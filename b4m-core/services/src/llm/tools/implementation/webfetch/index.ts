@@ -1,9 +1,9 @@
 import { Logger } from '@bike4mind/observability';
 import { ToolDefinition, ToolContext } from '../../base/types';
 import { GetEffectiveApiKeyAdapters, getFirecrawlConfig } from '../../../../apiKeyService';
-import { CitableSource } from '@bike4mind/common';
+import { CitableSource, UnprocessableEntityError } from '@bike4mind/common';
 import { FirecrawlError } from '@mendable/firecrawl-js';
-import { createFirecrawlApp } from './firecrawlApp';
+import { createFirecrawlApp, type FirecrawlClient, type FirecrawlScrapeParams } from './firecrawlApp';
 import { plainFetchScrape } from './plainFetch';
 import { UnsafeScrapeTargetError } from './errors';
 import { resolveAndVetUrl, unsafeFetchUrlReason } from './ssrfGuard';
@@ -162,6 +162,34 @@ type FirecrawlFetchOptions = {
 };
 
 /**
+ * Firecrawl refused the target site itself (its 403 "we do not support this site"). A property of
+ * the URL, not a fault of ours, so it is a 422: /api/tools/web-fetch logs it at warn instead of
+ * paging, and the web_fetch tool turns it into a hint to use web_search. Only 403 - Firecrawl's
+ * 401/402/429 are our key, credits or rate limit and must keep surfacing as server errors.
+ */
+export class UnsupportedScrapeTargetError extends UnprocessableEntityError {
+  // `cause` is the FirecrawlError, typed as Error so the published .d.ts never references
+  // firecrawl-js: its types pull in DOM-only names a non-DOM consumer can't resolve.
+  constructor(url: string, cause: Error) {
+    super(`This site can't be fetched: the web scraper does not support ${new URL(url).hostname}.`);
+    this.name = 'UnsupportedScrapeTargetError';
+    this.cause = cause;
+  }
+}
+
+/** Scrape after a 1s wait for client-side rendering, retrying without the action where Firecrawl rejects actions. */
+async function scrapeAfterRenderWait(app: FirecrawlClient, url: string, params: FirecrawlScrapeParams) {
+  try {
+    return await app.scrapeUrl(url, { ...params, actions: [{ type: 'wait' as const, milliseconds: 1000 }] });
+  } catch (scrapeError) {
+    const msg = scrapeError instanceof Error ? scrapeError.message : '';
+    if (!msg.includes('Actions are not supported')) throw scrapeError;
+    Logger.globalInstance.log('📥 WebFetch Tool: Actions not supported, retrying without actions...');
+    return app.scrapeUrl(url, params);
+  }
+}
+
+/**
  * Fetch URL content using Firecrawl (shared function, no ToolContext)
  * Pattern follows serpApiSearch from websearch tool
  *
@@ -224,28 +252,13 @@ export async function firecrawlFetch(
 
   const startedAt = Date.now();
   let result;
-  if (isPdf) {
-    result = await app.scrapeUrl(url, baseParams);
-  } else {
-    try {
-      result = await app.scrapeUrl(url, {
-        ...baseParams,
-        actions: [
-          {
-            type: 'wait' as const,
-            milliseconds: 1000,
-          },
-        ],
-      });
-    } catch (scrapeError) {
-      const msg = scrapeError instanceof Error ? scrapeError.message : '';
-      if (msg.includes('Actions are not supported')) {
-        Logger.globalInstance.log('📥 WebFetch Tool: Actions not supported, retrying without actions...');
-        result = await app.scrapeUrl(url, baseParams);
-      } else {
-        throw scrapeError;
-      }
+  try {
+    result = isPdf ? await app.scrapeUrl(url, baseParams) : await scrapeAfterRenderWait(app, url, baseParams);
+  } catch (scrapeError) {
+    if (scrapeError instanceof FirecrawlError && scrapeError.statusCode === 403) {
+      throw new UnsupportedScrapeTargetError(url, scrapeError);
     }
+    throw scrapeError;
   }
   const durationMs = Date.now() - startedAt;
 
@@ -366,8 +379,15 @@ export const webFetchTool: ToolDefinition = {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 
         // 400/403/408 + 502/503/504 are expected external failures - return user-friendly message
-        // so the agent can continue rather than treating this as a hard failure
-        if (error instanceof FirecrawlError && [400, 403, 408, 502, 503, 504].includes(error.statusCode)) {
+        // so the agent can continue rather than treating this as a hard failure.
+        // firecrawlFetch rethrows Firecrawl's 403 as UnsupportedScrapeTargetError.
+        const firecrawlStatus =
+          error instanceof UnsupportedScrapeTargetError
+            ? 403
+            : error instanceof FirecrawlError
+              ? error.statusCode
+              : undefined;
+        if (firecrawlStatus !== undefined && [400, 403, 408, 502, 503, 504].includes(firecrawlStatus)) {
           const statusMessages: Record<number, { userMessage: string; statusLabel: string }> = {
             400: {
               userMessage: `This site requires advanced browser features that are not available. Try using web_search to find the information instead.`,
@@ -394,10 +414,10 @@ export const webFetchTool: ToolDefinition = {
               statusLabel: 'gateway timeout',
             },
           };
-          const { userMessage, statusLabel } = statusMessages[error.statusCode];
+          const { userMessage, statusLabel } = statusMessages[firecrawlStatus];
           context.logger.warn('WebFetch expected Firecrawl failure', {
             url: params.url,
-            statusCode: error.statusCode,
+            statusCode: firecrawlStatus,
             error: errorMessage,
           });
           await context.statusUpdate({}, `WebFetch: ${statusLabel}`);
