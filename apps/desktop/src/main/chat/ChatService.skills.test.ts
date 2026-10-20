@@ -77,17 +77,19 @@ describe('ChatService and skills', () => {
     };
     catalog = new SkillCatalog(new ProjectTrustStore(join(base, 'trust.json')), accountSkills);
     for (const key of Object.keys(turnLimits) as (keyof typeof turnLimits)[]) delete turnLimits[key];
-    // Bound to this test's own array, not read through `events` at emit time: the previous test's
-    // disposed service can still emit the 'done' of its aborted reply after this hook has run,
-    // and counted here it would end a turn() wait before this test's reply has settled.
+    // Bound to this test's own objects, not read through the describe-level lets at call time: the
+    // previous test's disposed service can still emit the 'done' of its aborted reply after this
+    // hook has run, and counted here it would end a turn() wait before this test's reply has settled.
     const emitted: ChatStreamEvent[] = [];
     events = emitted;
-    streams = [];
-    post = vi.fn().mockImplementation(() => {
+    const opened: PassThrough[] = [];
+    streams = opened;
+    const calls = vi.fn().mockImplementation(() => {
       const stream = new PassThrough();
-      streams.push(stream);
+      opened.push(stream);
       return Promise.resolve({ data: stream, status: 200 });
     });
+    post = calls;
     service = new ChatService({
       store: new SessionStore(join(base, 'sessions'), 'test-model'),
       access: { list: async () => [] } as unknown as AccessStore,
@@ -95,7 +97,7 @@ describe('ChatService and skills', () => {
       getApiClient: () =>
         ({
           get: vi.fn().mockResolvedValue({}),
-          getAxiosInstance: () => ({ post }),
+          getAxiosInstance: () => ({ post: calls }),
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
       userInstructionsRoot: join(base, 'user'),
