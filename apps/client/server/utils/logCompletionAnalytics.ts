@@ -9,8 +9,9 @@ import {
   IApiKeyRepository,
   IAdminSettingsRepository,
   type CompletionSource,
+  CREDITS_PER_USD_COST,
 } from '@bike4mind/common';
-import { usdToCredits, getSettingsByNames } from '@bike4mind/utils';
+import { getSettingsByNames } from '@bike4mind/utils';
 import { getAvailableModels, ApiKeyTable } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { apiKeyService } from '@bike4mind/services';
@@ -46,6 +47,8 @@ interface SuccessAnalyticsParams extends BaseAnalyticsParams {
   finalCacheWriteTokens?: number;
   /** Per-request usage from the completion frames, when the adapter reports it (see getTurnsCost). */
   finalTurnUsage?: TurnUsage[];
+  /** Credits executeCompletion settled for this completion (its final chunk's creditsUsed); preferred over re-pricing. */
+  finalCreditsUsed?: number;
   hasToolCalls: boolean;
   error?: never;
 }
@@ -58,6 +61,7 @@ interface FailureAnalyticsParams extends BaseAnalyticsParams {
   finalCacheReadTokens?: never;
   finalCacheWriteTokens?: never;
   finalTurnUsage?: never;
+  finalCreditsUsed?: never;
   hasToolCalls?: never;
   modelInfo?: never;
 }
@@ -85,6 +89,7 @@ export async function logCompletionAnalytics(params: LogCompletionAnalyticsParam
       finalCacheReadTokens,
       finalCacheWriteTokens,
       finalTurnUsage,
+      finalCreditsUsed,
       hasToolCalls,
       db,
     } = params;
@@ -112,7 +117,8 @@ export async function logCompletionAnalytics(params: LogCompletionAnalyticsParam
               finalCacheWriteTokens ?? 0,
               finalInputTokens + (finalCacheReadTokens ?? 0) + (finalCacheWriteTokens ?? 0)
             );
-        creditsUsed = usdToCredits(costInUsd); // markup applied here
+        // Settlement is stochastic, so the fallback is its expectation, not a round-up.
+        creditsUsed = finalCreditsUsed ?? Math.round(costInUsd * CREDITS_PER_USD_COST * 100) / 100;
       } else if (!modelInfo) {
         // Model not found - log warning but don't fail analytics
         logger.error('[COMPLETION_ANALYTICS] Model not found for credits calculation:', { model: body.model });

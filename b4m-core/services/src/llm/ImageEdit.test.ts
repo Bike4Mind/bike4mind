@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { z } from 'zod';
 import {
+  CREDITS_PER_USD_COST,
   EditImageRequestBodySchema,
   ImageModels,
   IMAGES_PER_EDIT_REQUEST,
@@ -15,6 +16,25 @@ import { estimateImageCredits } from '../imageCost';
 import { deductCreditsWithOrgSupport } from '../creditService';
 import { ImageEditService, type ImageEditBody } from './ImageEdit';
 import type { SaveGeneratedAssetFn } from './saveGeneratedImage';
+
+// The real stochastic rounding, with its draw pinned so the final debit is assertable.
+const { settlementDraw } = vi.hoisted(() => ({ settlementDraw: vi.fn(() => 0.5) }));
+vi.mock('@bike4mind/common', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/common')>();
+  return {
+    ...actual,
+    usdToCreditsStochastic: (usd: number) => actual.usdToCreditsStochastic(usd, () => settlementDraw()),
+  };
+});
+beforeEach(() => {
+  settlementDraw.mockReturnValue(0.5);
+});
+
+// What a draw of 0.5 settles for an exact USD cost: the floor, plus 1 when the fraction exceeds the draw.
+const settledAtHalf = (usdCost: number) => {
+  const raw = usdCost * CREDITS_PER_USD_COST;
+  return Math.floor(raw) + (0.5 < raw - Math.floor(raw) ? 1 : 0);
+};
 
 vi.mock('@bike4mind/llm-adapters', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/llm-adapters')>();
@@ -310,6 +330,7 @@ describe('ImageEditService.process model dispatch', () => {
       const plain = await runBilled({});
       const withRefs = await runBilled({ referenceImageFabFileIds: ['a', 'a', 'b'] });
 
+      // Dispatch is stubbed to fail, so nothing settles: creditsUsed is still the round-up the gate held.
       expect(plain.creditsUsed).toBe(
         estimateImageCredits(gptImage, IMAGES_PER_EDIT_REQUEST, { model: gptImage.id, inputImageCount: 1 })
           .requiredCredits
@@ -366,13 +387,59 @@ describe('ImageEditService.process model dispatch', () => {
           requestId: 'quest1',
           feature: 'image_edit',
           // The rendered image plus the primary image sent as input.
-          creditsCharged: estimateImageCredits(gptImage, IMAGES_PER_EDIT_REQUEST, {
-            model: gptImage.id,
-            inputImageCount: 1,
-          }).requiredCredits,
+          creditsCharged: settledAtHalf(
+            estimateImageCredits(gptImage, IMAGES_PER_EDIT_REQUEST, { model: gptImage.id, inputImageCount: 1 }).usdCost
+          ),
         })
       );
       expect(landed).toBe(true);
+    });
+
+    describe('final debit rounding', () => {
+      const withValidatedCost = (cost: { requiredCredits: number; usdCost: number }) =>
+        vi
+          .spyOn(
+            ImageEditService.prototype as unknown as { validateUserCredits: () => Promise<unknown> },
+            'validateUserCredits'
+          )
+          .mockResolvedValue(cost);
+
+      afterEach(() => {
+        vi.restoreAllMocks();
+      });
+
+      it.each([
+        [0.25, 41],
+        [0.75, 40],
+      ])('debits N or N+1 for a cost of N + 0.5 credits (draw %s -> %s)', async (draw, expected) => {
+        withValidatedCost({ requiredCredits: 41, usdCost: 40.5 / CREDITS_PER_USD_COST });
+        settlementDraw.mockReturnValue(draw);
+        const record = vi.fn(async () => undefined);
+
+        const quest = await runCharged(record);
+
+        expect(quest.creditsUsed).toBe(expected);
+        expect(deductCreditsWithOrgSupport).toHaveBeenCalledWith(
+          expect.objectContaining({ type: 'image_edit_usage', credits: expected }),
+          expect.anything()
+        );
+        expect(record).toHaveBeenCalledWith(expect.objectContaining({ creditsCharged: expected }));
+      });
+
+      it('debits 0 for a tiny cost: no ledger row, but the usage event still records the edit', async () => {
+        withValidatedCost({ requiredCredits: 1, usdCost: 0.00001 });
+        settlementDraw.mockReturnValue(0.5);
+        const record = vi.fn(async () => undefined);
+
+        const quest = await runCharged(record);
+
+        expect(quest.status).toBe('done');
+        expect(quest.creditsUsed).toBe(0);
+        expect(deductCreditsWithOrgSupport).not.toHaveBeenCalled();
+        expect(record).toHaveBeenCalledWith(
+          expect.objectContaining({ feature: 'image_edit', creditsCharged: 0, costUsd: 0.00001 })
+        );
+      });
     });
 
     it('still completes the edit when the usage-event write fails', async () => {

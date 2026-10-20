@@ -373,6 +373,7 @@ describe('POST /api/ai/v1/completions - stream', () => {
         cacheReadInputTokens: 301_000,
         cacheCreationInputTokens: 500,
         turnUsage,
+        creditsUsed: 7,
       });
       // A trailing frame without the breakdown must not clear the latched one.
       await params.onChunk([''], { stopReason: 'end_turn' });
@@ -387,6 +388,7 @@ describe('POST /api/ai/v1/completions - stream', () => {
         finalCacheReadTokens: 301_000,
         finalCacheWriteTokens: 500,
         finalTurnUsage: turnUsage,
+        finalCreditsUsed: 7,
       })
     );
   });

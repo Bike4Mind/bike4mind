@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  CREDITS_PER_USD_COST,
   CreditHolderType,
   estimateMusicCostCredits,
   estimateMusicCostUsd,
@@ -24,6 +25,18 @@ import type { CreditHoldAdapters } from '../creditService/creditHold';
 import { createMusicJob } from './createMusicJob';
 import { createMusicJobHandler } from './musicJobHandler';
 import type { CreateMusicJobDeps, CreateMusicJobResult } from './types';
+
+// The real stochastic rounding with its draw pinned. estimateMusicCostUsd is wrapped so a test can price one
+// settlement off-catalog (the catalog's per-second rates never land on a half credit).
+const { settlementDraw } = vi.hoisted(() => ({ settlementDraw: vi.fn(() => 0.5) }));
+vi.mock('@bike4mind/common', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/common')>();
+  return {
+    ...actual,
+    estimateMusicCostUsd: vi.fn(actual.estimateMusicCostUsd),
+    usdToCreditsStochastic: (usd: number) => actual.usdToCreditsStochastic(usd, () => settlementDraw()),
+  };
+});
 
 vi.mock('../creditService/creditHold', () => ({
   holdCredits: vi.fn(),
@@ -117,6 +130,7 @@ const song = (seconds: number, extra: Partial<Extract<ProviderTerminalResult, { 
 
 beforeEach(() => {
   vi.clearAllMocks();
+  settlementDraw.mockReturnValue(0.5);
   vi.mocked(holdCredits).mockImplementation(async params => ({
     ownerId: params.userId,
     ownerType: CreditHolderType.User,
@@ -566,6 +580,50 @@ describe('music job settlement', () => {
     expect(t.deps.recordUsage).toHaveBeenCalledWith(
       expect.objectContaining({ durationSeconds: 75, costUsd: estimateMusicCostUsd(caps, { durationSeconds: 75 }) })
     );
+  });
+
+  describe('final charge rounding', () => {
+    // A per-second ElevenLabs song, so the hold is a real round-up and the settlement a smaller draw.
+    const settleOne = async (billedUsd: number) => {
+      const t = setup({
+        providers: createMusicProviderRegistry([stubProvider(async () => song(60), 'elevenlabs')]),
+      });
+      const created = await createMusicJob(
+        { user, request: { model: 'music_v2_5', prompt: 'x', durationSeconds: 60 }, source: 'api' },
+        t.deps
+      );
+      vi.mocked(estimateMusicCostUsd).mockReturnValueOnce(billedUsd);
+      await t.runToCompletion();
+      return { t, job: t.jobOf(created) };
+    };
+
+    it.each([
+      [0.25, 41],
+      [0.75, 40],
+    ])(
+      'charges N or N+1 for a cost of N + 0.5 credits, against the full hold (draw %s -> %s)',
+      async (draw, expected) => {
+        settlementDraw.mockReturnValue(draw);
+
+        const { t, job } = await settleOne(40.5 / CREDITS_PER_USD_COST);
+
+        const [hold, charged] = vi.mocked(settleCreditHold).mock.calls[0];
+        expect(charged).toBe(expected);
+        // The hold stays the round-up of the full request; settleCreditHold releases the difference.
+        expect(hold).toEqual(job.creditHold);
+        expect(charged).toBeLessThan(job.creditHold?.reservedCredits ?? 0);
+        expect(job.settledCredits).toBe(expected);
+        expect(t.deps.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ creditsCharged: expected }));
+      }
+    );
+
+    it('can charge 0 for a tiny cost: the whole hold is released and usage is still recorded', async () => {
+      const { t, job } = await settleOne(0.00001);
+
+      expect(vi.mocked(settleCreditHold).mock.calls[0][1]).toBe(0);
+      expect(job.settledCredits).toBe(0);
+      expect(t.deps.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ creditsCharged: 0, status: 'ok' }));
+    });
   });
 
   it('keys the ledger entry to the notebook when the song was made in one', async () => {

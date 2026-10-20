@@ -10,7 +10,7 @@ import {
 import { resolveDeprecatedModelId } from '@bike4mind/llm-adapters';
 import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
-import { usdToCredits } from '@bike4mind/utils';
+import { usdToCreditsStochastic } from '@bike4mind/utils';
 import { MemberCreditCapError } from '../../creditService';
 import { confirmingServerOf, withoutConfirmPrompt } from '../mcpPendingAction';
 
@@ -712,7 +712,8 @@ export class ServerSubagentOrchestrator {
                 totalCacheWriteTokens ?? 0,
                 totalInputTokens + (totalCacheReadTokens ?? 0) + (totalCacheWriteTokens ?? 0)
               );
-          result.completionInfo.totalCredits = usdToCredits(usdCost);
+          // Unbiased final charge: a cheap delegation may settle at 0.
+          result.completionInfo.totalCredits = usdToCreditsStochastic(usdCost);
         } else {
           // Model absent from availableModels: credits stay unset and the delegation's
           // cost is lost from the usage events. Warn so the miss rate is observable (#152).

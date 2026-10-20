@@ -1,6 +1,6 @@
 import { CreditHolderType, VoiceGenerationVendor, computeTtsUsd } from '@bike4mind/common';
 import { creditService } from '@bike4mind/services';
-import { usdToCredits } from '@bike4mind/utils';
+import { usdToCreditsStochastic } from '@bike4mind/utils';
 import {
   userRepository,
   organizationRepository,
@@ -39,8 +39,10 @@ export async function deductTtsCredits({
   logger,
 }: DeductTtsArgs): Promise<void> {
   const costUsd = computeTtsUsd(vendor, model, characters);
-  const credits = usdToCredits(costUsd);
-  if (credits <= 0) return;
+  if (!(costUsd > 0)) return;
+  // Unbiased rounding: a short clip can legitimately settle at 0 credits. The pre-flight gate
+  // (estimateTtsCreditCost in tts.ts) stays on the round-up.
+  const credits = usdToCreditsStochastic(costUsd);
 
   const sessionId = `tts-${userId}-${Date.now()}`;
 
@@ -52,23 +54,26 @@ export async function deductTtsCredits({
     if (!user) throw new Error('User not found');
     if (billingOrganizationId && !organization) throw new Error('Billing organization not found');
 
-    await creditService.deductCreditsWithOrgSupport(
-      {
-        type: 'text_to_speech_usage',
-        user,
-        organization,
-        credits,
-        model,
-        sessionId,
-      },
-      {
-        db: {
-          users: userRepository,
-          organizations: organizationRepository,
-          creditTransactions: creditTransactionRepository,
+    // A zero draw writes no ledger row (nor member usage); the usage event below still records the call.
+    if (credits > 0) {
+      await creditService.deductCreditsWithOrgSupport(
+        {
+          type: 'text_to_speech_usage',
+          user,
+          organization,
+          credits,
+          model,
+          sessionId,
         },
-      }
-    );
+        {
+          db: {
+            users: userRepository,
+            organizations: organizationRepository,
+            creditTransactions: creditTransactionRepository,
+          },
+        }
+      );
+    }
 
     const ownerId = organization?.id ?? userId;
     const ownerType = organization ? CreditHolderType.Organization : CreditHolderType.User;

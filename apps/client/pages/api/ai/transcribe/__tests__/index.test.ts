@@ -13,7 +13,18 @@ const { mocks, InsufficientCreditsPreflightError } = vi.hoisted(() => {
       transcribeOpenAIFromS3: vi.fn(),
       transcribeAWSFromS3: vi.fn(),
       subtractCredits: vi.fn(),
+      recordUsage: vi.fn(),
+      settlementDraw: vi.fn(),
     },
+  };
+});
+
+// The real stochastic rounding, with its draw pinned so the debit is assertable.
+vi.mock('@bike4mind/common', async importActual => {
+  const actual = await importActual<typeof import('@bike4mind/common')>();
+  return {
+    ...actual,
+    usdToCreditsStochastic: (usd: number) => actual.usdToCreditsStochastic(usd, () => mocks.settlementDraw()),
   };
 });
 
@@ -57,9 +68,10 @@ vi.mock('@bike4mind/services', () => ({
 vi.mock('@bike4mind/database', () => ({
   userRepository: {},
   creditTransactionRepository: {},
-  usageEventRepository: { record: () => Promise.resolve() },
+  usageEventRepository: { record: (...a: unknown[]) => mocks.recordUsage(...a) },
 }));
 
+import { CREDITS_PER_USD_COST } from '@bike4mind/common';
 import { BadRequestError } from '@server/utils/errors';
 import { estimateTranscriptionCost, transcriptionUsdPerMinute } from '@server/utils/transcriptionCost';
 import handler from '../index';
@@ -86,6 +98,8 @@ beforeEach(() => {
   mocks.transcribeOpenAIFromS3.mockResolvedValue({ text: 'hi' });
   mocks.transcribeAWSFromS3.mockResolvedValue({ text: 'hi' });
   mocks.subtractCredits.mockResolvedValue(undefined);
+  mocks.recordUsage.mockResolvedValue(undefined);
+  mocks.settlementDraw.mockReturnValue(0.5);
 });
 
 describe('POST /api/ai/transcribe', () => {
@@ -103,14 +117,67 @@ describe('POST /api/ai/transcribe', () => {
         featureLabel: 'transcription',
       });
       expect(res._getJSONData()).toEqual({ text: 'hi' });
-      // Charged at the same backend-rate estimate the gate admitted on, so the
-      // two cannot drift (e.g. billing every backend at the cheapest rate).
+      // The debit prices the same backend-rate USD the gate admitted on, settled stochastically
+      // (draw 0.5 vs this size's fraction), never above the gate's round-up.
+      const { costUsd } = estimateTranscriptionCost(SIZE, transcriptionUsdPerMinute(backend));
+      const charged = mocks.subtractCredits.mock.calls[0][0].credits;
+      expect([Math.floor(costUsd * CREDITS_PER_USD_COST), Math.ceil(costUsd * CREDITS_PER_USD_COST)]).toContain(
+        charged
+      );
+      expect(charged).toBeLessThanOrEqual(expected);
       expect(mocks.subtractCredits).toHaveBeenCalledWith(
-        expect.objectContaining({ credits: expected, model: backend }),
+        expect.objectContaining({ type: 'speech_to_text_usage', model: backend }),
         expect.anything()
       );
     }
   );
+
+  describe('final debit rounding', () => {
+    const rate = transcriptionUsdPerMinute('openai');
+    // Bytes that cost exactly N + 0.5 credits at the openai rate.
+    const bytesForCredits = (credits: number) =>
+      Math.round(credits / (estimateTranscriptionCost(1, rate).costUsd * CREDITS_PER_USD_COST));
+    const head = (length: number) =>
+      mocks.send.mockImplementation(async (cmd: { constructor: { name: string } }) =>
+        cmd.constructor.name === 'HeadObjectCommand' ? { ContentType: 'audio/mpeg', ContentLength: length } : {}
+      );
+
+    it.each([
+      [0.25, 4],
+      [0.75, 3],
+    ])('debits N or N+1 for a cost of N + 0.5 credits (draw %s -> %s)', async (draw, expected) => {
+      head(bytesForCredits(3.5));
+      mocks.settlementDraw.mockReturnValue(draw);
+      const { promise } = run();
+      await promise;
+      expect(mocks.subtractCredits).toHaveBeenCalledWith(
+        expect.objectContaining({ credits: expected }),
+        expect.anything()
+      );
+      expect(mocks.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ creditsCharged: expected }));
+    });
+
+    it('keeps the pre-flight gate on the round-up of the same call', async () => {
+      head(bytesForCredits(3.5));
+      mocks.settlementDraw.mockReturnValue(0.75);
+      const { promise } = run();
+      await promise;
+      expect(mocks.assertPreflightCredits).toHaveBeenCalledWith(expect.objectContaining({ estimatedCredits: 4 }));
+    });
+
+    it('debits 0 for a tiny cost: no ledger row, but the usage event still records it', async () => {
+      head(bytesForCredits(0.05));
+      mocks.settlementDraw.mockReturnValue(0.5);
+      const { promise } = run();
+      await promise;
+      expect(mocks.subtractCredits).not.toHaveBeenCalled();
+      expect(mocks.recordUsage).toHaveBeenCalledWith(
+        expect.objectContaining({ feature: 'transcription', creditsCharged: 0 })
+      );
+      // The gate still demanded a whole credit.
+      expect(mocks.assertPreflightCredits).toHaveBeenCalledWith(expect.objectContaining({ estimatedCredits: 1 }));
+    });
+  });
 
   it('rejects with a 400-class error and never calls the provider or bills when credits are short', async () => {
     mocks.assertPreflightCredits.mockRejectedValue(new InsufficientCreditsPreflightError('broke'));

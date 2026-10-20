@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { CreditHolderType, MAX_INLINE_PROVIDER_OUTPUT_BYTES, MAX_VIDEO_OUTPUT_BYTES } from '@bike4mind/common';
+import {
+  CREDITS_PER_USD_COST,
+  CreditHolderType,
+  estimateVideoCostUsd,
+  MAX_INLINE_PROVIDER_OUTPUT_BYTES,
+  MAX_VIDEO_OUTPUT_BYTES,
+} from '@bike4mind/common';
 import {
   createVideoProviderRegistry,
   ProviderSubmitError,
@@ -18,6 +24,18 @@ import { EXPIRED_KEY_SENTINEL } from '../modelDiscoveryService/credentials';
 import { createVideoJob } from './createVideoJob';
 import { createVideoJobHandler } from './videoJobHandler';
 import type { CreateVideoJobDeps, CreateVideoJobResult, VideoJobDeps } from './types';
+
+// The real stochastic rounding with its draw pinned. estimateVideoCostUsd is wrapped so a test can price one
+// settlement off-catalog (the test model's per-second rate never lands on a half credit).
+const { settlementDraw } = vi.hoisted(() => ({ settlementDraw: vi.fn(() => 0.5) }));
+vi.mock('@bike4mind/common', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/common')>();
+  return {
+    ...actual,
+    estimateVideoCostUsd: vi.fn(actual.estimateVideoCostUsd),
+    usdToCreditsStochastic: (usd: number) => actual.usdToCreditsStochastic(usd, () => settlementDraw()),
+  };
+});
 
 vi.mock('../creditService/creditHold', () => ({
   holdCredits: vi.fn(),
@@ -111,6 +129,7 @@ const stubProvider = (overrides: Partial<VideoProvider>): VideoProvider => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  settlementDraw.mockReturnValue(0.5);
   vi.mocked(holdCredits).mockImplementation(async params => ({
     ownerId: params.userId,
     ownerType: CreditHolderType.User,
@@ -159,6 +178,45 @@ describe('video job end to end with the test provider', () => {
     expect(t.deps.recordUsage).toHaveBeenCalledWith(
       expect.objectContaining({ creditsCharged: charged, costUsd: 0.04, durationSeconds: 4, status: 'ok' })
     );
+  });
+
+  describe('final charge rounding', () => {
+    const settleOne = async (billedUsd: number) => {
+      const t = setup();
+      const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
+      // The first price lookup after creation is the settlement's billed price.
+      vi.mocked(estimateVideoCostUsd).mockReturnValueOnce(billedUsd);
+      await t.runToCompletion();
+      return { t, job: t.jobOf(created) };
+    };
+
+    it.each([
+      [0.25, 41],
+      [0.75, 40],
+    ])(
+      'charges N or N+1 for a cost of N + 0.5 credits, against the full hold (draw %s -> %s)',
+      async (draw, expected) => {
+        settlementDraw.mockReturnValue(draw);
+
+        const { t, job } = await settleOne(40.5 / CREDITS_PER_USD_COST);
+
+        const [hold, charged] = vi.mocked(settleCreditHold).mock.calls[0];
+        expect(charged).toBe(expected);
+        // The hold stays the round-up of the full request; settleCreditHold releases the difference.
+        expect(hold).toEqual(job.creditHold);
+        expect(charged).toBeLessThan(job.creditHold?.reservedCredits ?? 0);
+        expect(job.settledCredits).toBe(expected);
+        expect(t.deps.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ creditsCharged: expected }));
+      }
+    );
+
+    it('can charge 0 for a tiny cost: the whole hold is released and usage is still recorded', async () => {
+      const { t, job } = await settleOne(0.00001);
+
+      expect(vi.mocked(settleCreditHold).mock.calls[0][1]).toBe(0);
+      expect(job.settledCredits).toBe(0);
+      expect(t.deps.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ creditsCharged: 0, status: 'ok' }));
+    });
   });
 
   it('settles on the provider-reported duration when it differs from the request', async () => {

@@ -3,12 +3,14 @@ import { ImageGenerationService } from './ImageGeneration';
 import type { SaveGeneratedAssetFn } from './saveGeneratedImage';
 import { SUMMARIZATION_CONFIG } from './ChatCompletionFeatures';
 import {
+  CREDITS_PER_USD_COST,
   CreditHolderType,
   ImageModels,
   MAX_REFERENCE_IMAGES,
   ModelBackend,
   type ISessionDocument,
   type ModelInfo,
+  usdToCredits,
 } from '@bike4mind/common';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
 import { getSettingsMap } from '@bike4mind/utils';
@@ -19,6 +21,19 @@ import { silentLogger, statusLog } from '../__tests__/utils/testUtils';
 import { getSettingsValue, ImageModerationBlockedError } from '@bike4mind/utils';
 import { moderateImageOrThrow } from './imageModerationGate';
 import { deductCreditsWithOrgSupport } from '../creditService';
+
+// The real stochastic rounding, with its draw pinned so the final debit is assertable.
+const { settlementDraw } = vi.hoisted(() => ({ settlementDraw: vi.fn(() => 0.5) }));
+vi.mock('@bike4mind/common', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/common')>();
+  return {
+    ...actual,
+    usdToCreditsStochastic: (usd: number) => actual.usdToCreditsStochastic(usd, () => settlementDraw()),
+  };
+});
+beforeEach(() => {
+  settlementDraw.mockReturnValue(0.5);
+});
 
 vi.mock('@bike4mind/llm-adapters', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/llm-adapters')>();
@@ -780,6 +795,7 @@ describe('ImageGenerationService.process (usage event on a charged generation)',
       fabFileIds,
       useRealCreditValidator = false,
       organizationId,
+      validatedCost = { requiredCredits: 40, usdCost: 0.02 },
     }: {
       model?: ImageModels;
       n?: number;
@@ -787,6 +803,7 @@ describe('ImageGenerationService.process (usage event on a charged generation)',
       fabFileIds?: string[];
       useRealCreditValidator?: boolean;
       organizationId?: string | null;
+      validatedCost?: { requiredCredits: number; usdCost: number };
     } = {}
   ) => {
     const quest = { id: 'quest1', sessionId: 'session1', status: undefined as string | undefined } as any;
@@ -816,7 +833,7 @@ describe('ImageGenerationService.process (usage event on a charged generation)',
       wsHttpsUrl: 'https://ws.example.com',
     } as any);
     if (!useRealCreditValidator) {
-      (service as any).validateUserCredits = vi.fn(async () => ({ requiredCredits: 40, usdCost: 0.04 }));
+      (service as any).validateUserCredits = vi.fn(async () => validatedCost);
     }
 
     await service.process({
@@ -881,19 +898,56 @@ describe('ImageGenerationService.process (usage event on a charged generation)',
       fabFileIds: [primaryImage.id],
       useRealCreditValidator: true,
     });
-    const expectedCredits = estimateImageCredits(gptImageModelInfo, 1, {
+    const { requiredCredits, usdCost } = estimateImageCredits(gptImageModelInfo, 1, {
       model: ImageModels.GPT_IMAGE_2,
       quality: OMITTED_QUALITY_TIER,
       inputImageCount: 1,
-    }).requiredCredits;
+    });
+    // Draw 0.5 on the exact USD: the floor, or the round-up when the cost's fraction exceeds the draw.
+    const raw = usdCost * CREDITS_PER_USD_COST;
+    const expectedCredits = Math.floor(raw) + (0.5 < raw - Math.floor(raw) ? 1 : 0);
 
     expect(quest.status).toBe('done');
+    expect(expectedCredits).toBeLessThanOrEqual(requiredCredits);
     expect(quest.creditsUsed).toBe(expectedCredits);
     expect(deductCreditsWithOrgSupport).toHaveBeenCalledWith(
       expect.objectContaining({ credits: expectedCredits, model: ImageModels.GPT_IMAGE_2 }),
       expect.anything()
     );
     expect(record).toHaveBeenCalledWith(expect.objectContaining({ creditsCharged: expectedCredits }));
+  });
+
+  it.each([
+    [0.25, 41],
+    [0.75, 40],
+  ])('debits N or N+1 for a cost of N + 0.5 credits (draw %s -> %s)', async (draw, expected) => {
+    settlementDraw.mockReturnValue(draw);
+    const record = vi.fn(async () => undefined);
+
+    const quest = await runCharged(record, {
+      validatedCost: { requiredCredits: 41, usdCost: 40.5 / CREDITS_PER_USD_COST },
+    });
+
+    expect(quest.creditsUsed).toBe(expected);
+    expect(deductCreditsWithOrgSupport).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'image_generation_usage', credits: expected }),
+      expect.anything()
+    );
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ creditsCharged: expected }));
+  });
+
+  it('debits 0 for a tiny cost: no ledger row, but the usage event still records the generation', async () => {
+    settlementDraw.mockReturnValue(0.5);
+    const record = vi.fn(async () => undefined);
+
+    const quest = await runCharged(record, { validatedCost: { requiredCredits: 1, usdCost: 0.00001 } });
+
+    expect(quest.status).toBe('done');
+    expect(quest.creditsUsed).toBe(0);
+    expect(deductCreditsWithOrgSupport).not.toHaveBeenCalled();
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({ feature: 'image_generation', creditsCharged: 0, costUsd: 0.00001 })
+    );
   });
 
   it('records the billed image count as units when Kontext is asked for several', async () => {
@@ -982,6 +1036,16 @@ describe('ImageGenerationService.validateUserCredits input images', () => {
       10
     );
     expect(held).toEqual(estimateImageCredits(modelInfo, 3, input as never));
+  });
+
+  it('gates on the rounded-up cost: never below the exact credits the final debit draws on', async () => {
+    const modelInfo = { id: ImageModels.GPT_IMAGE_2 } as ModelInfo;
+    const input = { model: ImageModels.GPT_IMAGE_2, quality: 'high', size: '1024x1024', inputImageCount: 2 };
+
+    const held = await validate(modelInfo, 3, input);
+
+    expect(held.requiredCredits).toBe(usdToCredits(held.usdCost));
+    expect(held.requiredCredits).toBeGreaterThanOrEqual(held.usdCost * CREDITS_PER_USD_COST);
   });
 
   it('adds no input term for a non-GPT model', async () => {
@@ -1462,7 +1526,7 @@ describe('ImageGenerationService quest partial writes', () => {
     vi.spyOn(
       service as unknown as { validateUserCredits: () => Promise<unknown> },
       'validateUserCredits'
-    ).mockResolvedValue({ requiredCredits: 7, usdCost: 0 });
+    ).mockResolvedValue({ requiredCredits: 7, usdCost: 7 / CREDITS_PER_USD_COST });
     // process() reads the settings map once for the credit gate and once for moderation.
     vi.mocked(getSettingsMap).mockResolvedValueOnce({ enforceCredits: 'true' }).mockResolvedValueOnce({});
   };

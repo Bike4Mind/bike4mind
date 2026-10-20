@@ -138,6 +138,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   let finalCacheReadTokens = 0;
   let finalCacheWriteTokens = 0;
   let finalTurnUsage: TurnUsage[] | undefined;
+  let finalCreditsUsed: number | undefined;
   let hasToolCalls = false;
 
   // Resolve API key name for analytics logging
@@ -178,6 +179,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
         if (info?.cacheReadInputTokens) finalCacheReadTokens = info.cacheReadInputTokens;
         if (info?.cacheCreationInputTokens) finalCacheWriteTokens = info.cacheCreationInputTokens;
         if (info?.turnUsage?.length) finalTurnUsage = info.turnUsage;
+        if (typeof info?.creditsUsed === 'number') finalCreditsUsed = info.creditsUsed;
         if (info?.toolsUsed && info.toolsUsed.length > 0) hasToolCalls = true;
 
         const chunk = buildCompletionStreamEvent(text, info);
@@ -214,6 +216,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       finalCacheReadTokens,
       finalCacheWriteTokens,
       finalTurnUsage,
+      finalCreditsUsed,
       hasToolCalls,
       db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
       logger: logger as unknown as Logger,
