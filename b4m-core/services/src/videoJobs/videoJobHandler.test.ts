@@ -210,6 +210,18 @@ describe('video job end to end with the test provider', () => {
       }
     );
 
+    it.each([Number.NaN, Number.POSITIVE_INFINITY])(
+      'keeps the full reservation when the price lookup returns %s',
+      async billedUsd => {
+        const { t, job } = await settleOne(billedUsd);
+
+        // Without the finiteness guard the draw reads a non-finite price as free and refunds the hold.
+        expect(vi.mocked(settleCreditHold).mock.calls[0][1]).toBeNaN();
+        expect(job.settledCredits).toBeNaN();
+        expect(t.deps.recordUsage).toHaveBeenCalledTimes(1);
+      }
+    );
+
     it('can charge 0 for a tiny cost: the whole hold is released and usage is still recorded', async () => {
       const { t, job } = await settleOne(0.00001);
 
