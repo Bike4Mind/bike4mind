@@ -276,6 +276,33 @@ import { client } from '@bike4mind/mcp';""",
             subject = self.git('show', '-s', '--format=%s', sha)
             self.assertEqual(note_relevant(sha, shared), 'unrelated' not in subject and 'server extraction' not in subject)
 
+    def test_notes_follow_second_hop_packages_but_not_type_only_imports(self):
+        sources = {
+            'apps/desktop/src/imports.ts': "import { scan } from '@bike4mind/utils/artifactParser';\nimport './setup';",
+            'apps/desktop/src/setup.ts': 'export const setup = 1;',
+            'b4m-core/utils/package.json': '{"name":"@bike4mind/utils"}',
+            'b4m-core/observability/package.json': '{"name":"@bike4mind/observability"}',
+            'b4m-core/agents/package.json': '{"name":"@bike4mind/agents"}',
+            'b4m-core/utils/src/artifactParser.ts': "import { Logger } from '@bike4mind/observability';\nimport type { Agent } from '@bike4mind/agents';",
+            'b4m-core/observability/src/index.ts': 'export const Logger = 1;',
+            'b4m-core/agents/src/index.ts': 'export const Agent = 1;',
+        }
+        for path, source in sources.items():
+            file = Path(path)
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.write_text(source)
+        self.commit('chore: shared baseline')
+        shared = shared_note_inputs('HEAD')
+        self.assertIn('b4m-core/observability/src/index.ts', shared)
+        self.assertNotIn('b4m-core/agents/src/index.ts', shared)
+
+    def test_desktop_manifest_only_commit_is_visible(self):
+        Path('apps/desktop').mkdir(parents=True, exist_ok=True)
+        Path('apps/desktop/package.json').write_text('{"name":"@bike4mind/desktop","dependencies":{"x":"1"}}')
+        self.git('add', '.')
+        self.git('commit', '-qm', 'fix(deps): bump runtime dependency')
+        self.assertTrue(note_relevant(self.git('rev-parse', 'HEAD'), set()))
+
     def shared_baseline(self):
         sources = {
             'apps/desktop/package.json': json.dumps({'name': '@bike4mind/desktop',
@@ -310,7 +337,7 @@ import { client } from '@bike4mind/mcp';""",
         with patch('desktop_release_version.subprocess.Popen', wraps=subprocess.Popen) as spawn:
             shared = shared_note_inputs('HEAD')
         commands = [call.args[0] for call in spawn.call_args_list]
-        self.assertEqual(commands, [['git', 'ls-tree', '-r', '--name-only', 'HEAD'],
+        self.assertEqual(commands, [['git', 'ls-tree', '-r', '--full-tree', '--name-only', 'HEAD'],
                                     ['git', 'cat-file', '--batch']])
         self.assertEqual(shared, {'b4m-core/utils/src/scanner.ts',
                                   'b4m-core/utils/src/value.ts'})

@@ -58,8 +58,26 @@ def source_reader(ref):
             raise subprocess.CalledProcessError(process.returncode, process.args)
 
 
+def workspace_targets(source, manifests, paths):
+    # Type-only statements are erased at build, so they never ship in the bundle.
+    source = re.sub(r'\b(?:import|export)\s+type\b[^;]*;', '', source)
+    targets = []
+    for specifier in re.findall(r'''(?:from\s*|import\s*\(\s*|require\s*\(\s*|import\s*)['"](@bike4mind/[^'"]+)['"]''', source):
+        parts = specifier.split('/')
+        folder = manifests.get('/'.join(parts[:2]))
+        if not folder:
+            continue
+        if len(parts) == 2:
+            # Bare imports expose a package barrel; retain its source conservatively.
+            targets.extend(p for p in paths if p.startswith(folder + '/src/') and p.endswith(('.ts', '.tsx')))
+        else:
+            target = folder + '/src/' + '/'.join(parts[2:])
+            targets.extend(p for p in (target + '.ts', target + '.tsx', target + '/index.ts') if p in paths)
+    return targets
+
+
 def shared_note_inputs(ref):
-    paths = set(git('ls-tree', '-r', '--name-only', ref).splitlines())
+    paths = set(git('ls-tree', '-r', '--full-tree', '--name-only', ref).splitlines())
     with source_reader(ref) as read_source:
         manifests = {}
         for path in paths:
@@ -70,17 +88,7 @@ def shared_note_inputs(ref):
         for path in paths:
             if path.startswith('apps/desktop/src/') and path.endswith(('.ts', '.tsx')) and not path.endswith(('.test.ts', '.test.tsx')):
                 source = read_source(path) or ''
-                for specifier in re.findall(r'''(?:from\s*|import\s*\(\s*|require\s*\(\s*)['"](@bike4mind/[^'"]+)['"]''', source):
-                    parts = specifier.split('/')
-                    folder = manifests.get('/'.join(parts[:2]))
-                    if not folder:
-                        continue
-                    if len(parts) == 2:
-                        # Bare imports expose a package barrel; retain its source conservatively.
-                        pending.extend(p for p in paths if p.startswith(folder + '/src/'))
-                    else:
-                        target = folder + '/src/' + '/'.join(parts[2:])
-                        pending.extend(p for p in (target + '.ts', target + '.tsx', target + '/index.ts') if p in paths)
+                pending.extend(workspace_targets(source, manifests, paths))
         reachable = set()
         while pending:
             path = pending.pop()
@@ -88,7 +96,8 @@ def shared_note_inputs(ref):
                 continue
             reachable.add(path)
             source = read_source(path) or ''
-            for specifier in re.findall(r'''(?:from\s*|import\s*\(\s*|require\s*\(\s*)['"](\.[^'"]+)['"]''', source):
+            pending.extend(workspace_targets(source, manifests, paths))
+            for specifier in re.findall(r'''(?:from\s*|import\s*\(\s*|require\s*\(\s*|import\s*)['"](\.[^'"]+)['"]''', source):
                 target = posixpath.normpath(posixpath.join(posixpath.dirname(path), specifier))
                 if target.endswith('.js'):
                     target = target[:-3]
@@ -106,7 +115,7 @@ def note_relevant(sha, shared):
     for path in paths:
         if (path.endswith(('.md', '.mdx', '.test.ts', '.test.tsx', '.spec.ts', '.spec.tsx'))
                 or '/__tests__/' in path or '/__fixtures__/' in path
-                or posixpath.basename(path) == 'package.json'):
+                or (posixpath.basename(path) == 'package.json' and path != 'apps/desktop/package.json')):
             continue
         if path.startswith(('apps/desktop/src/', 'apps/desktop/resources/')) or path in shared:
             return True
