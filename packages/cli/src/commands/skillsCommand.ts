@@ -9,7 +9,7 @@ import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
 import { createInterface } from 'readline';
-import { parseSkillMd, type SkillMdFields } from '@bike4mind/common';
+import { parseSkillMd, type SkillMdFields } from '@bike4mind/common/utils/skillMd';
 import { ConfigStore } from '../storage/ConfigStore.js';
 import { RemoteSkillSource } from '../storage/RemoteSkillSource.js';
 import { ApiClient } from '../auth/ApiClient.js';

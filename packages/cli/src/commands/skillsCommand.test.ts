@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
-import { toSkillMd } from '@bike4mind/common';
+import { toSkillMd } from '@bike4mind/common/utils/skillMd';
 import {
   buildSkillPayload,
   handleSkillsCommand,
