@@ -55,13 +55,17 @@ describe('ChatService attachments', () => {
     const root = await mkdtemp(join(tmpdir(), 'b4m-chat-attach-'));
     store = new SessionStore(join(root, 'sessions'), 'vision-model');
     attachments = new AttachmentStore(join(root, 'attachments'), { debug: vi.fn(), warn: vi.fn() });
-    events = [];
-    streams = [];
-    post = vi.fn().mockImplementation(() => {
+    // Bound per test: a previous service replying late must not push into this test's events.
+    const emitted: ChatStreamEvent[] = [];
+    events = emitted;
+    const opened: PassThrough[] = [];
+    streams = opened;
+    const boundPost = vi.fn().mockImplementation(() => {
       const stream = new PassThrough();
-      streams.push(stream);
+      opened.push(stream);
       return Promise.resolve({ data: stream, status: 200 });
     });
+    post = boundPost;
     cachedModels = [{ id: 'vision-model', name: 'Vision Model', supportsVision: true }];
 
     service = new ChatService({
@@ -74,10 +78,10 @@ describe('ChatService attachments', () => {
       getApiClient: () =>
         ({
           get: vi.fn().mockResolvedValue({ sseCompletionsUrl: '' }),
-          getAxiosInstance: () => ({ post }),
+          getAxiosInstance: () => ({ post: boundPost }),
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
-      emit: event => events.push(event),
+      emit: event => emitted.push(event),
     });
   });
 

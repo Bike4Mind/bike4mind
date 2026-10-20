@@ -1,4 +1,4 @@
-import type { WorkspaceDeniedToolsTable } from '@bike4mind/common';
+import type { WorkspaceDeniedToolsTable, WorkspaceSessionSettingsTable } from '@bike4mind/common';
 import type { ComponentType } from 'react';
 
 /**
@@ -258,6 +258,15 @@ export type PremiumWorkspaceCopyEntitlements = Readonly<Record<string, readonly 
  * Entries from several overlays are merged.
  */
 export type PremiumWorkspaceDeniedTools = WorkspaceDeniedToolsTable;
+
+/**
+ * Session fields owned, per workspace id, by the workspace a session is in, resolved at read time.
+ * Contributed via `b4mContributions.workspaceSessionSettingsExport` (`{ "<surface id>": "<module>" }`,
+ * each module exporting `workspaceSessionSettings: WorkspaceSessionSettingsEntry`). A fork, clone or
+ * snip drops the owned fields and a move unsets them, so a session takes on its current workspace's
+ * values. One overlay per workspace id.
+ */
+export type PremiumWorkspaceSessionSettings = WorkspaceSessionSettingsTable;
 
 /**
  * How a workspace is named and opened for a user whose access to it comes through a copy grant: one

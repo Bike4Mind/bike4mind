@@ -52,6 +52,7 @@ import type { ToolDefinition } from '@bike4mind/services/llm/tools';
 import { withLatticeTools } from '@bike4mind/server-utils/queueHandlers/latticeChatTools';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
 import { premiumWorkspaceDeniedTools } from '@server/premium-generated/premiumWorkspaceDeniedTools.generated';
+import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
 import { Resource } from 'sst';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
 import { logEvent } from '@server/utils/analyticsLog';
@@ -163,6 +164,7 @@ export const getStaticOptions = () => {
     slackWebhookUrl: Config.SLACK_WEBHOOK_URL,
     abilityGetter: defineAbilitiesFor,
     workspaceDeniedTools: premiumWorkspaceDeniedTools,
+    workspaceSessionSettings: premiumWorkspaceSessionSettings,
     getScopeFilter: (user: IUserDocument, permission: Permission, modelName: string) =>
       accessibleBy(defineAbilitiesFor(user), permission).ofType(mongoose.models[modelName]),
     // Entitlement-aware lake retrieval parity with questProcessor (see note there).

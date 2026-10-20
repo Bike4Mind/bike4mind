@@ -6,7 +6,7 @@ import type { ChatSpawnSuggestion, SpawnSuggestionResult } from '@shared/chat';
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { desktopTheme } from '../theme';
 import { Composer } from './Composer';
-import { SpawnSuggestionTray } from './SpawnSuggestionTray';
+import { SPAWN_CHOICE_STORAGE_KEY, SpawnSuggestionTray } from './SpawnSuggestionTray';
 import { writeDraft } from './spawnSuggestionDraft';
 import type { AttachmentDraft } from './useAttachments';
 
@@ -55,6 +55,7 @@ afterEach(() => {
   root = null;
   host = null;
   writeDraft(BASE.id, undefined);
+  window.localStorage.clear();
 });
 
 const ok = (suggestion: ChatSpawnSuggestion): SpawnSuggestionResult => ({ ok: true, suggestion });
@@ -115,6 +116,23 @@ async function click(id: string): Promise<void> {
   });
 }
 
+/** The menu is portalled out of the card, so it is looked up in the whole document. */
+function inDocument(id: string): HTMLElement | null {
+  return document.querySelector(`[data-testid="${id}"]`);
+}
+
+async function choose(choice: 'worktree' | 'local' | 'here'): Promise<void> {
+  await click('spawn-suggestion-start-menu-btn');
+  const item = inDocument(`spawn-suggestion-choice-${choice}-item`);
+  if (!item) throw new Error(`no ${choice} item`);
+  await act(async () => {
+    item.click();
+  });
+}
+
+const primary = () => byTestId<HTMLButtonElement>('spawn-suggestion-start-btn');
+const hasBranchField = () => host?.querySelector('[data-testid="spawn-suggestion-branch-input"]') !== null;
+
 describe('SpawnSuggestionTray', () => {
   it('shows the title, summary, branch and base, with the prompt folded away', () => {
     render([BASE], handlers());
@@ -143,12 +161,13 @@ describe('SpawnSuggestionTray', () => {
     });
   });
 
-  it('starts locally without a branch, and shows a refusal on the card', async () => {
+  it('starts in this folder without a branch, and shows a refusal on the card', async () => {
     const on = handlers();
     on.onStart.mockResolvedValueOnce({ ok: false, error: '3 started sessions are already running' });
     render([BASE], on);
 
-    await click('spawn-suggestion-start-local-btn');
+    await choose('local');
+    await click('spawn-suggestion-start-btn');
     expect(on.onStart).toHaveBeenCalledWith({
       suggestionId: 's1',
       placement: 'local',
@@ -156,6 +175,127 @@ describe('SpawnSuggestionTray', () => {
       title: BASE.title,
     });
     expect(byTestId('spawn-suggestion-error').textContent).toContain('already running');
+  });
+
+  it('defaults to a new worktree in a git repository, showing the branch', () => {
+    render([BASE], handlers());
+    expect(primary().textContent).toBe('Start in new worktree');
+    expect(hasBranchField()).toBe(true);
+  });
+
+  it('defaults to this folder outside a git repository, where a worktree cannot be chosen', async () => {
+    render([{ ...BASE, repository: false }], handlers());
+    expect(primary().textContent).toBe('Start in this folder');
+    expect(hasBranchField()).toBe(false);
+
+    await click('spawn-suggestion-start-menu-btn');
+    expect(inDocument('spawn-suggestion-start-menu')).not.toBeNull();
+    expect(inDocument('spawn-suggestion-choice-worktree-item')?.getAttribute('aria-disabled')).toBe('true');
+  });
+
+  it('switches the primary action from the menu without starting anything', async () => {
+    const on = handlers();
+    render([BASE], on);
+
+    await choose('here');
+    expect(primary().textContent).toBe('Run here');
+    expect(hasBranchField()).toBe(false);
+    expect(host?.querySelector('[data-testid="spawn-suggestion-base"]')).toBeNull();
+
+    await choose('local');
+    expect(primary().textContent).toBe('Start in this folder');
+    expect(hasBranchField()).toBe(false);
+
+    await choose('worktree');
+    expect(primary().textContent).toBe('Start in new worktree');
+    expect(hasBranchField()).toBe(true);
+    expect(on.onStart).not.toHaveBeenCalled();
+  });
+
+  it('labels each menu item with a line saying what it does', async () => {
+    render([BASE], handlers());
+    await click('spawn-suggestion-start-menu-btn');
+    expect(inDocument('spawn-suggestion-choice-worktree-item')?.textContent).toContain('New session in a worktree');
+    expect(inDocument('spawn-suggestion-choice-local-item')?.textContent).toContain('New session in this folder');
+    const here = inDocument('spawn-suggestion-choice-here-item')?.textContent ?? '';
+    expect(here).toContain('Run here, in this conversation');
+    expect(here).toContain('No new session.');
+    expect(byTestId('spawn-suggestion-start-menu-btn').getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('opens the menu from the keyboard with focus inside it, so a choice can be picked by key', async () => {
+    const on = handlers();
+    render([BASE], on);
+    const caret = byTestId('spawn-suggestion-start-menu-btn');
+    act(() => caret.focus());
+    await act(async () => {
+      caret.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    });
+    const menu = inDocument('spawn-suggestion-start-menu');
+    expect(menu?.contains(document.activeElement)).toBe(true);
+    expect(caret.getAttribute('aria-expanded')).toBe('true');
+
+    await act(async () => {
+      document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }));
+    });
+    expect(document.activeElement?.getAttribute('data-testid')).toBe('spawn-suggestion-choice-here-item');
+    await act(async () => {
+      document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    });
+    expect(primary().textContent).toBe('Run here');
+    expect(on.onStart).not.toHaveBeenCalled();
+  });
+
+  it('remembers the last choice for the next card', async () => {
+    render([BASE], handlers());
+    await choose('here');
+    expect(window.localStorage.getItem(SPAWN_CHOICE_STORAGE_KEY)).toBe('here');
+
+    act(() => root?.unmount());
+    root = null;
+    render([{ ...BASE, id: 's9' }], handlers());
+    expect(primary().textContent).toBe('Run here');
+  });
+
+  it('ignores a remembered worktree choice outside a git repository, and an unknown value', () => {
+    window.localStorage.setItem(SPAWN_CHOICE_STORAGE_KEY, 'worktree');
+    render([{ ...BASE, repository: false }], handlers());
+    expect(primary().textContent).toBe('Start in this folder');
+
+    act(() => root?.unmount());
+    root = null;
+    window.localStorage.setItem(SPAWN_CHOICE_STORAGE_KEY, 'elsewhere');
+    render([BASE], handlers());
+    expect(primary().textContent).toBe('Start in new worktree');
+  });
+
+  it('runs here with the edited prompt and no branch, even with the branch cleared', async () => {
+    const on = handlers();
+    render([BASE], on);
+    type(byTestId<HTMLInputElement>('spawn-suggestion-branch-input'), '');
+    expect(primary().disabled).toBe(true);
+
+    await choose('here');
+    await click('spawn-suggestion-expand-btn');
+    type(byTestId<HTMLTextAreaElement>('spawn-suggestion-prompt-input'), 'do it in this conversation');
+    expect(primary().disabled).toBe(false);
+    await click('spawn-suggestion-start-btn');
+    expect(on.onStart).toHaveBeenCalledWith({
+      suggestionId: 's1',
+      placement: 'here',
+      prompt: 'do it in this conversation',
+      title: BASE.title,
+    });
+  });
+
+  it('needs a prompt for every choice', async () => {
+    render([BASE], handlers());
+    await click('spawn-suggestion-expand-btn');
+    type(byTestId<HTMLTextAreaElement>('spawn-suggestion-prompt-input'), '  ');
+    for (const choice of ['worktree', 'local', 'here'] as const) {
+      await choose(choice);
+      expect(primary().disabled).toBe(true);
+    }
   });
 
   it('dismisses', async () => {
@@ -209,7 +349,13 @@ describe('SpawnSuggestionTray', () => {
       status: 'started',
       started: { sessionId: 'child-1', title: 'Tidy imports', placement: 'worktree', branch: 'agent/x', edited: false },
     };
-    render([BASE, started, { ...BASE, id: 's3', status: 'dismissed' }], handlers());
+    const ranHere: ChatSpawnSuggestion = {
+      ...BASE,
+      id: 's4',
+      status: 'started',
+      started: { title: 'Tidy imports', placement: 'here', edited: false },
+    };
+    render([BASE, started, ranHere, { ...BASE, id: 's3', status: 'dismissed' }], handlers());
     expect(host?.querySelectorAll('[data-testid="spawn-suggestion-card"]')).toHaveLength(1);
 
     render([started], handlers());

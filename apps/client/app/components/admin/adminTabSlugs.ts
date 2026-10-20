@@ -1,5 +1,6 @@
 import { ADMIN_AUDIT_LOG_TAB_SLUG, ADMIN_FEEDBACK_TAB_SLUG, ADMIN_USERS_TAB_SLUG } from '@bike4mind/common';
 import { AdminTab } from './adminSidebarConfig';
+import { ADMIN_SETTINGS_TAB_SLUG } from './adminTabParams';
 
 /**
  * AdminTab -> URL slug, for the console's `?tab=` param.
@@ -11,7 +12,7 @@ import { AdminTab } from './adminSidebarConfig';
  */
 const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
   [AdminTab.Users]: ADMIN_USERS_TAB_SLUG,
-  [AdminTab.AdminSettings]: 'admin-settings',
+  [AdminTab.AdminSettings]: ADMIN_SETTINGS_TAB_SLUG,
   [AdminTab.Feedback]: ADMIN_FEEDBACK_TAB_SLUG,
   [AdminTab.Analytics]: 'analytics',
   [AdminTab.Accounts]: 'accounts',

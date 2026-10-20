@@ -794,7 +794,9 @@ describe('the worktree status a first turn reports', () => {
 
   beforeEach(async () => {
     store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-status-sessions-')), 'test-model');
-    events = [];
+    // Bound per test: a previous service replying late must not push into this test's events.
+    const emitted: ChatStreamEvent[] = [];
+    events = emitted;
     queueEvents = [];
     onEvent = () => undefined;
     service = new ChatService({
@@ -804,7 +806,7 @@ describe('the worktree status a first turn reports', () => {
       getApiClient: () => ({}) as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
       emit: event => {
-        events.push(event);
+        emitted.push(event);
         onEvent(event);
       },
       queue: new MessageQueue(event => queueEvents.push(event)),

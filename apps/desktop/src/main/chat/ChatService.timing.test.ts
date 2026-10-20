@@ -20,10 +20,13 @@ describe('ChatService round timing', () => {
   let debug: ReturnType<typeof vi.fn<(message: string) => void>>;
 
   async function serviceWith(turnTiming: boolean): Promise<ChatService> {
+    // Bound to this test's sinks: a previous service replying late must not write into the next test's.
+    const emitted = events;
+    const opened = streams;
     const root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-timing-')));
     const post = vi.fn().mockImplementation(() => {
       const stream = new PassThrough();
-      streams.push(stream);
+      opened.push(stream);
       return Promise.resolve({ data: stream, status: 200 });
     });
     return new ChatService({
@@ -41,7 +44,7 @@ describe('ChatService round timing', () => {
           getAxiosInstance: () => ({ post }),
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
-      emit: event => events.push(event),
+      emit: event => emitted.push(event),
     });
   }
 
