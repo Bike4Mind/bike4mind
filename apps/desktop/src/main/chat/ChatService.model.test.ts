@@ -158,6 +158,38 @@ describe('ChatService model selection', () => {
     expect(turn).toMatchObject({ model: 'gpt-4o', max_tokens: 16_384 });
   });
 
+  describe('thinking on a local model', () => {
+    const LOCAL_THINKER: ChatModelOption = {
+      id: 'qwen3:8b',
+      name: 'qwen3:8b',
+      backend: 'ollama',
+      thinkingToggle: true,
+    };
+
+    async function turnOptions(model: string, effort?: 'default' | 'minimal'): Promise<Record<string, unknown>> {
+      const { id } = await service.createSession();
+      await service.setSessionModel(id, model);
+      if (effort) await service.setSessionReasoningEffort(id, effort);
+      await service.send(id, 'hello');
+      const turn = await vi.waitUntil(() => turnRequest(post), { timeout: 2000, interval: 5 });
+      return (turn as { options: Record<string, unknown> }).options;
+    }
+
+    it('leaves thinking out when the switch is Off, so the server tells Ollama think:false', async () => {
+      available = [LOCAL_THINKER];
+      expect(await turnOptions('qwen3:8b', 'minimal')).not.toHaveProperty('thinking');
+    });
+
+    it('still asks for thinking when the switch is On', async () => {
+      available = [LOCAL_THINKER];
+      expect((await turnOptions('qwen3:8b', 'default')).thinking).toEqual({ enabled: true });
+    });
+
+    it('keeps thinking on a hosted model whatever the effort', async () => {
+      expect((await turnOptions('gpt-4o', 'minimal')).thinking).toEqual({ enabled: true });
+    });
+  });
+
   it('leaves max_tokens to the server when the catalog does not state a ceiling', async () => {
     const { id } = await service.createSession();
     await service.setSessionModel(id, 'gpt-4o');

@@ -69,6 +69,34 @@ Anthropic models are available via both the Anthropic API and AWS Bedrock. Your 
 
 If your organization has Ollama configured, you can access any locally-hosted models installed on your organization's Ollama instance. Requests go only to that instance, never to an external provider.
 
+#### Desktop: turn local thinking on or off
+
+In Desktop, select a server-exposed Ollama model that supports thinking. The conversation's
+reasoning picker shows **Thinking: On** or **Thinking: Off** instead of effort levels. Open it
+and choose **On** to request reasoning before the answer, or **Off** to request an answer
+without thinking.
+
+The choice is saved per conversation. With the default Desktop configuration, a new
+conversation starts with thinking **On**. The same saved setting is reused when you switch
+models: choosing local **Off** saves **Minimal**, and choosing local **On** saves **Default**.
+Those values appear as effort levels on a hosted model that supports reasoning effort. Other
+saved effort levels, such as **High**, display as local **On** and remain unchanged until you
+choose a setting. Check the picker after switching models if you want a different effort level.
+
+Desktop uses the model catalog from your connected Bike4Mind server. Installing Ollama on
+your computer alone does not add models to Desktop. Your server must expose the Ollama model
+and report both tool support and thinking support for it. If the switch is missing, ask your
+administrator to check the catalog's Ollama backend and `can_think` capability; Desktop does
+not infer thinking support from the model name. Models without tool support do not appear in
+the Desktop picker.
+
+Your server must also support translating the thinking choice to Ollama's `think` flag,
+including explicitly sending `think: false` when thinking is off. An older server that leaves
+the flag unset can let Ollama continue thinking even after you select **Off**. If that happens,
+ask your administrator to update the server. For server setup, see the
+[self-hosting guide](../self-host/index.md); the CLI's
+[direct Ollama connection](../cli/local-models.md) is a separate setup.
+
 ### Retiring Soon
 
 These models are being retired by their providers. Move saved notebooks, agents, and API calls to a current model before the date shown.

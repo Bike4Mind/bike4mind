@@ -11,7 +11,9 @@ const routerMock = vi.hoisted(() => ({
 }));
 
 vi.mock('@tanstack/react-router', () => ({
-  useSearch: () => routerMock.search,
+  // Mirrors TanStack's `select`: the hook narrows its subscription to `tab`.
+  useSearch: (options?: { select?: (search: Record<string, unknown>) => unknown }) =>
+    options?.select ? options.select(routerMock.search) : routerMock.search,
   useLocation: () => ({ pathname: routerMock.pathname }),
   useNavigate: () => routerMock.navigate,
 }));
@@ -80,11 +82,29 @@ describe('useAdminTabUrlSync', () => {
 
     renderHook(() => useHarness(AdminTab.Users));
 
-    expect(lastNavigation().search({ emergency_access: 'true', redirectTo: '/somewhere' })).toStrictEqual({
-      emergency_access: 'true',
-      tab: 'users',
-      feedbackId: undefined,
-    });
+    const search = lastNavigation().search({ emergency_access: 'true', redirectTo: '/somewhere' });
+    expect(search).toEqual({ emergency_access: 'true', tab: 'users' });
+    expect(search).not.toHaveProperty('redirectTo');
+  });
+
+  it("keeps only the new tab's registered params on a tab switch", () => {
+    routerMock.search = { tab: 'admin-settings', section: 'security', q: 'slack' };
+    const { result } = renderHook(() => useHarness(AdminTab.AdminSettings));
+    expect(routerMock.navigate).not.toHaveBeenCalled();
+
+    act(() => result.current.setActiveTab(AdminTab.AuditLog));
+
+    const previous = { tab: 'admin-settings', section: 'security', q: 'slack', category: 'credits', entryId: 'e1' };
+    expect(lastNavigation().search(previous)).toEqual({ tab: 'audit-log', category: 'credits', entryId: 'e1' });
+  });
+
+  it('leaves an Audit Log deep link, filters included, untouched', () => {
+    routerMock.search = { tab: 'audit-log', category: 'credits' };
+
+    const { result } = renderHook(() => useHarness(AdminTab.CreditAnalytics));
+
+    expect(result.current.activeTab).toBe(AdminTab.AuditLog);
+    expect(routerMock.navigate).not.toHaveBeenCalled();
   });
 
   it('keeps feedbackId on the Feedback tab and drops it elsewhere', () => {
