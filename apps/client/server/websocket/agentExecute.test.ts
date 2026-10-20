@@ -670,6 +670,26 @@ describe('start command credential threading', () => {
     expect(input.apiKeyInfo).toBe(key);
   });
 
+  it('reports a billing refusal as a message-only error frame', async () => {
+    mockApiGwSend.mockClear();
+    vi.mocked(verifyApiKey).mockRejectedValueOnce(new Error('not a key'));
+    vi.mocked(verifyJwtToken).mockResolvedValueOnce({ id: 'user-1' } as never);
+    vi.mocked(startAgentExecution).mockResolvedValueOnce({
+      ok: false,
+      reason: 'billing_organization_mismatch',
+      message: "This API key bills its own organization; omit the billing organization or set it to the key's.",
+    } as never);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (func as any)(startEvent('jwt'), {}, noopLogger);
+
+    const [sent] = mockApiGwSend.mock.calls[0];
+    const frame = JSON.parse(sent.input.Data.toString());
+    expect(frame).toMatchObject({ action: 'agent_error' });
+    expect(frame.message).toContain('bills its own organization');
+    expect(frame).not.toHaveProperty('reason');
+  });
+
   it('drops the key credential when its rate-limit check throws, so the JWT fallback runs unscoped', async () => {
     vi.mocked(verifyApiKey).mockResolvedValueOnce({
       keyId: 'key-1',

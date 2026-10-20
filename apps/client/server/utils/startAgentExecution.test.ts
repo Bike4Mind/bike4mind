@@ -68,7 +68,7 @@ vi.mock('@server/utils/agentExecutorFunctionName', () => ({
   resolveAgentExecutorFunctionName: mockResolveExecutorName,
 }));
 
-import { ApiKeyScope, DATA_LAKE_TOOL_NAMES } from '@bike4mind/common';
+import { ApiKeyScope, CreditHolderType, DATA_LAKE_TOOL_NAMES } from '@bike4mind/common';
 import { startAgentExecution, sweepMemoSize } from './startAgentExecution';
 import { HEADLESS_CONNECTION_ID } from '@bike4mind/server-utils/utils/headlessConnection';
 import { MAX_CONCURRENT_EXECUTIONS_PER_USER } from './executionLimits';
@@ -243,6 +243,118 @@ describe('startAgentExecution', () => {
 
     expect(result).toMatchObject({ ok: true });
     expect(dispatchedPayload()).toMatchObject({ organizationId: 'org1' });
+  });
+
+  describe('billing under an org-billed API key', () => {
+    const KEY_ORG = 'key-org';
+    const orgKey = {
+      keyId: 'k-org',
+      scopes: [ApiKeyScope.AI_CHAT],
+      billingOwnerType: CreditHolderType.Organization,
+      organizationId: KEY_ORG,
+    };
+
+    beforeEach(() => {
+      mockOrgFindById.mockResolvedValue({ id: KEY_ORG, userId: 'owner', users: [{ userId: 'holder' }] });
+    });
+
+    it("bills the key's org when the start names none", async () => {
+      const result = await startAgentExecution(input({ userId: 'holder', apiKeyInfo: orgKey }), logger);
+
+      expect(result).toMatchObject({ ok: true });
+      expect(mockCreateExecution.mock.calls[0][0].organizationId).toBe(KEY_ORG);
+      expect(dispatchedPayload()).toMatchObject({ organizationId: KEY_ORG });
+    });
+
+    it("accepts the key's own org", async () => {
+      const result = await startAgentExecution(
+        input({ userId: 'holder', apiKeyInfo: orgKey, organizationId: KEY_ORG }),
+        logger
+      );
+
+      expect(result).toMatchObject({ ok: true });
+      expect(mockCreateExecution.mock.calls[0][0].organizationId).toBe(KEY_ORG);
+      expect(dispatchedPayload()).toMatchObject({ organizationId: KEY_ORG });
+    });
+
+    it('refuses another org with billing_organization_mismatch and creates nothing', async () => {
+      const result = await startAgentExecution(
+        input({ userId: 'holder', apiKeyInfo: orgKey, organizationId: 'other-org' }),
+        logger
+      );
+
+      expect(result).toMatchObject({ ok: false, reason: 'billing_organization_mismatch' });
+      expect(mockCreateExecution).not.toHaveBeenCalled();
+      expect(mockSend).not.toHaveBeenCalled();
+    });
+
+    it('refuses an empty organization_id with billing_organization_mismatch', async () => {
+      const result = await startAgentExecution(
+        input({ userId: 'holder', apiKeyInfo: orgKey, organizationId: '' }),
+        logger
+      );
+
+      expect(result).toMatchObject({ ok: false, reason: 'billing_organization_mismatch' });
+      expect(mockCreateExecution).not.toHaveBeenCalled();
+    });
+
+    it('refuses with billing_key_stale when the holder has left the org', async () => {
+      const result = await startAgentExecution(input({ userId: 'departed', apiKeyInfo: orgKey }), logger);
+
+      expect(result).toMatchObject({ ok: false, reason: 'billing_key_stale' });
+      expect(mockCreateExecution).not.toHaveBeenCalled();
+    });
+
+    it('refuses with billing_key_stale when the key org no longer exists', async () => {
+      mockOrgFindById.mockResolvedValue(null);
+
+      const result = await startAgentExecution(input({ userId: 'holder', apiKeyInfo: orgKey }), logger);
+
+      expect(result).toMatchObject({ ok: false, reason: 'billing_key_stale' });
+      expect(mockCreateExecution).not.toHaveBeenCalled();
+    });
+
+    it('admits an off-roster platform admin holder', async () => {
+      mockUserFindById.mockImplementation(async (id: string) => ({ id, isAdmin: true }));
+
+      const result = await startAgentExecution(input({ userId: 'admin-holder', apiKeyInfo: orgKey }), logger);
+
+      expect(result).toMatchObject({ ok: true });
+      expect(mockCreateExecution.mock.calls[0][0].organizationId).toBe(KEY_ORG);
+      expect(dispatchedPayload()).toMatchObject({ organizationId: KEY_ORG });
+    });
+
+    it('leaves a user-billed key on the named-org membership rules', async () => {
+      mockOrgFindById.mockResolvedValue({ userId: 'owner', users: [{ userId: 'member' }] });
+      const userKey = { keyId: 'k-user', scopes: [ApiKeyScope.AI_CHAT], billingOwnerType: CreditHolderType.User };
+
+      const result = await startAgentExecution(
+        input({ userId: 'member', apiKeyInfo: userKey, organizationId: 'org1' }),
+        logger
+      );
+
+      expect(result).toMatchObject({ ok: true });
+      expect(mockCreateExecution.mock.calls[0][0].organizationId).toBe('org1');
+    });
+
+    it('bills a session caller with no organization personally', async () => {
+      const result = await startAgentExecution(input({ userId: 'session-caller', apiKeyInfo: undefined }), logger);
+
+      expect(result).toMatchObject({ ok: true });
+      expect(mockCreateExecution.mock.calls[0][0].organizationId).toBeUndefined();
+      expect(mockOrgFindById).not.toHaveBeenCalled();
+    });
+
+    it('treats an empty organization_id from a session caller as personal', async () => {
+      const result = await startAgentExecution(
+        input({ userId: 'session-caller', apiKeyInfo: undefined, organizationId: '' }),
+        logger
+      );
+
+      expect(result).toMatchObject({ ok: true });
+      expect(mockCreateExecution.mock.calls[0][0].organizationId).toBeUndefined();
+      expect(mockOrgFindById).not.toHaveBeenCalled();
+    });
   });
 
   it('refuses to start past the concurrency cap without creating or dispatching anything', async () => {

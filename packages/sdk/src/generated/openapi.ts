@@ -1339,6 +1339,21 @@ export interface components {
         poll_url: string;
       };
     };
+    startAgentExecutionResponse403: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
+      required_scopes?: string[];
+      /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
+      also_required_scopes?: string[];
+      /** @enum {string} */
+      errorCode?: 'billing_organization_mismatch';
+    };
     /**
      * @example {
      *       "session_id": "<sessionId>",
@@ -1350,6 +1365,7 @@ export interface components {
       message: string;
       model?: string;
       agent_id?: string;
+      /** @description The organization whose credit pool pays for this run. You must belong to it; a non-member gets 404. Omit it to bill your personal credits. An organization-billed API key always bills its own organization: omit this or set it to the key's; any other value is a 403 (`errorCode: billing_organization_mismatch`). */
       organization_id?: string;
       tools?: string[];
       max_iterations?: number;
@@ -5442,7 +5458,7 @@ export interface operations {
           'application/json': components['schemas']['startAgentExecutionResponse202'];
         };
       };
-      /** @description No usable default chat model is configured and none was supplied. */
+      /** @description No usable default chat model is configured and none was supplied. An organization-billed API key bills an organization that no longer exists, or one its owner is no longer a member of; re-mint the key. */
       400: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -5476,15 +5492,27 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key does not hold any of the required scopes. */
+      /** @description The API key holds neither the `ai:chat` nor the `ai:generate` scope, or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`). */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ScopeForbiddenResponse'];
+          'application/json': components['schemas']['startAgentExecutionResponse403'];
         };
       };
       /** @description No session with the given `session_id` is owned by the caller, or `organization_id` names an organization the caller does not belong to. "Exists but is not yours" is reported as 404 too, so neither session ids nor org membership can be probed through this endpoint. */

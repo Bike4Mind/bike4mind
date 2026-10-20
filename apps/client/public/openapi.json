@@ -900,6 +900,45 @@
           "tracking_info"
         ]
       },
+      "startAgentExecutionResponse403": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "required_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "API key scopes this route accepts. Holding any one of them satisfies it."
+          },
+          "also_required_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "API key scopes this route also requires. Every one must be held, on top of `required_scopes`."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "billing_organization_mismatch"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
       "startAgentExecutionRequest": {
         "type": "object",
         "properties": {
@@ -918,7 +957,8 @@
             "type": "string"
           },
           "organization_id": {
-            "type": "string"
+            "type": "string",
+            "description": "The organization whose credit pool pays for this run. You must belong to it; a non-member gets 404. Omit it to bill your personal credits. An organization-billed API key always bills its own organization: omit this or set it to the key's; any other value is a 403 (`errorCode: billing_organization_mismatch`)."
           },
           "tools": {
             "type": "array",
@@ -12125,7 +12165,7 @@
             }
           },
           "400": {
-            "description": "No usable default chat model is configured and none was supplied.",
+            "description": "No usable default chat model is configured and none was supplied. An organization-billed API key bills an organization that no longer exists, or one its owner is no longer a member of; re-mint the key.",
             "content": {
               "application/json": {
                 "schema": {
@@ -12197,11 +12237,11 @@
             }
           },
           "403": {
-            "description": "The API key does not hold any of the required scopes.",
+            "description": "The API key holds neither the `ai:chat` nor the `ai:generate` scope, or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`).",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                  "$ref": "#/components/schemas/startAgentExecutionResponse403"
                 }
               }
             },
@@ -12210,6 +12250,42 @@
                 "description": "Correlation id for this request; safe to log and quote in support requests.",
                 "schema": {
                   "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
                 }
               }
             }
