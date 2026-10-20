@@ -5,7 +5,7 @@ import { ResearchLinkCategory } from '@bike4mind/database/content';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ensureAdmin } from '@server/utils/errors';
+import { ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 import qs from 'qs';
 
 interface IQuery {

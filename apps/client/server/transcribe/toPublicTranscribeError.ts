@@ -1,5 +1,5 @@
 import { insufficientCreditsError, type ApiErrorCode } from '@bike4mind/common';
-import { HTTPError, NotFoundError, UnprocessableEntityError } from '@server/utils/errors';
+import { HTTPError, NotFoundError, UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
 import { TranscribeRequestError } from './transcribe';
 
 /**

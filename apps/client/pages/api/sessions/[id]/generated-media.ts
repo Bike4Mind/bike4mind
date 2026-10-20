@@ -1,9 +1,9 @@
 import { questRepository, sessionRepository } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { NotFoundError } from '@server/utils/errors';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { GENERATED_MEDIA_URL_TTL_SECONDS, signGeneratedMediaUrls } from '@server/utils/generatedMediaUrls';
-import { toObjectIdString } from '@server/utils/objectId';
+import { toObjectIdString } from '@bike4mind/server-utils/utils/objectId';
 import { z } from 'zod';
 
 // A chat turn produces a handful of files; this bounds one request, not a session, and keeps the

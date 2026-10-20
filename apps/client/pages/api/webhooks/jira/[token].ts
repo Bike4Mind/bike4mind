@@ -50,7 +50,7 @@ import {
 } from '@bike4mind/database';
 import { slackDevWorkspaceRepository } from '@bike4mind/database/infra';
 import { User } from '@bike4mind/database';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { decryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
 import { decryptToken } from '@server/security/tokenEncryption';
 import { SlackClient } from '@bike4mind/slack';

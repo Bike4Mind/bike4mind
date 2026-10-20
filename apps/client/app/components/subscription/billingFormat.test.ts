@@ -8,20 +8,20 @@ describe('billingFormat', () => {
   });
 
   it('prices 1,000 credits to the cent', () => {
-    expect(pricePerThousandCredits(10, 16667)).toBe('$0.60');
     expect(pricePerThousandCredits(20, 33333)).toBe('$0.60');
+    expect(pricePerThousandCredits(100, 166667)).toBe('$0.60');
   });
 
   it('reports one shared rate only when every pack has it', () => {
     expect(
       sharedPackRate([
-        { price: 10, credits: 16667 },
-        { price: 35, credits: 58333 },
+        { price: 20, credits: 33333 },
+        { price: 100, credits: 166667 },
       ])
     ).toBe('$0.60');
     expect(
       sharedPackRate([
-        { price: 10, credits: 16667 },
+        { price: 20, credits: 33333 },
         { price: 30, credits: 60000 },
       ])
     ).toBeNull();

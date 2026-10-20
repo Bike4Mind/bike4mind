@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ isFeatureEnabled: vi.fn() }));
 
 import { isFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { assertMcpServerEnabled } from './mcpServerFlag';
 
 describe('assertMcpServerEnabled', () => {

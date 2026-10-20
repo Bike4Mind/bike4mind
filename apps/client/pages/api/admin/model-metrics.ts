@@ -3,7 +3,7 @@ import { ApiKeyScope, IChatHistoryItemDocument } from '@bike4mind/common';
 import { cacheService } from '@bike4mind/services';
 import { CacheKeys } from '@server/utils/cacheKeys';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { resolveQuestModelType } from '@server/utils/questModelType';
 import { Request } from 'express';
 import { z } from 'zod';

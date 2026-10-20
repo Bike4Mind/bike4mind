@@ -2,7 +2,7 @@ import { creditTransactionRepository, userRepository } from '@bike4mind/database
 import { ApiKeyScope, CreditHolderType, type CreditTransactionType } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 
 // Default view: manual credit movements only (admin adjustments/grants, both

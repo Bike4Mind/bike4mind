@@ -17,7 +17,7 @@ import {
 } from '@server/managers/sessionManager';
 import defineAbilitiesFor from '@server/auth/ability';
 import { isAvailable } from '@bike4mind/server-utils/services/integrationCircuitBreaker';
-import { recordRateLimitEvent } from '@server/utils/cloudwatch';
+import { recordRateLimitEvent } from '@bike4mind/server-utils/utils/cloudwatch';
 import { getDefaultChatCompletionOptions, getSharedTokenizer } from '@server/utils/chatCompletionDefaults';
 import { LLMEvents } from '@server/utils/eventBus';
 import { buildMcpEnvVariables } from '@server/utils/mcpEnv';
@@ -25,7 +25,7 @@ import { buildMcpEnvVariables } from '@server/utils/mcpEnv';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
 import { getSelectedRepositoriesForMcp } from '@bike4mind/server-utils/integrations/github/github-repo-helper';
 import { logEvent } from '@server/utils/analyticsLog';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { Resource } from 'sst';
 import { encryptToken, decryptToken } from '@server/security/tokenEncryption';
 

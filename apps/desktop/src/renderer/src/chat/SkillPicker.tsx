@@ -36,6 +36,7 @@ export function SkillPicker({
   onPickCommand,
   onPick,
   onTrustProject,
+  onBrowseMarket,
 }: {
   /** The app's own `/` actions, drawn above the skills. See commands.ts. */
   commands?: readonly ComposerCommand[];
@@ -47,6 +48,8 @@ export function SkillPicker({
   onPickCommand?: (command: ComposerCommand) => void;
   onPick: (skill: SkillSummary) => void;
   onTrustProject: () => void;
+  /** Offered when there are no skills, so an empty menu points somewhere. */
+  onBrowseMarket?: () => void;
 }) {
   const activeRef = useRef<HTMLDivElement | null>(null);
 
@@ -62,6 +65,7 @@ export function SkillPicker({
           <Typography level="body-xs" textColor="text.tertiary">
             No skills found. Put one in ~/.claude/skills/&lt;name&gt;/SKILL.md and type / again.
           </Typography>
+          {onBrowseMarket && <BrowseMarketLink onBrowse={onBrowseMarket} />}
         </Sheet>
       </Box>
     );
@@ -172,7 +176,30 @@ export function SkillPicker({
             </ListItemButton>
           ))}
         </List>
+        {skills.length === 0 && onBrowseMarket && (
+          <Box sx={{ px: 1.5, pb: 1 }}>
+            <BrowseMarketLink onBrowse={onBrowseMarket} />
+          </Box>
+        )}
       </Sheet>
     </Box>
+  );
+}
+
+function BrowseMarketLink({ onBrowse }: { onBrowse: () => void }) {
+  return (
+    <Button
+      size="sm"
+      variant="plain"
+      sx={{ px: 0, mt: 0.5 }}
+      // Mouse down, for the same reason as the rows: the textarea keeps focus until it is acted on.
+      onMouseDown={event => {
+        event.preventDefault();
+        onBrowse();
+      }}
+      data-testid="skill-picker-market-btn"
+    >
+      Browse the Skill Market
+    </Button>
   );
 }

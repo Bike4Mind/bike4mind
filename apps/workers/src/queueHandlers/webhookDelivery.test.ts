@@ -29,9 +29,9 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/observability', () => ({ Logger: class {} }));
 vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({ decryptSecret: () => 'plain-secret' }));
-vi.mock('@server/utils/ssrfProtection', () => ({ validateTargetUrl: h.validateTargetUrl }));
-vi.mock('@server/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: 'test-key' } }));
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/ssrfProtection', () => ({ validateTargetUrl: h.validateTargetUrl }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: 'test-key' } }));
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   recordWebhookDeliverySuccess: vi.fn(),
   recordWebhookDeliveryFailure: vi.fn(),
   recordWebhookDeliverySkipped: vi.fn(),

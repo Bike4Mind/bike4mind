@@ -7991,7 +7991,13 @@ describe('ChatCompletionProcess', () => {
     const resolve = vi.fn();
     const table = {
       'settings-surface': {
-        ownedFields: ['systemPromptText', 'enabledTools', 'temperature', 'maxToolCalls'] as const,
+        ownedFields: [
+          'systemPromptText',
+          'enabledTools',
+          'temperature',
+          'maxToolCalls',
+          'disableUserIntegrations',
+        ] as const,
         resolve,
       },
     };
@@ -8000,6 +8006,10 @@ describe('ChatCompletionProcess', () => {
       mockDb.sessions.findById.mockResolvedValue({ ...mockSession, ...session });
       (service as any).workspaceSessionSettings = workspaceSessionSettings;
       const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue([]);
+      const buildMcpToolsSpy = vi
+        .spyOn(ToolBuilder.prototype, 'buildMcpTools')
+        .mockResolvedValue({ mcpToolsByServer: {}, serverAgentConfig: {} });
+      buildMcpToolsSpy.mockClear();
       const complete = vi.fn().mockImplementation(async (_m, _msgs, _opts, cb) => cb(['Hi!']));
       mockedGetLlmByModel.mockReturnValue({
         complete,
@@ -8025,11 +8035,23 @@ describe('ChatCompletionProcess', () => {
       } as any);
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
-      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      const body = {
+        ...startQuestParams,
+        tools: [],
+        projectId: undefined,
+        organizationId: undefined,
+        mcpServers: ['notion'],
+      };
       try {
-        await service.process({ body, logger: mockLogger });
+        const processError = await service.process({ body, logger: mockLogger }).then(
+          () => undefined,
+          (error: unknown) => error
+        );
         const completeOptions = complete.mock.calls[0]?.[2];
         return {
+          processError,
+          modelCalled: complete.mock.calls.length > 0,
+          requestedMcpServers: buildMcpToolsSpy.mock.calls[0]?.[0]?.requestedMcpServers,
           // buildOptimizedFeatures is stubbed in beforeEach; its eighth argument is the session prompt.
           sessionPrompt: (service as any).buildOptimizedFeatures.mock.calls[0]?.[7] as string | undefined,
           temperature: completeOptions?.temperature,
@@ -8038,6 +8060,7 @@ describe('ChatCompletionProcess', () => {
         };
       } finally {
         buildToolsSpy.mockRestore();
+        buildMcpToolsSpy.mockRestore();
         (service as any).workspaceSessionSettings = {};
       }
     };
@@ -8052,10 +8075,12 @@ describe('ChatCompletionProcess', () => {
         enabledTools: ['current_datetime'],
         temperature: 0.15,
         maxToolCalls: 3,
+        disableUserIntegrations: true,
       });
 
       const turn = await runTurn({ surface: 'settings-surface' }, table);
 
+      expect(turn.processError).toBeUndefined();
       expect(resolve).toHaveBeenCalledWith(
         expect.objectContaining({
           user: expect.objectContaining({ id: 'user1' }),
@@ -8066,6 +8091,24 @@ describe('ChatCompletionProcess', () => {
       expect(turn.temperature).toBe(0.15);
       expect(turn.maxToolCalls).toBe(3);
       expect(turn.enabledTools).toContain('current_datetime');
+      // The request asked for an MCP server; the resolved disableUserIntegrations withholds it.
+      expect(turn.requestedMcpServers).toEqual([]);
+    });
+
+    it('fails closed when the resolver throws: no model call on stored settings', async () => {
+      resolve.mockRejectedValue(new Error('workspace lookup failed'));
+
+      const turn = await runTurn(
+        { surface: 'settings-surface', systemPromptText: 'STALE BAKED PROMPT', temperature: 0.9 },
+        table
+      );
+
+      expect(resolve).toHaveBeenCalledOnce();
+      expect(turn.processError).toEqual(
+        expect.objectContaining({ cause: expect.objectContaining({ message: 'workspace lookup failed' }) })
+      );
+      expect(turn.modelCalled).toBe(false);
+      expect(turn.sessionPrompt).toBeUndefined();
     });
 
     it('clears a baked owned field the resolver no longer yields', async () => {
@@ -8076,6 +8119,8 @@ describe('ChatCompletionProcess', () => {
         table
       );
 
+      expect(turn.processError).toBeUndefined();
+      expect(turn.modelCalled).toBe(true);
       expect(turn.sessionPrompt).toBeUndefined();
       expect(turn.maxToolCalls).toBeUndefined();
     });

@@ -6,10 +6,13 @@ import { transactionSchema } from './schemas';
  * Other deployments may use different payment payloads and plans.
  */
 
+// Ids are persisted on ledger rows and Stripe intents (and feed `credits-${packageId}` in
+// payment-intent.ts), so never reuse a retired id for a different amount. 'package_25k' is the
+// original id of the $20 pack and stays as is.
 export enum CreditPackageId {
-  A = 'package_10k',
-  B = 'package_25k',
-  C = 'package_50k',
+  Usd20 = 'package_25k',
+  Usd50 = 'package_usd50',
+  Usd100 = 'package_usd100',
 }
 
 export enum TransactionType {

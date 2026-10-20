@@ -60,7 +60,7 @@ vi.mock('@bike4mind/database', () => ({
   INTEGRATION_AUDIT_INTEGRATION_NAMES: ['github', 'atlassian', 'notion'],
 }));
 
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   recordRateLimitEvent: vi.fn(),
   recordCircuitBreakerRejection: vi.fn(),
 }));

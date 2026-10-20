@@ -21,7 +21,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@server/integrations/stripe/stripe', () => ({
   stripe: { invoices: { retrieve: mocks.retrieveInvoice } },
 }));
-vi.mock('@server/utils/cloudwatch', () => ({ emitMetric: mocks.emitMetric }));
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetric: mocks.emitMetric }));
 vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: mocks.publish } } }));
 vi.mock('@server/models/Subscription', () => ({
   subscriptionRepository: {

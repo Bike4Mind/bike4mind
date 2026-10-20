@@ -1,7 +1,7 @@
 import { ModalModel } from '@bike4mind/database/social';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { FilterQuery } from 'mongoose';
 import { IModalDocument } from '@bike4mind/common';
 import { extractVariantForViewer, viewerClassifier } from '@bike4mind/services';

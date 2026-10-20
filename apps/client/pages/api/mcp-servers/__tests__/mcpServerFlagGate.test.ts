@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 type RouteHandler = (req: unknown, res: unknown) => Promise<unknown>;
 type RouteMethod = 'get' | 'post' | 'put' | 'delete';

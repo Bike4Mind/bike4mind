@@ -40,9 +40,9 @@ import {
   purgeConnectionIngestedFiles,
   type PurgeConnectionLogger,
 } from '@server/dataLakes/purgeConnectionIngestedFiles';
-import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
-import { serializeError } from '@server/utils/serializeError';
-import { sendToQueue } from '@server/utils/sqs';
+import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
+import { serializeError } from '@bike4mind/server-utils/utils/serializeError';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import {
   BadRequestError,
   ConflictError,
@@ -50,7 +50,7 @@ import {
   HTTPError,
   HttpStatus,
   NotFoundError,
-} from '@server/utils/errors';
+} from '@bike4mind/server-utils/utils/errors';
 import { Resource } from 'sst';
 import {
   consumeGitHubLakeAuthGrant,

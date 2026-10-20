@@ -21,7 +21,7 @@ import { randomUUID } from 'crypto';
 import { connectDB, mcpServerRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { GitHubEvent } from '@server/integrations/github/GitHubEvent';
 import {
   GitHubEventType,
@@ -34,8 +34,8 @@ import {
   PayloadTooLargeError,
   verifyGitHubPayloadTimestamp,
 } from '@server/integrations/github/webhookUtils';
-import { sendToQueue } from '@server/utils/sqs';
-import { serializeError } from '@server/utils/serializeError';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
+import { serializeError } from '@bike4mind/server-utils/utils/serializeError';
 import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
 
 // Disable body parsing to get raw body for signature verification

@@ -112,7 +112,8 @@ const ReasoningDisclosure: FC<ReasoningDisclosureProps> = ({
   useEffect(() => {
     if (!expanded || !data) return;
     const store = useAgentExecutionStore.getState();
-    if (store.executions[replayId]?.status === 'completed') return;
+    const hydratedStatus = store.executions[replayId]?.status;
+    if (hydratedStatus === 'completed' || hydratedStatus === 'failed' || hydratedStatus === 'aborted') return;
     // Start fresh for the first hydration of this id.
     store.startExecution(replayId, sessionId);
     // Append each step as an iteration entry. IterationStream groups by
@@ -142,6 +143,16 @@ const ReasoningDisclosure: FC<ReasoningDisclosureProps> = ({
     // `IterationStream`'s delegate-action to child ordinal mapping relies on.
     if (data.children) {
       store.setChildExecutions(replayId, buildChildMap(data.children));
+    }
+    if (data.status === 'failed') {
+      // No failure reason is persisted, only the caller-safe message, which IterationStream
+      // renders on its own when the reason is absent.
+      store.markFailed(replayId, undefined, data.error ?? undefined);
+      return;
+    }
+    if (data.status === 'aborted') {
+      store.markAborted(replayId);
+      return;
     }
     // Final state: completed with the persisted answer.
     store.markCompleted(replayId, data.answer ?? undefined, 0);

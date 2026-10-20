@@ -4,7 +4,7 @@ import { invalidateSettingsCache } from '@bike4mind/utils';
 
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, NotFoundError, BadRequestError } from '@server/utils/errors';
+import { ForbiddenError, NotFoundError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 // Get LLM Model Configurations (readable by all authenticated users, needed for model selection)
 const getHandler = asyncHandler(async (req, res) => {

@@ -25,7 +25,7 @@ vi.mock('@bike4mind/observability', () => ({
     error = h.loggerError;
   },
 }));
-vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://%STAGE%/db' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://%STAGE%/db' } }));
 vi.mock('sst', () => ({ Resource: { App: { stage: 'dev' } } }));
 vi.mock('@server/integrations/google/drive/common', () => ({ releaseDriveConnection: h.releaseDriveConnection }));
 vi.mock('@server/integrations/github/dataLake/githubLakeConnection', () => ({

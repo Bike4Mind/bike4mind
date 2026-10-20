@@ -3,9 +3,9 @@ import { AppFile } from '@bike4mind/database/content';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { MAX_FILE_SIZE_DEFAULT_MB } from '@server/utils/maxFileSizeDefault';
-import { getAppFilesStorage } from '@server/utils/storage';
-import { isValidObjectId } from '@server/utils/objectId';
+import { MAX_FILE_SIZE_DEFAULT_MB } from '@bike4mind/server-utils/utils/maxFileSizeDefault';
+import { getAppFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import type { Request, Response } from 'express';
 
 /**

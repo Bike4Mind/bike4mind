@@ -1,6 +1,6 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, BadRequestError } from '@server/utils/errors';
+import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { slackDevWorkspaceRepository } from '@bike4mind/database/infra';
 import { compareManifests, extractBaseUrl } from '@bike4mind/slack';
 import { isSlackUserValidationError } from '@server/integrations/slack/slackExportErrors';

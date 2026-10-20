@@ -35,7 +35,7 @@ import type {
 } from '@bike4mind/common';
 import { parseNotebookImportKey } from '@server/utils/notebookImportKeys';
 import { Resource } from 'sst';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { v4 as uuidv4 } from 'uuid';
 import { updateImportProgress, markImportComplete, markImportFailed } from '@server/utils/importHistoryProgress';
 

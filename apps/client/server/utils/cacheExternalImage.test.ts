@@ -23,7 +23,7 @@ vi.mock('@aws-sdk/client-s3', () => ({
   HeadObjectCommand: class {},
 }));
 
-vi.mock('./ssrfProtection', () => ({
+vi.mock('@bike4mind/server-utils/utils/ssrfProtection', () => ({
   validateTargetUrl: (...args: unknown[]) => mockValidateTargetUrl(...args),
 }));
 

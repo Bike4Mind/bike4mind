@@ -15,7 +15,7 @@ import {
 import { IAdminSettingsRepository } from '@bike4mind/common';
 import { User } from '@bike4mind/database';
 import { fabFileRepository } from '@bike4mind/database';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 // Interop-safe constructor (not the raw default import) - see firecrawlApp.ts in services
 import { createFirecrawlApp } from '@bike4mind/services/llm/tools/implementation/webfetch';
 import { getFirecrawlConfig } from '@bike4mind/auth/apiKeyService';

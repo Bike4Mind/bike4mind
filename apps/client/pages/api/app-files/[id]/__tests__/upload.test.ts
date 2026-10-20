@@ -15,7 +15,7 @@ vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: vi.fn(async () => ({})),
   getSettingsValue: getSettingsValueMock,
 }));
-vi.mock('@server/utils/storage', () => ({ getAppFilesStorage: () => ({ upload: uploadMock }) }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getAppFilesStorage: () => ({ upload: uploadMock }) }));
 
 const handler = (await import('../upload')).default as (req: Request, res: Response) => Promise<unknown>;
 

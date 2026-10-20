@@ -25,6 +25,7 @@ import Compressor from 'compressorjs';
 import { useUpdateOrganization } from '@client/app/hooks/data/organizations';
 import OrganizationGroupTypesCard from './OrganizationGroupTypesCard';
 import OrganizationGroupMembersCard from './OrganizationGroupMembersCard';
+import OrganizationStorageLimitField, { parseStorageLimitInput } from './OrganizationStorageLimitField';
 
 export async function compressLogo(file: File, quality: number = 0.8): Promise<File | Blob> {
   return new Promise((resolve, reject) => {
@@ -51,6 +52,10 @@ interface OrganizationProfileProps {
 
 const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, onClose, children, activeDays }) => {
   const [editedOrg, setEditedOrg] = useState<WithId<IOrganization>>(org);
+  const [storageLimitInput, setStorageLimitInput] = useState(org.storageLimit?.toString() ?? '');
+  // The modal stays open after Update and `org` is the caller's snapshot, so track what was last saved.
+  const [savedStorageLimit, setSavedStorageLimit] = useState(org.storageLimit ?? null);
+  const parsedStorageLimit = parseStorageLimitInput(storageLimitInput);
 
   const updateOrganizationMutation = useUpdateOrganization();
 
@@ -77,9 +82,14 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
       description: org.description ?? '',
       billingContact: org.billingContact ?? '',
     });
+    setStorageLimitInput(org.storageLimit?.toString() ?? '');
+    setSavedStorageLimit(org.storageLimit ?? null);
   }, [org]);
 
   const handleUpdate = async () => {
+    if (!parsedStorageLimit.valid) return;
+    // Send only a changed limit, so saving other fields never writes null onto an org that has no override.
+    const storageLimitChanged = parsedStorageLimit.storageLimit !== savedStorageLimit;
     try {
       await updateOrganizationMutation.mutateAsync({
         orgId: org.id,
@@ -89,8 +99,10 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
           description: editedOrg.description,
           seats: editedOrg.seats,
           currentCredits: editedOrg.currentCredits,
+          ...(storageLimitChanged && { storageLimit: parsedStorageLimit.storageLimit }),
         },
       });
+      setSavedStorageLimit(parsedStorageLimit.storageLimit);
     } catch (error) {
       // Error is handled by the mutation hook
     }
@@ -137,6 +149,11 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
                     onChange={e => handleChange('currentCredits', e.target.value)}
                   />
                 </FormControl>
+                <OrganizationStorageLimitField
+                  orgId={org.id}
+                  value={storageLimitInput}
+                  onChange={setStorageLimitInput}
+                />
                 <FormControl>
                   <FormLabel>Description</FormLabel>
                   <Textarea
@@ -160,7 +177,12 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
               <Button variant="outlined" onClick={onClose}>
                 Cancel
               </Button>
-              <Button onClick={handleUpdate} loading={updateOrganizationMutation.isPending}>
+              <Button
+                data-testid="admin-org-update-btn"
+                onClick={handleUpdate}
+                loading={updateOrganizationMutation.isPending}
+                disabled={!parsedStorageLimit.valid}
+              >
                 Update
               </Button>
             </Stack>

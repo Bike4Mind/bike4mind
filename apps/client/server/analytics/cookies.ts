@@ -1,6 +1,6 @@
 import type { Request } from 'express';
 import type { OverwatchUtm } from '@bike4mind/common';
-import { ACQUISITION_COOKIES } from '@client/lib/subscriptions/acquisition';
+import { ACQUISITION_COOKIES } from '@bike4mind/server-utils/lib/subscriptions/acquisition';
 
 /**
  * First-party cookies the analytics emitter reads.

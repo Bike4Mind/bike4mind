@@ -54,8 +54,8 @@ import {
 import { toScanSummary, type IDataLakeDocument } from '@bike4mind/common';
 import { dataLakeService } from '@bike4mind/services';
 import { Logger } from '@bike4mind/observability';
-import { Config } from '@server/utils/config';
-import { emitMetric } from '@server/utils/cloudwatch';
+import { Config } from '@bike4mind/server-utils/utils/config';
+import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { Resource } from 'sst';
 

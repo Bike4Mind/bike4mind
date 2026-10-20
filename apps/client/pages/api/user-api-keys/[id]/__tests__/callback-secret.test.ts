@@ -54,7 +54,7 @@ const logEventSafe = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe }));
 
 import { ApiKeyScope } from '@bike4mind/common';
-import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import '@pages/api/user-api-keys/[id]/callback-secret';
 
 function post(id: string | undefined) {

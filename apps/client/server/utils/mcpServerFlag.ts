@@ -1,5 +1,5 @@
 import { isFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 /**
  * Throws unless the EnableMCPServer admin flag is on. The web routes that write or contact a user's

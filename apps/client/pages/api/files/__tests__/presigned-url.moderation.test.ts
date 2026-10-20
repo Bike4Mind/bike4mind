@@ -29,7 +29,7 @@ vi.mock('@server/dataLakes', () => ({
   resolveAccessibleLakes: vi.fn(),
 }));
 
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: vi.fn() }));
 
 import { filterServeableFilePaths } from '../presigned-url';
 

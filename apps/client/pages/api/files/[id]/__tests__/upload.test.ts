@@ -24,7 +24,7 @@ vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: vi.fn(async () => ({})),
   getSettingsValue: getSettingsValueMock,
 }));
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ upload: uploadMock }) }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({ upload: uploadMock }) }));
 vi.mock('@server/s3/uploadSizeGate', () => ({ admitLandedUpload: admitMock }));
 vi.mock('@server/dataLakes/recomputeStatsForUploadedFile', () => ({
   recomputeStatsForUploadedFile: recomputeUploadedMock,

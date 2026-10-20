@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { blockedIPRepository } from '@bike4mind/database';
-import { ensureAdmin } from '@server/utils/errors';
+import { ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 
 // GET: list active blocked IPs (limit=10)
 // POST: block ip { ip, reason }

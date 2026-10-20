@@ -41,11 +41,11 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-vi.mock('@server/utils/resolveActiveOrg', () => ({
+vi.mock('@bike4mind/server-utils/utils/resolveActiveOrg', () => ({
   resolveActiveOrg: async (_req: unknown, orgId?: string) => {
     if (!orgId?.trim()) return undefined;
     if (orgId === 'foreign-org') {
-      const { ForbiddenError } = await import('@server/utils/errors');
+      const { ForbiddenError } = await import('@bike4mind/server-utils/utils/errors');
       throw new ForbiddenError('You are not a member of the selected organization.');
     }
     return orgId;

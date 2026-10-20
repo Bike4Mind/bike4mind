@@ -51,7 +51,7 @@ vi.mock('@server/utils/chatCompletionDefaults', () => ({
   getSharedTokenizer: () => ({}),
 }));
 vi.mock('@server/utils/dispatchQuest', () => ({ dispatchQuest: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({}) }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({}) }));
 
 // Only the identity loader is stubbed, so its call is the observable for the skip. The rest of the
 // module stays real: sessionWillInjectAuthoredPrompt resolves a systemPromptId through it.

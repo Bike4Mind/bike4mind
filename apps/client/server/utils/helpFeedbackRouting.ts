@@ -11,7 +11,7 @@ import { Logger } from '@bike4mind/observability';
 import mongoose from 'mongoose';
 import { reviseFeedbackText, saveFeedbackOrRollbackText, writeFeedbackText } from '@server/utils/feedbackText';
 import { resolveFeedbackOrganization } from '@server/utils/feedbackOrganization';
-import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
+import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 import { hydrateFeedbackText } from '@server/utils/redactedFeedback';
 
 /**

@@ -9,7 +9,7 @@ import {
   reconcileOrgSeatsFromSubscription,
 } from './organizationService';
 import { SubscriptionSource } from '@client/lib/subscriptions/types';
-import { ORGANIZATION_SUBSCRIPTION_MAX_SEATS } from '@client/lib/subscriptions/constants';
+import { ORGANIZATION_SUBSCRIPTION_MAX_SEATS } from '@bike4mind/server-utils/lib/subscriptions/constants';
 
 // Vitest hoists vi.mock() calls above imports, so the mocked modules win
 // even though imports appear higher in source order.

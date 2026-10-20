@@ -6,7 +6,7 @@
 import { connectDB, generationJobRepository } from '@bike4mind/database';
 import { runGenerationJobSweep } from '@bike4mind/services/generationJobs';
 import { Logger } from '@bike4mind/observability';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { enqueueGenerationJob } from '@server/generationJobs/wiring';
 import { Resource } from 'sst';
 

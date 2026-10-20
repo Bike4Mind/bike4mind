@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sessionRepository } from '@bike4mind/database/auth';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { SpiderEvents } from '@server/utils/eventBus';
 import { v4 as uuidv4 } from 'uuid';
 import { assertSessionOperationalCredits } from '@server/utils/sessionOperationalCreditPreflight';

@@ -14,8 +14,8 @@ import {
 import { isLeaseHeld, ConflictError, UnprocessableEntityError, TooManyRequestsError } from '@bike4mind/common';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
-import { sendToQueue } from '@server/utils/sqs';
-import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
+import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import {
   LAKE_MEMORY_DAILY_CAP,
   LAKE_MEMORY_RATE_LIMIT_WINDOW_MS,

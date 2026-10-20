@@ -3,7 +3,7 @@
  *
  * Every TCP connection - first request, redirect hops, and whatever the caller fetches next - resolves
  * through `createSsrfSafeLookup`, so the address that is validated is the address the socket dials. That
- * closes the DNS-rebinding residual documented on `safeFetch` in `apps/client/server/utils/ssrfProtection.ts`,
+ * closes the DNS-rebinding residual documented on `safeFetch` in `packages/server-utils/src/utils/ssrfProtection.ts`,
  * which cannot hook global fetch's resolver. Node skips `lookup` entirely for an IP-literal host, so literals
  * are judged per hop in `assertHopAllowed` instead.
  *

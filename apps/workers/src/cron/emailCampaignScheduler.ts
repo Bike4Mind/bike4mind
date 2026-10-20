@@ -3,9 +3,9 @@ import { randomUUID } from 'crypto';
 import { emailJobRepository, connectDB } from '@bike4mind/database';
 import { EmailJobStatus } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import { sendToQueue } from '@server/utils/sqs';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { Resource } from 'sst';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 
 const contextToLogs = (context: Context) => ({
   requestId: context.awsRequestId ?? randomUUID(),

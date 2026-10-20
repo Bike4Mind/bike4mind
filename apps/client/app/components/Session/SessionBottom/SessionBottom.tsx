@@ -63,7 +63,8 @@ import { LexicalChatInput, LexicalChatInputRef } from '../LexicalChatInput';
 import { useModelInfo } from '../../../hooks/data/useModelInfo';
 import { useAccessibleModels } from '../../../hooks/useAccessibleModels';
 import { dismissCreditNudge, isCreditNudgeDismissed } from '../creditNudgeDismissal';
-import { noModelsPlaceholder, NoModelsPlaceholder, CreditsWarning, LowCreditsWarning } from '../SessionWarnings';
+import { noModelsPlaceholder, NoModelsPlaceholder, LowCreditsWarning } from '../SessionWarnings';
+import { ZeroCreditWarning } from '../ZeroCreditWarning';
 import { useLowCreditsThreshold } from '@client/app/hooks/data/teamPlanSettings';
 import { getComposerCreditUi } from './composerCreditUi';
 import { useFileBrowser } from '@client/app/components/Files/Browser';
@@ -125,7 +126,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
 
   const { chatCompletion, setChatCompletion } = useChatCompletionContext();
 
-  const { readyState, subscribeToAction } = useWebsocket();
+  const { readyState, hasEverOpened: hasSocketEverOpened, subscribeToAction } = useWebsocket();
 
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
   const lexicalInputRef = useRef<LexicalChatInputRef>(null);
@@ -358,6 +359,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
     isModelsError,
     hasModels,
     isSocketOpen: readyState === ReadyState.OPEN,
+    hasSocketEverOpened,
     hasActiveUploads,
   });
 
@@ -677,7 +679,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                 }}
               >
                 {creditUi.replaceComposer ? (
-                  <CreditsWarning show />
+                  <ZeroCreditWarning hasDraft={chatInputValue.trim() !== ''} />
                 ) : (
                   <Stack
                     className="session-bottom-input-row"

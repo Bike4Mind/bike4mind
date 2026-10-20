@@ -1,8 +1,8 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { getPublishedArtifactsStorage } from '@server/utils/storage';
-import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
+import { getPublishedArtifactsStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 import { PublishedArtifact } from '@bike4mind/database';
 import {
   FinalizeRequestSchema,

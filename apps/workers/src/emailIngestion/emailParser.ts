@@ -15,8 +15,8 @@ import { Resource } from 'sst';
 import { emailIngestionService } from '@bike4mind/services';
 import { UnauthorizedError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
-import { getFilesStorage } from '@server/utils/storage';
-import { sendToQueue } from '@server/utils/sqs';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 
 const { processIngestedEmail, readSenderAuthenticationHeaders } = emailIngestionService;
 type IEmailParserAdapter = emailIngestionService.IEmailParserAdapter;

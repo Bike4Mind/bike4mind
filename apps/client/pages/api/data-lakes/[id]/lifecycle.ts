@@ -21,9 +21,9 @@ import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { lakeMembershipAuditDb } from '@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
-import { sendToQueue } from '@server/utils/sqs';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import type { DataLakeCleanupMessage } from '@bike4mind/server-utils/dataLakes/dataLakeCleanupPayload';
-import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
+import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { disableDriveConnectionForLake, enableDriveConnectionForLake } from '@server/integrations/google/drive/common';
 import {
   disableGitHubConnectionForLake,

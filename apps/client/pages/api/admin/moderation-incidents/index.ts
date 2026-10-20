@@ -3,7 +3,7 @@ import { Request } from 'express';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { imageModerationIncidentRepository } from '@bike4mind/database';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 /**
  * Admin-only work-queue endpoint for image-moderation incidents that need attention.

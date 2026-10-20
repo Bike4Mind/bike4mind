@@ -1,7 +1,7 @@
 import type { TFunction } from 'i18next';
 
 export type SendBlockedReason =
-  'generating' | 'sending' | 'loadingModels' | 'modelsError' | 'noModels' | 'reconnecting' | 'uploading';
+  'generating' | 'sending' | 'loadingModels' | 'modelsError' | 'noModels' | 'connecting' | 'reconnecting' | 'uploading';
 
 /**
  * Why the composer can't send right now, or null when it can. The single gate for the Send
@@ -15,13 +15,15 @@ export function getSendBlockedReason(params: {
   isModelsError: boolean;
   hasModels: boolean;
   isSocketOpen: boolean;
+  /** False until the socket first opens, so the first connect isn't reported as a reconnect. */
+  hasSocketEverOpened: boolean;
   hasActiveUploads: boolean;
 }): SendBlockedReason | null {
   if (params.isGenerating) return 'generating';
   if (params.submitting) return 'sending';
   if (params.isModelsLoading) return 'loadingModels';
   if (!params.hasModels) return params.isModelsError ? 'modelsError' : 'noModels';
-  if (!params.isSocketOpen) return 'reconnecting';
+  if (!params.isSocketOpen) return params.hasSocketEverOpened ? 'reconnecting' : 'connecting';
   if (params.hasActiveUploads) return 'uploading';
   return null;
 }
@@ -39,6 +41,8 @@ export function getSendBlockedLabel(reason: SendBlockedReason, t: TFunction): st
       return t('session.sendBlocked.modelsError', "Couldn't load AI models");
     case 'noModels':
       return t('session.sendBlocked.noModels', 'No models available');
+    case 'connecting':
+      return t('session.sendBlocked.connecting', 'Connecting...');
     case 'reconnecting':
       return t('session.sendBlocked.reconnecting', 'Reconnecting...');
     case 'uploading':
@@ -60,6 +64,7 @@ const COMPOSER_TOASTED_REASONS: ReadonlySet<SendBlockedReason> = new Set([
   'loadingModels',
   'modelsError',
   'noModels',
+  'connecting',
   'reconnecting',
   'uploading',
 ]);

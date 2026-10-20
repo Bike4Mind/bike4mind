@@ -1,5 +1,5 @@
 import { ApiKeyScope, QA_INGEST_USER_TAG } from '@bike4mind/common';
-import { ForbiddenError, UnauthorizedError } from '@server/utils/errors';
+import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 
 /**
  * baseApi's scope gate only applies to API-key callers and lets a JWT through, so

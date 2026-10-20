@@ -63,6 +63,12 @@ export function NoModelsPlaceholder({ loadError, onRetry }: { loadError: boolean
 
 interface CreditsWarningProps {
   show: boolean;
+  /** Why the balance is 0. */
+  reason?: string;
+  /** Whether the composer holds text that will wait for credits. */
+  hasDraft?: boolean;
+  /** Free routes to credits; listed ahead of the paid actions. */
+  freeRoutes?: ReactNode;
   /** Replaces the account-aware CreditOfferActions, e.g. to preview one kind of account. */
   actions?: ReactNode;
 }
@@ -113,7 +119,7 @@ export function LowCreditsWarning({ show, currentCredits, onDismiss, actions }: 
  * sits above the toolbar and says what happened and what to
  * do in the same calm register as the rest of the composer.
  */
-export function CreditsWarning({ show, actions }: CreditsWarningProps) {
+export function CreditsWarning({ show, actions, reason, hasDraft = false, freeRoutes }: CreditsWarningProps) {
   if (!show) return null;
 
   return (
@@ -147,6 +153,29 @@ export function CreditsWarning({ show, actions }: CreditsWarningProps) {
             Your chats and files are safe. You can still review and export your work, then continue when credits are
             available.
           </Typography>
+          {reason && (
+            <Typography
+              data-testid="credits-warning-reason"
+              level="body-sm"
+              sx={{ mt: '2px', fontSize: '13px', color: 'text.tertiary' }}
+            >
+              {reason}
+            </Typography>
+          )}
+          {hasDraft && (
+            <Typography
+              data-testid="credits-warning-draft-saved"
+              level="body-sm"
+              sx={{ mt: '2px', fontSize: '13px', color: 'text.tertiary' }}
+            >
+              Your message is saved. Pick up where you left off once you have credits.
+            </Typography>
+          )}
+          {freeRoutes && (
+            <Box data-testid="credits-warning-free-routes" sx={{ mt: '12px' }}>
+              {freeRoutes}
+            </Box>
+          )}
         </Box>
         <Box data-testid="credits-warning-actions" sx={{ flexShrink: 0 }}>
           {actions ?? <CreditOfferActions moment="out" />}
