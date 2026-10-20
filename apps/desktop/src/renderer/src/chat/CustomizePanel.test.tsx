@@ -20,11 +20,17 @@ window.matchMedia ??= ((query: string) => ({
   dispatchEvent: () => false,
 })) as typeof window.matchMedia;
 
+const market = vi.hoisted(() => ({
+  imports: vi.fn(async () => ({ imports: [] as unknown[] })),
+  openOnWeb: vi.fn(async () => true),
+}));
+
 (window as unknown as { b4m: unknown }).b4m = {
   mcp: {
     getServers: async () => ({ servers: [], secretsPersisted: true }),
     onChanged: () => () => {},
   },
+  skillMarket: market,
 };
 
 const skills = vi.hoisted(() => ({
@@ -177,6 +183,34 @@ describe('the Customize screen', () => {
 
     const row = allByTestId('customize-skill-row').find(candidate => text(candidate)?.includes('/web-summary'));
     expect(text(row?.querySelector('[data-testid="customize-skill-chip"]'))).toBe('Bike4Mind');
+  });
+
+  it('marks a Skill Market import, offers its update, and opens the market and the web', async () => {
+    skills.state.skills = [
+      ...skills.state.skills,
+      { name: 'web-summary', description: 'Mine', source: 'account', filePath: 'b4m:/api/skills/a1' },
+      { name: 'market-pick', description: 'Theirs', source: 'account', imported: true, filePath: 'b4m:/api/skills/a2' },
+    ];
+    market.imports.mockResolvedValueOnce({
+      imports: [{ skillId: 'a2', name: 'market-pick', listingId: 'l1', updateAvailable: true }],
+    });
+    const onOpenSkillMarket = vi.fn();
+    renderNode(<CustomizeScreen sessionId="session-1" onClose={() => {}} onOpenSkillMarket={onOpenSkillMarket} />);
+    await act(async () => {});
+
+    const rows = allByTestId('customize-skill-row');
+    const mine = rows.find(row => text(row)?.includes('/web-summary'));
+    const theirs = rows.find(row => text(row)?.includes('/market-pick'));
+    expect(mine?.querySelector('[data-testid="customize-skill-imported-chip"]')).toBeNull();
+    expect(mine?.querySelector('[data-testid="customize-skill-update-btn"]')).toBeNull();
+    expect(text(theirs?.querySelector('[data-testid="customize-skill-imported-chip"]'))).toBe('Imported');
+
+    act(() => theirs?.querySelector<HTMLElement>('[data-testid="customize-skill-update-btn"]')?.click());
+    expect(onOpenSkillMarket).toHaveBeenLastCalledWith({ id: 'l1' });
+    act(() => byTestId('customize-skill-market-btn')?.click());
+    expect(onOpenSkillMarket).toHaveBeenLastCalledWith();
+    act(() => mine?.querySelector<HTMLElement>('[data-testid="customize-skill-web-btn"]')?.click());
+    expect(market.openOnWeb).toHaveBeenCalledWith({ kind: 'skill', id: 'a1' });
   });
 
   it('switches to MCP and preserves its inline controls', () => {
