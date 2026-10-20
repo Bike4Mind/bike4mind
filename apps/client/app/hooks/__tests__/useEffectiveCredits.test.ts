@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
-import { useEffectiveCredits } from '../useEffectiveCredits';
+import { POST_STREAM_HOLD_MAX_MS, useCreditSyncSignal, useEffectiveCredits } from '../useEffectiveCredits';
 import { useStreamingState } from '../useStreamingState';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 
@@ -111,6 +111,67 @@ describe('useEffectiveCredits', () => {
     mockUseUser.mockReturnValue({ currentUser: { id: 'user-1', currentCredits: 1350 } });
     rerender();
     expect(result.current).toBe(1350);
+  });
+
+  describe('after the turn ends, before the settled balance arrives', () => {
+    const endTurnWithHoldDippedBalance = () => {
+      const view = renderHook(() => useEffectiveCredits());
+      act(() => useStreamingState.getState().startStreaming('session-1'));
+      mockUseUser.mockReturnValue({ currentUser: { id: 'user-1', currentCredits: 227 } });
+      view.rerender();
+      act(() => useStreamingState.getState().completeStreaming('session-1'));
+      return view;
+    };
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('keeps the pre-turn balance instead of showing the hold-dipped one', () => {
+      const { result } = endTurnWithHoldDippedBalance();
+      expect(result.current).toBe(1500);
+    });
+
+    it('goes straight from the pre-turn balance to the settled one with no hold-based value between', () => {
+      const { result, rerender } = endTurnWithHoldDippedBalance();
+      const seen: number[] = [result.current];
+
+      mockUseUser.mockReturnValue({ currentUser: { id: 'user-1', currentCredits: 1421 } });
+      rerender();
+      seen.push(result.current);
+
+      expect(seen).toEqual([1500, 1421]);
+    });
+
+    it('releases to the live balance when the post-turn balance sync completes with no change', () => {
+      const { result } = endTurnWithHoldDippedBalance();
+      expect(result.current).toBe(1500);
+
+      act(() => useCreditSyncSignal.getState().markSynced());
+      expect(result.current).toBe(227);
+    });
+
+    it('releases to the live balance after the backstop even if no sync ever lands', () => {
+      vi.useFakeTimers();
+      const { result } = endTurnWithHoldDippedBalance();
+      expect(result.current).toBe(1500);
+
+      act(() => {
+        vi.advanceTimersByTime(POST_STREAM_HOLD_MAX_MS);
+      });
+      expect(result.current).toBe(227);
+    });
+
+    it('keeps holding the first turn pre-turn balance when a new turn starts before the settled balance lands', () => {
+      const { result, rerender } = endTurnWithHoldDippedBalance();
+
+      act(() => useStreamingState.getState().startStreaming('session-2'));
+      expect(result.current).toBe(1500);
+
+      mockUseUser.mockReturnValue({ currentUser: { id: 'user-1', currentCredits: 100 } });
+      rerender();
+      expect(result.current).toBe(1500);
+    });
   });
 
   it('reflects a genuine balance change once idle (freeze does not permanently pin the value)', () => {
