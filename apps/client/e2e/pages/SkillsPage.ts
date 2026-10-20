@@ -210,6 +210,25 @@ export class SkillsPage extends BasePage {
     else await expect(input).not.toBeChecked();
   }
 
+  /** Non-admin view of a non-global skill: no global switches, the Skill Market hint instead. */
+  async expectGlobalTogglesHidden() {
+    await expect(this.page.getByTestId('skill-share-market-hint')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await expect(this.page.getByTestId('skill-share-global-read')).toBeHidden();
+    await expect(this.page.getByTestId('skill-share-global-write')).toBeHidden();
+  }
+
+  async expectGlobalReadEnabled(enabled: boolean) {
+    const input = this.switchInput('skill-share-global-read');
+    if (enabled) await expect(input).toBeEnabled();
+    else await expect(input).toBeDisabled();
+  }
+
+  async expectGlobalWriteEnabled(enabled: boolean) {
+    const input = this.switchInput('skill-share-global-write');
+    if (enabled) await expect(input).toBeEnabled();
+    else await expect(input).toBeDisabled();
+  }
+
   /** Save the share dialog; asserts the PUT .../share fires and the dialog closes. */
   async saveShare() {
     const [response] = await Promise.all([

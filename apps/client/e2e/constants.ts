@@ -17,6 +17,13 @@ export const MONITORED_MODELS = ['Claude Opus 4.7', 'GPT-5.5'] as const;
  */
 export const NOTEBOOK_EXPORT_IMPORTER_KEY = 'notebookExportBytesImporter';
 
+/**
+ * Spec-user key for the non-admin account the skills suite switches to. The skills spec user is an
+ * admin (the global share toggles are admin-only), so the non-admin share path needs a second user;
+ * skills.setup.ts creates it. Shared here for the same reason as NOTEBOOK_EXPORT_IMPORTER_KEY.
+ */
+export const SKILLS_MEMBER_KEY = 'skillsMember';
+
 /** Centralized timeout constants for E2E tests (in milliseconds). */
 export const TIMEOUTS = {
   /** Short UI transitions and state settling */

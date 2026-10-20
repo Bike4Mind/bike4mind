@@ -1,4 +1,4 @@
-import { test, type APIRequestContext } from '@playwright/test';
+import { test, type APIRequestContext, type APIResponse } from '@playwright/test';
 import { Resource } from 'sst';
 import crypto from 'crypto';
 import type { DataLakeOrigin } from '@bike4mind/common';
@@ -669,6 +669,23 @@ export async function apiDeleteSkill(request: APIRequestContext, token: string, 
   const baseURL = process.env.API_URL || 'http://localhost:3000';
   await request.delete(`${baseURL}/api/skills/${skillId}`, {
     headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+/**
+ * PUT /api/skills/:id/share. Returns the raw response rather than throwing, so a caller can assert
+ * a 403 as readily as a 200.
+ */
+export async function apiShareSkill(
+  request: APIRequestContext,
+  token: string,
+  skillId: string,
+  body: { isGlobalRead?: boolean; isGlobalWrite?: boolean }
+): Promise<APIResponse> {
+  const baseURL = process.env.API_URL || 'http://localhost:3000';
+  return request.put(`${baseURL}/api/skills/${skillId}/share`, {
+    headers: { Authorization: `Bearer ${token}` },
+    data: body,
   });
 }
 
