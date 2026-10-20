@@ -77,13 +77,18 @@ function suggestionsEntry(enabled: boolean, toggle: () => void, model: string | 
   };
 }
 
-function permissionsEntry(state: PermissionsState | null, setState: (state: PermissionsState) => void): ConfigEntry {
+function permissionsEntry(
+  state: PermissionsState | null,
+  setState: (state: PermissionsState) => void,
+  loadError: string | null,
+  onRetry: () => void
+): ConfigEntry {
   return {
     id: 'permissions',
     icon: <ShieldIcon />,
     label: 'Permissions',
     summary: permissionsSummary(state),
-    control: <PermissionsSettings state={state} onState={setState} />,
+    control: <PermissionsSettings state={state} onState={setState} loadError={loadError} onRetry={onRetry} />,
   };
 }
 
@@ -143,12 +148,12 @@ function useSettingsEntries(auth: AuthState | null): ConfigEntry[] {
   const theme = useTheme();
   const [suggestions, toggleSuggestions] = usePromptSuggestions();
   const [suggestionModel] = usePromptSuggestionModel();
-  const [permissions, setPermissions] = usePermissions();
+  const [permissions, setPermissions, permissionsError, retryPermissions] = usePermissions();
 
   const preferences = [
     appearanceEntry(mode, setMode, theme.palette.mode),
     suggestionsEntry(suggestions, toggleSuggestions, suggestionModel),
-    permissionsEntry(permissions, setPermissions),
+    permissionsEntry(permissions, setPermissions, permissionsError, retryPermissions),
   ];
   return auth ? [...preferences, serverEntry(auth), updatesEntry(update)] : [...preferences, updatesEntry(update)];
 }

@@ -515,6 +515,8 @@ export interface ApprovalAlways {
   commands: readonly { text: string; pattern: string; coverable: boolean; words?: string; opaque?: string }[];
   /** Directories outside every granted root that the command reaches. */
   directories: readonly string[];
+  /** Physical paths named by a shell command, used to protect permission files even through aliases. */
+  paths?: readonly string[];
 }
 
 /** See ChatApprovalOption: this is that, plus what main does with the answer. */

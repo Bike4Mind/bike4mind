@@ -198,6 +198,14 @@ describe('PermissionService', () => {
     );
   });
 
+  it('refuses compilation when an imported rule source is unreadable', async () => {
+    await mkdir(join(home, '.claude'), { recursive: true });
+    await writeFile(join(home, '.claude', 'settings.json'), '{broken');
+    await service.start();
+    await service.setRules({ kind: 'user' }, { allow: ['Bash(rm:*)'], ask: [], deny: [] });
+    await expect(decide(bash('rm x'))).rejects.toThrow('Cannot read permission rules');
+  });
+
   it('refuses a rule that does not parse, and saves nothing', async () => {
     const result = await service.setRules({ kind: 'user' }, { allow: ['Bash(ls:*)', 'Nope(x)'], ask: [], deny: [] });
     expect(result.ok).toBe(false);
@@ -231,16 +239,57 @@ describe('PermissionRuleStore', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  it('reads a missing or corrupt file as no rules with sharing on', async () => {
+  it('serializes concurrent changes without losing rules or sharing preferences', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'b4m-rule-store-'));
+    try {
+      const path = join(dir, 'permission-rules.json');
+      const store = new PermissionRuleStore(path);
+      await Promise.all([
+        store.addUserAllows(['Bash(ls:*)']),
+        store.addUserAllows(['Bash(git status:*)']),
+        store.setShareClaudeCode(false),
+        store.setLists({ kind: 'project', directory: '/work/x' }, { allow: [], ask: [], deny: ['Bash(rm:*)'] }),
+      ]);
+      expect(await new PermissionRuleStore(path).read()).toMatchObject({
+        shareClaudeCode: false,
+        user: { allow: ['Bash(ls:*)', 'Bash(git status:*)'] },
+        projects: { '/work/x': { deny: ['Bash(rm:*)'] } },
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the last committed permissions after a failed save and can retry', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'b4m-rule-store-'));
+    try {
+      const path = join(dir, 'permission-rules.json');
+      const store = new PermissionRuleStore(path);
+      await store.setShareClaudeCode(false);
+      await mkdir(`${path}.tmp`);
+      await expect(store.addUserAllows(['Bash(rm:*)'])).rejects.toThrow();
+      expect(await store.read()).toMatchObject({ shareClaudeCode: false, user: { allow: [] } });
+      await rm(`${path}.tmp`, { recursive: true });
+      await store.addUserAllows(['Bash(ls:*)']);
+      expect(await new PermissionRuleStore(path).read()).toMatchObject({ user: { allow: ['Bash(ls:*)'] } });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('defaults only for a missing file and rejects corrupt rules', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'b4m-rule-store-'));
     await writeFile(join(dir, 'bad.json'), '{not json', 'utf8');
-    for (const name of ['missing.json', 'bad.json']) {
+    for (const name of ['missing.json']) {
       expect(await new PermissionRuleStore(join(dir, name)).read()).toEqual({
         shareClaudeCode: true,
         user: { allow: [], ask: [], deny: [] },
         projects: {},
       });
     }
+    await expect(new PermissionRuleStore(join(dir, 'bad.json')).read()).rejects.toThrow();
+    await writeFile(join(dir, 'bad.json'), JSON.stringify({ user: { deny: 'Bash(rm:*)' } }));
+    await expect(new PermissionRuleStore(join(dir, 'bad.json')).read()).rejects.toThrow();
     await rm(dir, { recursive: true, force: true });
   });
 });

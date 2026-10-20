@@ -1,4 +1,9 @@
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { scanShell } from '../tools/shellScan';
+import { permissionSubject } from './subject';
 import {
   CLAUDE_CODE_TOOLS,
   type CompiledRule,
@@ -209,6 +214,21 @@ describe('PermissionRuleSet', () => {
     );
   });
 
+  it.each([
+    'GIT_CONFIG_PARAMETERS=evil git status',
+    'GIT_EXTERNAL_DIFF=./payload git status',
+    'git status > out.txt',
+    'git status 2> errors.txt',
+    '> out.txt git status',
+    "git status <<'EOF' > out.txt\ninput\nEOF",
+  ])('an exact rule does not discard the unsafe syntax in %s', async script => {
+    const scan = await scanShell(script, PROJECT, [PROJECT]);
+    if (!scan) throw new Error('Expected the regression script to parse');
+    const subject = shell(script, scan.commands, scan.directories);
+    expect(decide(set({ allow: ['Bash(git status)'] }), subject)).toBeNull();
+    expect(decide(set({ allow: [`Bash(${script})`] }), subject)).toBe('allow');
+  });
+
   it('asks for a folder outside the shared ones unless a Read or Edit rule covers it', () => {
     const outside = shell('ls /srv/data', ['ls /srv/data'], ['/srv/data']);
     expect(decide(set({ allow: ['Bash(ls:*)'] }), outside)).toBeNull();
@@ -225,6 +245,47 @@ describe('PermissionRuleSet', () => {
     expect(decide(rules, { tool: 'file_write', paths: [`${PROJECT}/.claude/settings.json`] })).toBeNull();
     expect(decide(rules, { tool: 'file_write', paths: [`${HOME}/notes.md`] })).toBe('allow');
   });
+
+  it.each(['settings.json', 'settings.local.json', 'permission-rules.json'])(
+    'does not allow a shell write through a symlink to %s inside a shared root', async filename => {
+      const directory = await realpath(await mkdtemp(join(tmpdir(), 'permission-paths-')));
+      try {
+        const protectedDirectory = join(directory, filename === 'permission-rules.json' ? 'app-data' : '.claude');
+        await mkdir(protectedDirectory);
+        await writeFile(join(protectedDirectory, filename), '{}');
+        await writeFile(join(directory, 'payload'), '{}');
+        await symlink(protectedDirectory, join(directory, 'alias'));
+        const script = `cp payload alias/${filename}`;
+        const scan = await scanShell(script, directory, [directory]);
+        if (!scan) throw new Error('Expected the alias command to parse');
+        expect(scan.directories).toEqual([]);
+        expect(scan.paths).toContain(join(protectedDirectory, filename));
+        const subject = permissionSubject({ name: 'bash_execute', input: { command: script } }, {
+          detail: '', key: 'test', always: {
+            namespace: 'bash_execute',
+            commands: scan.commands.map(command => ({ ...command, pattern: command.always })),
+            directories: scan.directories,
+            paths: scan.paths,
+          },
+        }, { roots: [directory], workingDirectory: directory });
+        expect(decide(set({ allow: ['Bash(cp:*)'] }, [protectedDirectory]), subject)).toBeNull();
+        // Copying a file into the aliased folder names only that folder, not its final target.
+        const intoFolder = await scanShell(`cp ${filename} alias/`, directory, [directory]);
+        if (!intoFolder) throw new Error('Expected the destination-folder command to parse');
+        expect(decide(set({ allow: ['Bash(cp:*)'] }), {
+          tool: 'bash_execute', shell: { script: `cp ${filename} alias/`, ...intoFolder },
+        })).toBeNull();
+        // Starting inside the protected folder must be caught even when no argument names it.
+        const inside = await scanShell('cp payload other.json', protectedDirectory, [directory]);
+        if (!inside) throw new Error('Expected the protected cwd command to parse');
+        expect(decide(set({ allow: ['Bash(cp:*)'] }, [protectedDirectory]), {
+          tool: 'bash_execute', shell: { script: 'cp payload other.json', ...inside },
+        })).toBeNull();
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    }
+  );
 
   it('never allows an irreversible call, but still denies or asks', () => {
     expect(decide(set({ allow: ['session_delete'] }), { tool: 'session_delete', irreversible: true })).toBeNull();
@@ -246,6 +307,24 @@ describe('PermissionRuleSet', () => {
     expect(decide(rules, { tool: 'mcp__github_create', mcp: { server: 'github', tool: 'create' } })).toBeNull();
     expect(decide(rules, { tool: 'mcp__danger_x', mcp: { server: 'danger', tool: 'x' } })).toBe('deny');
   });
+
+  it.each(['deny', 'ask'] as const)('applies %s rules to descendants of recursive searches', list => {
+    const rules = set({ allow: ['Read'], [list]: ['Read(/secrets/**)'] });
+    for (const tool of ['grep_search', 'glob_files']) {
+      expect(decide(rules, { tool, paths: [PROJECT], recursive: true })).toBe(list);
+      expect(decide(rules, { tool, paths: [`${PROJECT}/secrets`], recursive: true })).toBe(list);
+      expect(decide(rules, { tool, paths: [`${PROJECT}/public`], recursive: true })).toBe('allow');
+    }
+    expect(decide(rules, { tool: 'file_read', paths: [`${PROJECT}/public.txt`] })).toBe('allow');
+  });
+
+  it.each(['Read(.env)', 'Read(/secr*/credentials.json)', 'Read(/private.txt)'])(
+    'conservatively refuses an ancestor search that can reach %s', rule => {
+      expect(decide(set({ allow: ['Read'], deny: [rule] }), {
+        tool: 'grep_search', paths: [PROJECT], recursive: true,
+      })).toBe('deny');
+    }
+  );
 
   it('reports the rule that decided, with its source', () => {
     const verdict = set({ deny: ['Bash(rm:*)'] }).evaluate(shell('rm x', ['rm x']));

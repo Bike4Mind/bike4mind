@@ -4,8 +4,8 @@ import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { PermissionsState } from '@shared/permissions';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { PermissionsSettings, permissionsSummary } from './PermissionsSettings';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { PermissionsSettings, permissionsSummary, usePermissions } from './PermissionsSettings';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 window.matchMedia = (query => ({
@@ -142,5 +142,128 @@ describe('PermissionsSettings collapsing', () => {
     expect(all('permissions-rule-row')).toHaveLength(0);
     expect(all('permissions-add-input')).toHaveLength(1);
     expect(all('permissions-desktop-count')[0].textContent).toBe('2 rules');
+  });
+});
+
+describe('PermissionsSettings mutation failures', () => {
+  let host: HTMLDivElement;
+  let root: Root;
+  let setRules: ReturnType<typeof vi.fn>;
+  const onState = vi.fn();
+
+  beforeEach(async () => {
+    onState.mockReset();
+    setRules = vi.fn();
+    (window as unknown as { b4m: unknown }).b4m = {
+      chat: { listRecentFolders: async () => [] },
+      permissions: { setRules },
+    };
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+    await act(async () => {
+      root.render(
+        <CssVarsProvider>
+          <PermissionsSettings state={state} onState={onState} />
+        </CssVarsProvider>
+      );
+    });
+  });
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it('blocks replacement mutations until the first save finishes', async () => {
+    let finish: ((value: { ok: true; state: PermissionsState }) => void) | undefined;
+    setRules.mockImplementation(
+      () =>
+        new Promise(resolve => {
+          finish = resolve;
+        })
+    );
+    const remove = host.querySelectorAll<HTMLButtonElement>('[data-testid="permissions-rule-remove-btn"]');
+    await act(async () => {
+      remove[0].click();
+    });
+    expect(host.querySelector('fieldset')?.disabled).toBe(true);
+    await act(async () => {
+      remove[1].click();
+    });
+    expect(setRules).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      finish?.({ ok: true, state });
+    });
+    expect(host.querySelector('fieldset')?.disabled).toBe(false);
+  });
+
+  it('shows rejected saves and enables retry without claiming success', async () => {
+    setRules.mockRejectedValueOnce(new Error('disk full'));
+    const remove = host.querySelector<HTMLButtonElement>('[data-testid="permissions-rule-remove-btn"]');
+    await act(async () => {
+      remove?.click();
+    });
+    expect(host.textContent).toContain('Could not save permission rules');
+    expect(host.textContent).toContain('disk full');
+    expect(onState).not.toHaveBeenCalled();
+    expect(host.querySelector('fieldset')?.disabled).toBe(false);
+    setRules.mockResolvedValueOnce({ ok: true, state });
+    await act(async () => {
+      remove?.click();
+    });
+    expect(onState).toHaveBeenCalledWith(state);
+    expect(host.textContent).not.toContain('disk full');
+  });
+
+  it('shows load failures with a retry action', async () => {
+    const retry = vi.fn();
+    await act(async () => {
+      root.render(
+        <CssVarsProvider>
+          <PermissionsSettings state={null} onState={onState} loadError="unreadable" onRetry={retry} />
+        </CssVarsProvider>
+      );
+    });
+    expect(host.textContent).toContain('Could not load permission rules: unreadable');
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('button')?.click();
+    });
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('usePermissions recovery', () => {
+  it('retries a failed load instead of leaving settings loading forever', async () => {
+    const getState = vi.fn().mockRejectedValueOnce(new Error('unreadable')).mockResolvedValueOnce(state);
+    (window as unknown as { b4m: unknown }).b4m = {
+      chat: { listRecentFolders: async () => [] },
+      permissions: { getState },
+    };
+    function ConnectedSettings() {
+      const [value, setValue, error, retry] = usePermissions();
+      return <PermissionsSettings state={value} onState={setValue} loadError={error} onRetry={retry} />;
+    }
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => {
+        root.render(
+          <CssVarsProvider>
+            <ConnectedSettings />
+          </CssVarsProvider>
+        );
+      });
+      expect(host.textContent).toContain('Could not load permission rules');
+      await act(async () => {
+        host.querySelector<HTMLButtonElement>('button')?.click();
+      });
+      expect(getState).toHaveBeenCalledTimes(2);
+      expect(host.textContent).toContain('Bash(gh pr view:*)');
+      expect(host.textContent).not.toContain('Could not load permission rules');
+    } finally {
+      act(() => root.unmount());
+      host.remove();
+    }
   });
 });

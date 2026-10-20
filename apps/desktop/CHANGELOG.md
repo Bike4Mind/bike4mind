@@ -1,5 +1,9 @@
 # @bike4mind/desktop
 
+## Unreleased
+
+- Add persistent permission rules and optional sharing of Claude Code rules, with deny and ask precedence.
+
 ## 0.1.9
 
 ### Patch Changes

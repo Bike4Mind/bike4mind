@@ -140,6 +140,8 @@ import { spendsCredits, readsUntrusted, sendsOut } from './tools/riskAssessment'
 import { MCP_TOOL_PREFIX } from './mcp/names';
 import type { PermissionScopeKey, PermissionService } from './permissions/PermissionService';
 import { describeRule, everySessionRules, permissionSubject } from './permissions/subject';
+import { resolveSubject } from './permissions/resolveSubject';
+import type { PermissionRuleSet } from './permissions/rules';
 import {
   capOutput,
   outputCapFor,
@@ -3609,12 +3611,17 @@ export class ChatService {
 
     const gate = this.deps.approvals;
     if (!gate) return { input: call.input };
-    const rules = this.deps.permissions
-      ? await this.deps.permissions.rulesFor(permissionScope).catch(error => {
-          this.deps.logger.warn(`PERMISSIONS: could not load rules: ${String(error)}`);
-          return null;
-        })
-      : null;
+    let rules: PermissionRuleSet | undefined;
+    try {
+      rules = await this.deps.permissions?.rulesFor(permissionScope);
+    } catch (error) {
+      const message = `Cannot load permission rules: ${String(error)}`;
+      this.deps.logger.warn(`PERMISSIONS: ${message}`);
+      const refused: ChatToolCall = { ...call, status: 'denied', error: message };
+      this.emit({ type: 'tool-start', sessionId, messageId, call });
+      this.emit({ type: 'tool-end', sessionId, messageId, call: refused });
+      return { settled: refused, input: call.input };
+    }
     if (!tool.approval && !rules?.size) return { input: call.input };
 
     // Building the prompt reads the filesystem for a write tool, and a refusal there - a path
@@ -3641,7 +3648,19 @@ export class ChatService {
 
     // The user's standing rules come before every mode, and a deny applies to a call no tool
     // would have asked about (a plain file read) as much as to one it would.
-    const subject = permissionSubject(call, gatedPrompt, context);
+    let subject = permissionSubject(call, gatedPrompt, context);
+    try {
+      if (rules?.size) subject = await resolveSubject(subject);
+    } catch (error) {
+      const refused: ChatToolCall = {
+        ...call,
+        status: 'denied',
+        error: `Cannot resolve permission paths: ${String(error)}`,
+      };
+      this.emit({ type: 'tool-start', sessionId, messageId, call });
+      this.emit({ type: 'tool-end', sessionId, messageId, call: refused });
+      return { settled: refused, input: call.input };
+    }
     const verdict = rules?.size ? rules.evaluate(subject) : { decision: null };
     if (verdict.decision === 'deny') {
       const refused: ChatToolCall = {

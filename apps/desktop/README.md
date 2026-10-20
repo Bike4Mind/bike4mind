@@ -696,3 +696,21 @@ client will want. Type-only imports are free (erased at build time); value impor
 Follow-up worth filing: give `@bike4mind/common` a subpath export for `./api-contract` (and
 ideally `./schemas`), and make the two `process.env` reads lazy. That would let the desktop
 renderer drop both workarounds above and cut roughly a megabyte.
+
+## Standing permission rules
+
+Open Settings -> Permissions to add allow, ask, or deny rules for every project or one
+project. Rules use Claude Code syntax, for example `Bash(git status:*)`,
+`Read(~/notes/**)`, and `WebFetch(domain:docs.example.com)`. Deny takes precedence over
+ask, and ask over allow. A shell command needs an allow for every subcommand.
+
+The approval card's "Always, in every session" saves the displayed allow rules.
+Irreversible calls cannot save a standing allow. Settings also shows imported Claude
+Code sources read-only. Turn off "Use them here" to stop importing them. An untrusted
+project contributes ask and deny rules, but cannot grant itself an allow.
+
+If a permission source cannot be read or parsed, tool execution is refused rather than
+dropping its restrictions. Check the path named in the error, repair the JSON or file
+permissions, then retry. Claude Code sources reload when their settings change; after
+repairing the desktop rule file, retry the call. A failed Settings save displays an
+error and keeps the previously saved rules active.

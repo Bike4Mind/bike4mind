@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import Chip from '@mui/joy/Chip';
@@ -82,17 +82,25 @@ function CollapseToggle({
 
 export function usePermissions() {
   const [state, setState] = useState<PermissionsState | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let live = true;
-    window.b4m.permissions
+    setError(null);
+    void window.b4m.permissions
       .getState()
-      .then(next => live && setState(next))
-      .catch(() => undefined);
+      .then(next => {
+        if (live) setState(next);
+      })
+      .catch(error => {
+        if (live) setError(String(error));
+      });
     return () => {
       live = false;
     };
-  }, []);
-  return [state, setState] as const;
+  }, [attempt]);
+  const retry = useCallback(() => setAttempt(previous => previous + 1), []);
+  return [state, setState, error, retry] as const;
 }
 
 function ListSelect({
@@ -206,9 +214,13 @@ function RuleRow({
 export function PermissionsSettings({
   state,
   onState,
+  loadError,
+  onRetry,
 }: {
   state: PermissionsState | null;
   onState: (state: PermissionsState) => void;
+  loadError?: string | null;
+  onRetry?: () => void;
 }) {
   const [folders, setFolders] = useState<RecentFolder[]>([]);
   const [scopeKey, setScopeKey] = useState<string>(USER_SCOPE);
@@ -216,6 +228,23 @@ export function PermissionsSettings({
   const [draftList, setDraftList] = useState<PermissionList>('allow');
   const [error, setError] = useState<string | null>(null);
   const [desktopOpen, setDesktopOpen] = useState(true);
+  const [pending, setPending] = useState(false);
+  const changing = useRef(false);
+
+  const mutate = useCallback(async (change: () => Promise<boolean>) => {
+    if (changing.current) return false;
+    changing.current = true;
+    setPending(true);
+    try {
+      return await change();
+    } catch (error) {
+      setError(`Could not save permission rules: ${String(error)}`);
+      return false;
+    } finally {
+      changing.current = false;
+      setPending(false);
+    }
+  }, []);
 
   useEffect(() => {
     window.b4m.chat
@@ -242,18 +271,30 @@ export function PermissionsSettings({
   );
 
   const save = useCallback(
-    async (next: PermissionRuleView[], target: PermissionScope = scope) => {
-      const result = await window.b4m.permissions.setRules(target, toLists(next));
-      if (result.ok) {
-        setError(null);
-        onState(result.state);
-        return true;
-      }
-      setError(result.error);
-      return false;
-    },
-    [scope, onState]
+    async (next: PermissionRuleView[], target: PermissionScope = scope) =>
+      mutate(async () => {
+        const result = await window.b4m.permissions.setRules(target, toLists(next));
+        if (result.ok) {
+          setError(null);
+          onState(result.state);
+          return true;
+        }
+        setError(result.error);
+        return false;
+      }),
+    [scope, onState, mutate]
   );
+
+  if (!state && loadError) {
+    return (
+      <Stack spacing={1}>
+        <Typography color="danger" role="alert">
+          Could not load permission rules: {loadError}
+        </Typography>
+        <Button onClick={onRetry}>Retry</Button>
+      </Stack>
+    );
+  }
 
   if (!state) {
     return (
@@ -275,123 +316,132 @@ export function PermissionsSettings({
     });
 
   return (
-    <Stack spacing={2} data-testid="permissions-settings">
-      <Typography level="body-xs" textColor="text.tertiary">
-        Rules use Claude Code's syntax, e.g. Bash(git status:*), Read(~/notes/**), WebFetch(domain:example.com),
-        mcp__server__tool. Deny beats ask, and ask beats allow, whichever list a rule comes from. The approval mode
-        under the message box still decides everything no rule names.
-      </Typography>
-
-      <Stack spacing={1}>
-        <Stack direction="row" spacing={1} alignItems="center">
-          <CollapseToggle
-            open={desktopOpen}
-            onToggle={() => setDesktopOpen(open => !open)}
-            name="desktop rules"
-            testId="permissions-desktop-toggle-btn"
-          />
-          <Typography level="title-sm">Desktop rules</Typography>
-          <Typography
-            level="body-xs"
-            textColor="text.tertiary"
-            sx={{ flex: 1 }}
-            data-testid="permissions-desktop-count"
-          >
-            {ruleCount(rules.length)}
-          </Typography>
-          <Select
-            size="sm"
-            value={scopeKey}
-            onChange={(_event, next) => next && setScopeKey(next)}
-            sx={{ maxWidth: 280 }}
-            slotProps={{ button: { 'data-testid': 'permissions-scope-select' } }}
-          >
-            <Option value={USER_SCOPE}>Every project</Option>
-            {projectChoices.map(directory => (
-              <Option key={directory} value={directory} title={directory}>
-                {shortPath(directory)}
-              </Option>
-            ))}
-          </Select>
-        </Stack>
-
-        {!desktopOpen ? null : rules.length === 0 ? (
-          <Typography level="body-sm" textColor="text.tertiary" data-testid="permissions-empty">
-            No rules here yet.
-          </Typography>
-        ) : (
-          <Stack spacing={0.75}>
-            {rules.map((view, index) => (
-              <RuleRow
-                key={`${view.list}:${view.rule}`}
-                view={view}
-                onSave={next => void save(rules.map((each, at) => (at === index ? next : each)))}
-                onRemove={() => void save(rules.filter((_each, at) => at !== index))}
-              />
-            ))}
-          </Stack>
-        )}
-
-        <Stack direction="row" spacing={1} alignItems="center">
-          <ListSelect value={draftList} onChange={setDraftList} testId="permissions-add-list-select" />
-          <Input
-            size="sm"
-            placeholder="Bash(gh pr view:*)"
-            value={draft}
-            onChange={event => setDraft(event.target.value)}
-            onKeyDown={event => {
-              if (event.key === 'Enter') void add();
-            }}
-            sx={{ flex: 1, fontFamily: 'monospace' }}
-            slotProps={{ input: { 'aria-label': 'New rule', 'data-testid': 'permissions-add-input' } }}
-          />
-          <Button size="sm" disabled={!draft.trim()} onClick={() => void add()} data-testid="permissions-add-btn">
-            Add
-          </Button>
-        </Stack>
-        {error && (
-          <Typography level="body-xs" color="danger" data-testid="permissions-error">
-            {error}
-          </Typography>
-        )}
-      </Stack>
-
-      <Stack spacing={1}>
-        <Stack direction="row" spacing={1} alignItems="center">
-          <Typography level="title-sm" sx={{ flex: 1 }}>
-            Claude Code rules
-          </Typography>
-          <Typography level="body-xs" textColor="text.tertiary">
-            Use them here
-          </Typography>
-          <Switch
-            size="sm"
-            checked={state.shareClaudeCode}
-            onChange={event => void window.b4m.permissions.setSharing(event.target.checked).then(onState)}
-            slotProps={{
-              input: {
-                'aria-label': "Use Claude Code's permission rules",
-                'data-testid': 'permissions-sharing-switch',
-              },
-            }}
-          />
-        </Stack>
+    <fieldset disabled={pending} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }} aria-busy={pending}>
+      <Stack spacing={2} data-testid="permissions-settings">
         <Typography level="body-xs" textColor="text.tertiary">
-          Read from Claude Code's settings files and never changed here. A project's own files may allow something only
-          once you trust the project; an untrusted project's deny and ask rules still apply.
+          Rules use Claude Code's syntax, e.g. Bash(git status:*), Read(~/notes/**), WebFetch(domain:example.com),
+          mcp__server__tool. Deny beats ask, and ask beats allow, whichever list a rule comes from. The approval mode
+          under the message box still decides everything no rule names.
         </Typography>
 
-        {state.claudeCode.map(source => (
-          <SourceCard
-            key={source.id}
-            source={source}
-            shared={state.shareClaudeCode}
-            isCopied={view => state.user.some(each => each.rule === view.rule && each.list === view.list)}
-            onCopy={view => void copyToDesktop(view)}
-          />
-        ))}
+        <Stack spacing={1}>
+          <Stack direction="row" spacing={1} alignItems="center">
+            <CollapseToggle
+              open={desktopOpen}
+              onToggle={() => setDesktopOpen(open => !open)}
+              name="desktop rules"
+              testId="permissions-desktop-toggle-btn"
+            />
+            <Typography level="title-sm">Desktop rules</Typography>
+            <Typography
+              level="body-xs"
+              textColor="text.tertiary"
+              sx={{ flex: 1 }}
+              data-testid="permissions-desktop-count"
+            >
+              {ruleCount(rules.length)}
+            </Typography>
+            <Select
+              size="sm"
+              value={scopeKey}
+              onChange={(_event, next) => next && setScopeKey(next)}
+              sx={{ maxWidth: 280 }}
+              slotProps={{ button: { 'data-testid': 'permissions-scope-select' } }}
+            >
+              <Option value={USER_SCOPE}>Every project</Option>
+              {projectChoices.map(directory => (
+                <Option key={directory} value={directory} title={directory}>
+                  {shortPath(directory)}
+                </Option>
+              ))}
+            </Select>
+          </Stack>
+
+          {!desktopOpen ? null : rules.length === 0 ? (
+            <Typography level="body-sm" textColor="text.tertiary" data-testid="permissions-empty">
+              No rules here yet.
+            </Typography>
+          ) : (
+            <Stack spacing={0.75}>
+              {rules.map((view, index) => (
+                <RuleRow
+                  key={`${view.list}:${view.rule}`}
+                  view={view}
+                  onSave={next => void save(rules.map((each, at) => (at === index ? next : each)))}
+                  onRemove={() => void save(rules.filter((_each, at) => at !== index))}
+                />
+              ))}
+            </Stack>
+          )}
+
+          <Stack direction="row" spacing={1} alignItems="center">
+            <ListSelect value={draftList} onChange={setDraftList} testId="permissions-add-list-select" />
+            <Input
+              size="sm"
+              placeholder="Bash(gh pr view:*)"
+              value={draft}
+              onChange={event => setDraft(event.target.value)}
+              onKeyDown={event => {
+                if (event.key === 'Enter') void add();
+              }}
+              sx={{ flex: 1, fontFamily: 'monospace' }}
+              slotProps={{ input: { 'aria-label': 'New rule', 'data-testid': 'permissions-add-input' } }}
+            />
+            <Button size="sm" disabled={!draft.trim()} onClick={() => void add()} data-testid="permissions-add-btn">
+              Add
+            </Button>
+          </Stack>
+          {error && (
+            <Typography level="body-xs" color="danger" data-testid="permissions-error">
+              {error}
+            </Typography>
+          )}
+        </Stack>
+
+        <Stack spacing={1}>
+          <Stack direction="row" spacing={1} alignItems="center">
+            <Typography level="title-sm" sx={{ flex: 1 }}>
+              Claude Code rules
+            </Typography>
+            <Typography level="body-xs" textColor="text.tertiary">
+              Use them here
+            </Typography>
+            <Switch
+              size="sm"
+              checked={state.shareClaudeCode}
+              onChange={event => {
+                const share = event.target.checked;
+                void mutate(async () => {
+                  onState(await window.b4m.permissions.setSharing(share));
+                  setError(null);
+                  return true;
+                });
+              }}
+              slotProps={{
+                input: {
+                  'aria-label': "Use Claude Code's permission rules",
+                  'data-testid': 'permissions-sharing-switch',
+                },
+              }}
+            />
+          </Stack>
+          <Typography level="body-xs" textColor="text.tertiary">
+            Read from Claude Code's settings files and never changed here. A project's own files may allow something
+            only once you trust the project; an untrusted project's deny and ask rules still apply.
+          </Typography>
+
+          {state.claudeCode.map(source => (
+            <SourceCard
+              key={source.id}
+              source={source}
+              shared={state.shareClaudeCode}
+              isCopied={view => state.user.some(each => each.rule === view.rule && each.list === view.list)}
+              onCopy={view => void copyToDesktop(view)}
+            />
+          ))}
+        </Stack>
       </Stack>
-    </Stack>
+    </fieldset>
   );
 }
 

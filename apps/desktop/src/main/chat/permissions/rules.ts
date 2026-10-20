@@ -187,14 +187,19 @@ function globToRegExp(glob: string): RegExp {
  * names no directory, as in gitignore. Null when the rule needs a base this context lacks.
  */
 export function compilePathGlob(spec: string, base: PathBase): RegExp | null {
+  const expanded = absolutePathGlob(spec, base);
+  return expanded === null ? null : globToRegExp(expanded);
+}
+
+function absolutePathGlob(spec: string, base: PathBase): string | null {
   const trim = (directory: string) => directory.replace(/\/+$/, '');
-  if (spec.startsWith('//')) return globToRegExp(spec.slice(1));
-  if (spec === '~' || spec.startsWith('~/')) return globToRegExp(trim(base.home) + spec.slice(1));
-  if (spec.startsWith('/')) return base.root ? globToRegExp(trim(base.root) + spec) : null;
+  if (spec.startsWith('//')) return spec.slice(1);
+  if (spec === '~' || spec.startsWith('~/')) return trim(base.home) + spec.slice(1);
+  if (spec.startsWith('/')) return base.root ? trim(base.root) + spec : null;
   if (!base.cwd) return null;
   const relative = spec.startsWith('./') ? spec.slice(2) : spec;
   const anyDepth = !relative.replace(/\/+$/, '').includes('/');
-  return globToRegExp(`${trim(base.cwd)}/${anyDepth ? '**/' : ''}${relative}`);
+  return `${trim(base.cwd)}/${anyDepth ? '**/' : ''}${relative}`;
 }
 
 export interface RuleSource {
@@ -203,7 +208,7 @@ export interface RuleSource {
   path?: string;
 }
 
-type CompiledMatcher = Exclude<RuleMatcher, { kind: 'path' }> | { kind: 'path'; pattern: RegExp };
+type CompiledMatcher = Exclude<RuleMatcher, { kind: 'path' }> | { kind: 'path'; pattern: RegExp; searchRoot: string };
 
 export interface CompiledRule {
   text: string;
@@ -222,8 +227,19 @@ export function compileRule(
 ): CompiledRule | null {
   const { matcher } = parsed;
   if (matcher.kind !== 'path') return { text: parsed.text, list, source, tools: parsed.tools, matcher };
-  const pattern = compilePathGlob(matcher.spec, base);
-  return pattern ? { text: parsed.text, list, source, tools: parsed.tools, matcher: { kind: 'path', pattern } } : null;
+  const absolute = absolutePathGlob(matcher.spec, base);
+  if (absolute === null) return null;
+  const wildcard = absolute.search(/[*?]/);
+  // Before a wildcard the final component may itself be partial (`secr*`), so use its parent.
+  const prefix = wildcard === -1 ? absolute : dirname(absolute.slice(0, wildcard) + 'x');
+  const searchRoot = prefix.replace(/\/+$/, '') || '/';
+  return {
+    text: parsed.text,
+    list,
+    source,
+    tools: parsed.tools,
+    matcher: { kind: 'path', pattern: globToRegExp(absolute), searchRoot },
+  };
 }
 
 export interface ShellSubjectCommand {
@@ -236,8 +252,15 @@ export interface ShellSubjectCommand {
 /** One tool call, reduced to what a rule can name. */
 export interface PermissionSubject {
   tool: string;
-  shell?: { script: string; commands: readonly ShellSubjectCommand[]; directories: readonly string[] };
+  shell?: {
+    script: string;
+    commands: readonly ShellSubjectCommand[];
+    directories: readonly string[];
+    paths?: readonly string[];
+  };
   paths?: readonly string[];
+  /** A search may read descendants of any named path, rather than only the named file. */
+  recursive?: boolean;
   host?: string;
   mcp?: { server: string; tool: string };
   irreversible?: boolean;
@@ -344,7 +367,12 @@ export class PermissionRuleSet {
         );
       case 'path':
         // The probe makes `Read(~/.ssh/**)` refuse a search rooted at ~/.ssh itself.
-        return (subject.paths ?? []).some(path => matcher.pattern.test(path) || matcher.pattern.test(`${path}/x`));
+        return (subject.paths ?? []).some(
+          path =>
+            matcher.pattern.test(path) ||
+            matcher.pattern.test(`${path}/x`) ||
+            (subject.recursive === true && (within(path, matcher.searchRoot) || within(matcher.searchRoot, path)))
+        );
       case 'domain':
         return subject.host !== undefined && hostMatches(subject.host, matcher);
       case 'mcp':
@@ -359,6 +387,7 @@ export class PermissionRuleSet {
       const { script, commands, directories } = subject.shell;
       if (commands.length === 0 || NAMES_RULE_FILE.test(script)) return null;
       if (this.protectedRoots.some(root => script.includes(root))) return null;
+      if (subject.shell.paths?.some(path => this.isProtectedPath(path) || NAMES_RULE_FILE.test(path))) return null;
       if (!directories.every(directory => this.coversFolder(directory))) return null;
       let first: CompiledRule | null = null;
       for (const command of commands) {

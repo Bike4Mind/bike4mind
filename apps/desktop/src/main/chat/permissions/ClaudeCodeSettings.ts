@@ -1,7 +1,8 @@
-import { type FSWatcher, existsSync, watch } from 'node:fs';
+import { type FSWatcher, existsSync, unwatchFile, watch, watchFile } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import type { PermissionRuleLists } from '@shared/permissions';
+import { z } from 'zod';
 import { emptyLists } from './PermissionRuleStore';
 
 export const MANAGED_SETTINGS_PATH = '/Library/Application Support/ClaudeCode/managed-settings.json';
@@ -31,9 +32,16 @@ export interface ClaudeCodeSettingsOptions {
 
 const SETTINGS_NAMES = new Set(['settings.json', 'settings.local.json']);
 
-function strings(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
-}
+const settingsSchema = z.looseObject({
+  permissions: z
+    .looseObject({
+      allow: z.array(z.string()).optional(),
+      ask: z.array(z.string()).optional(),
+      deny: z.array(z.string()).optional(),
+      additionalDirectories: z.array(z.string()).optional(),
+    })
+    .optional(),
+});
 
 /**
  * Claude Code's settings files, read and never written.
@@ -48,6 +56,7 @@ export class ClaudeCodeSettings {
   private readonly projects = new Map<string, Promise<void>>();
   private readonly watchers = new Map<string, FSWatcher>();
   private readonly timers = new Map<string, NodeJS.Timeout>();
+  private readonly polling = new Map<string, () => void>();
   private userLoaded: Promise<void> | null = null;
   private disposed = false;
 
@@ -145,6 +154,8 @@ export class ClaudeCodeSettings {
     this.disposed = true;
     for (const watcher of this.watchers.values()) watcher.close();
     for (const timer of this.timers.values()) clearTimeout(timer);
+    for (const [path, listener] of this.polling) unwatchFile(path, listener);
+    this.polling.clear();
     this.watchers.clear();
     this.timers.clear();
   }
@@ -153,24 +164,29 @@ export class ClaudeCodeSettings {
     let text: string;
     try {
       text = await readFile(file.path, 'utf8');
-    } catch {
-      this.files.set(file.path, { ...file, status: 'missing', lists: emptyLists(), additionalDirectories: [] });
+    } catch (error) {
+      const missing = (error as NodeJS.ErrnoException).code === 'ENOENT';
+      if (!missing) this.options.logger.warn(`PERMISSIONS: could not read ${file.path}: ${String(error)}`);
+      this.files.set(file.path, {
+        ...file,
+        status: missing ? 'missing' : 'unreadable',
+        lists: emptyLists(),
+        additionalDirectories: [],
+      });
       return;
     }
     try {
-      const parsed = JSON.parse(text) as { permissions?: Record<string, unknown> };
-      const permissions =
-        parsed && typeof parsed === 'object' && parsed.permissions && typeof parsed.permissions === 'object'
-          ? parsed.permissions
-          : {};
+      const permissions = settingsSchema.parse(JSON.parse(text)).permissions ?? {};
       this.files.set(file.path, {
         ...file,
         status: 'loaded',
-        lists: { allow: strings(permissions.allow), ask: strings(permissions.ask), deny: strings(permissions.deny) },
-        additionalDirectories: strings(permissions.additionalDirectories),
+        lists: { allow: permissions.allow ?? [], ask: permissions.ask ?? [], deny: permissions.deny ?? [] },
+        additionalDirectories: permissions.additionalDirectories ?? [],
       });
     } catch {
-      this.options.logger.warn(`PERMISSIONS: could not parse ${file.path}; its rules are not applied`);
+      this.options.logger.warn(
+        `PERMISSIONS: could not parse ${file.path}; permission rules unavailable until repaired`
+      );
       this.files.set(file.path, { ...file, status: 'unreadable', lists: emptyLists(), additionalDirectories: [] });
     }
   }
@@ -180,22 +196,25 @@ export class ClaudeCodeSettings {
    * parent, unless `existingOnly` - the managed folder is an administrator's, not worth a watch on `/Library`.
    */
   private watchFolder(folder: string, existingOnly = false): void {
-    if (this.disposed || this.watchers.has(folder)) return;
-    if (!existsSync(folder)) {
-      const parent = dirname(folder);
-      if (existingOnly || this.watchers.has(parent) || !existsSync(parent)) return;
+    if (this.disposed) return;
+    const parent = dirname(folder);
+    const parentKey = `${folder}\x00parent`;
+    // Keep the parent watch after creation: a folder watch follows the old inode when an
+    // editor replaces the entire .claude directory, and would otherwise miss future edits.
+    if (!existingOnly && !this.watchers.has(parentKey) && existsSync(parent)) {
       this.listen(
         parent,
         name => name === basename(folder),
-        () => {
-          this.watchers.get(parent)?.close();
-          this.watchers.delete(parent);
+        async () => {
+          this.watchers.get(folder)?.close();
+          this.watchers.delete(folder);
           this.watchFolder(folder);
-          return this.reloadFolder(folder);
-        }
+          await this.reloadFolder(folder);
+        },
+        parentKey
       );
-      return;
     }
+    if (this.watchers.has(folder) || !existsSync(folder)) return;
     this.listen(
       folder,
       name => SETTINGS_NAMES.has(name) || name === basename(this.managedPath),
@@ -203,28 +222,59 @@ export class ClaudeCodeSettings {
     );
   }
 
-  private listen(folder: string, relevant: (name: string) => boolean, reload: () => Promise<void>): void {
+  private listen(folder: string, relevant: (name: string) => boolean, reload: () => Promise<void>, key = folder): void {
     let watcher: FSWatcher;
     try {
       watcher = watch(folder, { persistent: false }, (_event, filename) => {
         if (filename && !relevant(filename.toString())) return;
-        clearTimeout(this.timers.get(folder));
+        clearTimeout(this.timers.get(key));
         const timer = setTimeout(() => {
-          this.timers.delete(folder);
+          this.timers.delete(key);
           if (this.disposed) return;
-          void reload().then(() => this.options.onChange());
+          void reload()
+            .then(() => this.options.onChange())
+            .catch(error => {
+              this.options.logger.warn(`PERMISSIONS: could not reload ${folder}: ${String(error)}`);
+            });
         }, this.options.debounceMs ?? 200);
         timer.unref?.();
-        this.timers.set(folder, timer);
+        this.timers.set(key, timer);
       });
-    } catch {
+    } catch (error) {
+      this.options.logger.warn(
+        `PERMISSIONS: could not watch ${folder}: ${String(error)}; polling settings files instead`
+      );
+      this.pollKnownFiles();
       return;
     }
-    watcher.on('error', () => {
+    watcher.on('error', error => {
+      this.options.logger.warn(
+        `PERMISSIONS: watch failed for ${folder}: ${String(error)}; polling settings files instead`
+      );
+      this.pollKnownFiles();
       watcher.close();
-      this.watchers.delete(folder);
+      this.watchers.delete(key);
     });
-    this.watchers.set(folder, watcher);
+    this.watchers.set(key, watcher);
+  }
+
+  /** Native watches can fail (for example EMFILE); keep rule changes observable with stat polling. */
+  private pollKnownFiles(): void {
+    if (this.disposed) return;
+    const known = [...this.userFiles(), ...[...this.projects.keys()].flatMap(project => this.projectFiles(project))];
+    for (const file of known) {
+      if (this.polling.has(file.path)) continue;
+      const listener = () => {
+        if (this.disposed) return;
+        void this.read(file)
+          .then(() => this.options.onChange())
+          .catch(error => {
+            this.options.logger.warn(`PERMISSIONS: could not reload ${file.path}: ${String(error)}`);
+          });
+      };
+      watchFile(file.path, { persistent: false, interval: 1000 }, listener);
+      this.polling.set(file.path, listener);
+    }
   }
 
   private async reloadFolder(folder: string): Promise<void> {

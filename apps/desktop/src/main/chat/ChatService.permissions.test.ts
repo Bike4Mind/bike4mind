@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -47,6 +47,7 @@ describe('ChatService permission rules', () => {
   let streams: PassThrough[];
   let root: string;
   let rules: PermissionRuleSet;
+  let rulesFailure: Error | undefined;
   let rememberAllows: ReturnType<typeof vi.fn<(rules: readonly string[]) => Promise<void>>>;
 
   const calls = (name: string, status: ChatToolCall['status']): ChatToolCall[] =>
@@ -62,6 +63,7 @@ describe('ChatService permission rules', () => {
     await writeFile(join(root, 'notes.txt'), 'hello\n', 'utf8');
     approvals = new ApprovalGate();
     rules = ruleSet({});
+    rulesFailure = undefined;
     rememberAllows = vi.fn<(rules: readonly string[]) => Promise<void>>().mockResolvedValue(undefined);
     events = [];
     streams = [];
@@ -74,7 +76,14 @@ describe('ChatService permission rules', () => {
       store: new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-rules-sessions-')), 'test-model'),
       access: { list: async () => [root] } as unknown as AccessStore,
       approvals,
-      permissions: { rulesFor: async () => rules, rememberAllows, invalidate: vi.fn() },
+      permissions: {
+        rulesFor: async () => {
+          if (rulesFailure) throw rulesFailure;
+          return rules;
+        },
+        rememberAllows,
+        invalidate: vi.fn(),
+      },
       logger: { debug: vi.fn(), warn: vi.fn() },
       getApiClient: () =>
         ({
@@ -103,8 +112,14 @@ describe('ChatService permission rules', () => {
     return created.id;
   }
 
-  const settled = (name: string) =>
-    vi.waitUntil(() => calls(name, 'done')[0] ?? calls(name, 'error')[0], { timeout: 5000, interval: 10 });
+  it.each(['ask', 'auto', 'full'] as const)('refuses tool execution when rules fail to load in %s', async mode => {
+    rulesFailure = new Error('permission file unreadable');
+    await run(mode, 'file_read', { path: join(root, 'notes.txt') });
+    const refused = await awaitCall('file_read', 'denied');
+    expect(refused.error).toContain('Cannot load permission rules');
+    expect(refused.error).toContain('permission file unreadable');
+    expect(calls('file_read', 'done')).toHaveLength(0);
+  });
 
   it('refuses a denied command in every mode, naming the rule and its source', async () => {
     rules = ruleSet({ deny: ['Bash(rm:*)'], allow: ['Bash(echo:*)'] });
@@ -121,6 +136,23 @@ describe('ChatService permission rules', () => {
 
     const refused = await awaitCall('file_read', 'denied');
     expect(refused.error).toContain(`Read(/${root}/**)`);
+  });
+
+  it.each(['grep_search', 'glob_files'])('refuses %s rooted above a denied descendant', async name => {
+    rules = ruleSet({ deny: [`Read(/${root}/notes.txt)`] });
+    await run('full', name, { path: root, pattern: '*' });
+    const refused = await awaitCall(name, 'denied');
+    expect(refused.error).toContain(`Read(/${root}/notes.txt)`);
+    expect(calls(name, 'done')).toHaveLength(0);
+  });
+
+  it('refuses a read through a symlink to a denied file inside the shared root', async () => {
+    await symlink(join(root, 'notes.txt'), join(root, 'alias.txt'));
+    rules = ruleSet({ deny: [`Read(/${root}/notes.txt)`] });
+    await run('full', 'file_read', { path: join(root, 'alias.txt') });
+    const refused = await awaitCall('file_read', 'denied');
+    expect(refused.error).toContain(`Read(/${root}/notes.txt)`);
+    expect(calls('file_read', 'done')).toHaveLength(0);
   });
 
   it('asks on an ask rule even in Approve for me and full access, and says why', async () => {
@@ -144,7 +176,7 @@ describe('ChatService permission rules', () => {
     rules = ruleSet({ allow: ['Bash(wc:*)', 'Bash(cat:*)'] });
     await run('ask', 'bash_execute', { command: 'wc -l notes.txt | cat', cwd: root });
 
-    await settled('bash_execute');
+    await awaitCall('bash_execute', 'running');
     expect(calls('bash_execute', 'awaiting-approval')).toHaveLength(0);
   });
 
@@ -167,7 +199,7 @@ describe('ChatService permission rules', () => {
     rules = ruleSet({ allow: ["Bash(node -e ' *)"] });
     await run('ask', 'bash_execute', { command: `node -e 'console.log(1)'`, cwd: root });
 
-    await settled('bash_execute');
+    await awaitCall('bash_execute', 'running');
     expect(calls('bash_execute', 'awaiting-approval')).toHaveLength(0);
   });
 
@@ -181,7 +213,7 @@ describe('ChatService permission rules', () => {
   it('runs a command in an outside folder that a Read rule covers', async () => {
     rules = ruleSet({ allow: ['Bash(ls:*)', 'Read(//usr/**)'] });
     await run('ask', 'bash_execute', { command: 'ls /usr/share', cwd: root });
-    await settled('bash_execute');
+    await awaitCall('bash_execute', 'running');
     expect(calls('bash_execute', 'awaiting-approval')).toHaveLength(0);
   });
 
@@ -191,7 +223,7 @@ describe('ChatService permission rules', () => {
     expect(asked.approvalRules).toEqual(['Bash(git status:*)']);
 
     approvals.resolve(asked.approvalId!, { decision: 'always', everywhere: true });
-    await settled('bash_execute');
+    await awaitCall('bash_execute', 'running');
     expect(rememberAllows).toHaveBeenCalledWith(['Bash(git status:*)']);
   });
 
@@ -199,7 +231,7 @@ describe('ChatService permission rules', () => {
     await run('ask', 'bash_execute', { command: 'git status', cwd: root });
     const asked = await awaitCall('bash_execute', 'awaiting-approval');
     approvals.resolve(asked.approvalId!, { decision: 'always' });
-    await settled('bash_execute');
+    await awaitCall('bash_execute', 'running');
     expect(rememberAllows).not.toHaveBeenCalled();
   });
 

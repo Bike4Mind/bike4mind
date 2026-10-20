@@ -1,5 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
+import { z } from 'zod';
 import { PERMISSION_LISTS, type PermissionRuleLists } from '@shared/permissions';
 
 export interface StoredPermissions {
@@ -27,39 +28,47 @@ function readLists(value: unknown): PermissionRuleLists {
   return lists;
 }
 
-/**
- * The desktop's own allow, ask and deny rules, user-level and per project, plus whether Claude
- * Code's rules are shared. Only Settings and an approval card's "Always, in every session" write
- * here; the file is written the way ApprovalModePreference writes its own, 0600 via a rename.
- *
- * A file that cannot be read is no rules and sharing on - the same as a fresh install - rather
- * than an error: losing rules can only make the app ask more, never less.
- */
+const ruleListsSchema = z.object({
+  allow: z.array(z.string()).default([]),
+  ask: z.array(z.string()).default([]),
+  deny: z.array(z.string()).default([]),
+});
+const storedPermissionsSchema = z.object({
+  shareClaudeCode: z.boolean().default(true),
+  user: ruleListsSchema.default({ allow: [], ask: [], deny: [] }),
+  projects: z.record(z.string(), ruleListsSchema).default({}),
+});
+
+/** Persist consent atomically; only a missing file represents a fresh installation. */
 export class PermissionRuleStore {
   private cached: StoredPermissions | null = null;
+  private loading: Promise<StoredPermissions> | null = null;
 
   constructor(private readonly filePath: string) {}
 
   async read(): Promise<StoredPermissions> {
     if (this.cached) return this.cached;
-    let parsed: Record<string, unknown> = {};
+    this.loading ??= this.load();
     try {
-      const raw: unknown = JSON.parse(await readFile(this.filePath, 'utf8'));
-      if (raw && typeof raw === 'object') parsed = raw as Record<string, unknown>;
-    } catch {
-      parsed = {};
+      return await this.loading;
+    } finally {
+      this.loading = null;
     }
-    const projects: Record<string, PermissionRuleLists> = {};
-    if (parsed.projects && typeof parsed.projects === 'object') {
-      for (const [directory, lists] of Object.entries(parsed.projects as Record<string, unknown>)) {
-        projects[resolve(directory)] = readLists(lists);
-      }
+  }
+
+  private async load(): Promise<StoredPermissions> {
+    let raw: unknown;
+    try {
+      raw = JSON.parse(await readFile(this.filePath, 'utf8'));
+    } catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+      raw = {};
     }
-    this.cached = {
-      shareClaudeCode: parsed.shareClaudeCode !== false,
-      user: readLists(parsed.user),
-      projects,
-    };
+    const parsed = storedPermissionsSchema.parse(raw);
+    const projects = Object.fromEntries(
+      Object.entries(parsed.projects).map(([directory, lists]) => [resolve(directory), readLists(lists)])
+    );
+    this.cached = { ...parsed, user: readLists(parsed.user), projects };
     return this.cached;
   }
 
@@ -67,40 +76,44 @@ export class PermissionRuleStore {
     scope: { kind: 'user' } | { kind: 'project'; directory: string },
     lists: PermissionRuleLists
   ): Promise<StoredPermissions> {
-    const current = await this.read();
-    const cleaned = readLists(lists);
-    if (scope.kind === 'user') return this.write({ ...current, user: cleaned });
-    const projects = { ...current.projects };
-    const empty = PERMISSION_LISTS.every(list => cleaned[list].length === 0);
-    if (empty) delete projects[resolve(scope.directory)];
-    else projects[resolve(scope.directory)] = cleaned;
-    return this.write({ ...current, projects });
+    return this.update(current => {
+      const cleaned = readLists(lists);
+      if (scope.kind === 'user') return { ...current, user: cleaned };
+      const projects = { ...current.projects };
+      const empty = PERMISSION_LISTS.every(list => cleaned[list].length === 0);
+      if (empty) delete projects[resolve(scope.directory)];
+      else projects[resolve(scope.directory)] = cleaned;
+      return { ...current, projects };
+    });
   }
 
   async setShareClaudeCode(share: boolean): Promise<StoredPermissions> {
-    return this.write({ ...(await this.read()), shareClaudeCode: share });
+    return this.update(current => ({ ...current, shareClaudeCode: share }));
   }
 
   /** The card's "Always, in every session": user-level allows, added once each. */
   async addUserAllows(rules: readonly string[]): Promise<StoredPermissions> {
-    const current = await this.read();
-    const allow = [...current.user.allow];
-    for (const rule of rules) if (!allow.includes(rule)) allow.push(rule);
-    return this.write({ ...current, user: { ...current.user, allow } });
+    return this.update(current => {
+      const allow = [...current.user.allow];
+      for (const rule of rules) if (!allow.includes(rule)) allow.push(rule);
+      return { ...current, user: { ...current.user, allow } };
+    });
   }
 
   // Serialised: two writes sharing one temp file must not interleave.
   private writing: Promise<unknown> = Promise.resolve();
 
-  private write(next: StoredPermissions): Promise<StoredPermissions> {
-    this.cached = next;
+  private update(change: (current: StoredPermissions) => StoredPermissions): Promise<StoredPermissions> {
     const run = this.writing.then(async () => {
+      const next = change(await this.read());
       await mkdir(dirname(this.filePath), { recursive: true });
       const temporary = `${this.filePath}.tmp`;
       await writeFile(temporary, JSON.stringify(next, null, 2), { encoding: 'utf8', mode: 0o600 });
       await rename(temporary, this.filePath);
+      this.cached = next;
+      return next;
     });
     this.writing = run.catch(() => undefined);
-    return run.then(() => next);
+    return run;
   }
 }

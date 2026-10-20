@@ -1,18 +1,13 @@
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import type { ApprovalPrompt } from '../tools/types';
+import { requiresExactShellRule } from '../tools/shellScan';
 import { CLAUDE_CODE_TOOLS, type CompiledRule, type PermissionSubject, cleanToolName } from './rules';
 
 const SHELL_TOOLS = new Set(CLAUDE_CODE_TOOLS.Bash.tools);
 const READ_TOOLS = new Set(CLAUDE_CODE_TOOLS.Read.tools);
 const EDIT_TOOLS = new Set(CLAUDE_CODE_TOOLS.Edit.tools);
 const FETCH_TOOLS = new Set(CLAUDE_CODE_TOOLS.WebFetch.tools);
-/**
- * Programs whose options, not their subcommand, decide whether data leaves the machine (see
- * shellScan's outboundReason). An allow rule outranks the outbound ask, so a card for `curl
- * localhost` must save that command, never `Bash(curl:*)`, which would also cover an upload.
- */
-const SENDS_BY_FLAGS = /^(curl|wget|rsync|aws|gsutil|gcloud|docker|podman|gh api)(\s|$)/;
 
 interface CallLike {
   name: string;
@@ -29,8 +24,8 @@ function text(value: unknown): string | null {
 }
 
 function absolute(path: string, place: PlaceLike): string {
-  const expanded = path === '~' || path.startsWith('~/') ? join(homedir(), path.slice(1)) : path;
-  return resolve(place.workingDirectory ?? place.roots[0] ?? homedir(), expanded);
+  // File tools resolve paths lexically; a '~' component is a literal folder, not shell syntax.
+  return resolve(place.workingDirectory ?? place.roots[0] ?? homedir(), path);
 }
 
 function hostOf(url: unknown): string | undefined {
@@ -55,7 +50,12 @@ export function permissionSubject(
     const commands = prompt?.always?.commands ?? [{ text: script, words: script, coverable: false }];
     return {
       tool: call.name,
-      shell: { script, commands, directories: prompt?.always?.directories ?? [] },
+      shell: {
+        script,
+        commands,
+        directories: prompt?.always?.directories ?? [],
+        paths: prompt?.always?.paths ?? [],
+      },
       ...irreversible,
     };
   }
@@ -70,7 +70,12 @@ export function permissionSubject(
           : READ_TOOLS.has(call.name)
             ? [absolute('.', place)]
             : [];
-    return { tool: call.name, paths, ...irreversible };
+    return {
+      tool: call.name,
+      paths,
+      ...(call.name === 'glob_files' || call.name === 'grep_search' ? { recursive: true } : {}),
+      ...irreversible,
+    };
   }
   if (FETCH_TOOLS.has(call.name)) {
     const host = hostOf(call.input.url);
@@ -94,8 +99,11 @@ export function everySessionRules(subject: PermissionSubject, prompt: ApprovalPr
     const { commands, directories } = subject.shell;
     if (!prompt.always || directories.length > 0 || commands.length === 0) return [];
     if (commands.some(command => !command.coverable || command.opaque)) return [];
+    // A literal '*' is rule syntax too, including inside shell quotes: an "exact" saved rule
+    // would silently cover more than the command the user saw.
+    if (prompt.always.commands.some(command => command.text.includes('*'))) return [];
     const patterns = prompt.always.commands.map(({ text, pattern }) =>
-      SENDS_BY_FLAGS.test(text) || !pattern.endsWith(' *') ? `Bash(${text})` : `Bash(${pattern.slice(0, -2)}:*)`
+      requiresExactShellRule(text) || !pattern.endsWith(' *') ? `Bash(${text})` : `Bash(${pattern.slice(0, -2)}:*)`
     );
     return [...new Set(patterns)];
   }

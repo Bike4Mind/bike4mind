@@ -171,6 +171,7 @@ export class PermissionService {
       if (working) await claudeCode.loadProject(working);
       const trusted = working ? await this.options.isTrusted(working) : false;
       for (const file of claudeCode.filesFor(working)) {
+        if (file.status === 'unreadable') throw new Error(`Cannot read permission rules in ${file.path}`);
         if (file.status !== 'loaded') continue;
         add(file.lists, sourceOf(file), false, file.root, file.scope !== 'project' || trusted);
       }

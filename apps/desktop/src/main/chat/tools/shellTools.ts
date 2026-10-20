@@ -441,6 +441,7 @@ export async function shellApproval(
         ...(opaque ? { opaque } : {}),
       })),
       directories: [...new Set([...directories, ...scan.directories])],
+      paths: scan.paths ?? [],
     },
   };
 }

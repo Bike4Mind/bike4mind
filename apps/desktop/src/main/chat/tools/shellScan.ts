@@ -5,7 +5,7 @@ import type { Node } from 'web-tree-sitter';
 import { arityPrefix, commandTokens, directoryOptionValues, droppedOnlySafeOptions } from './bashArity';
 import { parseBash } from './bashParser';
 import { isEnvFile } from './envFiles';
-import { resolveWithinRootsPhysically } from './paths';
+import { realpathNearest, resolveWithinRootsPhysically } from './paths';
 
 export interface ShellCommand {
   /** The command's tokens with options before the subcommand dropped: what a remembered pattern is matched against. */
@@ -17,7 +17,7 @@ export interface ShellCommand {
    * or an option off the safe list - so `text` no longer says what the command does.
    */
   coverable: boolean;
-  /** The command's words as written, options included: what a permission rule is matched against. */
+  /** The command as matched by rules, retaining assignments and redirects when it is not coverable. */
   words: string;
   /**
    * Set when the command runs code the scan cannot read (`eval`, `node -e`, `bash -c`, a script on
@@ -28,6 +28,8 @@ export interface ShellCommand {
 
 export interface ShellScan {
   commands: ShellCommand[];
+  /** Physical paths named by the script, including paths inside shared roots and its starting folder. */
+  paths?: string[];
   /** Directories the command reaches outside every granted root and the temp dirs. */
   directories: string[];
   /** `.env` files named as an argument or an input redirect, which auto mode must not read unasked. */
@@ -161,6 +163,25 @@ function globPrefix(text: string): string | null {
 // ponytail: a wrapper's own option values (`sudo -u bob`, `xargs -I {}`) are read as the program;
 // a full per-wrapper option table if that matters.
 const WRAPPERS = new Set(['sudo', 'env', 'command', 'exec', 'nohup', 'time', 'nice', 'timeout', 'xargs']);
+
+/** A wrapper can change the executable, and these clients can start sending data just by changing flags. */
+export function requiresExactShellRule(command: string): boolean {
+  const head = /^(?:"([^"]*)"|'([^']*)'|(\S+))(?:\s+|$)/.exec(command);
+  if (!head) return true;
+  const executable = head[1] ?? head[2] ?? head[3];
+  const program = basename(executable);
+  const argumentsText = command.slice(head[0].length);
+  return (
+    // Quoting or an absolute executable defeats arityPrefix's bare-program lookup.
+    head[1] !== undefined || head[2] !== undefined || executable !== program ||
+    WRAPPERS.has(program) ||
+    /^(curl|wget|rsync|aws|gsutil|gcloud|docker|podman)$/.test(program) ||
+    (program === 'gh' && (
+      /^(?:api|"api"|'api')(?:\s|$)/.test(argumentsText) ||
+      !/^[A-Za-z]+\s+[A-Za-z]+(?:\s|$)/.test(argumentsText)
+    ))
+  );
+}
 
 const ALWAYS_OUTBOUND = new Set(['scp', 'sftp', 'ftp', 'nc', 'ncat', 'netcat', 'socat', 'telnet', 'ssh']);
 
@@ -310,13 +331,16 @@ const STDIN_SCRIPT = /^(python[\d.]*|node|ruby|perl|php|bun|osascript|sh|bash|zs
  * runs. A wrapper (`sudo`, `timeout 5`) is looked through, so `sudo bash -c ...` is `sudo bash -c`.
  */
 export function opaqueForm(tokens: readonly string[]): string | null {
+  const normalised = tokens.map(unquote);
   let start = 0;
-  while (start < tokens.length && WRAPPERS.has(tokens[start])) {
+  while (start < normalised.length && WRAPPERS.has(basename(normalised[start]))) {
     start++;
-    while (start < tokens.length && /^(-|\d|[A-Za-z_][A-Za-z0-9_]*=)/.test(tokens[start])) start++;
+    while (start < normalised.length && /^(-|\d|[A-Za-z_][A-Za-z0-9_]*=)/.test(normalised[start])) start++;
   }
-  const [program, ...args] = tokens.slice(start);
-  if (program === undefined) return null;
+  const executable = normalised[start];
+  if (executable === undefined) return null;
+  const program = basename(executable);
+  const args = normalised.slice(start + 1);
   const head = (count: number) => tokens.slice(0, start + count).join(' ');
   if (program === 'eval' || program === 'source' || program === '.') return head(1);
   const inline = /^python[\d.]*$/.test(program) ? DASH_C : INLINE_SCRIPT[program];
@@ -325,7 +349,7 @@ export function opaqueForm(tokens: readonly string[]): string | null {
   if (inline && options.some(option => inline.test(option))) {
     return head(2 + args.findIndex(arg => inline.test(flagRun(arg, optionValueLetters(program)))));
   }
-  return operands.length === 0 || operands[0] === '-' ? head(1) : null;
+  return operands.length === 0 || operands[0] === '-' || STDIN_SCRIPT_ARG.test(operands[0]) ? head(1) : null;
 }
 
 /** Arguments that name the command's own standard input rather than a script file. */
@@ -690,6 +714,7 @@ export async function scanShell(
     const temp = [tmpdir(), '/tmp', '/private/tmp'];
     const allowed = [...roots, ...temp];
     const commands: ShellCommand[] = [];
+    const paths = new Set<string>([await realpathNearest(startDirectory)]);
     const directories = new Set<string>();
     const envFiles = new Set<string>();
     const outbound = new Set<string>();
@@ -706,9 +731,13 @@ export async function scanShell(
       const prefix = globPrefix(expandHome(unquote(raw)));
       if (!prefix || isDynamic(prefix)) return null;
       try {
-        return await resolveWithinRootsPhysically(prefix, allowed, cwd);
+        const physical = await resolveWithinRootsPhysically(prefix, allowed, cwd);
+        paths.add(physical);
+        return physical;
       } catch {
         const target = resolve(cwd, prefix);
+        paths.add(target);
+        paths.add(await realpathNearest(target));
         const isDirectory = (await stat(target).catch(() => null))?.isDirectory() === true;
         directories.add(isDirectory ? target : dirname(target));
         return target;
@@ -736,11 +765,15 @@ export async function scanShell(
       const writes = writtenCommands.has(node.id) || hasWriteRedirect(node);
       const arithmetic = tokens.some(token => EVALUATES_ARITHMETIC.test(token));
       const opaque = opaqueForm(tokens);
+      const coverable = !assigns && !writes && !arithmetic && droppedOnlySafeOptions(tokens);
+      // Exact rules must name the unsafe syntax too: dropping an assignment or output redirect
+      // would let `Bash(git status)` cover `GIT_CONFIG_PARAMETERS=... git status` or a file write.
+      const original = node.parent?.type === 'redirected_statement' ? node.parent.text : node.text;
       commands.push({
         text: normalised.join(' '),
         always: `${arityPrefix(normalised).join(' ')} *`,
-        coverable: !assigns && !writes && !arithmetic && droppedOnlySafeOptions(tokens),
-        words: tokens.join(' '),
+        coverable,
+        words: coverable ? tokens.join(' ') : original,
         ...(opaque ? { opaque } : {}),
       });
       const sends = outboundReason(tokens, readsStdin(node));
@@ -835,6 +868,7 @@ export async function scanShell(
     await visit(tree.rootNode);
     return {
       commands,
+      paths: [...paths],
       directories: [...directories],
       envFiles: [...envFiles],
       outbound: [...outbound],
