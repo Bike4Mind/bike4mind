@@ -50,6 +50,10 @@ export function useEffectiveCredits(options?: UseEffectiveCreditsOptions): numbe
   const [settleBaseline, setSettleBaseline] = useState<{ credits: number; syncCount: number } | null>(null);
   const [heldAccountKey, setHeldAccountKey] = useState(accountKey);
 
+  // After streaming ends the hold releases on a live change, a finished post-turn pull, or the
+  // backstop. If settlement landed before streaming ended, only the last pull or the backstop can
+  // fire, so the chip shows the pre-turn balance meanwhile; deliberate, it avoids flashing the
+  // reservation dip.
   if (accountKey !== heldAccountKey) {
     // A held value belongs to the previous account; mid-stream, re-snapshot the new one instead.
     setHeldAccountKey(accountKey);
@@ -59,16 +63,15 @@ export function useEffectiveCredits(options?: UseEffectiveCreditsOptions): numbe
   } else if (isAnyStreaming !== prevIsStreaming) {
     setPrevIsStreaming(isAnyStreaming);
     if (isAnyStreaming) {
-      // A new turn starting before the last one settled must keep the older pre-turn value:
-      // the live value is still hold-dipped and would become the new snapshot.
+      // A new turn starting before the last one settled must keep the older pre-turn value: the live
+      // value is still hold-dipped and would become the new snapshot. The balance is therefore
+      // overstated by the previous turn's cost until this turn settles.
       setFrozenCredits(frozenCredits ?? liveCredits);
       setSettleBaseline(null);
     } else {
       setSettleBaseline({ credits: liveCredits, syncCount });
     }
   } else if (
-    // If settlement lands before streaming ends, the chip shows the pre-turn balance until the last
-    // post-turn pull signals sync; deliberate, it avoids flashing the reservation dip.
     settleBaseline &&
     !isAnyStreaming &&
     (liveCredits !== settleBaseline.credits || syncCount !== settleBaseline.syncCount)
@@ -90,7 +93,5 @@ export function useEffectiveCredits(options?: UseEffectiveCreditsOptions): numbe
   if (options?.live) {
     return liveCredits;
   }
-  // A new turn mid-hold keeps the older pre-turn value, so the balance is overstated by the
-  // previous turn's cost until this turn settles.
   return frozenCredits ?? liveCredits;
 }
