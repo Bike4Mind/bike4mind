@@ -194,6 +194,13 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     endpoints: ['GET /api/v1/me', 'GET /api/v1/credits'],
   },
   {
+    value: ApiKeyScope.SKILLS_READ,
+    label: 'Skill Market: Claude Code feed',
+    // Confined, so it is minted from the Skill Market's "Use in Claude Code" dialog, not the New-Key modals.
+    description: "Read the Claude Code plugin marketplace of an organization's approved Skill Market listings",
+    endpoints: ['GET /api/v1/skills/market/claude-marketplace.json', 'GET /api/v1/skills/market/:id/claude-plugin.zip'],
+  },
+  {
     value: ApiKeyScope.MARKETING_REPORTS_READ,
     label: 'Marketing Reports: Read',
     description: 'Read published marketing reports',

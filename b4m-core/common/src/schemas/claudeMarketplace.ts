@@ -1,0 +1,34 @@
+import { z } from 'zod';
+
+/**
+ * Wire schemas for the Skill Market's Claude Code plugin feed
+ * (api-contract/contracts/skillMarket.contract.ts). The 200 body is a Claude Code
+ * `marketplace.json`, so its field names follow Claude Code, not this API's snake_case.
+ */
+export const ClaudeMarketplaceQuerySchema = z.object({
+  orgId: z.string().min(1),
+});
+
+export const ClaudePluginZipParamSchema = z.object({
+  id: z.string().min(1),
+});
+
+export const ClaudeMarketplacePluginSchema = z.object({
+  name: z.string(),
+  description: z.string(),
+  /** The listing's approved version number; Claude Code offers an update when it changes. */
+  version: z.string(),
+  source: z.object({
+    source: z.literal('archive'),
+    url: z.string(),
+    sha256: z.string(),
+  }),
+});
+
+export const ClaudeMarketplaceSchema = z.object({
+  name: z.string(),
+  owner: z.object({ name: z.string() }),
+  plugins: z.array(ClaudeMarketplacePluginSchema),
+});
+export type ClaudeMarketplace = z.infer<typeof ClaudeMarketplaceSchema>;
+export type ClaudeMarketplacePlugin = z.infer<typeof ClaudeMarketplacePluginSchema>;
