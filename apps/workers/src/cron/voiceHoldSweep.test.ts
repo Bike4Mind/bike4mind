@@ -211,6 +211,18 @@ describe('voiceHoldSweep', () => {
     ]);
   });
 
+  it('reports a run that cannot reach the database as a failure, and still throws', async () => {
+    connectDB.mockRejectedValueOnce(new Error('database unreachable'));
+
+    await expect(handler()).rejects.toThrow('database unreachable');
+
+    expect(findStaleVoiceHolds).not.toHaveBeenCalled();
+    expect(emitMetrics).toHaveBeenCalledWith('Lumina5/Voice', [
+      { name: 'HoldSweepSettled', value: 0, dimensions: { Stage: 'test' }, unit: 'Count' },
+      { name: 'HoldSweepFailed', value: 1, dimensions: { Stage: 'test' }, unit: 'Count' },
+    ]);
+  });
+
   it('leaves metrics to the hosted handler, so the self-host twin never calls CloudWatch', async () => {
     findStaleVoiceHolds.mockResolvedValue([hold('a')]);
 
