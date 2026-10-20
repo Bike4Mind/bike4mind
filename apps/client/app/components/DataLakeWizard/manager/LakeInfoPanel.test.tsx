@@ -22,6 +22,10 @@ vi.mock('@client/app/components/datalake/LakeSyncStatus', () => ({
 }));
 vi.mock('@client/app/components/datalake/LakeSkippedFilesChip', () => ({ default: () => null }));
 vi.mock('./FinishSourceConnectBanner', () => ({ default: () => null }));
+// The source card has its own suite (LakeSourceConnectActions.test.tsx); here only its mount gate matters.
+vi.mock('../steps/LakeSourceConnectActions', () => ({
+  default: () => <span data-testid="lake-source-connect-actions-stub" />,
+}));
 
 // "Start chat" pulls in SessionsContext/react-router/react-query transitively - irrelevant to this
 // suite (build/rebuild + state chips + purge), so stub it to a no-op, same as DataLakeManagerPanel's suite.
@@ -208,6 +212,30 @@ describe('LakeInfoPanel - header title', () => {
     expect(title).toHaveTextContent(name);
     const startChat = screen.getByTestId('datalake-startchat-btn-lake-1');
     expect(title.parentElement).not.toBe(startChat.parentElement);
+  });
+});
+
+describe('LakeInfoPanel - source card', () => {
+  it('mounts the source card for the manager of an org lake', () => {
+    renderPanel({ ...baseLake, organizationId: 'org-1', canManage: true } as ManagerLake);
+    expect(screen.getByTestId('datalake-selected-lake-source')).toContainElement(
+      screen.getByTestId('lake-source-connect-actions-stub')
+    );
+  });
+
+  it('mounts the source card for the creator of a personal lake', () => {
+    renderPanel({ ...baseLake, organizationId: '', isCreator: true } as ManagerLake);
+    expect(screen.getByTestId('datalake-selected-lake-source')).toBeInTheDocument();
+  });
+
+  it('omits the source card for an org lake the caller cannot manage', () => {
+    renderPanel({ ...baseLake, organizationId: 'org-1', canManage: false } as ManagerLake);
+    expect(screen.queryByTestId('datalake-selected-lake-source')).not.toBeInTheDocument();
+  });
+
+  it('omits the source card for a personal lake the caller did not create', () => {
+    renderPanel({ ...baseLake, organizationId: '', isCreator: false } as ManagerLake);
+    expect(screen.queryByTestId('datalake-selected-lake-source')).not.toBeInTheDocument();
   });
 });
 
