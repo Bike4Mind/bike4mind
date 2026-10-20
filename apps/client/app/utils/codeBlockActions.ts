@@ -11,7 +11,10 @@ import { useMemo, useSyncExternalStore } from 'react';
  *   (PromptReplies createCodeComponent);
  * - prompt fences: always CodeBlockHeader (UserPrompt);
  * - code artifacts: CodeArtifactPreviewCard, whose language defaults to 'typescript'
- *   (artifacts/handlers/code.tsx).
+ *   (artifacts/handlers/code.tsx);
+ * - other artifacts with a source language: ArtifactPreviewCard. This includes most Python
+ *   reply fences, which convertCodeBlocksToArtifacts promotes to python artifacts before the
+ *   fence renderers ever see them, so their language arrives as 'python' (handlers/python.tsx).
  */
 
 export type CodeBlockActionProps = {
