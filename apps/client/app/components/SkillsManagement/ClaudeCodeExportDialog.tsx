@@ -48,8 +48,15 @@ const ClaudeCodeExportDialog: FC<ClaudeCodeExportDialogProps> = ({
   const skillDir = `~/.claude/skills/${skill.name}`;
 
   const copyCommand = () => {
+    let command: string;
+    try {
+      command = buildClaudeCodeInstallCommand(skill.name, content);
+    } catch {
+      toast.error(`"${skill.name}" is not a valid Claude Code skill name - use Download and rename the folder`);
+      return;
+    }
     Promise.resolve()
-      .then(() => navigator.clipboard.writeText(buildClaudeCodeInstallCommand(skill.name, content)))
+      .then(() => navigator.clipboard.writeText(command))
       .then(() => toast.success(`Copied - paste it into a terminal, then use /${skill.name} in Claude Code`))
       .catch(() => toast.error('Could not copy to the clipboard - use Download instead'));
   };
@@ -72,8 +79,8 @@ const ClaudeCodeExportDialog: FC<ClaudeCodeExportDialogProps> = ({
                   ) : null}
                   {hints.agents.length ? (
                     <span>
-                      Calls a Bike4Mind agent ({hints.agents.map(a => `@${a}`).join(', ')}), which doesn&apos;t exist in
-                      Claude Code.
+                      May call a Bike4Mind agent ({hints.agents.map(a => `@${a}`).join(', ')}), which doesn&apos;t exist
+                      in Claude Code.
                     </span>
                   ) : null}
                 </Stack>
