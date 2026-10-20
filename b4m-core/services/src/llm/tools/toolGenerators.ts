@@ -49,6 +49,7 @@ export const generateTools = (
     authOrigin,
     apiKeyId,
     questId,
+    numberCitables,
     getAbortSignal,
   }: {
     db: ToolContext['db'];
@@ -68,6 +69,7 @@ export const generateTools = (
     authOrigin: ToolContext['authOrigin'];
     apiKeyId?: ToolContext['apiKeyId'];
     questId?: ToolContext['questId'];
+    numberCitables?: ToolContext['numberCitables'];
     getAbortSignal?: ToolContext['getAbortSignal'];
   },
   storage: BaseStorage,
@@ -127,6 +129,7 @@ export const generateTools = (
     availableModels,
     onToolLlmUsage,
     getAbortSignal,
+    numberCitables,
   };
 
   return Object.entries(tools).reduce(

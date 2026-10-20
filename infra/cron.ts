@@ -281,8 +281,8 @@ const creditLotSweepCron = new sst.aws.Cron('creditLotSweep', {
 // Voice Hold Sweep - settles voice credit holds no client ever ended (closed tab, crashed browser,
 // failed connect) on connected time. Self-host twin: apps/workers/src/selfhost/voiceHoldSweep.ts;
 // keep the schedules in step. Settlement is DB-only and capped at VOICE_HOLD_SWEEP_LIMIT holds per
-// run. Overlapping runs (at-least-once delivery, async retry after a timeout) are safe because
-// settleVoiceHold claims each hold atomically, so a losing settler moves no credit.
+// run. Overlapping runs (at-least-once delivery) are safe because settleVoiceHold claims each hold
+// atomically, so a losing settler moves no credit.
 const voiceHoldSweepCron = new sst.aws.Cron('voiceHoldSweep', {
   schedule: 'rate(5 minutes)',
   function: {
@@ -290,10 +290,19 @@ const voiceHoldSweepCron = new sst.aws.Cron('voiceHoldSweep', {
     handler: 'apps/workers/src/cron/voiceHoldSweep.handler',
     runtime: 'nodejs24.x',
     timeout: '4 minutes',
+    // The 5-minute schedule is the retry; Lambda's async retries would land one failed run in two alarm periods.
+    retries: 0,
     link: [...allSecrets],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
+    // The stale-hold alarms in infra/alarms.ts watch the counts this function publishes.
+    permissions: [
+      {
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
+    ],
     logging: {
       retention: '1 week',
     },

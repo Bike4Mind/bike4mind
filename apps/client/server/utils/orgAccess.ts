@@ -7,8 +7,8 @@
  * Five tiers, widest last. State which one you mean at every call site; picking the wrong one
  * either leaks across a tenant boundary or breaks a members' screen:
  * - `verifyOrgOwner`           - owner only
- * - `verifyOrgAccess`          - owner or manager
- * - `verifyOrgAdminRead`       - owner, manager or appointed admin (reads only)
+ * - `verifyOrgAccess`          - owner or manager (`adminUserIds` on the roster, or legacy `managerId`)
+ * - `verifyOrgAdminRead`       - owner or manager, matching `adminUserIds` without the roster row (reads only)
  * - `verifyOrgMemberOrManager` - any member, or the manager without a membership row (reads only)
  * - `verifyOrgMembership`      - any member (shareable ACL)
  *
@@ -18,7 +18,12 @@
  */
 
 import { organizationRepository } from '@bike4mind/database/infra';
-import { canAdministerOrganization, type AdministrableOrg, type IUserDocument } from '@bike4mind/common';
+import {
+  canAdministerOrganization,
+  isOrgOwnerOrPlatformAdmin,
+  type AdministrableOrg,
+  type IUserDocument,
+} from '@bike4mind/common';
 import { BadRequestError, NotFoundError, UnprocessableEntityError } from '@bike4mind/utils';
 import { isValidObjectId } from '@server/utils/objectId';
 import { resolveActiveOrg } from './resolveActiveOrg';
@@ -53,7 +58,7 @@ export async function verifyOrgAccess(user: { id: string; isAdmin: boolean }, or
     throw new NotFoundError('Organization not found');
   }
 
-  // Platform admins pass for every org; everyone else must be its owner or manager. Same error for
+  // Platform admins pass for every org; everyone else must be its owner or a manager. Same error for
   // not found and not authorized (prevents enumeration).
   if (!canManageOrg(user, org)) {
     throw new NotFoundError('Organization not found');
@@ -63,13 +68,14 @@ export async function verifyOrgAccess(user: { id: string; isAdmin: boolean }, or
 }
 
 /**
- * Read-tier sibling of `verifyOrgAccess` for status surfaces an appointed org admin may see but not
- * operate: admits the owner, the manager, an appointed admin (`adminUserIds`) and a platform admin.
- * That is the same set `findIdsWithAdminRights` and `canManageLake` resolve from the user's side, read
- * here off the org document because the org is already in hand: an appointed admin is matched on
- * `adminUserIds` alone, unlike `isOrgOwnerOrCurrentAdmin` (`b4m-core/common/src/constants/organization.ts`),
- * which also requires a current `users[]` row. Never use it to guard a write - `canManage` is the
- * `verifyOrgAccess` answer, so a caller can render the write controls only for who may use them.
+ * Read-tier sibling of `verifyOrgAccess` for status surfaces: admits the owner, the legacy manager,
+ * any `adminUserIds` manager and a platform admin. That is the same set `findIdsWithAdminRights` and
+ * `canManageLake` resolve from the user's side, read here off the org document because the org is
+ * already in hand: a manager is matched on `adminUserIds` alone, unlike `canAdministerOrganization`
+ * (`b4m-core/common/src/constants/organization.ts`), which also requires a current `users[]` row - so
+ * a manager whose row has lapsed may still see status but not operate. Never use it to guard a write
+ * - `canManage` is the `verifyOrgAccess` answer, so a caller can render the write controls only for
+ * who may use them.
  *
  * Non-oracular like its siblings: a missing org and an unrelated caller both answer NotFoundError.
  */
@@ -95,11 +101,14 @@ export async function verifyOrgAdminRead(user: { id: string; isAdmin: boolean },
 /**
  * Verify the caller OWNS the organization, returning the organization document.
  *
- * The strictest of the four tiers in this file - owner only, where `verifyOrgAccess` also admits
+ * The strictest of the five tiers in this file - owner only, where `verifyOrgAccess` also admits
  * the manager and `verifyOrgMembership` admits any member. Use it wherever only the party that
- * owns the org may act: billing writes (committing the org to a charge, or changing what it pays)
- * and org-level integration wiring (`integrations/slack/*`, where connecting or disconnecting a
- * workspace acts for the whole tenant). A manager has agreed to neither.
+ * owns the org may act: billing writes (committing the org to a charge, or changing what it pays),
+ * the org's credit spend and ledger (`usage/index.ts`, `admin/transactions.ts`,
+ * `admin/session-usage.ts`), and org-level integration wiring and secrets (`integrations/slack/*`,
+ * `organizations/[id]/github/*`, `organizations/[id]/webhooks/github*`), which act for the whole
+ * tenant. A manager has agreed to none of these. The client's tab gates for them
+ * (routes/organizations/orgTabAccess.ts) must stay in sync with this list.
  *
  * Non-oracular, like its siblings: a nonexistent org and an org the caller does not own both answer
  * NotFoundError, so the route cannot be used to enumerate which organization ids exist.
@@ -131,7 +140,7 @@ export async function verifyOrgOwner(user: { id: string; isAdmin: boolean }, org
   }
 
   // Platform admins pass through, matching every other gate in this file.
-  if (!user.isAdmin && org.userId !== user.id) {
+  if (!isOrgOwnerOrPlatformAdmin(user, org)) {
     throw new NotFoundError('Organization not found');
   }
 

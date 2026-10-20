@@ -777,7 +777,16 @@ export interface ChatModelOption {
    * absent flag here only means the model was not in a list that had loaded.
    */
   supportsReasoningEffort?: boolean;
+  /**
+   * A local Ollama model that can think. Its server takes no effort, only thinking on or off,
+   * so the effort picker becomes that switch, stored as `default` (on) and
+   * THINKING_OFF_SETTING (off).
+   */
+  thinkingToggle?: boolean;
 }
+
+/** The setting a `thinkingToggle` model's "Off" is stored as; any other setting thinks. */
+export const THINKING_OFF_SETTING = 'minimal' satisfies ReasoningEffortSetting;
 
 /**
  * How hard a model that reasons thinks before answering.
@@ -967,7 +976,8 @@ interface ChatSessionMeta {
    * effort it was held at rather than whatever the last conversation was set to.
    *
    * Only a model in the catalog's reasoning set is actually sent one - see
-   * `ChatModelOption.supportsReasoningEffort`. On any other model this is stored and inert.
+   * `ChatModelOption.supportsReasoningEffort`. For a model with `thinkingToggle`, `minimal`
+   * instead turns thinking off and every other setting turns it on. Otherwise this is inert.
    */
   reasoningEffort: ReasoningEffortSetting;
   /**
@@ -1188,6 +1198,8 @@ export interface ChatQueuedMessage {
   id: string;
   sessionId: string;
   text: string;
+  /** App-written reminders that belong only to the user message this entry becomes. */
+  notes?: string[];
   /** Descriptors whose bytes are already on disk; they are held back from pruning while queued. */
   attachments?: ChatAttachment[];
   queuedAt: string;
@@ -1453,6 +1465,8 @@ export interface ChatSpawnSuggestion {
   base: string;
   /** The prefilled branch name for a worktree start. */
   branch: string;
+  /** False when the project is not a git repository, so a worktree start cannot work. */
+  repository?: boolean;
   status: 'pending' | 'started' | 'dismissed';
   /**
    * `title` was cut from the prompt rather than given, so a start that keeps it leaves the
@@ -1467,22 +1481,50 @@ export interface ChatSpawnSuggestion {
   unreported?: boolean;
 }
 
-export interface ChatSpawnSuggestionStart {
-  sessionId: string;
+/** 'here' runs the task as the user's own next message in the suggesting conversation. */
+export type SpawnSuggestionPlacement = 'worktree' | 'local' | 'here';
+
+interface SpawnSuggestionStartBase {
   title: string;
-  placement: 'worktree' | 'local';
-  branch?: string;
   /** The user changed the prompt or title before starting. */
   edited: boolean;
 }
 
+export type ChatSpawnSuggestionStart =
+  | (SpawnSuggestionStartBase & { placement: 'worktree' | 'local'; sessionId: string; branch?: string })
+  | (SpawnSuggestionStartBase & { placement: 'here' });
+
+/**
+ * How both suggestion cards name the start choices: the tray's split button and session_spawn's
+ * approval card. Shared so the two never drift apart.
+ */
+export const SPAWN_CHOICE_TEXT: Readonly<
+  Record<SpawnSuggestionPlacement, { label: string; action: string; hint: string }>
+> = {
+  worktree: {
+    label: 'New session in a worktree',
+    action: 'Start in new worktree',
+    hint: 'Its own branch and checkout, so it cannot disturb this one.',
+  },
+  local: {
+    label: 'New session in this folder',
+    action: 'Start in this folder',
+    hint: 'Shares these files; both sessions edit them at once.',
+  },
+  here: {
+    label: 'Run here, in this conversation',
+    action: 'Run here',
+    hint: 'This conversation does the work itself. No new session.',
+  },
+};
+
 export interface StartSpawnSuggestionRequest {
   sessionId: string;
   suggestionId: string;
-  placement: 'worktree' | 'local';
+  placement: SpawnSuggestionPlacement;
   prompt: string;
   title: string;
-  /** Required for a worktree start. */
+  /** Required for a worktree start; ignored by the others. */
   branch?: string;
 }
 

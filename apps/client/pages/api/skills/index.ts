@@ -4,7 +4,7 @@ import { baseApi } from '@client/server/middlewares/baseApi';
 import { skillRepository } from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { ISkill, ISkillDocument } from '@bike4mind/common';
-import { BadRequestError } from '@bike4mind/utils';
+import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import {
   validateSkillName,
   validateSkillDescription,
@@ -15,7 +15,7 @@ import {
 import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
 import { ensureAdmin } from '@server/utils/errors';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
-import { ShareableSkill, canManageSkillSharingWith, redactShareRosterForViewer } from '@server/utils/skillAccess';
+import { ShareableSkill, isSkillOrgAdmin, canManageSkillSharingWith, redactShareRosterForViewer } from '@server/utils/skillAccess';
 import { attachMarketStatus } from '@server/skillMarket/marketStatus';
 
 const ALLOWED_ORDER_BY = new Set(['createdAt', 'updatedAt', 'name']);
@@ -48,9 +48,11 @@ async function resolveCreateScope(
     return { isSystem: true };
   }
 
-  // Org-scoped: verifyOrgAccess throws NotFound/Forbidden if the caller isn't
-  // an admin, owner, or manager of the target organization.
-  await verifyOrgAccess(user, scope.organizationId as string);
+  // Limited to who can later manage the skill (owner, legacy manager, platform admin); adminUserIds managers can't.
+  const org = await verifyOrgAccess(user, scope.organizationId as string);
+  if (!user.isAdmin && !isSkillOrgAdmin(org, user)) {
+    throw new NotFoundError('Organization not found');
+  }
   return { organizationId: scope.organizationId as string };
 }
 

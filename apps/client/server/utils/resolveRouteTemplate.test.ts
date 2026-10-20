@@ -60,6 +60,26 @@ describe('resolveRouteTemplate', () => {
   it('strips fragments and tolerates a missing query object', () => {
     expect(resolveRouteTemplate({ originalUrl: '/api/chat#x', url: '/api/chat' } as never)).toBe('/api/chat');
   });
+
+  it.each<[string, Record<string, string | string[]>, string, string]>([
+    ['/api/agents/a1?id=a1', { id: 'a1' }, '/api/agents/a1', 'unknown'],
+    ['/api/agents/a%201?id=a+1', { id: 'a 1' }, '/api/agents/a%201', 'unknown'],
+    ['/api/files/a/b?path=a&path=b', { path: ['a', 'b'] }, '/api/files/a/b', 'unknown'],
+    ['/api/items/1?n=1', { n: '1' }, '/api/items/1', 'unknown'],
+    [
+      '/api/admin/integration-status?z=api&z=admin',
+      { z: ['api', 'admin'] },
+      '/api/admin/integration-status',
+      'unknown',
+    ],
+    ['/api/agents/a1?id=other', { id: 'a1' }, '/api/agents/[id]', '/api/agents/[id]'],
+    ['/api/agents/a1?x=1', { id: 'a1', x: '1' }, '/api/agents/[id]', '/api/agents/[id]'],
+    ['/api/chat?x=', { x: '' }, '/api/chat', '/api/chat'],
+    ['/api/chat', {}, '/api/chat', '/api/chat'],
+  ])('optionally redacts ambiguous query/path values in %s', (url, query, normal, redacted) => {
+    expect(resolveRouteTemplate(req(url, query))).toBe(normal);
+    expect(resolveRouteTemplate(req(url, query), { redactAmbiguousQuery: true })).toBe(redacted);
+  });
 });
 
 describe('resolveRequestPathname', () => {

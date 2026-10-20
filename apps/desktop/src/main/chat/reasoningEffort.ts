@@ -3,7 +3,12 @@ import {
   REASONING_SUPPORTED_MODELS,
   type ReasoningEffort,
 } from '@bike4mind/common';
-import { REASONING_EFFORT_SETTINGS, type ReasoningEffortSetting } from '@shared/chat';
+import {
+  REASONING_EFFORT_SETTINGS,
+  THINKING_OFF_SETTING,
+  type ChatModelOption,
+  type ReasoningEffortSetting,
+} from '@shared/chat';
 
 /** An unset or unrecognised value is `default`: a typo must not silently change how a model reasons. */
 export function parseReasoningEffortSetting(raw: string | undefined): ReasoningEffortSetting {
@@ -25,8 +30,8 @@ export function supportsReasoningEffort(model: string): boolean {
  * The effort to put on a request for `model`, or undefined to send none.
  *
  * Gated on the adapters' own lists rather than a provider check: the server forwards the field
- * to whatever backend serves the model, and only these models accept it. Every desktop request
- * also sets `thinking` (see completions.ts), so on Claude this sizes that thinking and 'none' and
+ * to whatever backend serves the model, and only these models accept it. Claude turns also
+ * enable `thinking` (see completions.ts), so this sizes that thinking and 'none' and
  * 'minimal' map to 'low' - see resolveAnthropicEffort in llm-adapters.
  */
 export function reasoningEffortFor(
@@ -35,4 +40,16 @@ export function reasoningEffortFor(
 ): ReasoningEffort | undefined {
   if (!setting || setting === 'default') return undefined;
   return supportsReasoningEffort(model) ? setting : undefined;
+}
+
+/**
+ * Whether a turn asks the server for thinking. Every model does except a `thinkingToggle` one
+ * switched off: leaving the flag out is what makes the server send Ollama `think:false`, since a
+ * thinking-capable Ollama model otherwise thinks by default.
+ */
+export function requestsThinking(
+  setting: ReasoningEffortSetting | undefined,
+  option: Pick<ChatModelOption, 'thinkingToggle'> | undefined
+): boolean {
+  return !(option?.thinkingToggle && setting === THINKING_OFF_SETTING);
 }

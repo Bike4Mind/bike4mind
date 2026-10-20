@@ -40,6 +40,43 @@ export function isLatencyObservation(err: unknown): err is StreamingTimeoutError
   return err instanceof StreamingTimeoutError;
 }
 
+/** One poll of the chat UI while waiting for a reply to finish. */
+export type StreamSnapshot = {
+  stopVisible: boolean;
+  /** innerText of the newest reply's body (root container when no body is mounted); '' when none. */
+  text: string;
+};
+
+/**
+ * Whether the turn just sent has finished, given the latest poll.
+ *
+ * Done means the stop button is gone AND this turn demonstrably happened: either the stop button
+ * was seen at some point (it can flash by too fast to catch on a short reply) or the newest reply
+ * differs from the pre-send baseline. A stop button that never hides is never done - the caller
+ * fails it as a StreamingTimeoutError instead of guessing from stable text. One recovery is not
+ * distinguishable here: if the app gives up on a stalled turn itself it marks it complete and
+ * hides the button, which looks like a finished reply. That still fails the latency budget on
+ * time, but it is recorded as a slow success, not as incomplete.
+ */
+export function isStreamComplete(snapshot: StreamSnapshot, previousResponse: string, sawStopButton: boolean): boolean {
+  if (snapshot.stopVisible) return false;
+  if (sawStopButton) return true;
+  // Safe only on the plain chat path, where the stop button shows optimistically on send
+  // (OPTIMISTIC_GENERATING_STATUS in useSendMessage, read by app/hooks/chatCompletionState.ts).
+  // Slash commands and agent_executor skip it, and mid-stream chrome has text too.
+  return snapshot.text !== '' && snapshot.text !== previousResponse;
+}
+
+/** Why a streaming wait ran out, for the StreamingTimeoutError message. */
+export function describeStall(snapshot: StreamSnapshot): string {
+  if (!snapshot.stopVisible) return 'no new reply and the stop button never appeared';
+  // An empty reply means the turn never reached token output; a non-empty one means the stream
+  // (or its completion signal) stalled. Different fixes, so say which.
+  return snapshot.text === ''
+    ? 'no text streamed yet (tool work still in flight?)'
+    : 'reply streamed but stop button never hid';
+}
+
 /** ms -> s at 1 ms granularity. One helper so every duration field rounds the same way. */
 export function msToSec(ms: number): number {
   return Math.round(ms) / 1000;

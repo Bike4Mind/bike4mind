@@ -1,17 +1,28 @@
 import { useEffect, useRef, useState } from 'react';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
+import ButtonGroup from '@mui/joy/ButtonGroup';
+import Dropdown from '@mui/joy/Dropdown';
 import FormControl from '@mui/joy/FormControl';
 import FormHelperText from '@mui/joy/FormHelperText';
 import FormLabel from '@mui/joy/FormLabel';
 import IconButton from '@mui/joy/IconButton';
 import Input from '@mui/joy/Input';
+import Menu from '@mui/joy/Menu';
+import MenuButton from '@mui/joy/MenuButton';
+import MenuItem from '@mui/joy/MenuItem';
 import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Textarea from '@mui/joy/Textarea';
 import Typography from '@mui/joy/Typography';
-import type { ChatSpawnSuggestion, SpawnSuggestionResult, StartSpawnSuggestionRequest } from '@shared/chat';
-import { BranchIcon, ChevronIcon } from './icons';
+import {
+  SPAWN_CHOICE_TEXT,
+  type ChatSpawnSuggestion,
+  type SpawnSuggestionPlacement,
+  type SpawnSuggestionResult,
+  type StartSpawnSuggestionRequest,
+} from '@shared/chat';
+import { BranchIcon, CaretDownIcon, ChevronIcon } from './icons';
 import { contentColumnSx } from './layout';
 import {
   acceptAssistant,
@@ -29,6 +40,34 @@ const UPDATE_HIGHLIGHT_MS = 1600;
 
 type StartFn = (request: Omit<StartSpawnSuggestionRequest, 'sessionId'>) => Promise<SpawnSuggestionResult>;
 
+const CHOICES: readonly SpawnSuggestionPlacement[] = ['worktree', 'local', 'here'];
+
+export const SPAWN_CHOICE_STORAGE_KEY = 'b4m.spawnSuggestion.choice';
+
+function readRememberedChoice(): SpawnSuggestionPlacement | null {
+  try {
+    const stored = window.localStorage.getItem(SPAWN_CHOICE_STORAGE_KEY);
+    return CHOICES.find(choice => choice === stored) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function rememberChoice(choice: SpawnSuggestionPlacement): void {
+  try {
+    window.localStorage.setItem(SPAWN_CHOICE_STORAGE_KEY, choice);
+  } catch {
+    // Storage can be unavailable; the choice then lasts as long as the card.
+  }
+}
+
+/** An absent `repository` is a suggestion stored before the flag existed, which always had one. */
+function initialChoice(repository: boolean): SpawnSuggestionPlacement {
+  const remembered = readRememberedChoice();
+  if (remembered && (remembered !== 'worktree' || repository)) return remembered;
+  return repository ? 'worktree' : 'local';
+}
+
 /**
  * Tasks the model suggested handing to a new session, pinned above the composer.
  *
@@ -37,7 +76,8 @@ type StartFn = (request: Omit<StartSpawnSuggestionRequest, 'sessionId'>) => Prom
  * answers "also make it do X", and that is exactly when it needs to be in view. The turn is never
  * held on it, so the composer below stays fully usable.
  *
- * Only pending suggestions are drawn: once one starts, its session in the sidebar is the record.
+ * Only pending suggestions are drawn: once one starts, its session in the sidebar is the record,
+ * or, for one run here, the user message it sent.
  */
 export function SpawnSuggestionTray({
   suggestions,
@@ -83,6 +123,9 @@ export function SpawnSuggestionCard({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [highlight, setHighlight] = useState(false);
+  const repository = suggestion.repository !== false;
+  const [choice, setChoice] = useState<SpawnSuggestionPlacement>(() => initialChoice(repository));
+  const [menuOpen, setMenuOpen] = useState(false);
   const seenRevision = useRef(suggestion.revision);
 
   useEffect(() => {
@@ -105,7 +148,15 @@ export function SpawnSuggestionCard({
       setDraft(editDraft(suggestion, draft, name, event.target.value)),
   });
 
-  const start = async (placement: 'worktree' | 'local') => {
+  const pick = (next: SpawnSuggestionPlacement) => {
+    setChoice(next);
+    rememberChoice(next);
+    setMenuOpen(false);
+  };
+
+  const canStart = !busy && values.prompt.trim() !== '' && (choice !== 'worktree' || values.branch.trim() !== '');
+
+  const start = async (placement: SpawnSuggestionPlacement) => {
     setBusy(true);
     setError(null);
     const result = await onStart({
@@ -186,18 +237,20 @@ export function SpawnSuggestionCard({
         </Stack>
       )}
 
-      <FormControl size="sm" sx={{ mt: 1 }}>
-        <FormLabel sx={{ fontSize: 'xs' }}>Branch</FormLabel>
-        <Input
-          size="sm"
-          startDecorator={<BranchIcon />}
-          {...field('branch')}
-          slotProps={{ input: { 'data-testid': 'spawn-suggestion-branch-input' } }}
-        />
-        <FormHelperText sx={{ fontSize: 'xs' }} data-testid="spawn-suggestion-base">
-          Based on {suggestion.base}
-        </FormHelperText>
-      </FormControl>
+      {choice === 'worktree' && (
+        <FormControl size="sm" sx={{ mt: 1 }}>
+          <FormLabel sx={{ fontSize: 'xs' }}>Branch</FormLabel>
+          <Input
+            size="sm"
+            startDecorator={<BranchIcon />}
+            {...field('branch')}
+            slotProps={{ input: { 'data-testid': 'spawn-suggestion-branch-input' } }}
+          />
+          <FormHelperText sx={{ fontSize: 'xs' }} data-testid="spawn-suggestion-base">
+            Based on {suggestion.base}
+          </FormHelperText>
+        </FormControl>
+      )}
 
       {conflicts.map(name => (
         <Stack
@@ -239,24 +292,49 @@ export function SpawnSuggestionCard({
       )}
 
       <Stack direction="row" spacing={1} useFlexGap sx={{ mt: 1, flexWrap: 'wrap', alignItems: 'center' }}>
-        <Button
-          size="sm"
-          disabled={busy || !values.prompt.trim() || !values.branch.trim()}
-          onClick={() => void start('worktree')}
-          data-testid="spawn-suggestion-start-btn"
-        >
-          Start with worktree
-        </Button>
-        <Button
-          size="sm"
-          variant="outlined"
-          color="neutral"
-          disabled={busy || !values.prompt.trim()}
-          onClick={() => void start('local')}
-          data-testid="spawn-suggestion-start-local-btn"
-        >
-          Start locally
-        </Button>
+        {/* A MenuButton inside a Dropdown rather than an IconButton anchoring a bare Menu: only
+            the Dropdown moves focus into the menu, which is what makes the choices reachable
+            from the keyboard. */}
+        <ButtonGroup size="sm" variant="solid" color="primary" disabled={busy}>
+          <Button disabled={!canStart} onClick={() => void start(choice)} data-testid="spawn-suggestion-start-btn">
+            {SPAWN_CHOICE_TEXT[choice].action}
+          </Button>
+          <Dropdown open={menuOpen} onOpenChange={(_event, open) => setMenuOpen(open)}>
+            <MenuButton
+              slots={{ root: IconButton }}
+              slotProps={{
+                root: {
+                  'aria-label': 'Choose where to run this task',
+                  'data-testid': 'spawn-suggestion-start-menu-btn',
+                },
+              }}
+            >
+              <CaretDownIcon />
+            </MenuButton>
+            <Menu placement="bottom-start" size="sm" sx={{ maxWidth: 320 }} data-testid="spawn-suggestion-start-menu">
+              {CHOICES.map(option => {
+                const unavailable = option === 'worktree' && !repository;
+                return (
+                  <MenuItem
+                    key={option}
+                    selected={option === choice}
+                    disabled={unavailable}
+                    onClick={() => pick(option)}
+                    data-testid={`spawn-suggestion-choice-${option}-item`}
+                    sx={{ flexDirection: 'column', alignItems: 'flex-start', gap: 0.25 }}
+                  >
+                    <Typography level="body-sm" fontWeight="lg">
+                      {SPAWN_CHOICE_TEXT[option].label}
+                    </Typography>
+                    <Typography level="body-xs" textColor="text.tertiary" sx={{ whiteSpace: 'normal' }}>
+                      {unavailable ? 'Needs a git repository.' : SPAWN_CHOICE_TEXT[option].hint}
+                    </Typography>
+                  </MenuItem>
+                );
+              })}
+            </Menu>
+          </Dropdown>
+        </ButtonGroup>
         <Button
           size="sm"
           variant="plain"

@@ -9,7 +9,7 @@ import {
 } from '@bike4mind/common';
 import { ForbiddenError } from '@server/utils/errors';
 import { NotFoundError } from '@bike4mind/utils';
-import { verifyOrgAccess } from '@server/utils/orgAccess';
+import { verifyOrgOwner } from '@server/utils/orgAccess';
 import { z } from 'zod';
 
 const QuerySchema = z.object({
@@ -26,7 +26,7 @@ const QuerySchema = z.object({
  * this session cost what it did?".
  *
  * Access: platform admins read any session, cross-org. A non-admin must pass
- * the org they can access (verifyOrgAccess) AND the session's spend must be
+ * the org they can access (verifyOrgOwner) AND the session's spend must be
  * billed to that org - sessions carry no org of their own, so ownership is
  * proven off the usage events. Mismatches 404 (same as no access, to avoid
  * enumeration).
@@ -40,10 +40,10 @@ const QuerySchema = z.object({
  * requiredScopes gates the API-key path only: apiKeyAuth 403s an under-scoped key
  * before req.user is set, so a key issued for a narrow integration can't read
  * session spend just because its owner is an admin. JWT/browser callers (admin or
- * org owner/manager) skip that check and still go through the access logic above.
+ * org owner) skip that check and still go through the access logic above.
  * ApiKeyScope.ADMIN has no mint path (excluded from every key-creation UI and
  * rejected server-side), so this closes the API-key path entirely for a
- * non-admin org owner/manager - only a JWT/browser session still works for them.
+ * non-admin org owner - only a JWT/browser session still works for them.
  */
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
   if (!req.user) {
@@ -59,7 +59,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req,
     if (!organizationId) {
       throw new ForbiddenError('Admin access required');
     }
-    await verifyOrgAccess(req.user, organizationId);
+    await verifyOrgOwner(req.user, organizationId);
     const belongsToOrg = await usageEventRepository.sessionBelongsToOwner(
       sessionId,
       organizationId,

@@ -1,7 +1,7 @@
 /**
  * Organization GitHub Webhook Configuration API
  *
- * Allows organization admins/managers to configure a shared GitHub webhook
+ * Allows organization owners to configure a shared GitHub webhook
  * that can be subscribed to by team members.
  *
  * Security:
@@ -21,7 +21,7 @@ import { orgWebhookConfigRepository } from '@bike4mind/database/infra';
 import { webhookSubscriptionRepository } from '@bike4mind/database/infra';
 import { generateWebhookToken, generateWebhookSecret } from '@server/integrations/github/webhookUtils';
 import { encryptSecret, decryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
-import { verifyOrgAccess } from '@server/utils/orgAccess';
+import { verifyOrgOwner } from '@server/utils/orgAccess';
 import { Config } from '@server/utils/config';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { IOrgWebhookConfigRequest, IOrgWebhookConfigResponse } from '@bike4mind/common';
@@ -52,7 +52,7 @@ const handler = baseApi()
       const orgId = req.query.id!;
       const user = req.user!;
 
-      await verifyOrgAccess(user, orgId);
+      await verifyOrgOwner(user, orgId);
 
       const existingConfig = await orgWebhookConfigRepository.findByOrganizationId(orgId);
       if (existingConfig) {
@@ -117,7 +117,7 @@ const handler = baseApi()
       const user = req.user!;
       const revealSecret = req.query.revealSecret === 'true';
 
-      await verifyOrgAccess(user, orgId);
+      await verifyOrgOwner(user, orgId);
 
       const webhookConfig = await orgWebhookConfigRepository.findByOrganizationId(orgId);
       if (!webhookConfig) {
@@ -169,7 +169,7 @@ const handler = baseApi()
         const orgId = req.query.id!;
         const user = req.user!;
 
-        await verifyOrgAccess(user, orgId);
+        await verifyOrgOwner(user, orgId);
 
         const existingConfig = await orgWebhookConfigRepository.findByOrganizationId(orgId);
         if (!existingConfig) {
@@ -248,7 +248,7 @@ const handler = baseApi()
         const orgId = req.query.id!;
         const user = req.user!;
 
-        await verifyOrgAccess(user, orgId);
+        await verifyOrgOwner(user, orgId);
 
         const webhookConfig = await orgWebhookConfigRepository.findByOrganizationId(orgId);
         if (!webhookConfig) {

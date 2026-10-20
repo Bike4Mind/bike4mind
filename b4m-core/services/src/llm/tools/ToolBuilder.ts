@@ -10,6 +10,7 @@ import {
   ModelInfo,
   materializePromptMetaSession,
   type GenerationJobRef,
+  type CitableSource,
 } from '@bike4mind/common';
 import type { SoundGenerationVendor, VoiceGenerationVendor } from '@bike4mind/common';
 import { type ApiKeyTable, type ICompletionBackend, type ICompletionOptionTools } from '@bike4mind/llm-adapters';
@@ -20,6 +21,12 @@ import { ServerAgentStore } from '../agents/ServerAgentStore';
 import { generateMcpToolsFromCache, LlmTools } from './index';
 import { shouldLiveFetchTools, buildMcpToolCacheUpdate } from './mcpToolFetchCache';
 import { mergeRetrievalSummary } from './retrievalSummaryMerge';
+import {
+  assignCitationIndices,
+  citableKey,
+  mergeKeepsCitationNumbering,
+  stripCitationIndices,
+} from './citationNumbering';
 import { ToolDefinition, type ToolContext } from './base/types';
 import { validateImageCredits, validateAudioCredits } from './base/utils';
 import { estimateImageCredits } from '../../imageCost';
@@ -121,6 +128,8 @@ export interface ToolBuilderConfig {
   apiKeyId?: ToolContext['apiKeyId'];
   /** Generic retrieval-exclusion filter, forwarded to the tool context (see ToolContext.retrievalFilter). */
   retrievalFilter?: ToolContext['retrievalFilter'];
+  /** The session's citationStyle; 'indexed' gives tools ToolContext.numberCitables. */
+  citationStyle?: 'named' | 'indexed';
   /** Inlined-attachment ids, forwarded to the tool context (see ToolContext.inlinedAttachmentIds). */
   inlinedAttachmentIds?: ToolContext['inlinedAttachmentIds'];
   /** Attached file ids, forwarded to the tool context (see ToolContext.attachedFileIds). */
@@ -252,6 +261,56 @@ function resolveToolStatus(toolName: string, data: any): string | null {
 }
 
 /**
+ * Append `incoming` citables to `existing`, deduped by stable identity (citableKey), and decide
+ * whether the turn keeps its [N] numbering (see citationNumbering.ts).
+ */
+function mergeCitables(existing: CitableSource[], incoming: CitableSource[]): CitableSource[] {
+  const mergedCitables = [...existing, ...incoming];
+  // Dedup keeps ONE entry per identity but prefers the one carrying a passage anchor: the same
+  // file can be cited by a file-level arm and a chunk-level one on the same turn, and keeping
+  // whichever merely arrived first would silently drop the chip the reader can deep-link from
+  // (#3038). The winner takes the loser's POSITION, because a citation index [N] refers to this
+  // array's order - reordering here would repoint every marker after it.
+  const hasPassageAnchor = (citable: (typeof mergedCitables)[number]): boolean =>
+    typeof citable?.metadata?.fullContext === 'string' && citable.metadata.fullContext.length > 0;
+  const citableIndexByKey = new Map<string, number>();
+  const dedupedCitables: typeof mergedCitables = [];
+  for (const citable of mergedCitables) {
+    const key = citableKey(citable);
+    if (!key) continue;
+    const existingIndex = citableIndexByKey.get(key);
+    if (existingIndex === undefined) {
+      citableIndexByKey.set(key, dedupedCitables.length);
+      dedupedCitables.push(citable);
+      continue;
+    }
+    const winner =
+      !hasPassageAnchor(dedupedCitables[existingIndex]) && hasPassageAnchor(citable)
+        ? citable
+        : dedupedCitables[existingIndex];
+    // Unioned across both chips rather than riding on the anchor rule above (#3041): the anchor
+    // and the conflict marks are independent signals written by different arms, and
+    // knowledgeBaseRetrieve stamps conflictsWith while deliberately never carrying an anchor. So
+    // whenever a search chip for the same file also lands this turn, letting the anchor decide
+    // alone would silently drop the marks - the reader would lose a warning the model still got.
+    // Array.isArray because these arrive off a stored document, where metadata is Mixed.
+    const conflictsWith = [
+      ...new Set(
+        [dedupedCitables[existingIndex], citable].flatMap(c =>
+          Array.isArray(c?.metadata?.conflictsWith) ? c.metadata.conflictsWith : []
+        )
+      ),
+    ];
+    // Copied, never mutated in place: the loser may be the caller's own object.
+    dedupedCitables[existingIndex] = conflictsWith.length
+      ? { ...winner, metadata: { ...winner.metadata, conflictsWith } }
+      : winner;
+  }
+  if (!incoming.length || mergeKeepsCitationNumbering(incoming, dedupedCitables)) return dedupedCitables;
+  return stripCitationIndices(dedupedCitables);
+}
+
+/**
  * Apply a partial status-update change set onto the live quest object.
  *
  * Most fields are overwritten wholesale via Object.assign, but four fields
@@ -297,56 +356,7 @@ export function applyQuestStatusChanges(
   } = changes;
 
   if (changedPromptMeta && quest.promptMeta) {
-    const mergedCitables = [...(quest.promptMeta.citables || []), ...(changedPromptMeta.citables || [])];
-    // Dedup keeps ONE entry per identity but prefers the one carrying a passage anchor: the same
-    // file can be cited by a file-level arm and a chunk-level one on the same turn, and keeping
-    // whichever merely arrived first would silently drop the chip the reader can deep-link from
-    // (#3038). The winner takes the loser's POSITION, because a citation index [N] refers to this
-    // array's order - reordering here would repoint every marker after it.
-    const hasPassageAnchor = (citable: (typeof mergedCitables)[number]): boolean =>
-      typeof citable?.metadata?.fullContext === 'string' && citable.metadata.fullContext.length > 0;
-    const citableIndexByKey = new Map<string, number>();
-    const dedupedCitables: typeof mergedCitables = [];
-    for (const citable of mergedCitables) {
-      const key = citable.id || citable.url || citable.title;
-      if (!key) continue;
-      const existingIndex = citableIndexByKey.get(key);
-      if (existingIndex === undefined) {
-        citableIndexByKey.set(key, dedupedCitables.length);
-        dedupedCitables.push(citable);
-        continue;
-      }
-      const winner =
-        !hasPassageAnchor(dedupedCitables[existingIndex]) && hasPassageAnchor(citable)
-          ? citable
-          : dedupedCitables[existingIndex];
-      // Unioned across both chips rather than riding on the anchor rule above (#3041): the anchor
-      // and the conflict marks are independent signals written by different arms, and
-      // knowledgeBaseRetrieve stamps conflictsWith while deliberately never carrying an anchor. So
-      // whenever a search chip for the same file also lands this turn, letting the anchor decide
-      // alone would silently drop the marks - the reader would lose a warning the model still got.
-      // Array.isArray because these arrive off a stored document, where metadata is Mixed.
-      const conflictsWith = [
-        ...new Set(
-          [dedupedCitables[existingIndex], citable].flatMap(c =>
-            Array.isArray(c?.metadata?.conflictsWith) ? c.metadata.conflictsWith : []
-          )
-        ),
-      ];
-      // Copied, never mutated in place: the loser may be the caller's own object.
-      dedupedCitables[existingIndex] = conflictsWith.length
-        ? { ...winner, metadata: { ...winner.metadata, conflictsWith } }
-        : winner;
-    }
-    // Tool results number their own sources 1., 2., so once any tool citable lands a [N] is ambiguous;
-    // dropping the forced-retrieval stamps makes the client's citationMarkersLinkable gate fail safe.
-    const finalCitables = changedPromptMeta.citables?.length
-      ? dedupedCitables.map(citable => {
-          if (citable.metadata?.citationIndex === undefined) return citable;
-          const { citationIndex: _stamp, ...metadata } = citable.metadata;
-          return { ...citable, metadata };
-        })
-      : dedupedCitables;
+    const finalCitables = mergeCitables(quest.promptMeta.citables || [], changedPromptMeta.citables || []);
     const mergedWarnings = [...(quest.promptMeta.warnings || []), ...(changedPromptMeta.warnings || [])];
     const mergedRetrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, changedPromptMeta.retrieval);
     quest.promptMeta = materializePromptMetaSession(
@@ -364,7 +374,13 @@ export function applyQuestStatusChanges(
       { sessionId: quest.sessionId, userId }
     );
   } else if (changedPromptMeta) {
-    quest.promptMeta = materializePromptMetaSession(changedPromptMeta, { sessionId: quest.sessionId, userId });
+    // Deduped and numbered like the branch above, so a turn whose first citables come from a tool
+    // still gets a citables array the [N] markers can index.
+    const citables = changedPromptMeta.citables ? mergeCitables([], changedPromptMeta.citables) : undefined;
+    quest.promptMeta = materializePromptMetaSession(
+      { ...changedPromptMeta, ...(citables ? { citables } : {}) },
+      { sessionId: quest.sessionId, userId }
+    );
   }
 
   if (changedImages) {
@@ -1084,6 +1100,22 @@ export class ToolBuilder {
         },
         sessionId: quest.sessionId,
         questId: quest.id,
+        // Synchronous so parallel tool calls cannot claim the same numbers: the stamped citables
+        // land on the live quest before the next call reads its length.
+        numberCitables:
+          this.deps.citationStyle === 'indexed'
+            ? citables => {
+                const stamped = assignCitationIndices(quest.promptMeta?.citables ?? [], citables);
+                if (stamped) {
+                  applyQuestStatusChanges(
+                    quest,
+                    { promptMeta: { citables: stamped } } as Partial<IChatHistoryItemDocument>,
+                    this.deps.user.id
+                  );
+                }
+                return stamped;
+              }
+            : undefined,
         onSubagentCredits: (credits, meta) => {
           this.reserveToolCredits('delegate_to_agent', credits, meta?.model);
           // No meta == model unresolvable; skip rather than fabricate a zero-cost event.

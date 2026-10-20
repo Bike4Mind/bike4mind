@@ -74,6 +74,7 @@ import {
   materializePromptMetaSession,
   ModelBackend,
   type WorkspaceDeniedToolsTable,
+  type WorkspaceSessionSettingsTable,
   type SupportedEmbeddingModel,
   PersistedSessionSummaryTrigger,
   SessionSummaryTrigger,
@@ -381,6 +382,11 @@ export interface IChatCompletionServiceOptions {
    * value is the generated empty table.
    */
   workspaceDeniedTools: WorkspaceDeniedToolsTable;
+  /**
+   * `{ surface id: settings }` resolved over the loaded session before any reader sees it. Required for
+   * the same reason as `workspaceDeniedTools`; the open-core value is the generated empty table.
+   */
+  workspaceSessionSettings: WorkspaceSessionSettingsTable;
   autoNameSession: (sessionId: string, logger: Logger) => Promise<string | null>;
   invokeCreateMemento: (
     questId: string,
@@ -3857,7 +3863,9 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
             `The following content was retrieved from the curated library for this query, drawn from ${sourceFileIds.length} ` +
             'numbered source document(s) — each section heading carries its document number as [N]. Ground your answer in this ' +
             'content and cite ONLY by bracketed index (e.g. [1], [3]) placed immediately after the claim it supports. Never write ' +
-            `source names or URLs as citations, never invent references, and never cite an index above ${sourceFileIds.length}. ` +
+            'source names or URLs as citations, never invent references, and never cite an index that no source carries. ' +
+            `These documents are [1] to [${sourceFileIds.length}]; sources a tool returns later in this turn continue the ` +
+            'same numbering and are cited the same way. ' +
             'If the retrieved content does not address the question, say so rather than relying on outside knowledge.\n\n'
           : '[Knowledge Base — Retrieved Context]\n' +
             'The following content was retrieved from the curated library for this query. Ground your answer in it and ' +

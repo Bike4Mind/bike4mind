@@ -108,32 +108,52 @@ export const isOrgOwnerOrCurrentAdmin = (
  * May this actor set the org's per-member credit budgets - the default `maxCreditsPerMember` and
  * each member's `userDetails[].maxCredits` override?
  *
- * Exactly `isOrgOwnerOrCurrentAdmin`. Deliberately excludes a manager who is not also an appointed
- * admin: a spending limit on the owner's pool is a billing decision, the same line
+ * Exactly `isOrgOwnerOrCurrentAdmin`, so every `adminUserIds` manager may set budgets. Deliberately
+ * excludes the legacy `managerId` who is not also in `adminUserIds`: a spending limit on the owner's pool is a billing decision, the same line
  * `organizationService/update.ts` draws for `billingContact`. Appointed admins hold only a read row
  * in `users[]` and so cannot pass `shareable.findUpdateAccessById` - server callers must fetch with
  * `findById`. The budget routes enforce it; the client uses it only to decide which controls to show.
  */
 export const canManageMemberCreditBudgets = isOrgOwnerOrCurrentAdmin;
 
+/**
+ * The owner-only tier: the billing owner or a platform admin, never a manager. The server enforces
+ * it with `verifyOrgOwner` (apps/client/server/utils/orgAccess.ts) and the client's org tab gates
+ * (apps/client/app/routes/organizations/orgTabAccess.ts) run this same function.
+ */
+export const isOrgOwnerOrPlatformAdmin = (
+  user: { id: string; isAdmin?: boolean | null },
+  org: { userId: string }
+): boolean => user.isAdmin === true || org.userId === user.id;
+
 /** The actor slice an administration decision needs - resolved from auth, never from the body. */
 export type OrgAuthorityActor = { id: string; isAdmin?: boolean | null };
 
 /** The organization slice an administration decision needs. */
-export type AdministrableOrg = { userId: string; managerId?: string | null };
+export type AdministrableOrg = {
+  userId: string;
+  managerId?: string | null;
+  adminUserIds?: readonly string[] | null;
+  users?: ReadonlyArray<{ userId: string }> | null;
+};
 
 /**
- * May this actor administer the organization's roster - remove members, or add them through the
- * direct `addMember` path? Billing owner, appointed manager, or platform admin.
+ * May this actor administer the organization - its roster (remove members, or add them through the
+ * direct `addMember` path) and the write routes behind `verifyOrgAccess`, such as connecting a
+ * lake's GitHub or Drive source? Billing owner, any org manager, or platform admin.
+ *
+ * "Managers" are the `adminUserIds` list the owner edits in the UI, held to the same current-row
+ * rule as `isOrgOwnerOrCurrentAdmin`, plus the legacy single `managerId` until it is folded into
+ * that list. Billing, credit spend reports and org integration secrets stay owner-only via
+ * `verifyOrgOwner` (see `isOrgOwnerOrPlatformAdmin`).
  *
  * Deliberately NARROWER than `shareable.findAccessibleById`, which is a MEMBERSHIP ACL: it admits
  * anyone in `users[]` holding `read`, and `addMember` only ever grants `[Permission.read]`, so
  * every ordinary member satisfied it and could therefore enroll arbitrary accounts.
  *
- * NOT the same set as `isOrgOwnerOrCurrentAdmin`: a manager passes this but not that, an appointed
- * admin passes that but not this. Invites (and cancelling them) gate on that one, behind an
- * `isOrgMember` check, so the client must ask each control's own server predicate rather than
- * one "can manage" flag.
+ * A superset of `isOrgOwnerOrCurrentAdmin` only by the legacy `managerId`, who passes this but not
+ * that. Invites (and cancelling them) gate on that one, behind an `isOrgMember` check, so the
+ * client must ask each control's own server predicate rather than one "can manage" flag.
  *
  * `userId` and `managerId` are declared `String` on the organization schema, so a strict
  * comparison is correct. Callers include `organizationService` `addMember` and `revokeAccess`
@@ -142,6 +162,27 @@ export type AdministrableOrg = { userId: string; managerId?: string | null };
  * (components/organizations/Member.tsx).
  */
 export function canAdministerOrganization(actor: OrgAuthorityActor, organization: AdministrableOrg): boolean {
-  if (actor.isAdmin) return true;
-  return organization.userId === actor.id || (!!organization.managerId && organization.managerId === actor.id);
+  if (isOrgOwnerOrCurrentAdmin(actor, organization)) return true;
+  return !!organization.managerId && organization.managerId === actor.id;
+}
+
+/**
+ * May this actor remove `targetUserId` from the organization? `canAdministerOrganization`, except
+ * that only the billing owner or a platform admin may remove a manager: removal purges the target
+ * from `adminUserIds` (and clears `managerId`), so a manager revoking another manager would be
+ * editing the Managers list, which `organizations/[id]/admins.ts` reserves for the owner.
+ *
+ * Enforced by `organizationService.revokeAccess`; the client's Members tab
+ * (components/organizations/Member.tsx) asks it per card so it never offers a refused Revoke.
+ */
+export function canRevokeOrgMember(
+  actor: OrgAuthorityActor,
+  organization: AdministrableOrg,
+  targetUserId: string
+): boolean {
+  if (!canAdministerOrganization(actor, organization)) return false;
+  if (isOrgOwnerOrPlatformAdmin(actor, organization)) return true;
+  const targetIsManager =
+    (organization.adminUserIds ?? []).includes(targetUserId) || organization.managerId === targetUserId;
+  return !targetIsManager;
 }

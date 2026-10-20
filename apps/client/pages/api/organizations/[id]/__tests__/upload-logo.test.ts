@@ -99,7 +99,6 @@ describe('POST /api/organizations/[id]/upload-logo', () => {
 
   it.each([
     ['a plain member', { id: MEMBER, isAdmin: false }],
-    ['an appointed org admin', { id: APPOINTED_ADMIN, isAdmin: false }],
     ['a non-member', { id: 'stranger1', isAdmin: false }],
   ])('refuses %s with a 404 and deletes nothing', async (_label, user) => {
     await expect(invoke(user)).rejects.toBeInstanceOf(NotFoundError);
@@ -112,7 +111,8 @@ describe('POST /api/organizations/[id]/upload-logo', () => {
 
   it.each([
     ['the owner', { id: OWNER, isAdmin: false }],
-    ['the manager', { id: MANAGER, isAdmin: false }],
+    ['the legacy manager', { id: MANAGER, isAdmin: false }],
+    ['a rostered org manager', { id: APPOINTED_ADMIN, isAdmin: false }],
     ['a platform admin', { id: 'admin1', isAdmin: true }],
   ])('lets %s replace the logo', async (_label, user) => {
     const res = await invoke(user);

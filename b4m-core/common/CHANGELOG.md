@@ -1,5 +1,51 @@
 # @bike4mind/common
 
+## 17.1.0
+
+### Minor Changes
+
+- [#5042](https://github.com/Bike4Mind/bike4mind/pull/5042) [`174eeda`](https://github.com/Bike4Mind/bike4mind/commit/174eedabbbcafefe4282268d902efdc6ad12e125) Thanks [@julsanchez](https://github.com/julsanchez)! - log OAuth error responses and record the client on OAuth sessions
+
+## 17.0.0
+
+### Major Changes
+
+- [#4997](https://github.com/Bike4Mind/bike4mind/pull/4997) [`5598195`](https://github.com/Bike4Mind/bike4mind/commit/5598195554d31841e2a01afb4c1bb877bd315a58) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - resolve contributed per-surface session settings at read time
+
+## 16.2.0
+
+### Minor Changes
+
+- [#4938](https://github.com/Bike4Mind/bike4mind/pull/4938) [`ffa4000`](https://github.com/Bike4Mind/bike4mind/commit/ffa4000fdd229f99fd8173ebc8c8bf257219773d) Thanks [@onoya](https://github.com/onoya)! - org-admin storage usage endpoint and Storage tab
+
+- [#4951](https://github.com/Bike4Mind/bike4mind/pull/4951) [`bddc668`](https://github.com/Bike4Mind/bike4mind/commit/bddc668291070d4cc3b53a91cb207be006092ee9) Thanks [@erikbethke](https://github.com/erikbethke)! - add the custom MCP connection API, probe and tool discovery
+
+- [#5044](https://github.com/Bike4Mind/bike4mind/pull/5044) [`a466c7f`](https://github.com/Bike4Mind/bike4mind/commit/a466c7fd0143132cade0db08a2b1039238a1d3f7) Thanks [@onoya](https://github.com/onoya)! - admit every org manager to the org write gate
+
+- [#5052](https://github.com/Bike4Mind/bike4mind/pull/5052) [`868ff68`](https://github.com/Bike4Mind/bike4mind/commit/868ff68dc17ea92cf24292d6124d1757bdbe88a5) Thanks [@jjmarfa](https://github.com/jjmarfa)! - add gpt-5.4-mini dated snapshot to ChatModels
+
+- [#5063](https://github.com/Bike4Mind/bike4mind/pull/5063) [`4b046c1`](https://github.com/Bike4Mind/bike4mind/commit/4b046c1a77916a76fadd7cacceb9b86f17d791c7) Thanks [@onoya](https://github.com/onoya)! - add the admin Audit Log page
+
+- [#5092](https://github.com/Bike4Mind/bike4mind/pull/5092) [`e898c7c`](https://github.com/Bike4Mind/bike4mind/commit/e898c7cc920e1d5c3262114651e7bf24f626eab2) Thanks [@erikbethke](https://github.com/erikbethke)! - notify configured reviewers when an image incident needs review
+
+### Patch Changes
+
+- [#4993](https://github.com/Bike4Mind/bike4mind/pull/4993) [`af39820`](https://github.com/Bike4Mind/bike4mind/commit/af3982067de72652fcbd7cb4c2e2cee74f4d1fc4) Thanks [@onoya](https://github.com/onoya)! - number tool sources into the turn's [N] sequence so inline citations stay clickable
+
+- [#5025](https://github.com/Bike4Mind/bike4mind/pull/5025) [`5fb3885`](https://github.com/Bike4Mind/bike4mind/commit/5fb38852c2d555a0189f02191a5cdc1d8774a57a) Thanks [@aflordelis](https://github.com/aflordelis)! - move the remaining height-0 shared files into the package
+
+- [#5037](https://github.com/Bike4Mind/bike4mind/pull/5037) [`a467516`](https://github.com/Bike4Mind/bike4mind/commit/a467516775c4123320ca7079babce53aeec52869) Thanks [@julsanchez](https://github.com/julsanchez)! - hold and settle credits for research configs, thinking budgets and aborted turns
+
+- [#5043](https://github.com/Bike4Mind/bike4mind/pull/5043) [`92186a1`](https://github.com/Bike4Mind/bike4mind/commit/92186a1c8172c0520779beb2c00b4be3ee1fa327) Thanks [@onoya](https://github.com/onoya)! - typed response schema for the MCP server routes
+
+- [#5056](https://github.com/Bike4Mind/bike4mind/pull/5056) [`73c675c`](https://github.com/Bike4Mind/bike4mind/commit/73c675c64e0be1189c0aa8e4c1c59a86ab388104) Thanks [@jjmarfa](https://github.com/jjmarfa)! - bill sound effects and speech to the selected account
+
+- [#5061](https://github.com/Bike4Mind/bike4mind/pull/5061) [`6f32290`](https://github.com/Bike4Mind/bike4mind/commit/6f322902280cea3fb7ed745e10ea49d47a186f8d) Thanks [@jjmarfa](https://github.com/jjmarfa)! - accept organization_id alias on image generation and edit bodies
+
+- [#5085](https://github.com/Bike4Mind/bike4mind/pull/5085) [`d299e48`](https://github.com/Bike4Mind/bike4mind/commit/d299e483d13449ccf91cd3471dde95f0e83cc487) Thanks [@erikbethke](https://github.com/erikbethke)! - align model prices with provider rate cards
+
+- [#5086](https://github.com/Bike4Mind/bike4mind/pull/5086) [`71376ea`](https://github.com/Bike4Mind/bike4mind/commit/71376ea83c4435f465b88094c47611a69ec2b5b2) Thanks [@erikbethke](https://github.com/erikbethke)! - enforce a minimum per-credit price and charge whole cents
+
 ## 16.1.0
 
 ### Minor Changes

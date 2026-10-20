@@ -1,8 +1,11 @@
 import { mcpServerRepository } from '@bike4mind/database';
+import { mcpServerResponseSchema } from '@bike4mind/common';
+import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
 import { MCPClient } from '@bike4mind/mcp';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError, NotFoundError } from '@server/utils/errors';
+import { respond } from '@server/utils/respond';
 import { assertMcpServerEnabled } from '@server/utils/mcpServerFlag';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
@@ -65,7 +68,7 @@ const handler = baseApi()
       );
     }
 
-    res.json(servers);
+    respond(res, z.array(mcpServerResponseSchema), servers);
   })
   .post(async (req, res) => {
     await assertMcpServerEnabled();
@@ -123,8 +126,12 @@ const handler = baseApi()
         throw new BadRequestError('Unable to connect to MCP server', { reason: message });
       }
     }
+    if (!server) {
+      // Deleted mid-request: update() found nothing to write.
+      throw new NotFoundError('MCP Server not found');
+    }
 
-    res.json(server);
+    respond(res, mcpServerResponseSchema, server);
   });
 
 export default handler;
