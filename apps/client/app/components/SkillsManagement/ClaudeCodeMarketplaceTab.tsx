@@ -104,8 +104,7 @@ const ClaudeCodeMarketplaceTab: FC<ClaudeCodeMarketplaceTabProps> = ({ org, skil
           /plugin install {claudeSkillNameFor(skillName)}@{marketplace}
         </Typography>
         <Typography level="body-xs" textColor="text.tertiary">
-          Or run <code>/plugin</code> to browse every skill in the marketplace. An org admin can roll the same{' '}
-          <code>extraKnownMarketplaces</code> entry out to everyone through Claude Code managed settings.
+          Or run <code>/plugin</code> to browse every skill in the marketplace.
         </Typography>
       </Stack>
     </Stack>
