@@ -144,6 +144,9 @@ export const resolveSettingsIcon = (icon: string | undefined): React.FC<{ sx?: S
 
 const settingConfigs = Object.values(settingsMap);
 
+// Settings whose value is a list of plain strings get the one-entry-per-line editor.
+const STRING_LIST_SETTING_KEYS = new Set<string>(['ImageModerationReviewerEmails']);
+
 interface EnvVariable {
   key: string;
   value: string;
@@ -540,9 +543,11 @@ const AdminSettingsTab: React.FC = () => {
                 setting: child,
                 defaultValue: settingValueByName.get(child.key) ?? child.defaultValue,
               }));
-              // A string-list object setting gets a one-entry-per-line editor; keyed on the stored value so
-              // a save or a refetch resets the draft.
-              if (setting.type === 'object' && Array.isArray(setting.defaultValue)) {
+              // A string-list setting gets a one-entry-per-line editor; the React key is the stored
+              // value so a save or refetch resets the draft. Keyed explicitly rather than by value
+              // shape: any future object setting with an array default would otherwise get this
+              // editor, and toStringList drops non-string entries.
+              if (setting.type === 'object' && STRING_LIST_SETTING_KEYS.has(setting.key)) {
                 const storedValue = settingValueByName.get(setting.key) ?? setting.defaultValue;
                 return (
                   <AdminStringListSettingField
