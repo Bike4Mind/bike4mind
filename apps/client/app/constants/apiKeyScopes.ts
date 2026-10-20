@@ -28,6 +28,7 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     label: 'Read Notebooks',
     description: 'View notebooks and sessions',
     endpoints: [
+      'GET /api/sessions',
       'GET /api/sessions/:id',
       'GET /api/v1/quests/:id',
       'GET /api/v1/quests/:id/files',
@@ -71,6 +72,7 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     label: 'AI Generate',
     description: 'Use AI generation features',
     endpoints: [
+      'POST /api/v1/sessions',
       'POST /api/v1/image-generations',
       'POST /api/v1/image-edits',
       'POST /api/v1/video-generations',

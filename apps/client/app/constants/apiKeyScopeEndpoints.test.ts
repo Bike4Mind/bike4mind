@@ -28,6 +28,10 @@ const OFF_PAGES_ROUTES: Record<string, string> = {
   '/api/embed/chat': 'server/chatCompletion/external/embedRoute.ts',
 };
 
+// Verbs deliberately open to every non-confined key, whatever its scopes, so any scope may list
+// them. Pinned below to have no scope door at all, so an entry cannot outlive the route opening up.
+const OPEN_TO_ANY_KEY = new Set(['GET /api/sessions']);
+
 // Routes served by premium overlays, which are not checked out here; their claims cannot be
 // verified in this repo and are skipped rather than failed.
 const OVERLAY_PATH_PREFIXES = ['/api/premium-overwatch/', '/api/overwatch/marketing-reports'];
@@ -75,39 +79,54 @@ const stripComments = (code: string) =>
 
 const scopeOf = (member: string) => SCOPE_BY_MEMBER.get(member);
 
+// The scope set a check enforces: a `[...]` literal or a list name.
+const GATE_EXPR = String.raw`(\[[^[\]]*\]|[A-Za-z_$][\w$]*)`;
+
+// Only sites that can deny: a route's or verifier's `requiredScopes`/`alsoRequiredScopes`, and the
+// list handed to `assertApiKeyScope`. A scope array elsewhere (a payload, a filter) is not a gate.
+const ENFORCING_SITE = new RegExp(
+  String.raw`\b(?:requiredScopes|alsoRequiredScopes)\s*:\s*${GATE_EXPR}|\bassertApiKeyScope\(\s*[\w.]+\s*,\s*${GATE_EXPR}`,
+  'g'
+);
+
 /**
- * Every gate `code` declares: each scope array literal (spreads of shared lists resolved), then
- * each shared list, helper call or `ApiKeyScope.X` left outside those literals as a gate of its own.
+ * Every gate `code` enforces: each enforcing site (literals, shared lists and lists declared in the
+ * same file resolved) plus each call to a derived helper.
  */
 function gatesIn(code: string, helpers: ReadonlyMap<string, Gate>): Gate[] {
-  const gates: Gate[] = [];
-  const outsideArrays = code.replace(/\[([^[\]]*)\]/g, (literal, inner: string) => {
+  const localLists = new Map<string, string>();
+  for (const [, name, literal] of code.matchAll(/\bconst ([A-Za-z_$][\w$]*)(?:\s*:[^=]+)?\s*=\s*(\[[^[\]]*\])/g)) {
+    localLists.set(name, literal);
+  }
+  const resolve = (expr: string, seen = new Set<string>()): Set<ApiKeyScope> => {
     const scopes = new Set<ApiKeyScope>();
-    for (const [, member] of inner.matchAll(/\bApiKeyScope\.([A-Z_]+)\b/g)) {
+    if (!expr.startsWith('[')) {
+      const local = localLists.get(expr);
+      if (local && !seen.has(expr)) return resolve(local, seen.add(expr));
+      GATE_LISTS.get(expr)?.forEach(s => scopes.add(s));
+      return scopes;
+    }
+    for (const [, member] of expr.matchAll(/\bApiKeyScope\.([A-Z_]+)\b/g)) {
       const scope = scopeOf(member);
       if (scope) scopes.add(scope);
     }
-    for (const [, name] of inner.matchAll(/\.\.\.([A-Z_]+)\b/g)) GATE_LISTS.get(name)?.forEach(s => scopes.add(s));
-    if (scopes.size === 0) return literal;
-    gates.push(scopes);
-    return '[]';
-  });
-  for (const [, member] of outsideArrays.matchAll(/\bApiKeyScope\.([A-Z_]+)\b/g)) {
-    const scope = scopeOf(member);
-    if (scope) gates.push(new Set([scope]));
-  }
-  for (const [name, list] of GATE_LISTS) {
-    if (new RegExp(`\\b${name}\\b`).test(outsideArrays)) gates.push(new Set(list));
+    for (const [, name] of expr.matchAll(/\.\.\.([A-Za-z_$][\w$]*)/g)) resolve(name, seen).forEach(s => scopes.add(s));
+    return scopes;
+  };
+  const gates: Gate[] = [];
+  for (const [, routeExpr, assertExpr] of code.matchAll(ENFORCING_SITE)) {
+    const scopes = resolve(routeExpr ?? assertExpr);
+    if (scopes.size > 0) gates.push(scopes);
   }
   for (const [name, gate] of helpers) {
-    if (new RegExp(`\\b${name}\\(`).test(outsideArrays)) gates.push(gate);
+    if (new RegExp(`\\b${name}\\(`).test(code)) gates.push(gate);
   }
   return gates;
 }
 
 /**
- * Exported helpers whose body runs exactly one scope check that can deny, mapped to that check's
- * gate. A non-throwing probe like `holdsDataLakeReadScope` is not a gate.
+ * Exported helpers whose body enforces exactly one gate, mapped to it. A non-throwing probe like
+ * `holdsDataLakeReadScope` enforces none, so it is not a gate.
  */
 function loadHelpers(): Map<string, Gate> {
   const bodies = new Map<string, string>();
@@ -125,10 +144,7 @@ function loadHelpers(): Map<string, Gate> {
     for (const [name, body] of bodies) {
       if (helpers.has(name)) continue;
       const gates = gatesIn(body, helpers);
-      const denies =
-        /\bthrow\b|\bassertApiKeyScope\(|\brequiredScopes:/.test(body) ||
-        [...helpers.keys()].some(h => body.includes(`${h}(`));
-      if (gates.length === 1 && denies) helpers.set(name, gates[0]);
+      if (gates.length === 1) helpers.set(name, gates[0]);
     }
   }
   return helpers;
@@ -190,8 +206,9 @@ function routeOf(claim: Claim): Route {
     return { key: `contract ${contract.operationId}`, gates: [new Set(contract.scopes ?? []), ...fileGates] };
   }
   if (!file) return { problem: 'no contract or pages/ route serves this path' };
-  // A handler chain (`.post(`, `.get<T>(`) or a `req.method` comparison ('POST') serves a verb.
-  const verb = new RegExp(`\\.(${claim.method.toLowerCase()}|all)\\s*[<(]|['"]${claim.method}['"]`);
+  // A handler chain link (`).post(`, `}).get<T>(`) or a `req.method` comparison ('POST') serves a
+  // verb. Anchored on the `)` a chain link follows, so `Promise.all(` and `headers.get(` do not.
+  const verb = new RegExp(`\\)\\s*\\.(${claim.method.toLowerCase()}|all)\\s*[<(]|['"]${claim.method}['"]`);
   if (!offPages && !verb.test(source))
     return { problem: `${path.relative(CLIENT_DIR, file)} does not serve this method` };
   return { key: path.relative(CLIENT_DIR, file), gates: fileGates };
@@ -252,11 +269,28 @@ describe('apiKeyScopes endpoint claims', () => {
   it.each(CHECKED.map(({ claim, route }) => [claim.scope, `${claim.method} ${claim.path}`, claim, route] as const))(
     '%s really gates %s',
     (_scope, _endpoint, claim, route) => {
+      if (OPEN_TO_ANY_KEY.has(`${claim.method} ${claim.path}`)) return;
       const problem =
         route.key === undefined ? route.problem : verifyGates(claim.scope, route.gates, CLAIMANTS.get(route.key)!);
       expect(problem, `${claim.scope} claims "${claim.endpoint}"`).toBeUndefined();
     }
   );
+
+  it.each([...OPEN_TO_ANY_KEY])('%s is still open to any key', endpoint => {
+    const { methods, path: routePath } = parseEndpoint(endpoint)!;
+    const contract = CONTRACTS.find(
+      c => c.method.toUpperCase() === methods[0] && normalizePath(c.path) === normalizePath(routePath)
+    );
+    expect(contract?.scopes ?? [], `${endpoint} has a contract scope door`).toEqual([]);
+    const file = resolvePageFile(routePath);
+    expect(file, `${endpoint} has no pages/ route`).toBeDefined();
+    const code = stripComments(readFileSync(file!, 'utf8'));
+    expect(code, `${endpoint} now declares a route-level scope door`).not.toMatch(/\brequiredScopes\b/);
+    expect(
+      CLAIMS.some(c => `${c.method} ${c.path}` === endpoint),
+      `${endpoint} is claimed by no scope`
+    ).toBe(true);
+  });
 
   it('skips only claims on overlay routes', () => {
     // Pins the skip list to routes this repo genuinely cannot see: if one of these paths gains a
@@ -280,15 +314,23 @@ describe('the gate rule itself', () => {
     expect([...HELPERS.get('verifyEmbedApiKey')!]).toEqual([ApiKeyScope.EMBED_CHAT]);
   });
 
-  it('counts neither an import nor a non-throwing probe as a gate', () => {
+  it('counts neither an import, a non-throwing probe, nor a scope array that enforces nothing', () => {
     const imported = "import { DATA_LAKE_SHARE_SCOPES } from '@server/dataLakes/dataLakeScopes';\n";
     expect(gatesIn(stripComments(imported), HELPERS)).toEqual([]);
     expect(HELPERS.has('holdsDataLakeReadScope')).toBe(false);
+    const payload =
+      'res.json({ grants: [ApiKeyScope.DATALAKE_SHARE] }); keys.filter(k => k.includes(ApiKeyScope.ADMIN));';
+    expect(gatesIn(payload, HELPERS)).toEqual([]);
+  });
+
+  it('resolves a scope list declared in the route file itself', () => {
+    const code = 'const WRITE = [ApiKeyScope.HEARTH_WRITE];\nassertApiKeyScope(req, WRITE, "no");';
+    expect(gatesIn(code, HELPERS)).toEqual([new Set([ApiKeyScope.HEARTH_WRITE])]);
   });
 
   it('fails a claim on a verb the route file does not serve', () => {
     const claim: Claim = {
-      scope: ApiKeyScope.AGENTS_READ,
+      scope: ApiKeyScope.READ_AGENTS,
       endpoint: 'PATCH /api/agents',
       method: 'PATCH',
       path: '/api/agents',
