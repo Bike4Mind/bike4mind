@@ -46,9 +46,11 @@ const CreditsExplanationModal = ({ open, onClose }: CreditsExplanationModalProps
             <Typography level="h2" data-testid="credits-explanation-answers">
               {answers === null
                 ? 'Answer estimate unavailable'
-                : answers < 1
-                  ? 'Less than 1 typical answer left'
-                  : `About ${answers.toLocaleString('en-US')} typical ${answers === 1 ? 'answer' : 'answers'} left`}
+                : credits <= 0
+                  ? 'No typical answers left'
+                  : answers < 1
+                    ? 'Less than 1 typical answer left'
+                    : `About ${answers.toLocaleString('en-US')} typical ${answers === 1 ? 'answer' : 'answers'} left`}
             </Typography>
             <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
               {selected ? `On ${selected.name}, based on a typical answer.` : 'Based on a typical answer.'}
@@ -62,12 +64,18 @@ const CreditsExplanationModal = ({ open, onClose }: CreditsExplanationModalProps
             </Typography>
           </Box>
           <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
-            {showFreeCreditsNote && 'Free starting credits require no card. '}Your chats and files remain yours if the balance runs out.
+            {showFreeCreditsNote && 'Free starting credits require no card. '}Your chats and files remain yours if the
+            balance runs out.
           </Typography>
           <Button data-testid="credits-explanation-top-up" onClick={() => setBillingOpen(true)} sx={{ mt: 1 }}>
             See plans and top up
           </Button>
-          <Button data-testid="credits-explanation-usage" variant="plain" color="neutral" onClick={() => setUsageOpen(true)}>
+          <Button
+            data-testid="credits-explanation-usage"
+            variant="plain"
+            color="neutral"
+            onClick={() => setUsageOpen(true)}
+          >
             See usage
           </Button>
         </ModalDialog>
