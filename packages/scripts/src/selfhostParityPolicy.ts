@@ -801,7 +801,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   }),
   wired(
     'schedule:infra/cron.ts:voiceHoldSweep',
-    'e6dd9b2370fcbc18de3b07e38bd6c20978f485280826afaaa8b9de6f219ab8b3',
+    '638f3795ab583a8037345326fa68d2833507030dfefd8c8184bb9cef43a41e64',
     {
       source: 'apps/workers/src/selfhost/voiceHoldSweep.ts',
       symbol: 'registerVoiceHoldSweep',
