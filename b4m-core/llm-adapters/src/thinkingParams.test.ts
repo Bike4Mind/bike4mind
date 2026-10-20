@@ -172,6 +172,33 @@ describe('resolveOutputMaxTokens', () => {
       expect(resolve(undefined, legacyModel)).toBe(4096);
     });
 
+    describe('Gemini thinking models', () => {
+      const geminiModel: ModelInfo = {
+        ...baseModelInfo,
+        id: 'gemini-3-pro' as ModelInfo['id'],
+        name: 'Gemini 3 Pro',
+        backend: ModelBackend.Gemini,
+        max_tokens: 65_536,
+        can_think: true,
+      };
+
+      it('defaults an unset budget to the declared model cap', () => {
+        expect(resolve(undefined, geminiModel)).toBe(65_536);
+      });
+
+      it('does not raise an explicit budget', () => {
+        expect(resolve(2048, geminiModel)).toBe(2048);
+      });
+
+      it('keeps the fallback when the cap is derived', () => {
+        expect(resolve(undefined, { ...geminiModel, max_tokens: 4096, maxOutputTokensDerived: true })).toBe(4096);
+      });
+
+      it('keeps the fallback when the model cannot think', () => {
+        expect(resolve(undefined, { ...geminiModel, max_tokens: 8192, can_think: false })).toBe(4096);
+      });
+    });
+
     // The starvation this fixes: OpenAI spends reasoning inside max_completion_tokens,
     // so a 4096 default was consumed entirely by reasoning and the turn came back empty.
     it('defaults an OpenAI reasoning model to the shared floor', () => {
