@@ -154,13 +154,26 @@ const HELPERS = loadHelpers();
 
 const normalizePath = (p: string) => p.replace(/\{[^}]+\}|:[A-Za-z_]+/g, ':param');
 
-/** Parses `GET /api/x/:id` or `PATCH|DELETE /api/x/:id`; undefined for prose entries. */
+/** Parses `GET /api/x/:id` or `PATCH|DELETE /api/x/:id`, ignoring a trailing `(qualifier)`; undefined for prose entries. */
 function parseEndpoint(endpoint: string): { methods: string[]; path: string } | undefined {
-  const match = /^([A-Z|]+) (\/api\/\S+)$/.exec(endpoint);
+  const match = /^([A-Z|]+) (\/api\/\S+)(?: \([^)]*\))?$/.exec(endpoint);
   return match ? { methods: match[1].split('|'), path: match[2] } : undefined;
 }
 
 const PAGE_EXTENSIONS = ['.ts', '.tsx'];
+
+/**
+ * Whether `source` serves `method`: a handler chain link (`).post(`, `}).get<T>(`), a `req.method`
+ * comparison ('POST'), or a handler bound to a variable (`const api = baseApi(...); api.get(`).
+ * Chain links anchor on the `)` they follow, so `Promise.all(` and `headers.get(` do not.
+ */
+function servesVerb(source: string, method: string): boolean {
+  const lower = method.toLowerCase();
+  const bound = [...source.matchAll(/\bconst (\w+)\s*=\s*baseApi\(/g)].map(
+    m => `\\b${m[1]}\\s*\\.(${lower}|all)\\s*[<(]`
+  );
+  return new RegExp([`\\)\\s*\\.(${lower}|all)\\s*[<(]`, `['"]${method}['"]`, ...bound].join('|')).test(source);
+}
 
 /** The pages/ file that serves `routePath`, preferring a literal segment over a dynamic one. */
 function resolvePageFile(routePath: string): string | undefined {
@@ -206,10 +219,7 @@ function routeOf(claim: Claim): Route {
     return { key: `contract ${contract.operationId}`, gates: [new Set(contract.scopes ?? []), ...fileGates] };
   }
   if (!file) return { problem: 'no contract or pages/ route serves this path' };
-  // A handler chain link (`).post(`, `}).get<T>(`) or a `req.method` comparison ('POST') serves a
-  // verb. Anchored on the `)` a chain link follows, so `Promise.all(` and `headers.get(` do not.
-  const verb = new RegExp(`\\)\\s*\\.(${claim.method.toLowerCase()}|all)\\s*[<(]|['"]${claim.method}['"]`);
-  if (!offPages && !verb.test(source))
+  if (!offPages && !servesVerb(source, claim.method))
     return { problem: `${path.relative(CLIENT_DIR, file)} does not serve this method` };
   return { key: path.relative(CLIENT_DIR, file), gates: fileGates };
 }
@@ -248,6 +258,19 @@ for (const { claim, route } of CHECKED) {
 }
 
 describe('apiKeyScopes endpoint claims', () => {
+  it('ignores a trailing qualifier when parsing an endpoint', () => {
+    expect(parseEndpoint('PATCH /api/admin/release-notes/:id (video only)')).toEqual({
+      methods: ['PATCH'],
+      path: '/api/admin/release-notes/:id',
+    });
+  });
+
+  it('treats a handler bound to a baseApi variable as serving its verb', () => {
+    const source = 'const api = baseApi({});\napi.get(handler);';
+    expect(servesVerb(source, 'GET')).toBe(true);
+    expect(servesVerb(source, 'POST')).toBe(false);
+  });
+
   it('parses every endpoint entry, or it is prose that names no /api/ path', () => {
     for (const { value, endpoints } of [...USER_API_KEY_SCOPES, ...ADMIN_ONLY_API_KEY_SCOPES]) {
       for (const endpoint of endpoints) {
