@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Types } from 'mongoose';
 import type { AuditEntry } from '@bike4mind/common';
+import { CreditHolderType } from '@bike4mind/common';
 
 const mocks = vi.hoisted(() => ({
   adminList: vi.fn(),
@@ -300,7 +301,12 @@ describe('getUserCreditHistory', () => {
 
     const history = await getUserCreditHistory({ id: USER_ID, currentCredits: 125 }, now);
 
+    expect(mocks.dailyNet).toHaveBeenCalledWith(USER_ID, CreditHolderType.User, new Date('2026-07-22T00:00:00Z'), now);
     expect(mocks.findAdjustments).toHaveBeenCalledWith(USER_ID, new Date('2026-07-22T00:00:00Z'), now, 201);
+    expect(mocks.adminList).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'user.credits.adjusted', targetId: USER_ID }),
+      { limit: 200 }
+    );
     expect(history.points).toHaveLength(91);
     expect(history.points.at(-1)).toEqual({ day: '2026-10-20', balance: 125 });
     expect(history.points.at(-2)).toEqual({ day: '2026-10-19', balance: 100 });
