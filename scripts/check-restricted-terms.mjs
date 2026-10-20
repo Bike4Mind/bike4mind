@@ -3,7 +3,7 @@
 //
 // The list comes from the RESTRICTED_TERMS secret: one case-insensitive regex
 // fragment per line, matched on word boundaries (camelCase humps count as
-// boundaries too; see `matches`). Blank lines and lines starting with `#` are
+// boundaries too; see `hasWordEdges`). Blank lines and lines starting with `#` are
 // ignored. Neither the list nor anything it matches is ever printed,
 // because workflow logs on this repo are public: a hit reports only WHERE it was
 // found (PR title, commit sha, file and line), never what. A location that would
@@ -42,16 +42,50 @@ function safeMessage(err) {
   return err instanceof SafeError ? err.message : `unexpected ${err?.name ?? 'error'}.`;
 }
 
+// Letters, digits and the two case classes the boundary check needs. They are
+// deliberately case-sensitive: under /iu, \p{Lu} also matches lowercase letters,
+// so every position would look like a boundary.
+const ALNUM = /[\p{L}\p{N}]/u;
+const LOWER = /\p{Ll}/u;
+const UPPER = /\p{Lu}/u;
+const LETTER = /\p{L}/u;
+
+/** Whether an identifier changes case or switches between letters and digits between `i - 1` and `i`. */
+function isHump(text, i) {
+  if (i <= 0 || i >= text.length) return false;
+  const before = text[i - 1];
+  const at = text[i];
+  if (!ALNUM.test(before) || !ALNUM.test(at)) return false;
+  if (LOWER.test(before) && UPPER.test(at)) return true; // fooBar
+  if (UPPER.test(before) && UPPER.test(at) && LOWER.test(text[i + 1] ?? '')) return true; // HTTPServer
+  return LETTER.test(before) !== LETTER.test(at); // foo2, 2foo
+}
+
+// Word boundaries are letters and digits only, so `_`, `-`, `/` and `.` separate
+// words, and a case or letter-digit change inside an identifier does too. A
+// fragment that begins or ends with punctuation (`@acme`) supplies its own edge
+// there, so that side is not checked.
+function hasWordEdges(text, start, match) {
+  const end = start + match.length;
+  const first = match[0];
+  const last = match[match.length - 1];
+  const leftOk =
+    (first !== undefined && !ALNUM.test(first)) || start === 0 || !ALNUM.test(text[start - 1]) || isHump(text, start);
+  const rightOk =
+    (last !== undefined && !ALNUM.test(last)) || end === text.length || !ALNUM.test(text[end]) || isHump(text, end);
+  return leftOk && rightOk;
+}
+
 /**
- * Compiles the term list into a single matcher, or throws a message safe to print.
- * Word boundaries are letters and digits only, so `_`, `-`, `/` and `.` separate
- * words: a term matches inside `term_helper` and `term-cli` but not `termination`.
- * Test text with `matches`, which also treats camelCase humps as boundaries.
+ * Compiles the term list into a matcher, or throws a message safe to print.
+ * The matcher's `test` is boundary-aware (see `hasWordEdges`), so a term matches
+ * inside `term_helper`, `term-cli` and `useTermClient` but not `termination`.
+ * Fragments are folded the same way as the text they are matched against.
  */
 export function compileTerms(raw) {
   const fragments = [];
   (raw ?? '').split(/\r?\n/).forEach((line, i) => {
-    const fragment = line.trim();
+    const fragment = line.trim().normalize('NFKC');
     if (!fragment || fragment.startsWith('#')) return;
     try {
       new RegExp(fragment, 'iu');
@@ -63,28 +97,33 @@ export function compileTerms(raw) {
   if (fragments.length === 0) return null;
   // Fragments that compile alone can still fail together (too large, clashing
   // groups), and a RegExp SyntaxError quotes the whole pattern, so never let it out.
+  let pattern;
   try {
-    return new RegExp(`(?<![\\p{L}\\p{N}])(?:${fragments.join('|')})(?![\\p{L}\\p{N}])`, 'iu');
+    pattern = new RegExp(`(?:${fragments.join('|')})`, 'giu');
   } catch {
     throw new SafeError('The restricted-term list is valid line by line but does not compile as one pattern.');
   }
+  return {
+    test(text) {
+      // Fold first: fullwidth letters, a zero-width space or a strike-through
+      // overlay must not hide a term.
+      const folded = text.normalize('NFKC').replace(/\p{Cf}|\p{Mn}/gu, '');
+      // The pattern is stateful (`g`): start every scan from the top, and after a
+      // rejected match step one character ahead so an overlapping one is still seen.
+      pattern.lastIndex = 0;
+      let match;
+      while ((match = pattern.exec(folded)) !== null) {
+        if (hasWordEdges(folded, match.index, match[0])) return true;
+        pattern.lastIndex = match.index + 1;
+      }
+      return false;
+    },
+  };
 }
 
-// Where an identifier changes case or switches between letters and digits:
-// fooBar, HTTPServer, foo2.
-const HUMP = /(?<=\p{Ll})(?=\p{Lu})|(?<=\p{Lu})(?=\p{Lu}\p{Ll})|(?<=\p{L})(?=\p{N})|(?<=\p{N})(?=\p{L})/gu;
-
-/**
- * Tests text against the compiled list. The text is NFKC-folded and stripped of
- * invisible format characters first, so fullwidth letters or a zero-width space
- * inside a term do not hide it. It is tested as written and again with camelCase
- * humps split, so a term inside an identifier (`useTermClient`) is caught too.
- */
+/** Tests text against a matcher from `compileTerms`. Folding happens inside `test`. */
 export function matches(matcher, text) {
-  const folded = text.normalize('NFKC').replace(/\p{Cf}/gu, '');
-  if (matcher.test(folded)) return true;
-  const split = folded.replace(HUMP, ' ');
-  return split !== folded && matcher.test(split);
+  return matcher.test(text);
 }
 
 /** Returns the added lines of a unified diff as `{ line, text }`, numbered in the new file. */
@@ -155,14 +194,15 @@ async function scanFiles({ files, matcher, gh, repo, ref, hit, note, label = '' 
     let lines;
     if (file.patch !== undefined) {
       lines = addedLines(file.patch);
-    } else if (file.changes === 0) {
-      // A pure rename or mode change has no content diff to check. A rename with
-      // edits whose patch was omitted falls through and is fetched in full.
+    } else if (file.changes === 0 && file.status === 'renamed') {
+      // A pure rename has no content diff to check. An entry with no counted
+      // changes but any other status (a mode change, an added file GitHub did not
+      // diff) still has content that was never read, so it is fetched below.
       continue;
     } else {
       // GitHub omits the patch for binary files and for diffs it considers too
-      // large. Fetch the whole file at the head ref: binary is skipped, anything
-      // else is checked in full, since its added lines cannot be isolated.
+      // large. Fetch the whole file at the head ref: anything else is checked in
+      // full, since its added lines cannot be isolated.
       let content;
       try {
         const path = file.filename.split('/').map(encodeURIComponent).join('/');
@@ -171,14 +211,20 @@ async function scanFiles({ files, matcher, gh, repo, ref, hit, note, label = '' 
         note(`${where}: could not fetch content to check (HTTP ${err.status ?? 'error'}).`);
         continue;
       }
-      if (isBinary(content)) continue;
-      lines = content
-        .toString('utf8')
-        .split('\n')
-        .map((text, i) => ({ line: i + 1, text }));
+      if (isBinary(content)) {
+        // Binary content is still published with the repository, so scan its
+        // printable runs rather than skipping it; it has no lines to number.
+        const text = content.toString('latin1');
+        lines = (text.match(/[\x20-\x7e]{4,}/g) ?? []).map(run => ({ text: run }));
+      } else {
+        lines = content
+          .toString('utf8')
+          .split('\n')
+          .map((text, i) => ({ line: i + 1, text }));
+      }
     }
     for (const { line, text } of lines) {
-      if (matches(matcher, text)) hit(`${where} line ${line}`);
+      if (matches(matcher, text)) hit(line === undefined ? `${where} (binary text)` : `${where} line ${line}`);
     }
   }
 }
@@ -240,7 +286,12 @@ async function scanPush({ event, matcher, gh, repo, hit, incomplete }) {
     }
   } catch (err) {
     // A force push or a new ref has no usable base; fall back to the head commit.
+    // For a new ref that is the whole push, but after a force push the other
+    // commits go unread, which has to be reported as a gap.
     if (err.status !== 404) throw err;
+    if (!ZERO_SHA.test(event.before)) {
+      incomplete('the push base is not comparable; only the head commit was checked.');
+    }
     const head = await gh.json(`/repos/${repo}/commits/${event.after}`);
     commits = [head];
     files = await gh.paginate(`/repos/${repo}/commits/${event.after}`, body => body.files ?? []);

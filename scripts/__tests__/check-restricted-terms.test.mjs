@@ -43,12 +43,12 @@ const file = (filename, patch, extra = {}) => ({ filename, status: 'modified', c
 
 const commitRoute = (sha, files) => ({ [`/repos/acme/widgets/commits/${sha}`]: response({ sha, files }) });
 
-async function check({ event = PR_EVENT, eventName = 'pull_request_target', routes, terms = TERMS }) {
+async function check({ event = PR_EVENT, eventName = 'pull_request_target', routes, terms = TERMS, token = 'token' }) {
   const lines = [];
   const code = await run({
     env: {
       RESTRICTED_TERMS: terms,
-      GITHUB_TOKEN: 'token',
+      GITHUB_TOKEN: token,
       GITHUB_EVENT_NAME: eventName,
       GITHUB_EVENT_PATH: 'event.json',
       GITHUB_REPOSITORY: 'acme/widgets',
@@ -110,7 +110,7 @@ describe('compileTerms', () => {
     // SyntaxError quotes the full source.
     const RealRegExp = RegExp;
     globalThis.RegExp = function (source, flags) {
-      if (source.startsWith('(?<!')) throw new SyntaxError(`Invalid regular expression: /${source}/`);
+      if (source.startsWith('(?:(?:')) throw new SyntaxError(`Invalid regular expression: /${source}/`);
       return new RealRegExp(source, flags);
     };
     let message = '';
@@ -159,6 +159,28 @@ describe('matches', () => {
     expect(matches(m, '\uFF5A\uFF4F\uFF52\uFF42\uFF4C\uFF41\uFF58')).toBe(true);
     expect(matches(m, 'zor\u200Bblax')).toBe(true);
     expect(matches(m, 'zor\u00ADblax')).toBe(true);
+  });
+
+  it('sees through combining marks stacked on each letter', () => {
+    expect(matches(m, 'z\u0336o\u0336r\u0336b\u0336l\u0336a\u0336x\u0336')).toBe(true);
+  });
+
+  it('matches a term that itself has a case or digit boundary inside an identifier', () => {
+    const identifier = compileTerms('acme2\nacmecorp');
+    expect(identifier.test('src/acme2Client.ts')).toBe(true);
+    expect(identifier.test('useAcmeCorpClient')).toBe(true);
+    expect(identifier.test('ACME2_SERVER')).toBe(true);
+  });
+
+  it('matches a fragment that starts or ends with punctuation next to a letter', () => {
+    const punctuation = compileTerms('@acme\nacme-');
+    expect(punctuation.test('user@acme.com')).toBe(true);
+    expect(punctuation.test('acme-x')).toBe(true);
+  });
+
+  it('folds fragments the same way as the text they are matched against', () => {
+    expect(compileTerms('cafe\u0301').test('caf\u00E9')).toBe(true);
+    expect(compileTerms('caf\u00E9').test('cafe\u0301')).toBe(true);
   });
 });
 
@@ -272,19 +294,39 @@ describe('run', () => {
     expect(output).toContain('file src/b.ts line 1');
   });
 
-  it('checks a large text file in full and skips binary files', async () => {
+  it('checks a large text file in full and scans a binary file instead of skipping it', async () => {
     const routes = prRoutes({
       files: [file('big.txt', undefined, { changes: 5000 }), file('img.png', undefined, { changes: 10 })],
     });
     routes['/repos/acme/widgets/contents/big.txt'] = response('line one\nzorblax here');
     routes['/repos/acme/widgets/contents/img.png'] = {
       ...response(''),
-      arrayBuffer: async () => new Uint8Array([0x89, 0, 0x7a]).buffer,
+      arrayBuffer: async () => new Uint8Array([0x89, 0, ...new TextEncoder().encode('zorblax')]).buffer,
     };
     const { code, output } = await check({ routes });
     expect(code).toBe(1);
     expect(output).toContain('file big.txt line 2');
-    expect(output).not.toContain('img.png');
+    expect(output).toContain('file img.png (binary text)');
+    expect(output.toLowerCase()).not.toContain('zorblax');
+  });
+
+  it('checks an added file whose patch is omitted', async () => {
+    const routes = prRoutes({ files: [file('data.txt', undefined, { status: 'added', changes: 0 })] });
+    routes['/repos/acme/widgets/contents/data.txt'] = response('zorblax');
+    const { code, output } = await check({ routes });
+    expect(code).toBe(1);
+    expect(output).toContain('file data.txt line 1');
+  });
+
+  it('withholds a path that contains a term with a digit in it', async () => {
+    const { code, output } = await check({
+      terms: 'acme2',
+      routes: prRoutes({ files: [file('src/acme2Client.ts', '@@ -0,0 +1 @@\n+// acme2 here')] }),
+    });
+    expect(code).toBe(1);
+    expect(output).toContain('changed file #1 (path withheld): the file path');
+    expect(output).toContain('changed file #1 (path withheld) line 1');
+    expect(output).not.toContain('acme2Client');
   });
 
   it('fails without echoing the body when an API response is not JSON', async () => {
@@ -303,6 +345,40 @@ describe('run', () => {
     const { code, output } = await check({ routes: prRoutes({ pull: pr({ changed_files: 3001 }) }) });
     expect(code).toBe(1);
     expect(output).toContain('Incomplete check');
+  });
+
+  it('fails closed when the PR has more commits than the API lists', async () => {
+    const { code, output } = await check({ routes: prRoutes({ pull: pr({ commits: 251 }) }) });
+    expect(code).toBe(1);
+    expect(output).toContain('::error::Incomplete check: The PR has 251 commits; the API lists only 250.');
+  });
+
+  it('fails closed when one commit changes more files than the API lists', async () => {
+    const [a, b] = ['a'.repeat(40), 'b'.repeat(40)];
+    const many = Array.from({ length: 3000 }, (_, i) => ({ filename: `f${i}.txt`, status: 'removed' }));
+    const { code, output } = await check({
+      routes: prRoutes({
+        pull: pr({ commits: 2 }),
+        commits: [commit('one', a), commit('two', b)],
+        extra: { ...commitRoute(a, many), ...commitRoute(b, []) },
+      }),
+    });
+    expect(code).toBe(1);
+    expect(output).toContain(`Incomplete check: commit ${a.slice(0, 12)} changes 3000+ files`);
+  });
+
+  it('fails closed when a file without a patch cannot be fetched', async () => {
+    const routes = prRoutes({ files: [file('big.txt', undefined, { changes: 5000 })] });
+    routes['/repos/acme/widgets/contents/big.txt'] = response({ message: 'Not Found' }, { status: 404 });
+    const { code, output } = await check({ routes });
+    expect(code).toBe(1);
+    expect(output).toContain('Incomplete check: file big.txt: could not fetch content to check (HTTP 404).');
+  });
+
+  it('fails closed when there is no GITHUB_TOKEN', async () => {
+    const { code, output } = await check({ routes: prRoutes(), token: '' });
+    expect(code).toBe(1);
+    expect(output).toContain('GITHUB_TOKEN is not set.');
   });
 
   it('fetches a renamed and edited file in full when its patch is omitted', async () => {
@@ -347,5 +423,56 @@ describe('run', () => {
     expect(output).toContain(`commit ${'d'.repeat(12)} message`);
     expect(output).toContain('already on the branch');
     expect(output.toLowerCase()).not.toContain('flim');
+  });
+
+  it('fails a push that changes more files than compare lists', async () => {
+    const event = { ref: 'refs/heads/main', before: '1'.repeat(40), after: '2'.repeat(40) };
+    const files = Array.from({ length: 300 }, (_, i) => ({ filename: `f${i}.txt`, status: 'removed' }));
+    const routes = {
+      [`/repos/acme/widgets/compare/${event.before}...${event.after}`]: response({
+        commits: [commit('chore: ok', 'd'.repeat(40))],
+        files,
+      }),
+    };
+    const { code, output } = await check({ eventName: 'push', event, routes });
+    expect(code).toBe(1);
+    expect(output).toContain('Incomplete check: The push changes 300+ files');
+  });
+
+  it('fails a push when compare errors instead of falling back to the head commit', async () => {
+    const event = { ref: 'refs/heads/main', before: '1'.repeat(40), after: '2'.repeat(40) };
+    const routes = {
+      [`/repos/acme/widgets/compare/${event.before}...${event.after}`]: response({}, { status: 500 }),
+    };
+    const { code, output } = await check({ eventName: 'push', event, routes });
+    expect(code).toBe(1);
+    expect(output).toContain('could not complete: GitHub API 500');
+    expect(output).not.toContain('Checked push');
+  });
+
+  it('reports the unread commits when a push base cannot be compared', async () => {
+    const event = { ref: 'refs/heads/main', before: '1'.repeat(40), after: '2'.repeat(40) };
+    const routes = {
+      [`/repos/acme/widgets/commits/${event.after}`]: response({
+        ...commit('chore: ok', event.after),
+        files: [file('src/a.ts', '@@ -0,0 +1 @@\n+ok')],
+      }),
+    };
+    const { code, output } = await check({ eventName: 'push', event, routes });
+    expect(code).toBe(1);
+    expect(output).toContain('Incomplete check: the push base is not comparable');
+  });
+
+  it('checks the head commit of a new ref without reporting a gap', async () => {
+    const event = { ref: 'refs/heads/main', before: '0'.repeat(40), after: '2'.repeat(40) };
+    const routes = {
+      [`/repos/acme/widgets/commits/${event.after}`]: response({
+        ...commit('chore: ok', event.after),
+        files: [file('src/a.ts', '@@ -0,0 +1 @@\n+ok')],
+      }),
+    };
+    const { code, output } = await check({ eventName: 'push', event, routes });
+    expect(code).toBe(0);
+    expect(output).toContain('No restricted terms found.');
   });
 });
