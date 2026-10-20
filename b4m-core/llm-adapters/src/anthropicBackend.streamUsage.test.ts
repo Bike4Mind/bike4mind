@@ -225,6 +225,46 @@ describe('AnthropicBackend - per-round tool timing log', () => {
     for (const r of rounds) expect(r.modelMs).toBeLessThanOrEqual(r.roundMs);
   });
 
+  it('logs one ToolRound line per round on the non-streaming path', async () => {
+    const logger = new Logger();
+    const info = vi.spyOn(logger, 'info').mockImplementation(() => {});
+    const backend = buildBackend(
+      [
+        {
+          content: [{ type: 'tool_use', id: 'call_1', name: 'get_weather', input: { city: 'NYC' } }],
+          stop_reason: 'tool_use',
+          usage: { input_tokens: 80, output_tokens: 15 },
+        },
+        {
+          content: [{ type: 'text', text: 'It is sunny.' }],
+          stop_reason: 'end_turn',
+          usage: { input_tokens: 90, output_tokens: 5 },
+        },
+      ],
+      logger
+    );
+
+    await backend.complete(
+      ChatModels.CLAUDE_4_8_OPUS,
+      [{ role: 'user', content: 'weather?' }],
+      { stream: false, tools: [weatherTool], executeTools: true },
+      async () => undefined
+    );
+
+    const rounds = info.mock.calls
+      .filter(([message]) => message === TOOL_ROUND_LOG_PREFIX)
+      .map(([, metadata]) => metadata as ToolRoundEntry);
+
+    expect(rounds.map(r => r.round)).toEqual([0, 1]);
+    expect(rounds[0].tools).toEqual([{ name: 'get_weather', resultChars: 'sunny'.length }]);
+    expect(rounds[0].stopReason).toBe('tool_use');
+    expect(rounds[0].msToFirstChunk).toBeNull();
+    expect(rounds[1].tools).toEqual([]);
+    expect(rounds[1].stopReason).toBe('end_turn');
+    expect(rounds[1].sinceRequestMs).toBeGreaterThanOrEqual(rounds[0].sinceRequestMs);
+    for (const r of rounds) expect(r.modelMs).toBeLessThanOrEqual(r.roundMs);
+  });
+
   it('logs the round that ends the turn after only end-of-turn tools ran', async () => {
     const logger = new Logger();
     const info = vi.spyOn(logger, 'info').mockImplementation(() => {});
