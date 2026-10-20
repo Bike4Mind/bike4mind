@@ -3,8 +3,8 @@
  * CLI/desktop loader (packages/cli CustomCommandStore) skips stamped files, and a future CLI sync
  * keys off it to find files it owns - keep the `# Bike4Mind-Source: <url>` line format stable.
  *
- * Deliberately import-free so the stamp check never needs a YAML parser. The CLI still pulls in
- * `yaml`, because it imports this through the `@bike4mind/common` barrel, which re-exports skillMd.ts.
+ * Deliberately import-free so the stamp check never needs a YAML parser. skillMd.ts, which does need
+ * one, sits behind `@bike4mind/common/utils/skillMd` rather than the barrel the CLI imports.
  */
 export const SKILL_MD_SOURCE_MARKER = 'Bike4Mind-Source:';
 
