@@ -393,6 +393,11 @@ describe('isStreamComplete', () => {
   it('does not mistake the prior turn for this one before anything streamed', () => {
     expect(isStreamComplete({ stopVisible: false, text: PREVIOUS }, PREVIOUS, false)).toBe(false);
     expect(isStreamComplete({ stopVisible: false, text: '' }, '', false)).toBe(false);
+    expect(isStreamComplete({ stopVisible: false, text: '' }, PREVIOUS, false)).toBe(false);
+  });
+
+  it('completes once a seen stop button hides, even if no reply text was read', () => {
+    expect(isStreamComplete({ stopVisible: false, text: '' }, PREVIOUS, true)).toBe(true);
   });
 });
 
@@ -401,6 +406,7 @@ describe('describeStall', () => {
     expect(describeStall({ stopVisible: true, text: '' })).toMatch(/no text streamed/);
     expect(describeStall({ stopVisible: true, text: 'partial' })).toMatch(/stop button never hid/);
     expect(describeStall({ stopVisible: false, text: '' })).toMatch(/never appeared/);
+    expect(describeStall({ stopVisible: false, text: 'Brazil, Argentina' })).toMatch(/never appeared/);
   });
 });
 
@@ -410,12 +416,18 @@ describe('ChatPage reply reader', () => {
     '../../../apps/client/e2e/pages/ChatPage.ts'
   );
 
-  it('reads replies from the root container, never the <p>-only ai-response id', () => {
+  it('reads replies from the body inside the root container, never the <p>-only ai-response id', () => {
     // ChatPage imports Playwright, so no vitest project can load it; the selector is pinned as
     // text. Reverting to `ai-response` brings back the list-only-reply stall above.
     const source = fs.readFileSync(CHAT_PAGE, 'utf8');
-    expect(source).not.toMatch(/getByTestId\(\s*['"]ai-response['"]/);
+    expect(source).not.toMatch(/getByTestId\(\s*['"`]ai-response['"`]/);
     expect(source).not.toMatch(/locator\(\s*['"`]\[data-testid=['"]?ai-response['"]?\]/);
-    expect(source).toMatch(/isStreamComplete\(/);
+    expect(source).toMatch(/ai-response-body/);
+    // Strip comment lines so a commented-out call cannot satisfy the guard.
+    const code = source
+      .split('\n')
+      .filter(line => !/^\s*(\/\/|\*|\/\*)/.test(line))
+      .join('\n');
+    expect(code).toMatch(/isStreamComplete\(/);
   });
 });
