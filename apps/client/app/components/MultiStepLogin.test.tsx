@@ -118,8 +118,8 @@ const checkboxIn = (testId: string) => within(screen.getByTestId(testId)).getByR
 
 // Drives the flow from the email step to the register-username step (email -> code ->
 // registrationRequired). Assumes mocks.verifyOTC's FIRST call resolves registrationRequired.
-const advanceToUsernameStep = async (user: ReturnType<typeof userEvent.setup>) => {
-  await user.type(textboxIn('login-email-input'), 'new@test.com');
+const advanceToUsernameStep = async (user: ReturnType<typeof userEvent.setup>, email = 'new@test.com') => {
+  await user.type(textboxIn('login-email-input'), email);
   await user.click(screen.getByTestId('login-continue-btn'));
   const otcInput = within(await screen.findByTestId('login-otc-input')).getByRole('textbox');
   await user.type(otcInput, '12345678');
@@ -365,29 +365,69 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
     await waitFor(() => expect(mocks.verifyOTC).toHaveBeenCalledWith(expect.objectContaining({ code: '123456' })));
   });
 
-  it('does not advance to the username step when open registration is disabled', async () => {
+  it('completes partner signup when the server admits the verified email on an invite-only instance', async () => {
     const user = userEvent.setup();
-    mocks.verifyOTC.mockResolvedValueOnce({
-      registrationRequired: true,
-      email: 'new@test.com',
-      pendingToken: 'ptok-2',
-    });
+    const email = 'new@partner.example';
+    mocks.verifyOTC
+      .mockResolvedValueOnce({
+        registrationRequired: true,
+        registrationAllowed: true,
+        email,
+        pendingToken: 'ptok-partner',
+      })
+      .mockResolvedValueOnce({ user: { id: 'partner-user', email, username: 'partner-user' }, accessToken: 'atk' });
 
     renderLogin({ enableRegister: false });
+    await advanceToUsernameStep(user, email);
+    await user.type(textboxIn('login-register-username-input'), 'partner-user');
+    await acceptInlinePolicies(user);
+    await user.click(screen.getByTestId('login-register-username-btn'));
 
-    await user.type(textboxIn('login-email-input'), 'new@test.com');
-    await user.click(screen.getByTestId('login-continue-btn'));
-
-    const otcInput = within(await screen.findByTestId('login-otc-input')).getByRole('textbox');
-    await user.type(otcInput, '12345678');
-    await user.click(screen.getByTestId('login-verify-btn'));
-
-    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('auth.registrationClosed'));
-    expect(mocks.toast.dismiss).toHaveBeenCalledWith('otc-code-sent');
-    // Must NOT strand the user on the username step, and must not create a session.
-    expect(screen.queryByTestId('login-register-username-input')).not.toBeInTheDocument();
-    expect(mocks.setCurrentUser).not.toHaveBeenCalled();
+    await waitFor(() => expect(mocks.setCurrentUser).toHaveBeenCalled());
+    expect(mocks.verifyOTC).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        email,
+        username: 'partner-user',
+        pendingToken: 'ptok-partner',
+        acceptedPolicyVersion: CURRENT_POLICY_VERSION,
+        ageAttestation: true,
+      })
+    );
+    expect(mocks.accessTokenState.setVerifiedSession).toHaveBeenCalledWith('atk');
+    expect(mocks.toast.error).not.toHaveBeenCalled();
   });
+
+  it.each([
+    [false, undefined],
+    [false, false],
+    [true, false],
+  ])(
+    'refuses username entry with enableRegister=%s and server admission=%s',
+    async (enableRegister, registrationAllowed) => {
+      const user = userEvent.setup();
+      mocks.verifyOTC.mockResolvedValueOnce({
+        registrationRequired: true,
+        registrationAllowed,
+        email: 'new@test.com',
+        pendingToken: 'ptok-2',
+      });
+
+      renderLogin({ enableRegister });
+
+      await user.type(textboxIn('login-email-input'), 'new@test.com');
+      await user.click(screen.getByTestId('login-continue-btn'));
+
+      const otcInput = within(await screen.findByTestId('login-otc-input')).getByRole('textbox');
+      await user.type(otcInput, '12345678');
+      await user.click(screen.getByTestId('login-verify-btn'));
+
+      await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('auth.registrationClosed'));
+      expect(mocks.toast.dismiss).toHaveBeenCalledWith('otc-code-sent');
+      // Must NOT strand the user on the username step, and must not create a session.
+      expect(screen.queryByTestId('login-register-username-input')).not.toBeInTheDocument();
+      expect(mocks.setCurrentUser).not.toHaveBeenCalled();
+    }
+  );
 });
 
 // The "already logged in" bounce must gate on a LIVE session (currentUser + token), not on a
