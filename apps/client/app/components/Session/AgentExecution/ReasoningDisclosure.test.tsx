@@ -90,4 +90,10 @@ describe('ReasoningDisclosure failed runs', () => {
     render(<ReasoningDisclosure agentExecutionId="exec-ok" sessionId="s1" defaultExpanded />, { wrapper: Wrapper });
     expect(useAgentExecutionStore.getState().executions['replay-exec-ok'].status).toBe('completed');
   });
+
+  it('hydrates an aborted run as aborted, not as completed', () => {
+    mocks.trace = { data: { ...failedTrace, status: 'aborted', error: null }, isLoading: false, isError: false };
+    render(<ReasoningDisclosure agentExecutionId="exec-stop" sessionId="s1" defaultExpanded />, { wrapper: Wrapper });
+    expect(useAgentExecutionStore.getState().executions['replay-exec-stop'].status).toBe('aborted');
+  });
 });

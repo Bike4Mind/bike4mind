@@ -113,7 +113,7 @@ const ReasoningDisclosure: FC<ReasoningDisclosureProps> = ({
     if (!expanded || !data) return;
     const store = useAgentExecutionStore.getState();
     const hydratedStatus = store.executions[replayId]?.status;
-    if (hydratedStatus === 'completed' || hydratedStatus === 'failed') return;
+    if (hydratedStatus === 'completed' || hydratedStatus === 'failed' || hydratedStatus === 'aborted') return;
     // Start fresh for the first hydration of this id.
     store.startExecution(replayId, sessionId);
     // Append each step as an iteration entry. IterationStream groups by
@@ -148,6 +148,10 @@ const ReasoningDisclosure: FC<ReasoningDisclosureProps> = ({
       // No failure reason is persisted, only the caller-safe message, which IterationStream
       // renders on its own when the reason is absent.
       store.markFailed(replayId, undefined, data.error ?? undefined);
+      return;
+    }
+    if (data.status === 'aborted') {
+      store.markAborted(replayId);
       return;
     }
     // Final state: completed with the persisted answer.
