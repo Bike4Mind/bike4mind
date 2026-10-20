@@ -43,6 +43,16 @@ const file = (filename, patch, extra = {}) => ({ filename, status: 'modified', c
 
 const commitRoute = (sha, files) => ({ [`/repos/acme/widgets/commits/${sha}`]: response({ sha, files }) });
 
+// A merge of `mergedIn` into the branch; its own diff comes from compare/{mergedIn}...{sha}.
+const MAIN_TIP = 'f'.repeat(40);
+const merge = (message, sha, mergedIn = MAIN_TIP) => ({
+  ...commit(message, sha),
+  parents: [{ sha: 'p'.repeat(40) }, { sha: mergedIn }],
+});
+const mergeRoute = (sha, files, mergedIn = MAIN_TIP) => ({
+  [`/repos/acme/widgets/compare/${mergedIn}...${sha}`]: response({ files }),
+});
+
 async function check({ event = PR_EVENT, eventName = 'pull_request_target', routes, terms = TERMS, token = 'token' }) {
   const lines = [];
   const code = await run({
@@ -329,12 +339,12 @@ describe('run', () => {
     const { code, output } = await check({
       routes: prRoutes({
         pull: pr({ commits: 3 }),
-        commits: [commit('add', a), commit('remove', b), { ...commit('merge main', m), parents: [{}, {}] }],
+        commits: [commit('add', a), commit('remove', b), merge('merge main', m)],
         files: [file('src/a.ts', '@@ -0,0 +1 @@\n+ok')],
         extra: {
           ...commitRoute(a, [file('src/a.ts', '@@ -0,0 +1,2 @@\n+ok\n+zorblax')]),
           ...commitRoute(b, [file('src/a.ts', '@@ -1,2 +1 @@\n ok\n-zorblax')]),
-          ...commitRoute(m, []),
+          ...mergeRoute(m, []),
         },
       }),
     });
@@ -344,20 +354,52 @@ describe('run', () => {
   });
 
   it('checks a merge resolution even when a later commit removes its added term', async () => {
-    const [merge, removal] = ['e'.repeat(40), 'b'.repeat(40)];
+    const [mergeSha, removal] = ['e'.repeat(40), 'b'.repeat(40)];
     const { code, output } = await check({
       routes: prRoutes({
         pull: pr({ commits: 2 }),
-        commits: [{ ...commit('merge', merge), parents: [{}, {}] }, commit('remove', removal)],
+        commits: [merge('merge', mergeSha), commit('remove', removal)],
         extra: {
-          ...commitRoute(merge, [file('src/a.ts', '@@ -0,0 +1 @@\n+zorblax')]),
+          ...mergeRoute(mergeSha, [file('src/a.ts', '@@ -0,0 +1 @@\n+zorblax')]),
           ...commitRoute(removal, [file('src/a.ts', '@@ -1 +0,0 @@\n-zorblax')]),
         },
       }),
     });
     expect(code).toBe(1);
-    expect(output).toContain(`Restricted term found in commit ${merge.slice(0, 12)} file src/a.ts line 1.`);
+    expect(output).toContain(`Restricted term found in commit ${mergeSha.slice(0, 12)} file src/a.ts line 1.`);
     expect(output).not.toContain('zorblax');
+  });
+
+  it('fails closed when a merge changes more files than compare lists', async () => {
+    const m = 'e'.repeat(40);
+    const many = Array.from({ length: 300 }, (_, i) => file(`src/f${i}.ts`, '@@ -0,0 +1 @@\n+ok'));
+    const { code, output } = await check({
+      routes: prRoutes({
+        pull: pr({ commits: 2 }),
+        commits: [commit('feat'), merge('merge main', m)],
+        extra: { ...commitRoute('c'.repeat(40), []), ...mergeRoute(m, many) },
+      }),
+    });
+    expect(code).toBe(1);
+    expect(output).toContain(`Incomplete check: merge ${m.slice(0, 12)} changes 300+ files`);
+  });
+
+  it("does not charge a merge of the base branch with the base branch's own changes", async () => {
+    const [a, m] = ['a'.repeat(40), 'e'.repeat(40)];
+    const { code, output } = await check({
+      routes: prRoutes({
+        pull: pr({ commits: 2 }),
+        commits: [commit('feat', a), merge('merge main', m)],
+        extra: {
+          ...commitRoute(a, [file('src/a.ts', '@@ -0,0 +1 @@\n+ok')]),
+          // The first-parent diff carries a term main added; the merge's own diff is clean.
+          ...commitRoute(m, [file('docs/main.md', '@@ -0,0 +1 @@\n+zorblax')]),
+          ...mergeRoute(m, [file('src/a.ts', '@@ -0,0 +1 @@\n+ok')]),
+        },
+      }),
+    });
+    expect(output).not.toContain('Restricted term found');
+    expect(code).toBe(0);
   });
 
   it('reports contextual zero-width configuration errors without echoing the pattern', async () => {

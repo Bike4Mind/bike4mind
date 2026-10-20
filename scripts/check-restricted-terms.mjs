@@ -219,14 +219,28 @@ async function scanFiles({ files, matcher, gh, repo, ref, hit, note, label = '' 
 }
 
 // Net diffs miss additions later removed, including merge resolutions. Scan
-// every commit; merge first-parent diffs can include base changes, so fail closed.
+// every commit's own diff. A merge is diffed against its merged-in (last)
+// parent, not the first: the first-parent diff of `git merge main` carries all
+// of main's changes, which are not the PR's. What that skips is either already
+// on the base branch or in side-branch commits this loop scans themselves.
 async function scanCommitDiffs({ commits, matcher, gh, repo, hit, incomplete }) {
   if (commits.length < 2) return;
   for (const c of commits) {
     const sha = c.sha.slice(0, 12);
-    const files = await gh.paginate(`/repos/${repo}/commits/${c.sha}`, body => body.files ?? []);
-    if (files.length >= MAX_PR_FILES) {
-      incomplete(`commit ${sha} changes ${MAX_PR_FILES}+ files; the API lists only ${MAX_PR_FILES}.`);
+    const mergedIn = c.parents?.length > 1 ? c.parents.at(-1).sha : null;
+    let files;
+    if (mergedIn) {
+      files = (await gh.json(`/repos/${repo}/compare/${mergedIn}...${c.sha}`)).files ?? [];
+      if (files.length >= MAX_COMPARE_FILES) {
+        incomplete(
+          `merge ${sha} changes ${MAX_COMPARE_FILES}+ files; only the first ${MAX_COMPARE_FILES} were checked.`
+        );
+      }
+    } else {
+      files = await gh.paginate(`/repos/${repo}/commits/${c.sha}`, body => body.files ?? []);
+      if (files.length >= MAX_PR_FILES) {
+        incomplete(`commit ${sha} changes ${MAX_PR_FILES}+ files; the API lists only ${MAX_PR_FILES}.`);
+      }
     }
     await scanFiles({ files, matcher, gh, repo, ref: c.sha, hit, note: incomplete, label: `commit ${sha} ` });
   }
