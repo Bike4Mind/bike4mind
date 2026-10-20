@@ -9,6 +9,7 @@ import {
   Textarea,
   Tooltip,
   FormLabel,
+  FormHelperText,
   Typography,
   Input,
 } from '@mui/joy';
@@ -88,10 +89,12 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
     setSavedStorageLimit(org.storageLimit ?? null);
   }, [org]);
 
-  // The input holds a string while typing; the server coerces it.
-  const editedCredits = Number(editedOrg.currentCredits ?? 0);
+  // The input holds a string while typing; an empty or non-numeric value ("1,000") is NaN.
+  const rawCredits = String(editedOrg.currentCredits ?? 0).trim();
+  const editedCredits = rawCredits === '' ? NaN : Number(rawCredits);
+  const creditsValid = Number.isFinite(editedCredits) && editedCredits >= 0;
   const creditsChanged = editedCredits !== (org.currentCredits ?? 0);
-  const canSave = !creditsChanged || isValidAdminActionReason(creditReason);
+  const canSave = !creditsChanged || (creditsValid && isValidAdminActionReason(creditReason));
 
   const handleUpdate = async () => {
     if (!parsedStorageLimit.valid) return;
@@ -151,13 +154,18 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
                 </FormControl>
               </Stack>
               <Stack direction="column" spacing={2}>
-                <FormControl>
+                <FormControl error={!creditsValid}>
                   <FormLabel>Current Credits</FormLabel>
                   <Input
                     value={editedOrg.currentCredits ?? 0}
                     onChange={e => handleChange('currentCredits', e.target.value)}
                     slotProps={{ input: { 'data-testid': 'org-profile-credits-input' } }}
                   />
+                  {!creditsValid && (
+                    <FormHelperText data-testid="org-profile-credits-error">
+                      Enter a number of credits (0 or more), without commas.
+                    </FormHelperText>
+                  )}
                 </FormControl>
                 <OrganizationStorageLimitField
                   orgId={org.id}

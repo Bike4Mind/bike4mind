@@ -24,7 +24,11 @@ const updateOrgBodySchema = z.object({
   name: z.string().optional(),
   description: z.string().optional(),
   billingContact: z.string().optional(),
-  currentCredits: z.coerce.number().min(0).optional(),
+  // No bare coerce: it reads null (what JSON makes of NaN) and '' as 0, which would wipe the balance.
+  currentCredits: z
+    .union([z.number(), z.string().trim().min(1)])
+    .pipe(z.coerce.number<string | number>().min(0))
+    .optional(),
   systemPrompt: z.string().max(10000).optional(),
   maxCreditsPerMember: z.number().int().positive().nullable().optional(),
   storageLimit: z.number().min(0).max(MAX_STORAGE_LIMIT_MB).nullable().optional(),
