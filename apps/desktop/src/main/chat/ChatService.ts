@@ -94,7 +94,7 @@ import {
   type CompletionMessage,
 } from './completions';
 import { describeAlways } from './approvalScope';
-import { reasoningEffortFor } from './reasoningEffort';
+import { reasoningEffortFor, requestsThinking } from './reasoningEffort';
 import { addUsage, foldUsage } from './streamEvents';
 import { findStaleResults, historyRounds, sentHistory, toolResultContent } from './contextPruning';
 import { stalePlanReminder, unfinishedPlanReminder } from './planReminder';
@@ -1962,7 +1962,9 @@ export class ChatService {
       let mcpServers = (await this.deps.mcp?.state())?.servers ?? [];
       const catalog = await this.deps.models?.list();
       const cacheable = supportsPromptCache(catalog?.models ?? [], session.model);
-      const maxTokens = catalog?.models.find(option => option.id === session.model)?.maxOutputTokens;
+      const modelOption = catalog?.models.find(option => option.id === session.model);
+      const maxTokens = modelOption?.maxOutputTokens;
+      const askForThinking = requestsThinking(session.reasoningEffort, modelOption);
       const effort = reasoningEffortFor(session.reasoningEffort, session.model);
       const effortField = effort ? { reasoningEffort: effort } : {};
       // Silence is not "no": see ChatModelOption.supportsVision.
@@ -2103,7 +2105,7 @@ export class ChatService {
             model: session.model,
             messages: cacheable ? withCacheBreakpoints(wire) : wire,
             tools,
-            thinking: true,
+            thinking: askForThinking,
             // Dev log only; never sent on the wire. See CompletionRequest.sessionId.
             sessionId,
             ...effortField,

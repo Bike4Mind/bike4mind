@@ -7,7 +7,12 @@ import MenuItem from '@mui/joy/MenuItem';
 import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
-import { REASONING_EFFORT_SETTINGS, type ChatModelOption, type ReasoningEffortSetting } from '@shared/chat';
+import {
+  REASONING_EFFORT_SETTINGS,
+  THINKING_OFF_SETTING,
+  type ChatModelOption,
+  type ReasoningEffortSetting,
+} from '@shared/chat';
 
 const LABELS: Record<ReasoningEffortSetting, string> = {
   default: 'Default',
@@ -24,6 +29,12 @@ const DESCRIPTIONS: Record<ReasoningEffortSetting, string> = {
   medium: 'A balance of speed and care.',
   high: 'Think hardest. Slowest and most expensive.',
 };
+
+/** The two faces of a `thinkingToggle` model's switch, in menu order. */
+const THINKING_CHOICES: readonly { setting: ReasoningEffortSetting; label: string; description: string }[] = [
+  { setting: 'default', label: 'On', description: 'Think before answering. Slower on a local machine.' },
+  { setting: THINKING_OFF_SETTING, label: 'Off', description: 'Answer straight away. Fastest.' },
+];
 
 /**
  * Whether this model would do anything with an effort, as far as the renderer can tell.
@@ -46,7 +57,8 @@ function supportState(
  *
  * The two belong together: which efforts mean anything is a property of the model, and only
  * the reasoning models accept one at all. On anything else the control is disabled and says
- * why, rather than quietly accepting a choice the next turn would drop on the floor.
+ * why, rather than quietly accepting a choice the next turn would drop on the floor. A local
+ * model that can think (`thinkingToggle`) gets a thinking On/Off switch instead.
  */
 export function ReasoningEffortPicker({
   models,
@@ -55,7 +67,7 @@ export function ReasoningEffortPicker({
   disabled,
   onSelect,
 }: {
-  /** The loaded catalog, for the one flag this reads off the conversation's model. */
+  /** The loaded catalog, for the flags this reads off the conversation's model. */
   models: readonly ChatModelOption[];
   modelId: string | null;
   effort: ReasoningEffortSetting;
@@ -65,6 +77,50 @@ export function ReasoningEffortPicker({
   const { supported, known } = supportState(models, modelId);
   const unsupported = known && !supported;
   const sx = { fontWeight: 'normal', minWidth: 0 } as const;
+
+  // A local model's server takes no effort, only thinking on or off; any setting but Off thinks.
+  if (modelId && models.find(model => model.id === modelId)?.thinkingToggle) {
+    const thinkingOn = effort !== THINKING_OFF_SETTING;
+    return (
+      <Dropdown>
+        <MenuButton
+          size="sm"
+          variant="plain"
+          color="neutral"
+          disabled={disabled}
+          sx={sx}
+          slotProps={{ root: { 'data-testid': 'effort-picker-btn' } }}
+        >
+          <Typography level="body-xs" noWrap textColor="inherit">
+            Thinking: {thinkingOn ? 'On' : 'Off'}
+          </Typography>
+        </MenuButton>
+        <Menu size="sm" placement="top-start" sx={{ minWidth: 240 }}>
+          {THINKING_CHOICES.map(choice => {
+            const selected = choice.setting === THINKING_OFF_SETTING ? !thinkingOn : thinkingOn;
+            return (
+              <MenuItem
+                key={choice.setting}
+                selected={selected}
+                onClick={() => onSelect(choice.setting)}
+                data-testid="effort-picker-option"
+              >
+                <Stack sx={{ minWidth: 0 }}>
+                  <Typography level="body-sm" noWrap>
+                    {selected ? '\u2022 ' : ''}
+                    {choice.label}
+                  </Typography>
+                  <Typography level="body-xs" textColor="text.tertiary" noWrap>
+                    {choice.description}
+                  </Typography>
+                </Stack>
+              </MenuItem>
+            );
+          })}
+        </Menu>
+      </Dropdown>
+    );
+  }
 
   if (unsupported) {
     return (

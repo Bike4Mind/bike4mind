@@ -1,5 +1,5 @@
 import { renderToStaticMarkup } from 'react-dom/server';
-import type { ChatModelOption } from '@shared/chat';
+import type { ChatModelOption, ReasoningEffortSetting } from '@shared/chat';
 import { describe, expect, it } from 'vitest';
 import { ReasoningEffortPicker } from './ReasoningEffortPicker';
 
@@ -14,11 +14,23 @@ const MODELS: ChatModelOption[] = [
   { id: 'claude-opus-5', name: 'Claude Opus 5', supportsReasoningEffort: false },
 ];
 
-function markup(modelId: string | null, models: ChatModelOption[] = MODELS): string {
+function markup(
+  modelId: string | null,
+  models: ChatModelOption[] = MODELS,
+  effort: ReasoningEffortSetting = 'high'
+): string {
   return renderToStaticMarkup(
-    <ReasoningEffortPicker models={models} modelId={modelId} effort="high" onSelect={() => {}} />
+    <ReasoningEffortPicker models={models} modelId={modelId} effort={effort} onSelect={() => {}} />
   );
 }
+
+const LOCAL_THINKER: ChatModelOption = {
+  id: 'qwen3:8b',
+  name: 'qwen3:8b',
+  backend: 'ollama',
+  supportsReasoningEffort: false,
+  thinkingToggle: true,
+};
 
 describe('ReasoningEffortPicker', () => {
   it('shows the chosen effort on a model that takes one', () => {
@@ -29,12 +41,24 @@ describe('ReasoningEffortPicker', () => {
     const html = markup('claude-opus-5');
     expect(html).toContain('Effort: n/a');
     expect(html).not.toContain('Effort: High');
-    expect(html).toContain('disabled');
+    expect(html).toMatch(/<button[^>]*Mui-disabled/);
   });
 
   it('stays usable while the catalog has not loaded, rather than guessing a model is unsupported', () => {
     expect(markup('gpt-5', [])).toContain('Effort: High');
     expect(markup(null, [])).toContain('Effort: High');
+  });
+
+  it('is a usable thinking switch on a local model that can think, though it takes no effort', () => {
+    const on = markup('qwen3:8b', [LOCAL_THINKER], 'default');
+    expect(on).toContain('Thinking: On');
+    // The button's state class, not the word: Joy's inlined CSS mentions disabled on every control.
+    expect(on).not.toMatch(/<button[^>]*Mui-disabled/);
+    expect(markup('qwen3:8b', [LOCAL_THINKER], 'minimal')).toContain('Thinking: Off');
+  });
+
+  it('reads any effort but Off as thinking On, as the request does', () => {
+    expect(markup('qwen3:8b', [LOCAL_THINKER], 'high')).toContain('Thinking: On');
   });
 
   it('keeps a model the catalog never stated a flag for usable', () => {

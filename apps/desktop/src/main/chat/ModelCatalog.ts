@@ -42,6 +42,7 @@ interface WireModel {
   max_tokens?: unknown;
   supportsTools?: unknown;
   supportsVision?: unknown;
+  can_think?: unknown;
 }
 
 export interface ModelCatalogLogger {
@@ -212,6 +213,7 @@ export function selectUsableModels(wire: unknown): ChatModelOption[] {
       // Decided here rather than read off the wire: the catalog does not report it, and the
       // renderer has to disable the effort picker on a model that would ignore the field.
       supportsReasoningEffort: supportsReasoningEffort(model.id as string),
+      ...(model.backend === 'ollama' && model.can_think === true ? { thinkingToggle: true } : {}),
     }));
 }
 

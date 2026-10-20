@@ -39,6 +39,18 @@ describe('selectUsableModels', () => {
     });
   });
 
+  it('gives a thinking switch only to an Ollama model the server says can think', () => {
+    const [thinker, plain, hosted] = selectUsableModels([
+      wireModel({ id: 'qwen3:8b', backend: 'ollama', can_think: true }),
+      wireModel({ id: 'llama3.2', backend: 'ollama', can_think: false }),
+      wireModel({ id: 'claude-sonnet-4-5-20250929', backend: 'anthropic', can_think: true }),
+    ]);
+
+    expect(thinker).toMatchObject({ thinkingToggle: true });
+    expect(plain).not.toHaveProperty('thinkingToggle');
+    expect(hosted).not.toHaveProperty('thinkingToggle');
+  });
+
   it('treats a non-array payload as no models rather than throwing', () => {
     expect(selectUsableModels(undefined)).toEqual([]);
     expect(selectUsableModels({ models: [] })).toEqual([]);
