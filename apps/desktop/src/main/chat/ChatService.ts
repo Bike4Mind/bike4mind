@@ -1059,7 +1059,7 @@ export class ChatService {
     return updated;
   }
 
-  /** How hard this conversation's model should think. Inert on a model outside the reasoning set. */
+  /** Reasoning effort, or thinking On/Off for an Ollama model with a thinking switch. */
   setSessionReasoningEffort(sessionId: string, effort: ReasoningEffortSetting): Promise<ChatSessionSummary | null> {
     return this.deps.store.setReasoningEffort(sessionId, effort);
   }
@@ -1964,7 +1964,10 @@ export class ChatService {
       const cacheable = supportsPromptCache(catalog?.models ?? [], session.model);
       const modelOption = catalog?.models.find(option => option.id === session.model);
       const maxTokens = modelOption?.maxOutputTokens;
-      const askForThinking = requestsThinking(session.reasoningEffort, modelOption);
+      const thinkingToggle =
+        modelOption?.thinkingToggle ??
+        (catalog?.error ? this.deps.models?.lastKnownThinkingToggle(session.model) : undefined);
+      const askForThinking = requestsThinking(session.reasoningEffort, { thinkingToggle });
       const effort = reasoningEffortFor(session.reasoningEffort, session.model);
       const effortField = effort ? { reasoningEffort: effort } : {};
       // Silence is not "no": see ChatModelOption.supportsVision.

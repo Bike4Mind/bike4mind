@@ -30,8 +30,8 @@ export function supportsReasoningEffort(model: string): boolean {
  * The effort to put on a request for `model`, or undefined to send none.
  *
  * Gated on the adapters' own lists rather than a provider check: the server forwards the field
- * to whatever backend serves the model, and only these models accept it. Every desktop request
- * also sets `thinking` (see completions.ts), so on Claude this sizes that thinking and 'none' and
+ * to whatever backend serves the model, and only these models accept it. Claude turns also
+ * enable `thinking` (see completions.ts), so this sizes that thinking and 'none' and
  * 'minimal' map to 'low' - see resolveAnthropicEffort in llm-adapters.
  */
 export function reasoningEffortFor(

@@ -84,6 +84,13 @@ export class ModelCatalog {
     return entry.models;
   }
 
+  /** Retain a known thinking preference through a failed refresh, without offering stale models. */
+  lastKnownThinkingToggle(modelId: string): boolean | undefined {
+    const entry = this.cache;
+    if (!entry || entry.environmentUrl !== this.deps.getEnvironmentUrl()) return undefined;
+    return entry.models.find(model => model.id === modelId)?.thinkingToggle;
+  }
+
   async list(force = false): Promise<ChatModelCatalog> {
     if (!force) {
       const hit = this.cached();
@@ -104,6 +111,7 @@ export class ModelCatalog {
     }
 
     if (models.length === 0) {
+      this.cache = null;
       this.deps.logger.warn('CHAT: server returned no tool-capable text models');
       return { models: [] };
     }

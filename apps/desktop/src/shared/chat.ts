@@ -976,7 +976,8 @@ interface ChatSessionMeta {
    * effort it was held at rather than whatever the last conversation was set to.
    *
    * Only a model in the catalog's reasoning set is actually sent one - see
-   * `ChatModelOption.supportsReasoningEffort`. On any other model this is stored and inert.
+   * `ChatModelOption.supportsReasoningEffort`. For a model with `thinkingToggle`, `minimal`
+   * instead turns thinking off and every other setting turns it on. Otherwise this is inert.
    */
   reasoningEffort: ReasoningEffortSetting;
   /**
