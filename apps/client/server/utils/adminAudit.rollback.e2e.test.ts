@@ -9,13 +9,21 @@ import {
 import type { AdminAuditAction, AuditContext, IAdminAuditLogRepository } from '@bike4mind/common';
 import {
   AdminAuditLogModel,
+  AuthSessionModel,
+  CreditTransaction,
+  PasskeyCredentialModel,
+  TrustedDeviceModel,
   adminAuditLogRepository,
+  authSessionRepository,
+  creditLotRepository,
+  creditTransactionRepository,
   userRepository,
   User,
   withTransaction,
 } from '@bike4mind/database';
-import { AdminSettings } from '@bike4mind/database/infra';
-import { adminAuditService } from '@bike4mind/services';
+import { AdminSettings, Organization, organizationRepository } from '@bike4mind/database/infra';
+import { CreditHolderType } from '@bike4mind/common';
+import { adminAuditService, authSessionService, creditService, mfaService } from '@bike4mind/services';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -154,5 +162,132 @@ describe('strict admin audit writes roll back the action on a real replica set',
     });
 
     expect((await User.findById(user.id).lean())?.name).toBe('Renamed');
+  });
+
+  describe('multi-write strict paths', () => {
+    const recordFor = (
+      action: AdminAuditAction,
+      store: Pick<IAdminAuditLogRepository, 'append'>,
+      target: { kind: 'organization' | 'user'; id: string }
+    ) =>
+      adminAuditService.recordAdminAction(
+        { action, actor, context, target: { ...target, displayName: 'Target' }, summary: 'test' },
+        { db: { adminAuditLog: store }, logger: { error: () => undefined } }
+      );
+
+    const seedOrganization = async (userId: string) =>
+      Organization.create({ name: 'Acme', userId, currentCredits: 100 });
+
+    const adjustOrgCredits = (orgId: string) =>
+      creditService.addCredits(
+        {
+          ownerId: orgId,
+          ownerType: CreditHolderType.Organization,
+          credits: 50,
+          reason: 'admin_adjustment',
+          description: 'goodwill grant',
+          type: 'generic_add',
+        },
+        {
+          db: { creditTransactions: creditTransactionRepository, creditLots: creditLotRepository },
+          creditHolderMethods: organizationRepository,
+        }
+      );
+
+    const orgState = async (id: string) => {
+      const org = await Organization.findById(id).lean();
+      return {
+        balance: org?.currentCredits,
+        name: org?.name,
+        ledgerRows: await CreditTransaction.countDocuments({ ownerId: id }),
+        auditRows: await AdminAuditLogModel.countDocuments(),
+      };
+    };
+
+    it('a failed audit write leaves an admin org credit edit and profile update uncommitted', async () => {
+      const org = await seedOrganization('owner-1');
+
+      await expect(
+        withTransaction(async () => {
+          await adjustOrgCredits(org.id);
+          await recordFor('org.credits.adjusted', failingStore, { kind: 'organization', id: org.id });
+          await Organization.updateOne({ _id: org._id }, { $set: { name: 'Renamed' } });
+        })
+      ).rejects.toThrow('audit store unavailable');
+
+      expect(await orgState(org.id)).toEqual({ balance: 100, name: 'Acme', ledgerRows: 0, auditRows: 0 });
+    });
+
+    it('a failed profile update after the credit edit rolls the ledger row and audit entry back', async () => {
+      const org = await seedOrganization('owner-1');
+
+      await expect(
+        withTransaction(async () => {
+          await adjustOrgCredits(org.id);
+          await recordFor('org.credits.adjusted', adminAuditLogRepository, { kind: 'organization', id: org.id });
+          throw new Error('profile update failed');
+        })
+      ).rejects.toThrow('profile update failed');
+
+      expect(await orgState(org.id)).toEqual({ balance: 100, name: 'Acme', ledgerRows: 0, auditRows: 0 });
+    });
+
+    it('a failed audit write leaves no impersonation session document', async () => {
+      const target = await seedUser();
+
+      await expect(
+        withTransaction(async () => {
+          const session = await authSessionService.issueSession(
+            target.id,
+            { createdVia: 'impersonation', tokenVersion: 0, impersonatedBy: 'admin-1' },
+            {
+              db: { authSessions: authSessionRepository },
+              signAccessToken: async () => 'access-token',
+            }
+          );
+          await recordFor('user.impersonation.started', failingStore, { kind: 'user', id: target.id });
+          return session;
+        })
+      ).rejects.toThrow('audit store unavailable');
+
+      expect(await AuthSessionModel.countDocuments({ userId: target.id })).toBe(0);
+    });
+
+    it('a failed audit write leaves an MFA force-reset fully uncommitted', async () => {
+      const target = await seedUser();
+      await User.updateOne(
+        { _id: target._id },
+        { $set: { mfa: { totpSecret: 'secret', totpEnabled: true, backupCodes: [], setupAt: new Date() } } }
+      );
+      await PasskeyCredentialModel.create({
+        userId: target.id,
+        credentialId: 'cred-1',
+        publicKey: 'pk',
+        counter: 0,
+        deviceType: 'singleDevice',
+        backedUp: false,
+        name: 'Key',
+      });
+      await TrustedDeviceModel.create({
+        userId: target.id,
+        tokenHash: 'hash-1',
+        label: 'Laptop',
+        expiresAt: new Date(Date.now() + 86_400_000),
+      });
+      const admin = await seedUser(true);
+
+      await expect(
+        withTransaction(async () => {
+          await PasskeyCredentialModel.deleteMany({ userId: target.id });
+          await mfaService.forceResetMFA({ targetUserId: target.id, adminUser: admin }, userRepository);
+          await TrustedDeviceModel.deleteMany({ userId: target.id });
+          await recordFor('user.mfa.reset', failingStore, { kind: 'user', id: target.id });
+        })
+      ).rejects.toThrow('audit store unavailable');
+
+      expect(await PasskeyCredentialModel.countDocuments({ userId: target.id })).toBe(1);
+      expect(await TrustedDeviceModel.countDocuments({ userId: target.id })).toBe(1);
+      expect((await User.findById(target.id).lean())?.mfa?.totpEnabled).toBe(true);
+    });
   });
 });
