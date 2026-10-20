@@ -59,6 +59,8 @@ export type StreamSnapshot = {
 export function isStreamComplete(snapshot: StreamSnapshot, previousResponse: string, sawStopButton: boolean): boolean {
   if (snapshot.stopVisible) return false;
   if (sawStopButton) return true;
+  // Safe only because the stop button shows optimistically on send (OPTIMISTIC_GENERATING_STATUS
+  // in useSendMessage, read by app/hooks/chatCompletionState.ts); mid-stream chrome has text too.
   return snapshot.text !== '' && snapshot.text !== previousResponse;
 }
 
