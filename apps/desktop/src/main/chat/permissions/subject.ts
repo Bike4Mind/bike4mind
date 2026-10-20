@@ -7,6 +7,12 @@ const SHELL_TOOLS = new Set(CLAUDE_CODE_TOOLS.Bash.tools);
 const READ_TOOLS = new Set(CLAUDE_CODE_TOOLS.Read.tools);
 const EDIT_TOOLS = new Set(CLAUDE_CODE_TOOLS.Edit.tools);
 const FETCH_TOOLS = new Set(CLAUDE_CODE_TOOLS.WebFetch.tools);
+/**
+ * Programs whose options, not their subcommand, decide whether data leaves the machine (see
+ * shellScan's outboundReason). An allow rule outranks the outbound ask, so a card for `curl
+ * localhost` must save that command, never `Bash(curl:*)`, which would also cover an upload.
+ */
+const SENDS_BY_FLAGS = /^(curl|wget|rsync|aws|gsutil|gcloud|docker|podman|gh api)(\s|$)/;
 
 interface CallLike {
   name: string;
@@ -88,8 +94,8 @@ export function everySessionRules(subject: PermissionSubject, prompt: ApprovalPr
     const { commands, directories } = subject.shell;
     if (!prompt.always || directories.length > 0 || commands.length === 0) return [];
     if (commands.some(command => !command.coverable || command.opaque)) return [];
-    const patterns = prompt.always.commands.map(({ pattern }) =>
-      pattern.endsWith(' *') ? `Bash(${pattern.slice(0, -2)}:*)` : `Bash(${pattern})`
+    const patterns = prompt.always.commands.map(({ text, pattern }) =>
+      SENDS_BY_FLAGS.test(text) || !pattern.endsWith(' *') ? `Bash(${text})` : `Bash(${pattern.slice(0, -2)}:*)`
     );
     return [...new Set(patterns)];
   }

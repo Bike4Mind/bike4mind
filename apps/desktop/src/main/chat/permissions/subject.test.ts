@@ -56,6 +56,19 @@ describe('everySessionRules', () => {
     ]);
   });
 
+  it('derives the exact command for a program whose flags decide whether it sends data', () => {
+    const prompt = shellPrompt([
+      { text: 'curl -s http://localhost:3000', pattern: 'curl *', coverable: true },
+      { text: 'gh api repos/o/r', pattern: 'gh api *', coverable: true },
+      { text: 'gh pr view 1', pattern: 'gh pr view *', coverable: true },
+    ]);
+    expect(rulesFor('bash_execute', { command: 'x' }, prompt)).toEqual([
+      'Bash(curl -s http://localhost:3000)',
+      'Bash(gh api repos/o/r)',
+      'Bash(gh pr view:*)',
+    ]);
+  });
+
   it('derives nothing for an opaque or unnormalised command, or one reaching outside the shared folders', () => {
     expect(
       rulesFor(

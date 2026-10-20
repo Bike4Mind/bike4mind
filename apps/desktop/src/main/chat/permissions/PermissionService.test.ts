@@ -25,10 +25,13 @@ async function writeSettings(path: string, permissions: Record<string, unknown>)
 async function savedUntil(
   path: string,
   permissions: Record<string, unknown>,
-  applied: () => Promise<boolean>
+  applied: () => Promise<boolean>,
+  { recreateFolder = false } = {}
 ): Promise<void> {
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
+    // A dropped mkdir event is only seen again if the folder is made again.
+    if (recreateFolder) await rm(join(path, '..'), { recursive: true, force: true });
     await writeSettings(path, permissions);
     const until = Date.now() + 500;
     while (Date.now() < until) {
@@ -190,7 +193,8 @@ describe('PermissionService', () => {
     await savedUntil(
       join(project, '.claude', 'settings.json'),
       { allow: ['Bash(make:*)'] },
-      async () => (await decide(bash('make'))).decision === 'allow'
+      async () => (await decide(bash('make'))).decision === 'allow',
+      { recreateFolder: true }
     );
   });
 
