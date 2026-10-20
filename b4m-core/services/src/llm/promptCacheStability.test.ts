@@ -18,9 +18,9 @@ import {
   buildTaggedContextMessages,
   filterByPromptMode,
   isPerTurnContext,
+  markHistoryCacheAnchor,
   markShareablePrefixBoundary,
   relocatePerTurnContext,
-  resolveHistoryCacheExcludeTrailingCount,
   SYSTEM_PROMPT_PRIORITY,
 } from './systemPromptSources';
 
@@ -140,16 +140,16 @@ async function runTurn(priorQuestCount: number, state: SessionState, opts: { rel
 
   // A stack shaped like process(): a stable head, per-turn sources that change every turn, and the
   // session-stable middle. Mementos and the view path change on every turn; retrieval on odd ones.
+  const viewContext = sys(
+    `[Current View Context] User is on page ${priorQuestCount % 3}. Path: /p/${priorQuestCount % 3}`
+  );
   const tagged = buildTaggedContextMessages({
     dateContext: [sys('Current date: Tuesday, October 20, 2026')],
     artifactEmission: [sys('artifact guidance')],
     helpCenter: [sys('help center guidance')],
     abstention: [sys('abstention guidance')],
     toolPrompt: [sys('tool guidance')],
-    extraContext: [
-      sys('[ADMIN_PROMPT:bike4mind_identity]\nYou are the assistant.'),
-      sys(`[Current View Context] User is on page ${priorQuestCount % 3}. Path: /p/${priorQuestCount % 3}`),
-    ],
+    extraContext: [sys('[ADMIN_PROMPT:bike4mind_identity]\nYou are the assistant.'), viewContext],
     sessionPrompt: [sys('session prompt')],
     knowledgeRetrieval: priorQuestCount % 2 === 1 ? [sys(`[Passages] chunk for turn ${priorQuestCount}`)] : [],
     contextSummary: [sys('[Context from earlier in this conversation]\nrunning summary')],
@@ -159,7 +159,10 @@ async function runTurn(priorQuestCount: number, state: SessionState, opts: { rel
   });
   const admitted = filterByPromptMode(tagged, undefined);
   markShareablePrefixBoundary(admitted);
-  const perTurn = new Set(opts.relocate ? admitted.filter(isPerTurnContext).map(t => t.message) : []);
+  const perTurnExtra = new Set<IMessage>([viewContext]);
+  const perTurn = new Set(
+    opts.relocate ? admitted.filter(t => isPerTurnContext(t, perTurnExtra)).map(t => t.message) : []
+  );
   const priorities = new Map(admitted.map(t => [t.message, SYSTEM_PROMPT_PRIORITY[t.source]]));
   const prompt: IMessage[] = [{ role: 'user', content: message }];
 
@@ -174,17 +177,18 @@ async function runTurn(priorQuestCount: number, state: SessionState, opts: { rel
     tokenizer as never,
     { verbose: false, skipAdminPromptTemplates: true, systemMessagePriority: m => priorities.get(m) }
   );
-  const turnContext = relocatePerTurnContext(built.messages, perTurn, prompt[0]);
-  const exclude = opts.relocate
-    ? resolveHistoryCacheExcludeTrailingCount(turnContext.relocatedCount, built.currentTurnMessageCount)
-    : 0;
+  // Only the fixed path flags the history anchor; the control arm keeps the adapter's own
+  // end-of-array anchor, which is what every turn did before.
+  const anchored = opts.relocate
+    ? markHistoryCacheAnchor(built.messages, built.currentTurnMessageCount)
+    : built.messages;
+  const turnContext = relocatePerTurnContext(anchored, perTurn, prompt[0]);
   const cacheStrategy: ICacheStrategy = {
     enableCaching: true,
     cacheSystemPrompt: true,
     cacheTools: true,
-    cacheConversationHistory: true,
+    cacheConversationHistory: anchored === built.messages,
     cacheTTL: '5m',
-    ...(exclude > 0 ? { historyCacheExcludeTrailingCount: exclude } : {}),
   };
 
   const backend = new AnthropicBackend('test-key');

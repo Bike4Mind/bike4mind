@@ -12,6 +12,7 @@ import {
   LAKE_CONTENT_LAYER_NAMES,
   LAKE_CONTENT_SOURCES,
   lakeContentTokens,
+  markHistoryCacheAnchor,
   PER_TURN_CONTEXT_SOURCES,
   PROMPT_SOURCE_METADATA,
   PROMPT_SOURCE_ORDER,
@@ -503,16 +504,23 @@ describe('per-turn context placement', () => {
       }
     });
 
-    it('moves the caller-supplied extra context but not an admin-authored prompt riding with it', () => {
-      expect(isPerTurnContext(tag('extraContext', sys('[Current View Context] User is on the Admin page.')))).toBe(
-        true
+    it('moves caller extra context only where the producer flagged it per turn', () => {
+      const view = sys('[Current View Context] User is on the Admin page.');
+      const perSend = sys('Refine the open brief.');
+      const flagged = new Set<IMessage>([view]);
+
+      expect(isPerTurnContext(tag('extraContext', view), flagged)).toBe(true);
+      // Voice, Slack and programmatic launches put a real system prompt through this same channel.
+      expect(isPerTurnContext(tag('extraContext', perSend), flagged)).toBe(false);
+      expect(isPerTurnContext(tag('extraContext', sys('[ADMIN_PROMPT:bike4mind_identity]\nIdentity')), flagged)).toBe(
+        false
       );
-      expect(isPerTurnContext(tag('extraContext', sys('[ADMIN_PROMPT:bike4mind_identity]\nIdentity')))).toBe(false);
     });
 
-    it('moves only the system-role notices of attached files, which are text, not the file messages', () => {
-      expect(isPerTurnContext(tag('attachedFiles', sys('# Available Files')))).toBe(true);
+    it('leaves attachments in system, whose notice is an instruction, and moves only the URL notice', () => {
+      expect(isPerTurnContext(tag('attachedFiles', sys('# Available Files')))).toBe(false);
       expect(isPerTurnContext(tag('attachedFiles', user('file body')))).toBe(false);
+      expect(isPerTurnContext(tag('urls', sys('# URL content')))).toBe(true);
       expect(isPerTurnContext(tag('urls', user('page body')))).toBe(false);
     });
 
@@ -597,6 +605,47 @@ describe('per-turn context placement', () => {
       };
 
       expect(JSON.stringify(turn('[Memento] likes tea'))).toBe(JSON.stringify(turn('[Memento] likes coffee')));
+    });
+  });
+
+  describe('markHistoryCacheAnchor', () => {
+    const head = sys('stable head');
+    const answer = { role: 'assistant' as const, content: 'earlier answer' };
+    const attachment = user('attached file');
+    const prompt = user('this turn');
+
+    it('flags the last history message, not the volatile current turn', () => {
+      const marked = markHistoryCacheAnchor([head, answer, attachment, prompt], 2);
+
+      expect(marked.map(m => m.cache)).toEqual([undefined, true, undefined, undefined]);
+      // A copy, so the caller's array and the persisted message stay unmarked.
+      expect(marked[1]).not.toBe(answer);
+      expect(answer.cache).toBeUndefined();
+    });
+
+    it('anchors on the last message of history when the turn is a bare prompt', () => {
+      expect(markHistoryCacheAnchor([head, answer, prompt], 1).map(m => m.cache)).toEqual([undefined, true, undefined]);
+    });
+
+    it('returns the input unchanged when there is no history to anchor', () => {
+      const messages = [head, prompt];
+
+      expect(markHistoryCacheAnchor(messages, 1)).toBe(messages);
+      expect(markHistoryCacheAnchor(messages, 2)).toBe(messages);
+    });
+
+    it('returns the input unchanged rather than flag a system message', () => {
+      const messages = [head, sys('more context'), prompt];
+
+      expect(markHistoryCacheAnchor(messages, 1)).toBe(messages);
+    });
+
+    it('returns the input unchanged when the next message shares the anchor role', () => {
+      // Flagging turns the content into a block array, which the adapter then refuses to merge with
+      // the same-role message after it - that message would be dropped instead of joined.
+      const messages = [head, user('no answer yet'), prompt];
+
+      expect(markHistoryCacheAnchor(messages, 1)).toBe(messages);
     });
   });
 });

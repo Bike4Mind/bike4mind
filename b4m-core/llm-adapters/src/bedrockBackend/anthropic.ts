@@ -946,16 +946,32 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
     // makes the same string-vs-blocks choice.
     const cacheStrategy = options.cacheStrategy;
     const modelSupportsCaching = !BEDROCK_NO_PROMPT_CACHING_MODELS.has(modelId);
-    const emitSystemCacheBreakpoint =
-      Boolean(cacheStrategy?.enableCaching) && modelSupportsCaching && systemBlocks.some(block => block.cache);
+    const emitCaching = Boolean(cacheStrategy?.enableCaching) && modelSupportsCaching;
+    const emitSystemCacheBreakpoint = emitCaching && systemBlocks.some(block => block.cache);
+    // Same TTL as applyCaching gives the other breakpoints: Anthropic constrains how
+    // mixed-TTL breakpoints may be ordered, and matching sidesteps that entirely.
+    const cacheControl = {
+      type: 'ephemeral' as const,
+      ...(cacheStrategy?.cacheTTL === '1h' ? { ttl: cacheStrategy.cacheTTL } : {}),
+    };
+
+    // A `cache: true` user/assistant message declares a mid-history breakpoint (see
+    // markHistoryCacheAnchor in @bike4mind/services). This backend forwards IMessage objects into
+    // the request body, so the control flag has to become cache_control on the message's last
+    // content block - and must never be serialized, since the wire has no such field.
+    body.messages = filteredMessages.map(message => {
+      const { cache, ...wire } = message;
+      if (!emitCaching || cache !== true) return wire;
+      const content =
+        typeof wire.content === 'string'
+          ? [{ type: 'text' as const, text: wire.content }]
+          : [...(wire.content as Array<Record<string, unknown>>)];
+      if (content.length === 0) return wire;
+      content[content.length - 1] = { ...content[content.length - 1], cache_control: cacheControl };
+      return { ...wire, content };
+    });
 
     if (emitSystemCacheBreakpoint) {
-      // Same TTL as applyCaching gives the other breakpoints: Anthropic constrains how
-      // mixed-TTL breakpoints may be ordered, and matching sidesteps that entirely.
-      const cacheControl = {
-        type: 'ephemeral' as const,
-        ...(cacheStrategy?.cacheTTL === '1h' ? { ttl: cacheStrategy.cacheTTL } : {}),
-      };
       const blocks: Array<Record<string, unknown>> = systemBlocks.map(block =>
         block.cache
           ? { type: 'text', text: block.text, cache_control: cacheControl }

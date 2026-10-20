@@ -201,13 +201,13 @@ import {
   filterByPromptMode,
   filterFeaturesByPromptMode,
   isPerTurnContext,
+  markHistoryCacheAnchor,
   markShareablePrefixBoundary,
   PROMPT_MODE_SOURCES,
   PROMPT_SOURCE_METADATA,
   resolveForcedRetrieval,
   SYSTEM_PROMPT_PRIORITY,
   relocatePerTurnContext,
-  resolveHistoryCacheExcludeTrailingCount,
   resolveSkipAutoOffers,
   lakeContentTokens,
   toPromptDetails,
@@ -3742,8 +3742,13 @@ export class ChatCompletionProcess {
       // The per-turn sources that ride in the current user turn instead of system (see
       // PER_TURN_CONTEXT_SOURCES). Not under a promptMode: those callers asked for a request
       // they can compare against the bare model, and moving their own system messages would alter it.
+      // `extraContext` moves only where the producer flagged it: the same channel carries the real
+      // system prompt of voice, Slack and programmatic launches.
+      const perTurnExtraContext = new Set<IMessage>(extraContextMessages.filter(m => m.perTurn === true) as IMessage[]);
       const perTurnContextMessages = new Set<IMessage>(
-        promptMode ? [] : admittedContextMessages.filter(isPerTurnContext).map(t => t.message)
+        promptMode
+          ? []
+          : admittedContextMessages.filter(t => isPerTurnContext(t, perTurnExtraContext)).map(t => t.message)
       );
       const contextAndSystemMessages: IMessage[] = admittedContextMessages.map(t => t.message);
       // Carries each message's source across into the builder, which sees only an IMessage[] and so
@@ -4154,7 +4159,8 @@ export class ChatCompletionProcess {
             admittedContextMessages,
             deliveredMessages,
             undefined,
-            injectedBlocks
+            injectedBlocks,
+            perTurnContextMessages
           );
         } catch (promptTextError) {
           logger.warn(`📊 Failed to itemize the effective system prompt:`, promptTextError);
@@ -4644,12 +4650,17 @@ export class ChatCompletionProcess {
       // The request body. Per-turn context moves from the system prompt into the front of the current
       // user message here, last: budgeting, delivery telemetry and overflow recovery above all work
       // on the system-role form, and `messages` stays that form for everything persisted from it.
-      const turnContext = relocatePerTurnContext(messages, perTurnContextMessages, currentUserPromptMessages[0]);
-      let outboundMessages = turnContext.messages;
-      const historyCacheExcludeTrailingCount = resolveHistoryCacheExcludeTrailingCount(
-        turnContext.relocatedCount,
-        currentTurnMessageCount
+      // The history breakpoint is flagged on the message itself, before relocation, so both the
+      // adapter's same-role merge and the tool rounds below see the same object.
+      const anchoredMessages = markHistoryCacheAnchor(messages, currentTurnMessageCount);
+      const turnContext = relocatePerTurnContext(
+        anchoredMessages,
+        perTurnContextMessages,
+        currentUserPromptMessages[0]
       );
+      let outboundMessages = turnContext.messages;
+      // The adapter's own end-of-array anchor would only add a breakpoint on the volatile current turn.
+      const historyAnchorMarked = anchoredMessages !== messages;
 
       // Check if Research Mode is enabled and handle parallel processing
       if (isResearchMode) {
@@ -4884,10 +4895,11 @@ export class ChatCompletionProcess {
               enableCaching: messageCount >= 2, // Enable caching for multi-turn conversations
               cacheSystemPrompt: true, // Always cache system prompts
               cacheTools: hasTools, // Cache tools if present
-              cacheConversationHistory: messageCount >= 2, // Cache history for multi-turn
+              // A flagged history message already closes the cached prefix; asking the adapter for
+              // its own end-of-array anchor would cache the current turn as well.
+              cacheConversationHistory: !historyAnchorMarked && messageCount >= 2, // Cache history for multi-turn
               cacheTTL: '5m', // Use 5-minute TTL for active conversations
               conversationId: quest.id, // Use quest ID for xAI cache affinity
-              ...(historyCacheExcludeTrailingCount > 0 ? { historyCacheExcludeTrailingCount } : {}),
             };
 
             // Log cache strategy decision with structured metadata

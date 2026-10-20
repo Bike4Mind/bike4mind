@@ -122,14 +122,21 @@ export const pushChatMessage = async (
   }
 ) => {
   // Inject current view context for navigate_view tool awareness, plus any
-  // surface-registered active brief so "refine this" round-trips.
+  // surface-registered active brief so "refine this" round-trips. Both change per turn, so they are
+  // flagged perTurn and ride in the user message rather than the system prompt.
   const viewDesc = getViewDescription();
   const briefContext = getSurfaceChatContext().briefContext ?? null;
   const extraContextMessages = [
     ...(viewDesc
-      ? [{ role: 'system' as const, content: `[Current View Context] ${viewDesc} Path: ${window.location.pathname}` }]
+      ? [
+          {
+            role: 'system' as const,
+            content: `[Current View Context] ${viewDesc} Path: ${window.location.pathname}`,
+            perTurn: true,
+          },
+        ]
       : []),
-    ...(briefContext ? [{ role: 'system' as const, content: briefContext }] : []),
+    ...(briefContext ? [{ role: 'system' as const, content: briefContext, perTurn: true }] : []),
   ];
 
   const response = await api.post(`/api/sessions/${sessionId}/chat`, {

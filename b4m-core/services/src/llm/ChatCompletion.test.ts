@@ -2658,6 +2658,33 @@ describe('ChatCompletionProcess', () => {
           },
         ]);
       });
+
+      it('sends the relocated per-turn context to each configuration', async () => {
+        const complete = vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+          await cb(['Answer']);
+        });
+        mockedGetLlmByModel.mockReturnValue({ complete, getModelInfo: vi.fn().mockResolvedValue([]) } as any);
+        mockedGetAvailableModels.mockResolvedValue(availableModels() as any);
+        service.features.set('mementos', {
+          getContextMessages: async () => [{ role: 'system' as const, content: 'MEMENTO-FACT' }],
+        } as any);
+        mockedBuildAndSortMessages.mockImplementation(async (_prev: any, context: any[], prompt: any[]) => ({
+          messages: [...context, ...prompt],
+          currentTurnMessageCount: prompt.length,
+          messageTruncation: null,
+        }));
+        mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+        mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+        await service.process({ body: researchBody() as any, logger: mockLogger });
+
+        const [, messages] = complete.mock.calls[0];
+        expect(messages.at(-1)).toEqual({
+          role: 'user',
+          content: `${TURN_CONTEXT_HEADER}MEMENTO-FACT${TURN_CONTEXT_END}Hello`,
+        });
+        expect(JSON.stringify(messages.filter((m: IMessage) => m.role === 'system'))).not.toContain('MEMENTO-FACT');
+      });
     });
 
     describe('incomplete answer notice', () => {
@@ -8664,6 +8691,9 @@ describe('ChatCompletionProcess', () => {
       // once the reserved recovery budget lands too small - the first build still carries a system
       // message, every rebuild after it does not.
       dropSystemMessagesOnRebuild?: boolean;
+      // Per-call currentTurnMessageCount for the first build and the rebuild, so a caller can pin
+      // that the recovered payload's count is the one used.
+      turnCounts?: { first: number; rebuilt: number };
     }): Promise<any> => {
       const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue(manyMcpTools as any);
       const buildToolPromptSpy = vi.spyOn(ToolBuilder.prototype, 'buildToolPrompt').mockResolvedValue(null);
@@ -8682,16 +8712,25 @@ describe('ChatCompletionProcess', () => {
       mockedUsdToCredits.mockImplementation(realUsdToCredits);
       mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
 
+      const complete = vi.fn().mockImplementation(async (_m: any, _msgs: any, _opts: any, cb: any) => {
+        await cb(['Hi!'], { inputTokens: 100, outputTokens: 50 });
+      });
       mockedGetLlmByModel.mockReturnValue({
-        complete: vi.fn().mockImplementation(async (_m: any, _msgs: any, _opts: any, cb: any) => {
-          await cb(['Hi!'], { inputTokens: 100, outputTokens: 50 });
-        }),
+        complete,
         getModelInfo: vi.fn().mockResolvedValue([]),
         currentModel: ChatModels.GPT4,
       } as any);
       mockedGetAvailableModels.mockResolvedValue([smallContextModel] as any);
       const userOnlyBuild = { messages: [{ role: 'user', content: 'Hello' }], messageTruncation: null };
-      if (opts.dropSystemMessagesOnRebuild) {
+      if (opts.turnCounts) {
+        let call = 0;
+        const turnCounts = opts.turnCounts;
+        mockedBuildAndSortMessages.mockImplementation(async (prev: any[], _context: any[], prompt: any[]) => ({
+          messages: [...(prev ?? []), ...prompt],
+          currentTurnMessageCount: call++ === 0 ? turnCounts.first : turnCounts.rebuilt,
+          messageTruncation: null,
+        }));
+      } else if (opts.dropSystemMessagesOnRebuild) {
         mockedBuildAndSortMessages
           .mockResolvedValueOnce({
             messages: [
@@ -8714,8 +8753,27 @@ describe('ChatCompletionProcess', () => {
       buildToolPromptSpy.mockRestore();
 
       const updateCall = mockDb.quests.update.mock.calls.at(-1)?.[0];
-      return { updateCall, buildCalls: mockedBuildAndSortMessages.mock.calls };
+      return {
+        updateCall,
+        buildCalls: mockedBuildAndSortMessages.mock.calls,
+        completeCall: complete.mock.calls.at(-1),
+      };
     };
+
+    it('places the history anchor from the recovered payload, using the count the rebuild reported', async () => {
+      // The rebuild sheds the oldest turn AND reports a wider current turn (say, an attachment), so
+      // the index differs from both the first build's count and the recovered array's length alone.
+      const { completeCall } = await runRecoveryScenario({
+        recoveryTokenCounts: [100, 50],
+        turnCounts: { first: 1, rebuilt: 2 },
+      });
+
+      const sent = completeCall![1] as IMessage[];
+      // Recovered history is [turn two, reply two, turn three, reply three], then a 2-message turn.
+      expect(sent.map(m => m.content).slice(0, 4)).toEqual(['turn two', 'reply two', 'turn three', 'reply three']);
+      expect(sent.find(m => m.cache === true)?.content).toBe('turn three');
+      expect(sent.at(-1)?.cache).toBeUndefined();
+    });
 
     it('reserves toolSchemaTokens before rebuilding, so a rebuild that reports "fits" actually fits', async () => {
       // One shed turn is enough: effectiveTotalTokens(100) + toolSchemaTokens(3000) = 3100, comfortably
@@ -9265,9 +9323,14 @@ describe('ChatCompletionProcess', () => {
         },
       ] as any);
       if (opts.builderReturnsContext) {
-        // The admitted system messages BY REFERENCE, as the real builder emits them, then the prompt.
-        mockedBuildAndSortMessages.mockImplementation(async (_prev: any, context: any[], prompt: any[]) => {
-          return { messages: [...context, ...prompt], messageTruncation: null } as any;
+        // The admitted system messages BY REFERENCE, as the real builder emits them, then the
+        // window's history, then the current turn - the shape and count the real builder reports.
+        mockedBuildAndSortMessages.mockImplementation(async (prev: any, context: any[], prompt: any[]) => {
+          return {
+            messages: [...context, ...(prev ?? []), ...prompt],
+            currentTurnMessageCount: prompt.length,
+            messageTruncation: null,
+          } as any;
         });
       } else {
         mockedBuildAndSortMessages.mockResolvedValue({
@@ -9275,7 +9338,11 @@ describe('ChatCompletionProcess', () => {
           messageTruncation: null,
         } as any);
       }
-      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue(
+        opts.builderReturnsContext
+          ? ([[{ role: 'assistant', content: 'Earlier answer' }], 0, {}] as any)
+          : ([[], 0, {}] as any)
+      );
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
       return { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
     };
@@ -9316,6 +9383,7 @@ describe('ChatCompletionProcess', () => {
       const viewContext = {
         role: 'system' as const,
         content: '[Current View Context] User is on the Admin dashboard.',
+        perTurn: true as const,
       };
 
       const runWithContext = async (extra: Record<string, unknown> = {}) => {
@@ -9355,17 +9423,59 @@ describe('ChatCompletionProcess', () => {
         expect(systemText(messages)).toContain('Current date:');
       });
 
-      it('moves the history cache breakpoint ahead of the current turn when it carries context', async () => {
-        const { options } = await runWithContext();
+      it('flags the last history message as the cache breakpoint, ahead of the current turn', async () => {
+        const { messages, options } = await runWithContext();
 
-        expect(options.cacheStrategy.historyCacheExcludeTrailingCount).toBe(1);
+        expect(messages.find(m => m.content === 'Earlier answer')?.cache).toBe(true);
+        expect(messages.at(-1)!.cache).toBeUndefined();
+        // The flag is the breakpoint; the adapter's own end-of-array anchor would land on the
+        // volatile current turn.
+        expect(options.cacheStrategy.cacheConversationHistory).toBe(false);
+        expect(options.cacheStrategy).not.toHaveProperty('historyCacheExcludeTrailingCount');
       });
 
-      it('leaves the history breakpoint on the last message when nothing per-turn was added', async () => {
-        const body = wireTurn();
+      it('leaves the adapter its own anchor when the message before the turn cannot carry the flag', async () => {
+        const body = wireTurn({ builderReturnsContext: true });
+        // An unanswered question: flagging it would stop the adapter merging it with the prompt.
+        mockedFetchAndProcessPreviousMessages.mockResolvedValue([
+          [{ role: 'user', content: 'Unanswered' }],
+          0,
+          {},
+        ] as any);
+
         await service.process({ body, logger: mockLogger });
 
+        expect(lastComplete()[2].cacheStrategy.cacheConversationHistory).toBe(true);
         expect(lastComplete()[2].cacheStrategy).not.toHaveProperty('historyCacheExcludeTrailingCount');
+      });
+
+      it('carries the relocated context exactly once through the tool-pairing retry', async () => {
+        const body = wireTurn({ builderReturnsContext: true });
+        service.features.set('mementos', {
+          getContextMessages: async () => [{ role: 'system' as const, content: 'MEMENTO-FACT' }],
+        } as any);
+        const complete = vi
+          .fn()
+          .mockRejectedValueOnce(new Error('messages: unexpected tool_use_id in tool_result'))
+          .mockImplementation(async (_m: any, _msgs: any, _opts: any, cb: any) => {
+            await cb(['Hi!'], { inputTokens: 100, outputTokens: 50 });
+          });
+        mockedGetLlmByModel.mockReturnValue({
+          complete,
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: ChatModels.GPT4,
+        } as any);
+
+        await service.process({ body: body as any, logger: mockLogger });
+
+        expect(complete).toHaveBeenCalledTimes(2);
+        const retryMessages = complete.mock.calls[1][1] as IMessage[];
+        const relocated = retryMessages.filter(
+          m => typeof m.content === 'string' && m.content.includes('MEMENTO-FACT')
+        );
+        expect(relocated).toHaveLength(1);
+        expect((relocated[0].content as string).startsWith(TURN_CONTEXT_HEADER)).toBe(true);
+        expect(retryMessages.some(m => m.cache === true)).toBe(true);
       });
 
       it('does not persist the injected context on the quest', async () => {
