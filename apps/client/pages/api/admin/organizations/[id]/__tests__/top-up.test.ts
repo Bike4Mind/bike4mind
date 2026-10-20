@@ -246,6 +246,38 @@ describe('POST /api/admin/organizations/[id]/top-up credit kind', () => {
     expect(res._getJSONData()).toEqual({ organizationId: 'org-1', creditsAdded: 100, idempotent: true });
   });
 
+  it('answers a refund that lost a concurrent race idempotently when the aborted transaction fails with a non-11000 error', async () => {
+    const noSuchTransaction = Object.assign(new Error('Transaction 1 has been aborted'), {
+      code: 251,
+      codeName: 'NoSuchTransaction',
+    });
+    mockAddCredits.mockRejectedValue(noSuchTransaction);
+    mockTxFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce({ id: 'tx-1' });
+    const { res, run } = call({ body: { ...body, kind: 'refund' } });
+    await run();
+    expect(mockTxFindOne).toHaveBeenCalledTimes(2);
+    expect(mockTxFindOne).toHaveBeenLastCalledWith({ transactionId: dedupeKey });
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toEqual({ organizationId: 'org-1', creditsAdded: 100, idempotent: true });
+  });
+
+  it('rethrows a refund failure when no winning row exists', async () => {
+    const noSuchTransaction = Object.assign(new Error('Transaction 1 has been aborted'), { code: 251 });
+    mockAddCredits.mockRejectedValue(noSuchTransaction);
+    const { res, run } = call({ body: { ...body, kind: 'refund' } });
+    await expect(run()).rejects.toBe(noSuchTransaction);
+    expect(mockTxFindOne).toHaveBeenCalledTimes(2);
+    expect(res._isEndCalled()).toBe(false);
+  });
+
+  it('does not look for a winning row when a non-refund top-up fails with a non-11000 error', async () => {
+    mockAddCredits.mockRejectedValue(new Error('boom'));
+    const { run } = call({ body });
+    await expect(run()).rejects.toThrow('boom');
+    expect(mockTxFindOne).not.toHaveBeenCalled();
+  });
+
   it('rejects an unknown kind before touching credits', async () => {
     const { run } = call({ body: { ...body, kind: 'gift' } });
     await expect(run()).rejects.toThrow();

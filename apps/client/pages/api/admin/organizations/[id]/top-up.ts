@@ -57,14 +57,18 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
     // A generic_add is deduped on transactionId, which createTransaction swallows into a silent
     // no-op rather than the E11000 the subscription path raises. Look the key up first so a
     // replayed refund answers like a replayed top-up and writes no second audit row. A concurrent
-    // duplicate that slips past this still cannot double-credit: addCredits no-ops on it.
-    if (isRefund && (await creditTransactionRepository.findOne({ transactionId: dedupeKey }))) {
-      req.logger.info(`Refund dedup hit for ${dedupeKey}, treating as success`);
-      return res.status(200).json({
+    // duplicate that slips past this never double-credits, but inside the transaction below the
+    // swallowed E11000 leaves it aborted, so the catch answers it.
+    const idempotentResponse = () =>
+      res.status(200).json({
         organizationId: organization.id,
         creditsAdded: credits,
         idempotent: true,
       });
+
+    if (isRefund && (await creditTransactionRepository.findOne({ transactionId: dedupeKey }))) {
+      req.logger.info(`Refund dedup hit for ${dedupeKey}, treating as success`);
+      return idempotentResponse();
     }
 
     // Atomic credit grant + audit log. Without the transaction, an audit-side
@@ -113,11 +117,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
     } catch (err: unknown) {
       if (typeof err === 'object' && err !== null && 'code' in err && (err as { code: unknown }).code === 11000) {
         req.logger.info(`Top-up dedup hit for ${dedupeKey}, treating as success`);
-        return res.status(200).json({
-          organizationId: organization.id,
-          creditsAdded: credits,
-          idempotent: true,
-        });
+        return idempotentResponse();
+      }
+      // A refund that lost the race reaches here as NoSuchTransaction, not 11000: createTransaction
+      // swallowed the E11000 but the server already aborted the transaction. The winner's row settles it.
+      if (isRefund && (await creditTransactionRepository.findOne({ transactionId: dedupeKey }))) {
+        req.logger.info(`Refund dedup hit after aborted transaction for ${dedupeKey}, treating as success`);
+        return idempotentResponse();
       }
       throw err;
     }
