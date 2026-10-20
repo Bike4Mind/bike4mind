@@ -208,7 +208,7 @@ export const SkillForm: FC<SkillFormProps> = ({
                     ? "This is another author's Skill Market skill; import it from the market to keep updates and attribution: "
                     : sourceIsSameOrigin
                       ? 'This skill came from Bike4Mind - open the original instead of making a copy: '
-                      : 'This file was exported from Bike4Mind: '}
+                      : 'This file has a Bike4Mind source stamp from another site: '}
                   {sourceIsSameOrigin ? (
                     <Link href={source.url} target="_blank" rel="noopener noreferrer">
                       {source.url}
