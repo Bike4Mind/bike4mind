@@ -1,5 +1,5 @@
 import { releaseNoteRepository, type IReleaseNoteDocument } from '@bike4mind/database';
-import { listWhatsNewContract, type ModalVideo, type PublicReleaseNote } from '@bike4mind/common';
+import { listWhatsNewContract, toPublicReleaseNoteVideo, type PublicReleaseNote } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import {
@@ -21,18 +21,6 @@ const UPSTREAM_CURSOR_SCOPE = 'v1.whats-new.upstream';
 const CACHE_CONTROL = 'public, s-maxage=300, stale-while-revalidate=600';
 const FALLBACK_CACHE_CONTROL = 'public, s-maxage=30, stale-while-revalidate=30';
 
-const toPublicVideo = ({
-  landscapeUrl,
-  landscapePosterUrl,
-  portraitUrl,
-  portraitPosterUrl,
-}: ModalVideo): ModalVideo => ({
-  landscapeUrl,
-  landscapePosterUrl,
-  portraitUrl,
-  portraitPosterUrl,
-});
-
 const toPublicReleaseNote = (note: IReleaseNoteDocument): PublicReleaseNote => ({
   id: note.id,
   release_tag: note.releaseTag,
@@ -40,7 +28,7 @@ const toPublicReleaseNote = (note: IReleaseNoteDocument): PublicReleaseNote => (
   summary: note.summary,
   published_at: note.publishAt.toISOString(),
   items: note.items.map(({ category, text, importance }) => ({ category, text, importance })),
-  ...(note.video && { video: toPublicVideo(note.video) }),
+  ...(note.video && { video: toPublicReleaseNoteVideo(note.video) }),
 });
 
 type PageCursor = { kind: 'upstream'; cursor: string } | { kind: 'local'; after: TimeIdKeyset };

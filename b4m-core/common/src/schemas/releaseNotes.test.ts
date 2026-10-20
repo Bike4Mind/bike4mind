@@ -15,7 +15,7 @@ describe('release note video', () => {
   it('is optional and nullable on the public note, so older feeds still parse', () => {
     expect(PublicReleaseNoteSchema.safeParse(publicNote).success).toBe(true);
     expect(PublicReleaseNoteSchema.safeParse({ ...publicNote, video: null }).success).toBe(true);
-    const video = { landscapeUrl: 'https://self-host.example/wide.mp4' };
+    const video = { landscape_url: 'https://self-host.example/wide.mp4' };
     expect(PublicReleaseNoteSchema.parse({ ...publicNote, video }).video).toEqual(video);
   });
 

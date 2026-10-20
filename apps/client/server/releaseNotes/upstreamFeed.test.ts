@@ -42,6 +42,26 @@ describe('getWhatsNewFeedUrl', () => {
   });
 });
 
+describe('fetchUpstreamFeed video vetting', () => {
+  const pageWith = (video: unknown) => json({ data: [{ ...NOTE, video }], next_cursor: null });
+
+  it('keeps a video whose URLs are all on allowed hosts', async () => {
+    const video = { landscape_url: 'https://d111.cloudfront.net/wide.mp4', portrait_url: null };
+    mockSafeFetch.mockResolvedValue(pageWith(video));
+    expect((await fetchOnce())?.data[0].video).toEqual(video);
+  });
+
+  it('drops a video with any URL outside the allowlist', async () => {
+    mockSafeFetch.mockResolvedValue(
+      pageWith({
+        landscape_url: 'https://d111.cloudfront.net/wide.mp4',
+        portrait_url: 'https://evil.example.com/t.mp4',
+      })
+    );
+    expect((await fetchOnce())?.data[0].video).toBeNull();
+  });
+});
+
 describe('fetchUpstreamFeed', () => {
   it('returns null without fetching when unset', async () => {
     vi.stubEnv('WHATS_NEW_FEED_URL', '');

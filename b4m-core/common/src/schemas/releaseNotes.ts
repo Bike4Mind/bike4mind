@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ModalVideoShapeSchema } from '../types/entities/ModalTypes';
+import { ModalVideoShapeSchema, type ModalVideo } from '../types/entities/ModalTypes';
 
 export const RELEASE_NOTES_SCHEMA_VERSION = 1;
 
@@ -87,6 +87,29 @@ export function parseReleaseNotesConfig(raw: unknown) {
   return ReleaseNotesConfigSchema.safeParse(value);
 }
 
+/** A release note video on the public wire: ModalVideo with snake_case keys. */
+export const PublicReleaseNoteVideoSchema = z.object({
+  landscape_url: z.string().nullable().optional(),
+  landscape_poster_url: z.string().nullable().optional(),
+  portrait_url: z.string().nullable().optional(),
+  portrait_poster_url: z.string().nullable().optional(),
+});
+export type PublicReleaseNoteVideo = z.infer<typeof PublicReleaseNoteVideoSchema>;
+
+export const toPublicReleaseNoteVideo = (video: ModalVideo): PublicReleaseNoteVideo => ({
+  landscape_url: video.landscapeUrl ?? null,
+  landscape_poster_url: video.landscapePosterUrl ?? null,
+  portrait_url: video.portraitUrl ?? null,
+  portrait_poster_url: video.portraitPosterUrl ?? null,
+});
+
+export const fromPublicReleaseNoteVideo = (video: PublicReleaseNoteVideo): ModalVideo => ({
+  landscapeUrl: video.landscape_url ?? null,
+  landscapePosterUrl: video.landscape_poster_url ?? null,
+  portraitUrl: video.portrait_url ?? null,
+  portraitPosterUrl: video.portrait_poster_url ?? null,
+});
+
 /**
  * A release note as GET /api/v1/whats-new serves it. An allowlist: provenance (sourcePrs, deployedSha),
  * workflow state (status, editedAt) and storage fields never reach the public wire.
@@ -105,7 +128,8 @@ export const PublicReleaseNoteSchema = z.object({
       importance: z.number().int().min(1).max(3),
     })
   ),
-  // Additive: absent when the note has no video. Hosts are checked on write, not on read.
-  video: ModalVideoShapeSchema.nullable().optional(),
+  // Additive: absent when the note has no video. Hosts are not checked here; an upstream feed's videos
+  // are vetted on ingest (server/releaseNotes/upstreamFeed.ts).
+  video: PublicReleaseNoteVideoSchema.nullable().optional(),
 });
 export type PublicReleaseNote = z.infer<typeof PublicReleaseNoteSchema>;

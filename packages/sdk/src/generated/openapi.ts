@@ -4582,6 +4582,12 @@ export interface components {
           text: string;
           importance: number;
         }[];
+        video?: {
+          landscape_url?: string | null;
+          landscape_poster_url?: string | null;
+          portrait_url?: string | null;
+          portrait_poster_url?: string | null;
+        } | null;
       }[];
       next_cursor: string | null;
     };

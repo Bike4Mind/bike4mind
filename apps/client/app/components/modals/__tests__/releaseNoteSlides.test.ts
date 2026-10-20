@@ -39,8 +39,13 @@ describe('releaseNoteToModal', () => {
   });
 
   it('passes the note video through to the slide', () => {
-    const video = { landscapeUrl: 'https://d111.cloudfront.net/wide.mp4', portraitUrl: null };
-    expect(releaseNoteToModal(note({ video })).video).toEqual(video);
+    const video = { landscape_url: 'https://d111.cloudfront.net/wide.mp4', portrait_url: null };
+    expect(releaseNoteToModal(note({ video })).video).toEqual({
+      landscapeUrl: 'https://d111.cloudfront.net/wide.mp4',
+      landscapePosterUrl: null,
+      portraitUrl: null,
+      portraitPosterUrl: null,
+    });
   });
 
   it('falls back to the release tag when the headline is blank', () => {

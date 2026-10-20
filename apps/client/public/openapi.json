@@ -9816,6 +9816,38 @@
                       "importance"
                     ]
                   }
+                },
+                "video": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "landscape_url": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "landscape_poster_url": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "portrait_url": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "portrait_poster_url": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  }
                 }
               },
               "required": [

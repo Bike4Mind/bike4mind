@@ -25,6 +25,8 @@ import AdminModalVideoFields from '@client/app/components/admin/AdminModalVideoF
 import { videoUrlsOf } from '@client/app/components/modals/whatsNewSlideMedia';
 import { type AdminReleaseNote, useEditReleaseNote } from './useReleaseNotes';
 
+const VIDEO_FIELDS = ['landscapeUrl', 'landscapePosterUrl', 'portraitUrl', 'portraitPosterUrl'] as const;
+
 const CATEGORIES: ReleaseNoteCategory[] = ['new', 'improved', 'fixed'];
 
 interface Props {
@@ -41,7 +43,7 @@ const ReleaseNoteEditDialog: React.FC<Props> = ({ note, onClose }) => {
   // Stored and uploaded URLs pass the form check whatever their host (see AdminModalVideoFields)
   const [trustedUrls, setTrustedUrls] = useState<ReadonlySet<string>>(() => new Set(videoUrlsOf(note.video)));
   const { data: config } = useConfig();
-  const videoChanged = JSON.stringify(video) !== JSON.stringify(note.video ?? null);
+  const videoChanged = VIDEO_FIELDS.some(field => (video?.[field] ?? null) !== (note.video?.[field] ?? null));
   const videoInvalid = Object.keys(getModalVideoErrors(video, { allowedUrls: trustedUrls })).length > 0;
 
   const updateItem = (index: number, patch: Partial<ReleaseNoteItem>) =>

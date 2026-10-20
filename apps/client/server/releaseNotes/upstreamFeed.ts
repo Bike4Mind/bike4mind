@@ -1,5 +1,12 @@
 import { z } from 'zod';
-import { paginatedResponseSchema, PublicReleaseNoteSchema, type PublicReleaseNote } from '@bike4mind/common';
+import {
+  fromPublicReleaseNoteVideo,
+  getModalVideoErrors,
+  paginatedResponseSchema,
+  PublicReleaseNoteSchema,
+  type PublicReleaseNote,
+} from '@bike4mind/common';
+import { deploymentMediaOrigins } from '@server/utils/deploymentMediaOrigins';
 import { safeFetch } from '@server/utils/ssrfProtection';
 import { decodeCursor, encodeCursor } from '@server/utils/cursorPagination';
 
@@ -167,7 +174,7 @@ async function fetchPage(
       body = undefined;
     }
     const parsed = pageSchema.safeParse(body);
-    if (parsed.success) return { page: parsed.data, upstreamDown: false };
+    if (parsed.success) return { page: vetVideos(parsed.data), upstreamDown: false };
     const feed = jsonFeedSchema.safeParse(body);
     if (feed.success) return { page: jsonFeedToPage(feed.data, limit, cursor), upstreamDown: false };
     logger.warn('[whats-new] upstream feed body matched neither the public schema nor JSON Feed');
@@ -180,6 +187,19 @@ async function fetchPage(
   } finally {
     clearTimeout(timer);
   }
+}
+
+// Drops a video with any URL outside the deployment's media allowlist, which the CSP would block anyway.
+function vetVideos(page: UpstreamFeedPage): UpstreamFeedPage {
+  const policy = { extraOrigins: deploymentMediaOrigins() };
+  return {
+    ...page,
+    data: page.data.map(note =>
+      note.video && Object.keys(getModalVideoErrors(fromPublicReleaseNoteVideo(note.video), policy)).length > 0
+        ? { ...note, video: null }
+        : note
+    ),
+  };
 }
 
 /** A page of JSON Feed items ordered by publish date and id, with a stable cursor across new entries. */

@@ -161,10 +161,10 @@ describe('GET /api/v1/whats-new', () => {
     mockListPublished.mockResolvedValueOnce({ items: [{ ...NOTES[0], video }, NOTES[1]], hasMore: false });
     const body = (await run())._getJSONData();
     expect(body.data[0].video).toEqual({
-      landscapeUrl: 'https://d111.cloudfront.net/wide.mp4',
-      landscapePosterUrl: null,
-      portraitUrl: null,
-      portraitPosterUrl: null,
+      landscape_url: 'https://d111.cloudfront.net/wide.mp4',
+      landscape_poster_url: null,
+      portrait_url: null,
+      portrait_poster_url: null,
     });
     expect('video' in body.data[1]).toBe(false);
   });
