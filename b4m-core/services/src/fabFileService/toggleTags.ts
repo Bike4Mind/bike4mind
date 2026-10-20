@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { distinctIdCount } from '../utils/objectIds';
-import { DATALAKE_TAG_PREFIX } from '@bike4mind/common';
+import { DATALAKE_TAG_PREFIX, isDataLakeTagName } from '@bike4mind/common';
 import {
   IAdminSettingsRepository,
   IDataLakeAccessGrantRepository,
@@ -352,17 +352,22 @@ export const toggleTags = async (
 
     // A meta-tag join moves the file's charged bytes onto the lake's owner (reassignStorageOwner).
     // Graded here, over the WHOLE batch and summed per destination, for the same reason as the gates
-    // above: a refusal raised inside addFileToLake would land after earlier files had already joined. Summing also
-    // catches a batch that only overflows the destination together.
+    // above: a refusal raised inside addFileToLake would land after earlier files had already joined.
+    // Summing also catches a batch that only overflows the destination together.
     const joiningBytesByOwner = new Map<string, { organizationId?: string; userId: string; bytes: number }>();
+    const finalTagsByFile = new Map<string, string[]>();
     for (const file of fabFiles) {
       const joiningLakes = metaJoinsByFile.get(file.id);
-      if (!joiningLakes) continue;
-      const transfer = await resolveStorageOwnerTransfer(
-        file,
-        [...storedTagNames(file), ...joiningLakes.map(lake => lake.datalakeTag)],
-        db
-      );
+      if (joiningLakes)
+        finalTagsByFile.set(file.id, [...storedTagNames(file), ...joiningLakes.map(l => l.datalakeTag)]);
+    }
+    // One lake read for the whole batch rather than one per file.
+    const batchLakeTags = [...new Set([...finalTagsByFile.values()].flat().filter(isDataLakeTagName))];
+    const batchLakes = batchLakeTags.length ? await db.dataLakes.findByDatalakeTags(batchLakeTags) : [];
+    for (const file of fabFiles) {
+      const finalTags = finalTagsByFile.get(file.id);
+      if (!finalTags) continue;
+      const transfer = await resolveStorageOwnerTransfer(file, finalTags, db, batchLakes);
       if (!transfer || transfer.bytes <= 0) continue;
       const key = `${transfer.to.type}:${transfer.to.id}`;
       const entry = joiningBytesByOwner.get(key) ?? {

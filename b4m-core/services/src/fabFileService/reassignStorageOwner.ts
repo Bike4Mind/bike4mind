@@ -5,6 +5,7 @@ import {
   isDataLakeTagName,
   NotFoundError,
   storageOwnerOf,
+  type IDataLakeDocument,
   type IDataLakeRepository,
   type IFabFileDocument,
   type IFabFileRepository,
@@ -48,16 +49,23 @@ export type StorageOwnerTransfer = {
 
 /**
  * The owner change that giving `file` exactly the meta-tags in `tagNames` implies, or null when the
- * owner stays the same. Reads lakes only; writes nothing.
+ * owner stays the same. Reads lakes only; writes nothing. `prefetchedLakes`, when given, must cover
+ * every meta-tag in `tagNames` (a batch caller's one findByDatalakeTags) and replaces the query.
  */
 export async function resolveStorageOwnerTransfer(
   file: OwnerSourceFile,
   tagNames: readonly string[],
-  db: Pick<StorageOwnerTransferDb, 'dataLakes'>
+  db: Pick<StorageOwnerTransferDb, 'dataLakes'>,
+  prefetchedLakes?: readonly IDataLakeDocument[]
 ): Promise<StorageOwnerTransfer | null> {
   const lakeTags = [...new Set(tagNames.filter(isDataLakeTagName))];
+  const found = !lakeTags.length
+    ? []
+    : prefetchedLakes
+      ? prefetchedLakes.filter(lake => lakeTags.includes(lake.datalakeTag))
+      : await db.dataLakes.findByDatalakeTags(lakeTags);
   // A deleted or purging lake no longer owns anything; a missing status is a legacy live lake.
-  const lakes = (lakeTags.length ? await db.dataLakes.findByDatalakeTags(lakeTags) : []).filter(
+  const lakes = found.filter(
     lake => !(DATA_LAKE_SLUG_UNRESOLVABLE_STATUSES as readonly string[]).includes(lake.status)
   );
   const nextOrganizationId = pickOwnerOrganizationId(lakes, file.sourceLakeId || undefined);
