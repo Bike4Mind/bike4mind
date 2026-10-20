@@ -77,6 +77,26 @@ describe('NewUserWelcome', () => {
     expect(screen.getAllByTestId(/^new-user-welcome-prompt-/)).toHaveLength(3);
   });
 
+  it('invites a prompt, or typing below, while there are credits to send with', () => {
+    renderWelcome();
+    expect(screen.getByText(/or type your own below/i)).toBeInTheDocument();
+  });
+
+  it('drops "type your own below" and the starters at 0 credits, when the composer is replaced', () => {
+    state.balance = 0;
+    renderWelcome();
+    expect(screen.getByTestId('new-user-welcome')).toBeInTheDocument();
+    expect(screen.queryByText(/type your own below/i)).not.toBeInTheDocument();
+    expect(screen.queryAllByTestId(/^new-user-welcome-prompt-/)).toHaveLength(0);
+  });
+
+  it('keeps the starters at 0 credits when credits are not enforced', () => {
+    state.balance = 0;
+    state.enforceCredits = false;
+    renderWelcome();
+    expect(screen.getAllByTestId(/^new-user-welcome-prompt-/)).toHaveLength(3);
+  });
+
   it('estimates how many answers the starting credits cover on the selected model, labelled as an estimate', () => {
     renderWelcome();
     expect(screen.getByTestId('new-user-welcome-answers-estimate')).toHaveTextContent(
