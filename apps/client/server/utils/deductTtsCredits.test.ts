@@ -154,13 +154,14 @@ describe('deductTtsCredits', () => {
     });
   });
 
-  it('skips billing and the usage event when the synthesis has no cost', async () => {
+  it('records the call but writes no ledger row when the synthesis has no cost', async () => {
     mocks.computeTtsUsd.mockReturnValue(0);
 
     await deductTtsCredits(args);
 
     expect(mocks.deductCreditsWithOrgSupport).not.toHaveBeenCalled();
-    expect(mocks.recordUsage).not.toHaveBeenCalled();
+    expect(mocks.recordUsage).toHaveBeenCalledTimes(1);
+    expect(mocks.recordUsage.mock.calls[0][0]).toMatchObject({ costUsd: 0, creditsCharged: 0 });
   });
 
   it('is non-fatal: a debit failure is logged, not thrown', async () => {

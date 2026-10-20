@@ -39,7 +39,6 @@ export async function deductTtsCredits({
   logger,
 }: DeductTtsArgs): Promise<void> {
   const costUsd = computeTtsUsd(vendor, model, characters);
-  if (!(costUsd > 0)) return;
   // Unbiased rounding: a short clip can legitimately settle at 0 credits. The pre-flight gate
   // (estimateTtsCreditCost in tts.ts) stays on the round-up.
   const credits = usdToCreditsStochastic(costUsd);
