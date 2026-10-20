@@ -247,11 +247,16 @@ describe('processSubagentDispatch tool deps', () => {
     } as never);
     const { handler } = await import('./agentExecutor');
 
-    await handler(dagNodeDispatchEvent(), lambdaContext).catch(() => undefined);
+    await expect(handler(dagNodeDispatchEvent(), lambdaContext)).resolves.toEqual({ batchItemFailures: [] });
 
     expect(resolveWorkspaceSettings).toHaveBeenCalledTimes(1);
     expect(buildSharedToolsMock).not.toHaveBeenCalled();
-    expect(agentExecutionRepository.markFailed).toHaveBeenCalledWith('child-1', expect.anything());
+    expect(agentExecutionRepository.markFailed).toHaveBeenCalledExactlyOnceWith(
+      'child-1',
+      expect.objectContaining({
+        message: 'Workspace session settings resolver for "settings-workspace" failed',
+      })
+    );
   });
 });
 

@@ -345,11 +345,16 @@ describe('processExecution tool deps', () => {
       } as never);
       const { handler } = await import('./agentExecutor');
 
-      await handler(continuationEvent(), lambdaContext).catch(() => undefined);
+      await expect(handler(continuationEvent(), lambdaContext)).resolves.toEqual({ batchItemFailures: [] });
 
       expect(resolveWorkspaceSettings).toHaveBeenCalledTimes(1);
       expect(buildSharedToolsMock).not.toHaveBeenCalled();
-      expect(agentExecutionRepository.markFailed).toHaveBeenCalledWith('exec-1', expect.anything());
+      expect(agentExecutionRepository.markFailed).toHaveBeenCalledExactlyOnceWith(
+        'exec-1',
+        expect.objectContaining({
+          message: 'Workspace session settings resolver for "settings-workspace" failed',
+        })
+      );
     });
 
     it('keeps the stored flag on a session outside any contributed workspace', async () => {
