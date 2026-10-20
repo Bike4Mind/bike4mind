@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { ApiKeyScope, CONTRACTS } from '@bike4mind/common';
 import * as agentScopes from '@server/agents/agentScopes';
 import * as dataLakeScopes from '@server/dataLakes/dataLakeScopes';
@@ -9,21 +9,14 @@ import * as fileScopes from '@server/files/fileScopes';
 import * as projectScopes from '@server/projects/projectScopes';
 import { ADMIN_ONLY_API_KEY_SCOPES, USER_API_KEY_SCOPES, type ApiKeyScopeOption } from './apiKeyScopes';
 
+// Only the gate lists are needed; keep dataLakeScopes from loading the services graph.
+vi.mock('@bike4mind/services', () => ({}));
+vi.mock('@server/auth/turnAuth', () => ({}));
+
 /**
- * Pins the direction of the catalogue's `endpoints` lists that misleads a user: every endpoint a
- * scope CLAIMS must really be gated on that scope. The lists are still not exhaustive - a scope can
- * open routes it does not name - and nothing here checks that half.
- *
- * A gate is the set of scopes one check admits (OR semantics): a contract's `scopes`, a scope array
- * literal, a shared `*_SCOPES` list, or a call to a helper such as `assertDataLakeShareScope`. A
- * claim holds when some gate on its route admits the scope AND admits nothing that would make the
- * claim misleading - only scopes that claim the same route, `admin:*`, or scopes the repo's own
- * lists say imply it. So a broad door alone (`DATA_LAKE_READ_OR_SHARE_SCOPES`) cannot vouch for
- * `datalake:share`; the narrower in-handler check must be there too.
- *
- * A contract's door is per method; the in-handler checks, like every pages/ route's, are read per
- * FILE from source with comments stripped, so a narrow check guarding one verb vouches for every
- * verb the file serves. That is the price of reading source instead of booting every route.
+ * Every endpoint a scope CLAIMS must be gated by a check that admits it and nothing that makes the
+ * claim misleading; routes a scope opens without listing them are not checked. In-handler checks
+ * are read per FILE from source, so a check guarding one verb vouches for every verb the file serves.
  */
 
 const CLIENT_DIR = path.resolve(__dirname, '../..');
@@ -70,11 +63,14 @@ const GATE_LISTS = new Map<string, readonly ApiKeyScope[]>(
   )
 );
 
-// Also drops `required_scopes: ...` 403 payloads: they report a gate, they do not enforce one.
+// Also drops imports and `required_scopes: ...` 403 payloads: they name a gate, they do not enforce
+// one. The line-comment pass also cuts a `//` inside a regex or mid-string, which can only drop a
+// gate (a false fail), never invent one.
 const stripComments = (code: string) =>
   code
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/(^|[^:'"`\\])\/\/.*$/gm, '$1')
+    .replace(/^import\b[\s\S]*?from\s*['"][^'"]+['"];?/gm, '')
     .replace(/required_scopes:\s*(\[[^[\]]*\]|[A-Z_]+)/g, '');
 
 const scopeOf = (member: string) => SCOPE_BY_MEMBER.get(member);
@@ -109,7 +105,10 @@ function gatesIn(code: string, helpers: ReadonlyMap<string, Gate>): Gate[] {
   return gates;
 }
 
-/** Exported helpers whose body runs exactly one scope check, mapped to that check's gate. */
+/**
+ * Exported helpers whose body runs exactly one scope check that can deny, mapped to that check's
+ * gate. A non-throwing probe like `holdsDataLakeReadScope` is not a gate.
+ */
 function loadHelpers(): Map<string, Gate> {
   const bodies = new Map<string, string>();
   for (const file of HELPER_SOURCES) {
@@ -126,7 +125,10 @@ function loadHelpers(): Map<string, Gate> {
     for (const [name, body] of bodies) {
       if (helpers.has(name)) continue;
       const gates = gatesIn(body, helpers);
-      if (gates.length === 1) helpers.set(name, gates[0]);
+      const denies =
+        /\bthrow\b|\bassertApiKeyScope\(|\brequiredScopes:/.test(body) ||
+        [...helpers.keys()].some(h => body.includes(`${h}(`));
+      if (gates.length === 1 && denies) helpers.set(name, gates[0]);
     }
   }
   return helpers;
@@ -142,21 +144,22 @@ function parseEndpoint(endpoint: string): { methods: string[]; path: string } | 
   return match ? { methods: match[1].split('|'), path: match[2] } : undefined;
 }
 
+const PAGE_EXTENSIONS = ['.ts', '.tsx'];
+
 /** The pages/ file that serves `routePath`, preferring a literal segment over a dynamic one. */
 function resolvePageFile(routePath: string): string | undefined {
   const segments = routePath.split('/').filter(Boolean);
+  const fileFor = (base: string) => PAGE_EXTENSIONS.map(ext => `${base}${ext}`).find(f => existsSync(f));
   const walk = (dir: string, rest: string[]): string | undefined => {
-    if (rest.length === 0) {
-      const index = path.join(dir, 'index.ts');
-      return existsSync(index) ? index : undefined;
-    }
+    if (rest.length === 0) return fileFor(path.join(dir, 'index'));
     const [head, ...tail] = rest;
     const entries = existsSync(dir) ? readdirSync(dir) : [];
     // `[...x]` catch-alls are excluded: v1's unmatched-path 404 would otherwise "serve" any typo.
-    const dynamic = entries.filter(e => /^\[[^.\]][^\]]*\](\.ts)?$/.test(e));
-    const names = head.startsWith(':') ? dynamic.map(e => e.replace(/\.ts$/, '')) : [head];
+    const dynamic = entries.filter(e => /^\[[^.\]][^\]]*\](\.tsx?)?$/.test(e));
+    const names = head.startsWith(':') ? dynamic.map(e => e.replace(/\.tsx?$/, '')) : [head];
     for (const name of new Set(names)) {
-      if (tail.length === 0 && existsSync(path.join(dir, `${name}.ts`))) return path.join(dir, `${name}.ts`);
+      const file = tail.length === 0 ? fileFor(path.join(dir, name)) : undefined;
+      if (file) return file;
       const sub = path.join(dir, name);
       if (existsSync(sub) && statSync(sub).isDirectory()) {
         const found = walk(sub, tail);
@@ -179,13 +182,18 @@ function routeOf(claim: Claim): Route {
   );
   const offPages = OFF_PAGES_ROUTES[claim.path];
   const file = offPages ? path.join(CLIENT_DIR, offPages) : resolvePageFile(claim.path);
-  const fileGates = file ? gatesIn(stripComments(readFileSync(file, 'utf8')), HELPERS) : [];
+  const source = file ? stripComments(readFileSync(file, 'utf8')) : '';
+  const fileGates = file ? gatesIn(source, HELPERS) : [];
   // A contract's scopes are the door; the handler behind it may narrow a scope the door admits
   // (POST /api/v1/sessions lets ai:generate in, then requires notebooks:write for most bodies).
   if (contract) {
     return { key: `contract ${contract.operationId}`, gates: [new Set(contract.scopes ?? []), ...fileGates] };
   }
   if (!file) return { problem: 'no contract or pages/ route serves this path' };
+  // A handler chain (`.post(`, `.get<T>(`) or a `req.method` comparison ('POST') serves a verb.
+  const verb = new RegExp(`\\.(${claim.method.toLowerCase()}|all)\\s*[<(]|['"]${claim.method}['"]`);
+  if (!offPages && !verb.test(source))
+    return { problem: `${path.relative(CLIENT_DIR, file)} does not serve this method` };
   return { key: path.relative(CLIENT_DIR, file), gates: fileGates };
 }
 
@@ -270,6 +278,22 @@ describe('the gate rule itself', () => {
     expect([...HELPERS.get('assertDataLakeShareScope')!]).toEqual([share]);
     expect([...HELPERS.get('assertDataLakeTagWriteScope')!]).toEqual([ApiKeyScope.DATALAKE_WRITE]);
     expect([...HELPERS.get('verifyEmbedApiKey')!]).toEqual([ApiKeyScope.EMBED_CHAT]);
+  });
+
+  it('counts neither an import nor a non-throwing probe as a gate', () => {
+    const imported = "import { DATA_LAKE_SHARE_SCOPES } from '@server/dataLakes/dataLakeScopes';\n";
+    expect(gatesIn(stripComments(imported), HELPERS)).toEqual([]);
+    expect(HELPERS.has('holdsDataLakeReadScope')).toBe(false);
+  });
+
+  it('fails a claim on a verb the route file does not serve', () => {
+    const claim: Claim = {
+      scope: ApiKeyScope.AGENTS_READ,
+      endpoint: 'PATCH /api/agents',
+      method: 'PATCH',
+      path: '/api/agents',
+    };
+    expect(routeOf(claim)).toMatchObject({ problem: expect.stringMatching(/does not serve this method/) });
   });
 
   it('accepts a broad door backed by the narrow check', () => {
