@@ -9,6 +9,7 @@ import { loadReleaseNotesConfig, toAdminReleaseNote } from '@server/releaseNotes
 const QuerySchema = z.object({
   status: z.enum(['scheduled', 'published', 'hidden']).default('scheduled'),
   cursor: z.string().min(1).optional(),
+  tag: z.string().min(1).max(100).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(20),
 });
 
@@ -23,7 +24,18 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req,
       query.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; ')
     );
   }
-  const { status, cursor, limit } = query.data;
+  const { status, cursor, limit, tag } = query.data;
+
+  if (tag !== undefined) {
+    if (cursor !== undefined) throw new UnprocessableEntityError('tag: cannot be combined with cursor');
+    const { config: tagConfig } = await loadReleaseNotesConfig(req.logger);
+    const found = await releaseNoteRepository.findOne({ releaseTag: tag });
+    const tagNow = new Date();
+    return res.json({
+      data: found ? [toAdminReleaseNote(found, tagNow, tagConfig.denylist)] : [],
+      next_cursor: null,
+    });
+  }
   // Scoped per status, so a cursor from one filter is refused by another.
   const cursorScope = `admin.release-notes.${status}`;
   const after = cursor === undefined ? undefined : decodeTimeIdCursor(cursor, cursorScope);

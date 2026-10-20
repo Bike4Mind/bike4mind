@@ -13,6 +13,7 @@ const m = vi.hoisted(() => ({
   unhide: vi.fn(),
   publishNow: vi.fn(),
   findById: vi.fn(),
+  findOne: vi.fn(),
   getSettings: vi.fn(),
   invalidate: vi.fn(),
   upsert: vi.fn(),
@@ -40,6 +41,7 @@ vi.mock('@bike4mind/database', () => ({
     unhide: m.unhide,
     publishNow: m.publishNow,
     findById: m.findById,
+    findOne: m.findOne,
   },
 }));
 vi.mock('@bike4mind/database/infra', () => ({ AdminSettings: { findOneAndUpdate: m.upsert } }));
@@ -134,6 +136,28 @@ describe('GET /api/admin/release-notes', () => {
     m.adminList.mockResolvedValue({ items: [note(), note({ headline: 'Now live for Acme Corp' })], hasMore: false });
     const { body } = await call(listHandler, { method: 'GET', query: { status: 'published' } });
     expect(body.data.map((n: { deniedTerm: string | null }) => n.deniedTerm)).toEqual([null, 'Acme Corp']);
+  });
+
+  it('lists the note for a tag in any state', async () => {
+    m.findOne.mockResolvedValue(note({ releaseTag: 'v2026.10.20.1', status: 'hidden' }));
+    const { body } = await call(listHandler, { method: 'GET', query: { tag: 'v2026.10.20.1', status: 'published' } });
+    expect(m.findOne).toHaveBeenCalledWith({ releaseTag: 'v2026.10.20.1' });
+    expect(m.adminList).not.toHaveBeenCalled();
+    expect(body.data).toHaveLength(1);
+    expect(body.data[0]).toMatchObject({ releaseTag: 'v2026.10.20.1', state: 'hidden' });
+    expect(body.next_cursor).toBeNull();
+  });
+
+  it('returns an empty list for an unknown tag', async () => {
+    m.findOne.mockResolvedValue(null);
+    const { body } = await call(listHandler, { method: 'GET', query: { tag: 'v0' } });
+    expect(body).toEqual({ data: [], next_cursor: null });
+  });
+
+  it('refuses a tag with a cursor', async () => {
+    const { error } = await call(listHandler, { method: 'GET', query: { tag: 'v0', cursor: 'abc' } });
+    expect(error?.statusCode).toBe(422);
+    expect(m.findOne).not.toHaveBeenCalled();
   });
 
   it.each([{ status: 'live' }, { limit: '0' }, { limit: '101' }, { limit: 'abc' }])(
