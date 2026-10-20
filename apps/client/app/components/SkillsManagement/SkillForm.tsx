@@ -69,7 +69,12 @@ export const SkillForm: FC<SkillFormProps> = ({
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
-    if (file) void file.text().then(applySkillMd);
+    if (file) {
+      file
+        .text()
+        .then(applySkillMd)
+        .catch(() => setImportResult({ ok: false, error: 'The file could not be read.' }));
+    }
   };
 
   const source = importResult?.ok ? importResult.source : undefined;
