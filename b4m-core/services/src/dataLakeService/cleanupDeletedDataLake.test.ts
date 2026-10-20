@@ -180,6 +180,46 @@ describe('cleanupDeletedDataLake', () => {
     expect(db.users.incrementCurrentStorage).toHaveBeenCalledWith('u1', 500);
   });
 
+  it('restamps a survivor before its pull, so a throw after the pull does not strand the old owner', async () => {
+    const db = makeDb([]);
+    const purgingLake = { ...LAKE, organizationId: 'org-sales' };
+    db.dataLakes.findById = vi.fn(async () => purgingLake);
+    db.fabFiles.findIdsByDataLakeTag = vi.fn().mockResolvedValueOnce([]).mockResolvedValue(['s1']);
+    const survivor = {
+      id: 's1',
+      userId: 'u1',
+      organizationId: 'org-sales',
+      fileSize: 500,
+      storageChargedAt: new Date('2026-10-10'),
+      status: 'complete',
+      createdAt: new Date('2026-10-09'),
+      tags: [
+        { name: 'datalake:sales', strength: 1 },
+        { name: 'datalake:mine', strength: 1 },
+      ],
+    };
+    db.fabFiles.findById = vi
+      .fn()
+      .mockResolvedValueOnce({ ...survivor })
+      .mockResolvedValueOnce({ ...survivor })
+      .mockRejectedValue(new Error('simulated crash after the pull'));
+    db.fabFiles.pullTagsByFabFileId = vi.fn(async () => 1 as never);
+    // The purging lake still resolves by tag, as it does until its record is deleted.
+    db.dataLakes.findByDatalakeTags.mockResolvedValue([
+      { ...purgingLake, createdAt: new Date('2026-01-01') },
+      { id: 'lake-mine', datalakeTag: 'datalake:mine', status: 'active' },
+    ]);
+
+    await expect(cleanupDeletedDataLake(ADMIN, 'lake-1', { db })).rejects.toThrow('simulated crash after the pull');
+
+    expect(db.fabFiles.setOwnerOrganizationIfUnchanged).toHaveBeenCalledWith('s1', expect.anything(), undefined);
+    expect(db.fabFiles.setOwnerOrganizationIfUnchanged.mock.invocationCallOrder[0]).toBeLessThan(
+      db.fabFiles.pullTagsByFabFileId.mock.invocationCallOrder[0]
+    );
+    expect(db.organizations.incrementCurrentStorage).toHaveBeenCalledWith('org-sales', -500);
+    expect(db.users.incrementCurrentStorage).toHaveBeenCalledWith('u1', 500);
+  });
+
   it('is a no-op when the lake is already gone', async () => {
     const db = makeDb();
     db.dataLakes.findById = vi.fn(async () => undefined as never);

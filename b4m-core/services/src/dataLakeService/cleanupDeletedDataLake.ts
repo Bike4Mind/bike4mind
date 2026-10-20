@@ -350,8 +350,9 @@ export const cleanupDeletedDataLake = async (
     const file = await db.fabFiles.findById(id);
     const { inLake, tagsToPull } = lakeMembershipSignals(existing, file);
     if (!file || !inLake) return;
-    // Not gated on the pull count, so a concurrent removal that pulled first still restamps. A reassign
-    // that throws after the pull is not retried: a redelivery no longer lists this file as a survivor.
+    // Restamped before the pull as well as after: a redelivery no longer lists this file once the pull
+    // lands, and this lake (deleted or purging) is already ignored by the owner resolution.
+    await reassignStorageOwner(file.id, db);
     await db.fabFiles.pullTagsByFabFileId(file.id, tagsToPull);
     await reassignStorageOwner(file.id, db);
   });

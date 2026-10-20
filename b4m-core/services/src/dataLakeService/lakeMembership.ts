@@ -200,6 +200,8 @@ export const removeFileFromLake = async (
     // ever softened (e.g. to make a retry "quietly" tolerate a non-member), the restore path's
     // absent ownership test becomes an unbounded add door. Do not soften it without re-deriving
     // that authorization from scratch.
+    // The refusal still restamps first: a retry after a reassign that threw post-pull lands here.
+    if (file) await reassignStorageOwner(file.id, db);
     throw new NotFoundError('File not found in this data lake');
   }
 
@@ -218,7 +220,7 @@ export const removeFileFromLake = async (
   }
   // Unconditional, unlike the event above: the losing half of two concurrent removals has already
   // pulled the tags and would otherwise never recompute the owner. Outside a transaction a throw here
-  // leaves the stamp stale: a retry finds the file no longer inLake and throws before reaching this.
+  // is repaired by a retry, which restamps in the non-member refusal above.
   await reassignStorageOwner(file.id, db);
   return { contentTags };
 };

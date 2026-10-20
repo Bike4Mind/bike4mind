@@ -119,8 +119,8 @@ const MAX_REASSIGN_ATTEMPTS = 3;
  * transaction; a crash between them drifts the counters until the storage reconciliation runs. The
  * stamp itself is NOT re-derived by that reconciliation (it recomputes counters FROM the stamp), so
  * every caller runs this unconditionally after its tag write rather than only when the write changed
- * something. That recovers a failed reassign on an add door or inside a caller transaction. A removal
- * outside a transaction that throws after its pull leaves the stamp stale until the next membership write.
+ * something. That recovers a failed reassign on an add door or inside a caller transaction; a removal
+ * that throws after its pull is repaired by its retry, which restamps before refusing the non-member.
  */
 export async function reassignStorageOwner(
   fabFileId: string,

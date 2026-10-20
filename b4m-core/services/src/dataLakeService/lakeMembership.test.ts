@@ -192,6 +192,32 @@ describe('removeFileFromLake', () => {
     );
   });
 
+  it('restamps a file no longer in the lake before refusing it, so a retry repairs a failed transfer', async () => {
+    // The state a retry finds after the first attempt pulled the tags and then threw in the restamp.
+    const adapters = {
+      db: withStorageOwnerFakes({
+        fabFiles: {
+          findById: vi.fn().mockResolvedValue({
+            id: 'f1',
+            userId: 'owner',
+            organizationId: 'org-sales',
+            tags: [{ name: 'unrelated', strength: 0 }],
+          }),
+          pullTagsByFabFileId: vi.fn(),
+        },
+      }),
+    };
+
+    await expect(removeFileFromLake(owner, lake(), 'f1', adapters)).rejects.toThrow(/not found in this data lake/i);
+
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+    expect(adapters.db.fabFiles.setOwnerOrganizationIfUnchanged).toHaveBeenCalledWith(
+      'f1',
+      expect.anything(),
+      undefined
+    );
+  });
+
   it('clears the membership signals without recomputing stats', async () => {
     const adapters = makeAdapters();
 
