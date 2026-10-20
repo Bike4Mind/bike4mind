@@ -1,5 +1,11 @@
 # @bike4mind/common
 
+## 17.1.0
+
+### Minor Changes
+
+- [#5042](https://github.com/Bike4Mind/bike4mind/pull/5042) [`174eeda`](https://github.com/Bike4Mind/bike4mind/commit/174eedabbbcafefe4282268d902efdc6ad12e125) Thanks [@julsanchez](https://github.com/julsanchez)! - log OAuth error responses and record the client on OAuth sessions
+
 ## 17.0.0
 
 ### Major Changes
