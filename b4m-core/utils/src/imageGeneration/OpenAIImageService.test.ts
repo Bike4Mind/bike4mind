@@ -137,6 +137,10 @@ describe('content-policy block logging (only error level forwards to the Slack a
       model: ImageModels.GPT_IMAGE_2,
       status: 400,
       code: 'moderation_blocked',
+      type: undefined,
+      param: undefined,
+      message: '400 Your request was rejected by the safety system.',
+      matchedBy: 'code',
       requestId: 'req_abc123',
     });
     expect(JSON.stringify(vi.mocked(logger.warn).mock.calls)).not.toContain(PROMPT);
@@ -160,6 +164,47 @@ describe('content-policy block logging (only error level forwards to the Slack a
       })
     ).rejects.toBeInstanceOf(ImageModerationBlockedError);
     expectWarnedNotErrored();
+  });
+
+  it('logs an unspecified 400 with its provider message and matchedBy: unspecified400', async () => {
+    imagesGenerate.mockRejectedValue(
+      Object.assign(Object.create(OpenAI.APIError.prototype) as APIErrorLike, {
+        status: 400,
+        requestID: 'req_400',
+        message: '400 Bad request',
+      })
+    );
+
+    await expect(
+      new OpenAIImageService('test-key', logger).generate(PROMPT, { model: ImageModels.GPT_IMAGE_2 })
+    ).rejects.toBeInstanceOf(ImageModerationBlockedError);
+    expect(Logger.globalInstance.error).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(
+      'OpenAI image request blocked by content policy:',
+      expect.objectContaining({ matchedBy: 'unspecified400', message: '400 Bad request', requestId: 'req_400' })
+    );
+  });
+
+  it('logs the same normalised requestId as the thrown error when requestID is absent', async () => {
+    imagesGenerate.mockRejectedValue(
+      Object.assign(Object.create(OpenAI.APIError.prototype) as APIErrorLike, {
+        status: 400,
+        code: 'moderation_blocked',
+        message: '400 blocked',
+      })
+    );
+
+    const thrown = await new OpenAIImageService('test-key', logger)
+      .generate(PROMPT, { model: ImageModels.GPT_IMAGE_2 })
+      .catch((e: unknown) => e);
+
+    expect(thrown).toBeInstanceOf(ImageModerationBlockedError);
+    expect((thrown as ImageModerationBlockedError).requestId).toBe('unknown');
+    expect(logger.warn).toHaveBeenCalledWith(
+      'OpenAI image request blocked by content policy:',
+      expect.objectContaining({ requestId: 'unknown' })
+    );
   });
 
   it('still logs a non-moderation API failure at error', async () => {

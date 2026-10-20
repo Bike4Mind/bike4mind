@@ -434,7 +434,7 @@ export class OpenAIImageService extends AIImageService {
       if (error instanceof OpenAI.APIError) {
         const moderationError = buildModerationBlockedError(error);
         if (moderationError) {
-          this.logModerationBlocked(options.model, error);
+          this.logModerationBlocked(options.model, error, moderationError);
           throw moderationError;
         }
       }
@@ -476,13 +476,25 @@ export class OpenAIImageService extends AIImageService {
     }
   }
 
-  /** Warn level keeps it out of the Slack alert channel; no prompt or provider body is logged. */
-  private logModerationBlocked(model: string | null | undefined, error: InstanceType<typeof OpenAI.APIError>): void {
+  /**
+   * Warn level keeps it out of the Slack alert channel. No prompt is logged; the provider's message/type/param
+   * are kept so an unspecified 400 that is not really a policy block can still be diagnosed.
+   */
+  private logModerationBlocked(
+    model: string | null | undefined,
+    error: InstanceType<typeof OpenAI.APIError>,
+    moderationError: ImageModerationBlockedError
+  ): void {
     this.logger.warn('OpenAI image request blocked by content policy:', {
       model,
       status: error.status,
       code: error.code,
-      requestId: error.requestID,
+      type: error.type,
+      param: error.param,
+      message: error.message,
+      matchedBy:
+        typeof error.code === 'string' && CONTENT_POLICY_ERROR_CODES.includes(error.code) ? 'code' : 'unspecified400',
+      requestId: moderationError.requestId,
     });
   }
 
@@ -655,7 +667,7 @@ export class OpenAIImageService extends AIImageService {
         // Same guidance as generate(), checked before the error-level log for the same reason.
         const moderationError = buildModerationBlockedError(error);
         if (moderationError) {
-          this.logModerationBlocked(model, error);
+          this.logModerationBlocked(model, error, moderationError);
           throw moderationError;
         }
 
