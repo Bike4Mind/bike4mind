@@ -28,7 +28,12 @@ import GroupsIcon from '@mui/icons-material/Groups';
 import LinkIcon from '@mui/icons-material/Link';
 import ShieldIcon from '@mui/icons-material/Shield';
 import { useNavigate } from '@tanstack/react-router';
-import type { ISkill, SkillListingVisibility } from '@bike4mind/common';
+import {
+  SKILL_LISTING_MAX_TAGS as MAX_TAGS,
+  SKILL_LISTING_TAG_PATTERN as TAG_PATTERN,
+  type ISkill,
+  type SkillListingVisibility,
+} from '@bike4mind/common';
 import { getErrorMessage } from '@client/app/utils/error';
 import {
   useMarketMe,
@@ -38,9 +43,6 @@ import {
   type SubmitResult,
 } from '@client/app/hooks/data/skillMarket';
 import ScanResult from './ScanResult';
-
-const TAG_PATTERN = /^[a-z0-9][a-z0-9-]{0,23}$/;
-const MAX_TAGS = 5;
 
 const VISIBILITY_OPTIONS: Array<{ value: SkillListingVisibility; title: string; body: string; icon: ReactElement }> = [
   {
