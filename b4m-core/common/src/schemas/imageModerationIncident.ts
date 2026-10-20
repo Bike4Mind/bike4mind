@@ -17,6 +17,10 @@ export type IncidentReviewStatus = (typeof INCIDENT_REVIEW_STATUSES)[number];
 export const INCIDENT_REPORT_CHANNELS = ['manual'] as const;
 export type IncidentReportChannel = (typeof INCIDENT_REPORT_CHANNELS)[number];
 
+// Which product path produced the image. Absent on incidents recorded before it was tracked.
+export const INCIDENT_SURFACES = ['generation', 'edit', 'upload'] as const;
+export type IncidentSurface = (typeof INCIDENT_SURFACES)[number];
+
 export const ModerationLabelHitSchema = z.object({
   name: z.string(),
   parentName: z.string(),
@@ -37,6 +41,7 @@ export const ImageModerationIncidentSchema = z.object({
   fabFileId: z.string().optional(),
   provider: z.string(),
   model: z.string(),
+  surface: z.enum(INCIDENT_SURFACES).optional(),
   labels: z.array(ModerationLabelHitSchema),
   // Triage state for the admin review queue. Absent on incidents created before Q3; treated
   // as 'pending_review' by all queries. Set to 'reported' once an NCMEC report is submitted.
@@ -56,6 +61,9 @@ export const ImageModerationIncidentSchema = z.object({
   // Admin user id and time of a 'false_positive' verdict.
   falsePositiveBy: z.string().optional(),
   falsePositiveAt: z.union([z.string(), z.date()]).optional(),
+  // When the reviewer alert was delivered. Absent means no alert went out (none configured, or the
+  // send failed), so a later sweep can find the incidents nobody was told about.
+  alertedAt: z.union([z.string(), z.date()]).optional(),
   createdAt: z.union([z.string(), z.date()]).optional(),
   updatedAt: z.union([z.string(), z.date()]).optional(),
 });

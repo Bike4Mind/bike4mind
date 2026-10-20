@@ -1,4 +1,4 @@
-import { ADMIN_AUDIT_LOG_TAB_SLUG, ADMIN_FEEDBACK_TAB_SLUG } from '@bike4mind/common';
+import { ADMIN_AUDIT_LOG_TAB_SLUG, ADMIN_FEEDBACK_TAB_SLUG, ADMIN_USERS_TAB_SLUG } from '@bike4mind/common';
 import { AdminTab } from './adminSidebarConfig';
 
 /**
@@ -10,7 +10,7 @@ import { AdminTab } from './adminSidebarConfig';
  * new tab without a slug a compile error. Never change an existing slug.
  */
 const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
-  [AdminTab.Users]: 'users',
+  [AdminTab.Users]: ADMIN_USERS_TAB_SLUG,
   [AdminTab.AdminSettings]: 'admin-settings',
   [AdminTab.Feedback]: ADMIN_FEEDBACK_TAB_SLUG,
   [AdminTab.Analytics]: 'analytics',

@@ -289,3 +289,46 @@ describe('settings/update per-credit price floor', () => {
     );
   });
 });
+
+describe('settings/update reviewer email list', () => {
+  beforeEach(() => {
+    stored = null;
+    findOneAndUpdate.mockReset();
+    vi.clearAllMocks();
+  });
+
+  it('refuses a list with an invalid address and names the entry', async () => {
+    await expect(
+      runHandler('ImageModerationReviewerEmails', ['reviewer@example.com', 'not-an-email'])
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      message: expect.stringContaining('not-an-email'),
+    });
+    expect(findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('stores a valid list trimmed, lowercased and deduped', async () => {
+    stageWriteResult('ImageModerationReviewerEmails', ['reviewer@example.com']);
+    await runHandler('ImageModerationReviewerEmails', [' Reviewer@Example.com', 'reviewer@example.com']);
+    expect(findOneAndUpdate).toHaveBeenCalledWith(
+      { settingName: 'ImageModerationReviewerEmails' },
+      { $set: { settingValue: ['reviewer@example.com'] } },
+      expect.anything()
+    );
+  });
+
+  it('refuses a value that is not a list', async () => {
+    await expect(runHandler('ImageModerationReviewerEmails', 'reviewer@example.com')).rejects.toThrow();
+    expect(findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('stores an empty list when every address is removed', async () => {
+    stageWriteResult('ImageModerationReviewerEmails', []);
+    await runHandler('ImageModerationReviewerEmails', []);
+    expect(findOneAndUpdate).toHaveBeenCalledWith(
+      { settingName: 'ImageModerationReviewerEmails' },
+      { $set: { settingValue: [] } },
+      expect.anything()
+    );
+  });
+});
