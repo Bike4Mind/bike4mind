@@ -20,6 +20,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { reconcileLakeTags } from './reconcileLakeTags';
 import { assertRewriteFits, commitContentRewrite } from './rewriteStorage';
 import { assertStorageOwnerTransferFits, reassignStorageOwner } from './reassignStorageOwner';
+import { storedTagNames } from '../tagService/bulkTagNames';
 import type { LakeConfigAuditAdapters } from '../dataLakeService/recordLakeConfigChange';
 import type { LakeMembershipAuditAdapters } from '../dataLakeService/recordLakeMembershipChange';
 
@@ -151,7 +152,7 @@ export const updateFabFile = async (
       : await reconcileLakeTags(
           { userId: user.id, isAdmin: !!user.isAdmin, administeredOrgIds: administeredOrgIds ?? [], auditPrincipal },
           id,
-          (fabFile.tags ?? []).map(t => t?.name).filter((name): name is string => typeof name === 'string'),
+          storedTagNames(fabFile),
           params.tags,
           {
             db,
