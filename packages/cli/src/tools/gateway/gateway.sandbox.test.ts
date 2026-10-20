@@ -326,7 +326,7 @@ describe('wrapToolWithPermission sandbox escalation', () => {
   }
 
   it('asks as its own question after a denial, then retries the original command unsandboxed', async () => {
-    const { wrapped, toolFn, showPermissionPrompt, orchestrator } = await setup();
+    const { wrapped, toolFn, showPermissionPrompt, orchestrator, profileStillThereOnRetry } = await setup();
 
     await expect(wrapped.toolFn({ command: 'touch /etc/hosts' })).resolves.toBe('done');
 
@@ -335,6 +335,8 @@ describe('wrapToolWithPermission sandbox escalation', () => {
     expect(toolFn).toHaveBeenNthCalledWith(1, expect.objectContaining({ command: 'sandboxed-command' }));
     expect(toolFn).toHaveBeenNthCalledWith(2, expect.objectContaining({ command: 'touch /etc/hosts' }));
     expect(orchestrator.recordUnsandboxed).toHaveBeenCalledTimes(1);
+    // The retry runs before the profile is cleaned up in the wrapper's finally.
+    expect(profileStillThereOnRetry).toEqual([true]);
   });
 
   it('still asks in auto-accept mode', async () => {
