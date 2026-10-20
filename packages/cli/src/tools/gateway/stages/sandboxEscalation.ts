@@ -13,8 +13,9 @@ export type SandboxDenial = {
 };
 
 const SNIPPET_LENGTH = 200;
-// The bash tool appends its own "Exit code: N" after stdout/stderr, so the last such line is
-// the real one; an earlier match is command output.
+// The bash tool appends "Exit code: N" at the very end of its output, and only when the exit
+// was non-zero; no such line means exit 0. An output cap can drop that line, in which case the
+// denial is missed (fail closed: the command is not retried).
 const EXIT_CODE_LINE = /^Exit code:\s*(-?\d+)\s*$/gm;
 // sandbox-exec and bwrap print their own failures at the start of a stderr line.
 const LAUNCHER_MARKER = /^(?:sandbox-exec|bwrap):/m;
@@ -23,22 +24,29 @@ const EPERM_TEXT = 'Operation not permitted';
 const NETWORK_TIP = "If this was a network call, prefer '/sandbox:network on' to allow filtered egress.";
 
 /**
- * Detect a sandbox denial in a tool result. A launcher marker (`sandbox-exec:`, `bwrap:` at the
- * start of a line) suffices. On macOS a real Seatbelt denial is the denied syscall's own EPERM
- * with no marker, so "Operation not permitted" also counts, but only with a non-zero final
- * "Exit code:" line: a command that printed the phrase and still exited 0 (e.g. a tolerated
- * `kill`) was not stopped.
+ * Detect a sandbox denial in a tool result. Both evidence kinds - a launcher marker
+ * (`sandbox-exec:`, `bwrap:` at the start of a line) and the EPERM text a Seatbelt denial
+ * surfaces on macOS - require a non-zero exit: a command that printed either and still exited
+ * 0 (e.g. a tolerated `kill`, or output that merely quotes the launcher) was not stopped.
  */
 export function detectSandboxDenial(sandboxed: boolean, result: string): SandboxDenial | null {
-  if (!sandboxed) return null;
+  if (!sandboxed || !exitedNonZero(result)) return null;
   const marker = LAUNCHER_MARKER.exec(result);
   if (marker) return { reason: 'launcher', snippet: snippetAt(result, marker.index) };
   const epermIndex = result.indexOf(EPERM_TEXT);
   if (epermIndex === -1) return null;
+  return { reason: 'eperm', snippet: snippetAt(result, epermIndex) };
+}
+
+/**
+ * The tool's exit code is non-zero. The last "Exit code:" line is the tool's own (the command
+ * may have printed earlier ones); a command that ends its own output with such a line can still
+ * be mistaken for a failure, which costs an extra question, never a silent unsandboxed run.
+ */
+function exitedNonZero(result: string): boolean {
   const exitCodes = [...result.matchAll(EXIT_CODE_LINE)];
   const exitCode = exitCodes[exitCodes.length - 1]?.[1];
-  if (exitCode === undefined || Number(exitCode) === 0) return null;
-  return { reason: 'eperm', snippet: snippetAt(result, epermIndex) };
+  return exitCode !== undefined && Number(exitCode) !== 0;
 }
 
 /** The error text from the start of the line holding `index`, so long stdout never hides it. */
@@ -97,7 +105,7 @@ export async function runSandboxed(input: SandboxedRunInput): Promise<string> {
     const response = await input.showPermissionPrompt(
       input.toolName,
       rawArgs,
-      escalationPreview(denial),
+      escalationPreview(denial, isHighRisk),
       'sandbox-escalation'
     );
     if (response.action === 'deny') return `${result}\n\n${NETWORK_TIP}`;
@@ -108,12 +116,15 @@ export async function runSandboxed(input: SandboxedRunInput): Promise<string> {
   return attempt({ ...execArgs, [commandArg]: command, cwd });
 }
 
-function escalationPreview(denial: SandboxDenial): string {
+function escalationPreview(denial: SandboxDenial, isHighRisk: boolean): string {
   return (
     `\u{1F6D1} SANDBOX BLOCKED - This command was denied by the OS sandbox.\n\n` +
     `- The sandbox prevented this operation because it violates filesystem or network restrictions.\n` +
     `- ${NETWORK_TIP}\n` +
-    `- You can retry without the sandbox, but the command will run with full system access.\n\n` +
-    `@@Error Details@@\n${denial.snippet}`
+    `- You can retry without the sandbox, but the command will run with full system access.\n` +
+    (isHighRisk
+      ? `- This command is high risk, so a session approval is not remembered: you will be asked again.\n`
+      : '') +
+    `\n@@Error Details@@\n${denial.snippet}`
   );
 }

@@ -7,16 +7,19 @@ import { ToolCatalog } from '../toolCatalog.js';
 import { detectSandboxDenial, runSandboxed } from './sandboxEscalation.js';
 
 const EPERM_RESULT = 'touch: /etc/hosts: Operation not permitted\nExit code: 1';
+const LAUNCHER_RESULT = 'sandbox-exec: deny(1) file-write-data /x\nExit code: 1';
 
 describe('detectSandboxDenial', () => {
   it('is null when the command was not sandboxed', () => {
-    expect(detectSandboxDenial(false, 'sandbox-exec: deny(1) file-write-data /x')).toBeNull();
+    expect(detectSandboxDenial(false, LAUNCHER_RESULT)).toBeNull();
     expect(detectSandboxDenial(false, EPERM_RESULT)).toBeNull();
   });
 
-  it('treats a launcher marker alone as a denial', () => {
-    expect(detectSandboxDenial(true, 'sandbox-exec: deny(1) file-write-data /x')).toMatchObject({ reason: 'launcher' });
-    expect(detectSandboxDenial(true, 'bwrap: Creating new namespace failed')).toMatchObject({ reason: 'launcher' });
+  it('treats a launcher marker with a non-zero exit as a denial', () => {
+    expect(detectSandboxDenial(true, LAUNCHER_RESULT)).toMatchObject({ reason: 'launcher' });
+    expect(detectSandboxDenial(true, 'bwrap: Creating new namespace failed\nExit code: 1')).toMatchObject({
+      reason: 'launcher',
+    });
   });
 
   it('treats EPERM with a non-zero exit code as a denial', () => {
@@ -26,17 +29,23 @@ describe('detectSandboxDenial', () => {
     ).toMatchObject({ reason: 'eperm' });
   });
 
+  it('ignores a launcher marker when the command exited 0', () => {
+    // The tool appends no exit line on a clean exit, so this is a command quoting the launcher.
+    expect(detectSandboxDenial(true, 'bwrap: Creating new namespace failed')).toBeNull();
+    expect(detectSandboxDenial(true, 'out\nbwrap: is a tool\nExit code: 0')).toBeNull();
+  });
+
   it('ignores EPERM text when the command exited 0 or reported no exit code', () => {
-    expect(detectSandboxDenial(true, 'kill: 1: Operation not permitted\nExit code: 0')).toBeNull();
     expect(detectSandboxDenial(true, 'kill: 1: Operation not permitted')).toBeNull();
+    expect(detectSandboxDenial(true, 'kill: 1: Operation not permitted\nExit code: 0')).toBeNull();
   });
 
   it('returns null for ordinary output', () => {
-    expect(detectSandboxDenial(true, 'file.txt\nExit code: 0')).toBeNull();
+    expect(detectSandboxDenial(true, 'file.txt')).toBeNull();
   });
 
   it('caps the snippet', () => {
-    const denial = detectSandboxDenial(true, `bwrap: ${'x'.repeat(500)}`);
+    const denial = detectSandboxDenial(true, `bwrap: ${'x'.repeat(500)}\nExit code: 1`);
     expect(denial?.snippet).toHaveLength(200);
   });
 
@@ -46,8 +55,8 @@ describe('detectSandboxDenial', () => {
   });
 
   it('only counts a launcher marker at the start of a line', () => {
-    expect(detectSandboxDenial(true, 'notes.md:3: see bwrap: for details\nExit code: 0')).toBeNull();
-    expect(detectSandboxDenial(true, 'out\nSTDERR:\nsandbox-exec: execvp() failed')).toMatchObject({
+    expect(detectSandboxDenial(true, 'notes.md:3: see bwrap: for details')).toBeNull();
+    expect(detectSandboxDenial(true, 'out\nSTDERR:\nsandbox-exec: execvp() failed\nExit code: 1')).toMatchObject({
       reason: 'launcher',
     });
   });
@@ -139,6 +148,28 @@ describe('runSandboxed', () => {
     expect(result).toContain(EPERM_RESULT);
     expect(result).toContain('/sandbox:network on');
     expect(attempt).toHaveBeenCalledTimes(1);
+  });
+
+  it('propagates a rejected prompt without retrying or recording an unsandboxed run', async () => {
+    // The prompt can reject when the TUI is torn down or the ACP client errors. Failing
+    // closed means the rejection reaches the caller and the command stays sandbox-denied.
+    const { run, attempt, showPermissionPrompt, sandboxOrchestrator } = setup();
+    showPermissionPrompt.mockRejectedValueOnce(new Error('prompt closed'));
+
+    await expect(run()).rejects.toThrow('prompt closed');
+    expect(attempt).toHaveBeenCalledTimes(1);
+    expect(sandboxOrchestrator.recordUnsandboxed).not.toHaveBeenCalled();
+  });
+
+  it('says a high-risk command will not be remembered for the session', async () => {
+    const { run, showPermissionPrompt } = setup({ command: 'sudo rm -rf /tmp/x' });
+    await run();
+    expect(showPermissionPrompt).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(Object),
+      expect.stringContaining('session approval is not remembered'),
+      'sandbox-escalation'
+    );
   });
 
   it('refuses without prompting when unsandboxed commands are disabled', async () => {
