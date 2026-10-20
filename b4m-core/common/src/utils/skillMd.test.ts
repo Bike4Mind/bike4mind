@@ -208,15 +208,15 @@ describe('buildClaudeCodeInstallCommand', () => {
     expect(() => buildClaudeCodeInstallCommand('a b', content)).toThrow();
   });
 
-  it.each([['\u0003'], ['\r'], ['\u001b'], ['\u007f'], ['\u009b']])(
+  it.each([['\t'], ['\u0003'], ['\r'], ['\u001b'], ['\u007f'], ['\u009b']])(
     'rejects content with the control byte %j',
     byte => {
       expect(() => buildClaudeCodeInstallCommand('tricky', `${content}${byte}`)).toThrow();
     }
   );
 
-  it('accepts tabs and newlines', () => {
-    expect(() => buildClaudeCodeInstallCommand('tricky', 'a\tb\nc')).not.toThrow();
+  it('accepts newlines', () => {
+    expect(() => buildClaudeCodeInstallCommand('tricky', 'a b\nc')).not.toThrow();
   });
 
   let hasBash = true;

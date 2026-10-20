@@ -81,6 +81,28 @@ describe('SkillForm SKILL.md import', () => {
     expect(alert).not.toHaveTextContent('came from Bike4Mind');
   });
 
+  it('words a foreign-origin stamp as foreign even when it carries the third-party line', () => {
+    renderForm();
+    paste(
+      toSkillMd(
+        { name: 'mine', description: 'd', body: 'b' },
+        { sourceUrl: 'https://evil.example/skills/market/2', thirdParty: true }
+      )
+    );
+    const alert = screen.getByTestId('skill-form-import-from-b4m');
+    expect(alert).toHaveTextContent('source stamp from another site');
+    expect(alert).not.toHaveTextContent('Skill Market skill');
+  });
+
+  it('resets the model-invocation flag when a later file does not set it', () => {
+    renderForm();
+    paste('---\nname: a\ndescription: d\ndisable-model-invocation: true\n---\nbody');
+    const box = screen.getByTestId('skill-disable-model-invocation') as HTMLInputElement;
+    expect(box.checked).toBe(true);
+    paste('---\nname: b\ndescription: d\n---\nbody');
+    expect(box.checked).toBe(false);
+  });
+
   it('shows an error when the chosen file cannot be read', async () => {
     renderForm();
     const file = new File(['x'], 'SKILL.md');

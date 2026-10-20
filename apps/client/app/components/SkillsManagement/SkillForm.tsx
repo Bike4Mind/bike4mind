@@ -65,7 +65,7 @@ export const SkillForm: FC<SkillFormProps> = ({
   // Bumped by every import so a slow earlier file read cannot overwrite a newer one.
   const importReadId = useRef(0);
 
-  // Overwrites only the fields the file sets; a malformed file touches nothing.
+  // Replaces argument hint and model-invocation flag with the file's values; other fields change only if the file sets them. A malformed file touches nothing.
   const applySkillMd = (text: string) => {
     const result = parseSkillMd(text);
     setImportResult(result);
@@ -73,9 +73,9 @@ export const SkillForm: FC<SkillFormProps> = ({
     const { fields } = result;
     if (fields.name !== undefined) setName(fields.name);
     if (fields.description !== undefined) setDescription(fields.description);
-    if (fields.argumentHint !== undefined) setArgumentHint(fields.argumentHint);
+    setArgumentHint(fields.argumentHint ?? '');
     if (fields.body !== undefined) setBody(fields.body);
-    if (fields.disableModelInvocation !== undefined) setDisableModelInvocation(fields.disableModelInvocation);
+    setDisableModelInvocation(fields.disableModelInvocation ?? false);
     setPasteOpen(false);
     setPasteText('');
   };
@@ -204,11 +204,11 @@ export const SkillForm: FC<SkillFormProps> = ({
                 data-testid="skill-form-import-from-b4m"
               >
                 <span>
-                  {source.thirdParty
-                    ? "This is another author's Skill Market skill; import it from the market to keep updates and attribution: "
-                    : sourceIsSameOrigin
-                      ? 'This skill came from Bike4Mind - open the original instead of making a copy: '
-                      : 'This file has a Bike4Mind source stamp from another site: '}
+                  {!sourceIsSameOrigin
+                    ? 'This file has a Bike4Mind source stamp from another site: '
+                    : source.thirdParty
+                      ? "This is another author's Skill Market skill; import it from the market to keep updates and attribution: "
+                      : 'This skill came from Bike4Mind - open the original instead of making a copy: '}
                   {sourceIsSameOrigin ? (
                     <Link href={source.url} target="_blank" rel="noopener noreferrer">
                       {source.url}
