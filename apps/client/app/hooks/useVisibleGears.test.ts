@@ -130,7 +130,13 @@ describe('useGearsNavSignal', () => {
     expect(signal().startHere).toBe(false);
   });
 
-  it('never says Start here without a usable signup date', () => {
+  it('says Start here at zero credits without a usable signup date', () => {
+    withGears([gear('published', 'destination', { credits: 5000 })]);
+    userState.currentUser = { currentCredits: 0 };
+    expect(signal()).toEqual({ startHere: true, startHereCredits: 5000, claimableCount: 0 });
+  });
+
+  it('does not say Start here when both the signup date and balance are unavailable', () => {
     withGears([gear('published', 'destination')]);
     userState.currentUser = {};
     expect(signal().startHere).toBe(false);
