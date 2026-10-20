@@ -30,6 +30,7 @@ import {
   PublishedArtifactReport,
   PublishedArtifactViewAuditModel,
   Annotation,
+  Skill,
 } from '@bike4mind/database';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -109,6 +110,7 @@ const seedChildren = async (userId: mongoose.Types.ObjectId) => {
   await Organization.collection.insertOne({ _id: oid(), userId: uid, name: `o-${uid}` });
   await Favorite.collection.insertOne({ _id: oid(), userId: uid, documentId: `d-${uid}` });
   await Artifact.collection.insertOne({ _id: oid(), userId: uid });
+  await Skill.collection.insertOne({ _id: oid(), userId: uid, name: `sk-${uid}`, isGlobalRead: true });
   // The one genuinely ObjectId-typed user reference - guards against over-correcting Tool to strings.
   await Tool.collection.insertOne({ _id: oid(), userId });
   // Activity keys ownership as ownerType/ownerId (both String), not userId, so it needs its own
@@ -180,6 +182,7 @@ describe('DELETE /api/test/cleanup (real DB)', () => {
     expect(await Organization.collection.countDocuments({ userId: uid })).toBe(0);
     expect(await Favorite.collection.countDocuments({ userId: uid })).toBe(0);
     expect(await Artifact.collection.countDocuments({ userId: uid })).toBe(0);
+    expect(await Skill.collection.countDocuments({ userId: uid })).toBe(0);
     expect(await mongoose.models.Activity.collection.countDocuments({ ownerType: 'User', ownerId: uid })).toBe(0);
   });
 
@@ -268,6 +271,7 @@ describe('DELETE /api/test/cleanup (real DB)', () => {
     expect(await User.collection.countDocuments({ _id: controlUserId })).toBe(1);
     expect(await Session.collection.countDocuments({ userId: cuid })).toBe(1);
     expect(await FabFile.collection.countDocuments({ userId: cuid })).toBe(1);
+    expect(await Skill.collection.countDocuments({ userId: cuid })).toBe(1);
     expect(await mongoose.models.Activity.collection.countDocuments({ ownerType: 'User', ownerId: cuid })).toBe(1);
     expect(await DataLakeModel.collection.countDocuments({ createdByUserId: cuid })).toBe(1);
     expect(await DataLakeAccessGrantModel.collection.countDocuments({ dataLakeId: controlLakeId.toString() })).toBe(1);

@@ -36,6 +36,7 @@ test.describe('Skills - list, create, detail, edit, share', () => {
     const { specUsers } = getTestUsers();
     ({ accessToken: token, userId } = specUsers.skills);
     member = specUsers[SKILLS_MEMBER_KEY];
+    if (!member) throw new Error(`No ${SKILLS_MEMBER_KEY} spec user - skills.setup.ts must run first`);
     const ctx = await playwright.request.newContext();
     await apiDeleteAllSkills(ctx, token, userId);
     await apiDeleteAllSkills(ctx, member.accessToken, member.userId);
@@ -54,11 +55,13 @@ test.describe('Skills - list, create, detail, edit, share', () => {
   test('nav entry, empty state, then search filter', async ({ page, skillsPage, request }) => {
     // Every global-read or system skill on the DB lands in this user's list, so a
     // real fetch is only empty on a pristine DB. Stub the list for the empty-state steps only.
-    await page.route(SKILLS_LIST_URL, route =>
-      route.request().method() === 'GET'
-        ? route.fulfill({ json: { data: [], hasMore: false, total: 0 } })
-        : route.fallback()
-    );
+    // The page falls back to an empty list on a fetch error too, so record that the stub served.
+    let stubServed = false;
+    await page.route(SKILLS_LIST_URL, route => {
+      if (route.request().method() !== 'GET') return route.fallback();
+      stubServed = true;
+      return route.fulfill({ json: { data: [], hasMore: false, total: 0 } });
+    });
 
     await test.step('reach /skills from the profile menu', async () => {
       await skillsPage.openViaNav();
@@ -73,6 +76,7 @@ test.describe('Skills - list, create, detail, edit, share', () => {
       const empty = page.getByTestId('skills-empty-state');
       await expect(empty).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
       await expect(empty).toContainText('No skills yet');
+      expect(stubServed).toBe(true);
       await page.unroute(SKILLS_LIST_URL);
     });
 
@@ -224,6 +228,8 @@ test.describe('Skills - list, create, detail, edit, share', () => {
       name: `e2e-member-legacy-${TEST_RUN_ID}`,
       description: 'Non-admin skill made global before publishing moved to the Market',
       body: 'Body',
+      // It is briefly global-read; keep it out of every other user's auto-invocation set meanwhile.
+      disableModelInvocation: true,
     });
 
     const openShareFor = async (skillId: string) => {
@@ -250,7 +256,7 @@ test.describe('Skills - list, create, detail, edit, share', () => {
       expect(write.status()).toBe(403);
     });
 
-    await test.step('legacy global skill: read is on and can be turned off, write stays off and locked', async () => {
+    await test.step('legacy global skill: read is on and enabled, write stays off and locked', async () => {
       // Stand-in for a skill made global before the gate: only an admin can set the flag now.
       // Until this step retracts it (or afterAll deletes it), the skill is visible to every user.
       const seeded = await apiShareSkill(request, token, legacy.id, { isGlobalRead: true });
@@ -261,10 +267,23 @@ test.describe('Skills - list, create, detail, edit, share', () => {
       await skillsPage.expectGlobalReadEnabled(true);
       await skillsPage.expectGlobalWriteChecked(false);
       await skillsPage.expectGlobalWriteEnabled(false);
+    });
 
+    await test.step('saving with read left on does not re-send the admin-only flag', async () => {
+      // A non-admin re-sending isGlobalRead: true would 403, so the dialog must omit it.
+      const response = await skillsPage.saveShare();
+      expect(response.status()).toBe(200);
+      const body = response.request().postDataJSON();
+      expect(body).not.toHaveProperty('isGlobalRead');
+      expect(body).toMatchObject({ isGlobalWrite: false });
+    });
+
+    await test.step('read can be turned off', async () => {
+      await openShareFor(legacy.id);
       await skillsPage.setGlobalRead(false);
       const response = await skillsPage.saveShare();
       expect(response.status()).toBe(200);
+      expect(response.request().postDataJSON()).toMatchObject({ isGlobalRead: false, isGlobalWrite: false });
     });
 
     await test.step('once retracted, the skill is no longer global and the toggles are gone', async () => {
