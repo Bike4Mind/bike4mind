@@ -13,6 +13,7 @@ import { authSuccessRedirectQuery } from '@server/auth/authSuccessRedirect';
 import { isLocalAppUrl } from '@server/utils/validators';
 import { stampOAuthSourceTag } from '@server/utils/auth/oauthSourceTag';
 import { getClientIp } from '@server/utils/ip';
+import type { OAuthUser } from '@server/utils/auth/verifyCallback';
 import { emitSignupFunnelEvents, recordSignupAcquisition } from '@server/analytics/funnel';
 
 const handleSamlCallback = async (req: any, res: any) => {
@@ -146,7 +147,7 @@ const handleSamlCallback = async (req: any, res: any) => {
           user: { id: user.id, ...signupFunnel },
           method: AuthStrategy.SAML,
           emailVerified: user.emailVerified === true,
-          creditsGranted: user.signupCreditsGranted ?? 0,
+          creditsGranted: (user as OAuthUser).signupCreditsGranted ?? 0,
         });
       }
 

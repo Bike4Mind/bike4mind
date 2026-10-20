@@ -1,5 +1,5 @@
 import { AuthStrategy, IAuthProviders } from '@bike4mind/common';
-import { User, authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
+import { User, authSessionRepository, realtimeConnectionRepository, type IUserObject } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { authSessionService } from '@bike4mind/services';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
@@ -27,6 +27,13 @@ import { applyOAuthSignupDomainGrant } from './oauthSignupGrants';
  * are invite-only for the public.
  */
 const SELF_SERVE_STRATEGIES: ReadonlySet<AuthStrategy> = new Set([AuthStrategy.Google, AuthStrategy.Github]);
+
+/** The user `done` hands the callback endpoints, with the transient flags this module sets (never persisted). */
+export type OAuthUser = IUserObject & {
+  isNewUser?: boolean;
+  isNewOAuthLink?: boolean;
+  signupCreditsGranted?: number;
+};
 
 // Core authentication logic shared by all strategies
 const authenticateUser = async (
