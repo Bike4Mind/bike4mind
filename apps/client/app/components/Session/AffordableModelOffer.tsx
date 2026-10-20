@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { Box, Button, Typography } from '@mui/joy';
 import type { ModelInfo } from '@bike4mind/common';
 import { findAffordableModelOffer } from '@client/app/utils/creditEstimate';
@@ -18,7 +19,10 @@ export const AffordableModelOffer = ({
   onSelect,
   onDismiss = () => {},
 }: AffordableModelOfferProps) => {
-  const offer = findAffordableModelOffer(models, selectedModelId, credits);
+  const offer = useMemo(
+    () => findAffordableModelOffer(models, selectedModelId, credits),
+    [models, selectedModelId, credits]
+  );
   if (!offer) return null;
 
   return (
