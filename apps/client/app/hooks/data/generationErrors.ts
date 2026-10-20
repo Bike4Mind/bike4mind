@@ -24,7 +24,9 @@ export const readErrorCode = (data: unknown): unknown =>
 
 /**
  * The user-facing message for a failed generation request: the shared rate-limit text, else the message for the
- * kind's own errorCode, else `fallback`. With `billing`, a 403 and insufficient_credits name the paying account.
+ * kind's own errorCode, else `fallback`. With `billing`, insufficient_credits names the paying account, and a 403
+ * says to switch accounts only while an organization account is billed (a personal selection sends no org, so a
+ * 403 there is something else, such as CSRF, and falls through).
  * The response's `error` text is never shown - messages come from the code.
  */
 export function describeGenerationError<TCode extends string>(
@@ -36,7 +38,8 @@ export function describeGenerationError<TCode extends string>(
 ): string {
   if (!isAxiosError(error)) return fallback;
   if (error.response?.status === 429) return GENERATION_RATE_LIMITED_MESSAGE;
-  if (billing && error.response?.status === 403) return GENERATION_ACCOUNT_CANNOT_PAY_MESSAGE;
+  const billsOrganization = !!billing?.billingAccount && !billing.billingAccount.personal;
+  if (billsOrganization && error.response?.status === 403) return GENERATION_ACCOUNT_CANNOT_PAY_MESSAGE;
   const code = readErrorCode(error.response?.data);
   if (billing && code === 'insufficient_credits') return describeInsufficientCredits(billing);
   if (typeof code === 'string' && (codes as readonly string[]).includes(code)) return messages[code as TCode];

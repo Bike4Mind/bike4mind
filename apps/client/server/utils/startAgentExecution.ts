@@ -501,7 +501,10 @@ async function resolveRunBillingOrg(input: StartAgentExecutionInput, logger: Log
       case 'mismatch':
         return { ok: false, reason: 'billing_organization_mismatch', message: billing.message };
       case 'stale':
-        logger.warn('[Start] Org-billed API key no longer speaks for its organization', { userId });
+        logger.warn('[Start] Org-billed API key no longer speaks for its organization', {
+          userId,
+          keyId: input.apiKeyInfo?.keyId,
+        });
         return { ok: false, reason: 'billing_key_stale', message: billing.message };
       case 'not_org_billed':
         break;

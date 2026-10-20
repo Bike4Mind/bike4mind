@@ -119,13 +119,11 @@ export function useCreateMusicGeneration() {
       void invalidateGenerationCreditBalances(queryClient);
       toast.success('Song generation started');
     },
-    onError: error =>
+    // Snapshot the billed account at submit so an error names who was charged even if the switcher moves meanwhile.
+    onMutate: () => ({ billingAccount: useSelectedAccount.getState().selectedAccount }),
+    onError: (error, _body, context) =>
       toast.error(
-        describeMusicGenerationError(
-          error,
-          'Could not start the song. Try again.',
-          useSelectedAccount.getState().selectedAccount
-        )
+        describeMusicGenerationError(error, 'Could not start the song. Try again.', context?.billingAccount ?? null)
       ),
   });
 }

@@ -44,13 +44,16 @@ describe('describeVideoGenerationError billing context', () => {
   const org = { name: 'Acme', personal: false };
   const insufficient = () => axiosError(422, { error: 'x', errorCode: 'insufficient_credits' });
 
-  it('tells the user to switch accounts on a 403 from a create', () => {
+  it('tells the user to switch accounts on a 403 while an organization account is billed', () => {
     expect(describeVideoGenerationError(axiosError(403, { error: 'x' }), FALLBACK, org)).toBe(
       GENERATION_ACCOUNT_CANNOT_PAY_MESSAGE
     );
-    expect(
-      describeVideoGenerationError(axiosError(403, { errorCode: 'billing_organization_mismatch' }), FALLBACK, null)
-    ).toBe(GENERATION_ACCOUNT_CANNOT_PAY_MESSAGE);
+  });
+
+  it('keeps the fallback for a 403 on a personal or unselected account, which sends no organization', () => {
+    const forbidden = axiosError(403, { error: 'x' });
+    expect(describeVideoGenerationError(forbidden, FALLBACK, personal)).toBe(FALLBACK);
+    expect(describeVideoGenerationError(forbidden, FALLBACK, null)).toBe(FALLBACK);
   });
 
   it('keeps the fallback for a 403 without billing context', () => {

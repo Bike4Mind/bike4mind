@@ -119,13 +119,11 @@ export function useCreateVideoGeneration() {
       void invalidateGenerationCreditBalances(queryClient);
       toast.success('Video generation started');
     },
-    onError: error =>
+    // Snapshot the billed account at submit so an error names who was charged even if the switcher moves meanwhile.
+    onMutate: () => ({ billingAccount: useSelectedAccount.getState().selectedAccount }),
+    onError: (error, _body, context) =>
       toast.error(
-        describeVideoGenerationError(
-          error,
-          'Could not start the video. Try again.',
-          useSelectedAccount.getState().selectedAccount
-        )
+        describeVideoGenerationError(error, 'Could not start the video. Try again.', context?.billingAccount ?? null)
       ),
   });
 }
