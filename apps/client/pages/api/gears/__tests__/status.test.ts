@@ -370,6 +370,13 @@ describe('Gears page placement of the real catalog', () => {
       .sort();
     expect(placed).toEqual(GEAR_DEFAULTS.map(g => g.key).sort());
   });
+
+  it('keeps Hearth out of Getting Started', () => {
+    const tabs = groupGearsByTab(GEAR_DEFAULTS.map(g => ({ key: g.key, kind: g.kind })));
+
+    expect(tabs['getting-started'].map(g => g.key)).not.toContain('hearth');
+    expect(tabs.features.map(g => g.key)).toContain('hearth');
+  });
 });
 
 describe('gear catalog parity', () => {
