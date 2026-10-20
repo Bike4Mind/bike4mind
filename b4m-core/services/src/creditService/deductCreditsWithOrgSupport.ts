@@ -85,6 +85,21 @@ export interface DeductSoundEffectsCreditsParams extends DeductCreditsCommonPara
 }
 
 /**
+ * Parameters for text-to-speech credit deduction. Quest-less, like sound effects.
+ */
+export interface DeductTtsCreditsParams extends DeductCreditsCommonParams {
+  type: 'text_to_speech_usage';
+}
+
+/**
+ * Parameters for speech-to-text credit deduction. Quest-less and always user-billed:
+ * transcription has no organization pool (see the transcribe route).
+ */
+export interface DeductSpeechToTextCreditsParams extends DeductCreditsCommonParams {
+  type: 'speech_to_text_usage';
+}
+
+/**
  * Parameters for music-generation credit deduction. Quest-less, like sound
  * effects: music generation is a stateless API call with only a synthetic
  * sessionId, so it extends the common base rather than the quest-scoped one.
@@ -114,6 +129,8 @@ export type DeductCreditsParams =
   | DeductVideoGenerationCreditsParams
   | DeductTextGenerationCreditsParams
   | DeductSoundEffectsCreditsParams
+  | DeductTtsCreditsParams
+  | DeductSpeechToTextCreditsParams
   | DeductMusicGenerationCreditsParams
   | DeductDecisionCreditsParams;
 
@@ -226,6 +243,12 @@ export async function deductCreditsWithOrgSupport(
   } else if (type === 'sound_effects_usage') {
     // Quest-less: sound effects has no questId.
     transactionParams = { ...baseParams, type: 'sound_effects_usage' };
+  } else if (type === 'text_to_speech_usage') {
+    // Quest-less: speech is a stateless API call, like sound effects.
+    transactionParams = { ...baseParams, type: 'text_to_speech_usage' };
+  } else if (type === 'speech_to_text_usage') {
+    // Quest-less: transcription is a stateless API call, like speech synthesis.
+    transactionParams = { ...baseParams, type: 'speech_to_text_usage' };
   } else if (type === 'music_generation_usage') {
     // Quest-less: music generation has no questId.
     transactionParams = { ...baseParams, type: 'music_generation_usage' };

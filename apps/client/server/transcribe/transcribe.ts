@@ -19,7 +19,7 @@ import {
 import { speechToTextService } from '@bike4mind/services';
 import { Resource } from 'sst';
 import { type ILogger } from '@bike4mind/observability';
-import { CreditHolderType, GatewayTimeoutError } from '@bike4mind/common';
+import { GatewayTimeoutError, type IUserDocument } from '@bike4mind/common';
 import { usageEventRepository } from '@bike4mind/database';
 import type { PreflightCreditHold } from '@server/utils/creditPreflight';
 import { v4 as uuidv4 } from 'uuid';
@@ -98,18 +98,19 @@ export async function createTranscribeUpload({
  * it that failure is rethrown as is.
  */
 export async function transcribeUpload({
-  userId,
+  user,
   fileKey,
   receivedAt,
   logger,
   mapProviderError,
 }: {
-  userId: string;
+  user: IUserDocument;
   fileKey: string;
   receivedAt: Date;
   logger: ILogger;
   mapProviderError?: (err: unknown) => unknown;
 }): Promise<speechToTextService.TranscriptionResult> {
+  const userId = user.id;
   // Ownership check: the init endpoint mints keys under transcribe-uploads/{userId}/.
   // Reject anything else to prevent users from transcribing arbitrary bucket objects.
   const expectedPrefix = `${TRANSCRIBE_UPLOAD_PREFIX}${userId}/`;
@@ -182,7 +183,7 @@ export async function transcribeUpload({
     const speechToText = new speechToTextService.speechService(bucketName);
 
     // Held last, so no rejection above strands it; the actual cost is the same size-based figure.
-    const hold = await asInsufficientCredits(() => holdTranscriptionCredits(userId, cost.credits, logger));
+    const hold = await asInsufficientCredits(() => holdTranscriptionCredits(user, cost.credits, logger));
     let results: speechToTextService.TranscriptionResult;
     try {
       // A slow hold write can finish after the deadline. It must still enter the refund boundary.
@@ -244,8 +245,8 @@ async function deductTranscriptionCredits({ hold, userId, backend, contentLength
     .record({
       requestId: sessionId,
       userId,
-      ownerId: userId,
-      ownerType: CreditHolderType.User,
+      ownerId: hold.ownerId,
+      ownerType: hold.ownerType,
       sessionId,
       feature: 'transcription',
       provider: backend,

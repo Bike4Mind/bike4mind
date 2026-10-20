@@ -393,13 +393,36 @@ describe('DataLakeWizardModal - streamlined step order', () => {
     expect(screen.getByTestId('wizard-next-btn')).toBeDisabled();
   });
 
-  it('keeps Next disabled on the GitHub card, which leaves the wizard instead of advancing', () => {
+  it('hides the stepper and Next on the GitHub card, but keeps Cancel', () => {
     seedSource({});
     useDataLakeWizardStore.setState({ createSource: 'github' });
 
     renderModal();
 
-    expect(screen.getByTestId('wizard-next-btn')).toBeDisabled();
+    expect(screen.getByTestId('github-create-panel')).toBeInTheDocument();
+    expect(screen.queryByTestId('wizard-step-indicator')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('wizard-next-btn')).not.toBeInTheDocument();
+    expect(screen.getByTestId('wizard-cancel-btn')).toBeInTheDocument();
+  });
+
+  it('keeps the stepper in append mode even with a stale GitHub create source', () => {
+    seedSource({
+      targetLake: { id: 'lake-1', name: 'Legal Contracts', fileTagPrefix: 'legal:', organizationId: 'org-1' },
+    });
+    useDataLakeWizardStore.setState({ createSource: 'github' });
+
+    renderModal();
+
+    expect(screen.getByTestId('wizard-step-indicator')).toBeInTheDocument();
+  });
+
+  it('keeps the stepper on the source cards screen', () => {
+    seedSource({});
+    useDataLakeWizardStore.setState({ createSource: null });
+
+    renderModal();
+
+    expect(screen.getByTestId('wizard-step-indicator')).toBeInTheDocument();
   });
 
   it('shows only source, configure and upload when neither optional step is enabled', () => {

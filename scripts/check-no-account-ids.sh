@@ -21,8 +21,8 @@ set -euo pipefail
 
 ALLOWLIST="scripts/account-ids-allowlist.txt"
 
-# Shippable code only. Docs-site branding is a separate milestone decision.
-SCAN_DIRS=(apps b4m-core packages infra .github/workflows)
+# Shippable code only. docs-site deploys from main, so its non-markdown files are scanned too.
+SCAN_DIRS=(apps b4m-core packages infra docs-site .github/workflows)
 
 INCLUDES=(--include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx'
   --include='*.mjs' --include='*.cjs' --include='*.json' --include='*.yml' --include='*.yaml')
@@ -31,7 +31,9 @@ INCLUDES=(--include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx'
 # not couple a fork to Bike4Mind infrastructure — the functional open-core risk is
 # in runtime/infra/CI code. Excluded here; branding-in-tests is a separate concern.
 EXCLUDE_FILES=(--exclude='*.test.ts' --exclude='*.test.tsx' --exclude='*.spec.ts'
-  --exclude='*.spec.tsx' --exclude='*.test.js' --exclude='*.spec.js')
+  --exclude='*.spec.tsx' --exclude='*.test.js' --exclude='*.spec.js'
+  --exclude='*.test.[cm]js' --exclude='*.spec.[cm]js'
+  --exclude=pnpm-lock.yaml)
 
 EXCLUDE_DIRS=(--exclude-dir=node_modules --exclude-dir=dist --exclude-dir=build
   --exclude-dir=.next --exclude-dir=.turbo --exclude-dir=coverage --exclude-dir=__tests__

@@ -24,7 +24,7 @@ const {
   mockAssertCredits: vi.fn(),
   mockHoldCredits: vi.fn(),
   mockPresign: vi.fn(),
-  hold: { settle: vi.fn(), release: vi.fn() },
+  hold: { ownerId: 'u1', ownerType: 'User', settle: vi.fn(), release: vi.fn() },
 }));
 
 vi.mock('@aws-sdk/client-s3', () => ({
@@ -81,7 +81,7 @@ const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } 
 const mapped = new Error('mapped');
 const run = () =>
   transcribeUpload({
-    userId: 'u1',
+    user: { id: 'u1' },
     fileKey: 'transcribe-uploads/u1/a.mp3',
     receivedAt: new Date(),
     logger,
@@ -145,7 +145,7 @@ describe('transcribeUpload rejection kinds', () => {
 
   it('tags a key outside the caller prefix as invalid_key', async () => {
     await expect(
-      transcribeUpload({ userId: 'u1', fileKey: 'transcribe-uploads/u2/a.mp3', receivedAt: new Date(), logger })
+      transcribeUpload({ user: { id: 'u1' }, fileKey: 'transcribe-uploads/u2/a.mp3', receivedAt: new Date(), logger })
     ).rejects.toMatchObject({ kind: 'invalid_key' });
   });
 
@@ -164,7 +164,7 @@ describe('transcribeUpload credit hold', () => {
 
   it('rejects an already expired request before reading metadata or taking a hold', async () => {
     const result = transcribeUpload({
-      userId: 'u1',
+      user: { id: 'u1' },
       fileKey: 'transcribe-uploads/u1/a.mp3',
       receivedAt: new Date(Date.now() - 60_000),
       logger,
@@ -206,9 +206,12 @@ describe('transcribeUpload credit hold', () => {
       await new Promise(resolve => setTimeout(resolve, 6_000));
       return { speechModelInfo: { backend: 'aws' } };
     });
-    const result = transcribeUpload({ userId: 'u1', fileKey: 'transcribe-uploads/u1/a.mp3', receivedAt, logger }).catch(
-      (error: unknown) => error
-    );
+    const result = transcribeUpload({
+      user: { id: 'u1' },
+      fileKey: 'transcribe-uploads/u1/a.mp3',
+      receivedAt,
+      logger,
+    }).catch((error: unknown) => error);
     await vi.advanceTimersByTimeAsync(6_000);
     expect(await result).toMatchObject({ statusCode: 504 });
     expect(mockHoldCredits).not.toHaveBeenCalled();

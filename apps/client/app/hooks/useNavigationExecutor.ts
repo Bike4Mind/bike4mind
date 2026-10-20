@@ -1,6 +1,7 @@
 import { useCallback } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useAdminModal } from '@client/app/components/admin/useAdminModal';
+import { adminTabToSlug } from '@client/app/components/admin/adminTabSlugs';
 import { useOptiNavigation } from './useOptiNavigation';
 import { useFileBrowser } from '@client/app/components/Files/Browser';
 import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.generated';
@@ -36,7 +37,8 @@ export function useNavigationExecutor() {
           if (!isNaN(tabIndex)) {
             setActiveTab(tabIndex);
           }
-          navigate({ to: '/admin' });
+          // Carry the slug so an already-mounted admin page doesn't lose ?tab= to a bare /admin
+          navigate({ to: '/admin', search: { tab: adminTabToSlug(tabIndex) } });
           break;
         }
 

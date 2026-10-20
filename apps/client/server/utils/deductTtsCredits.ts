@@ -1,4 +1,4 @@
-import { CreditHolderType, VoiceGenerationVendor, computeTtsUsd } from '@bike4mind/common';
+import { VoiceGenerationVendor, computeTtsUsd } from '@bike4mind/common';
 import { usdToCredits } from '@bike4mind/utils';
 import { usageEventRepository } from '@bike4mind/database';
 import { type ILogger } from '@bike4mind/observability';
@@ -41,8 +41,8 @@ export async function deductTtsCredits({
     .record({
       requestId: sessionId,
       userId,
-      ownerId: userId,
-      ownerType: CreditHolderType.User,
+      ownerId: hold.ownerId,
+      ownerType: hold.ownerType,
       sessionId,
       feature: 'text_to_speech',
       provider: vendor,

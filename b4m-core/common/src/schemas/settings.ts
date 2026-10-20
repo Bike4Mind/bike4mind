@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { CREDITS_PER_USD_COST } from '../pricing';
+import { CREDITS_PER_USD_COST, formatUsdPerCredit, MIN_PRICE_PER_CREDIT_USD } from '../pricing';
 import { CustomMcpPrivateCidrSchema, McpHostPatternListSchema } from './customMcpHosts';
 import {
   DEFAULT_PASSAGE_TOKEN_TARGET,
@@ -3023,7 +3023,7 @@ export const settingsMap = {
     userReadable: true,
     name: 'Price Per Credit',
     defaultValue: 50,
-    description: 'The price per credit for purchasing credits.',
+    description: `The price in USD of one credit bought pay-as-you-go. Cannot be set below ${formatUsdPerCredit(MIN_PRICE_PER_CREDIT_USD)}, the per-credit sale price including markup.`,
     category: 'Users',
     group: API_SERVICE_GROUPS.CREDITS.id,
     order: 1,

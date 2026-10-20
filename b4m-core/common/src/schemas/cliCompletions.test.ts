@@ -538,3 +538,14 @@ describe('CompletionSseErrorEventSchema', () => {
     ]);
   });
 });
+
+describe('CompletionRequestSchema thinking budget', () => {
+  it('rejects a thinking budget past MAX_THINKING_BUDGET_TOKENS', () => {
+    const parsed = CompletionRequestSchema.safeParse({
+      model: 'claude',
+      messages: [{ role: 'user', content: 'hi' }],
+      options: { thinking: { enabled: true, budget_tokens: 10_000_000 } },
+    });
+    expect(parsed.success).toBe(false);
+  });
+});

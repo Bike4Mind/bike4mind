@@ -19,7 +19,7 @@
 
 import { organizationRepository } from '@bike4mind/database/infra';
 import { canAdministerOrganization, type AdministrableOrg, type IUserDocument } from '@bike4mind/common';
-import { BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { BadRequestError, NotFoundError, UnprocessableEntityError } from '@bike4mind/utils';
 import { isValidObjectId } from '@server/utils/objectId';
 import { resolveActiveOrg } from './resolveActiveOrg';
 import type { Request } from 'express';
@@ -265,5 +265,47 @@ export async function resolveBillingOrgId(
       return null;
     }
     throw err; // a transient DB failure must surface as a 5xx, not silently bill personally
+  }
+}
+
+/**
+ * Reads the billing org off a public image request body, which accepts `organizationId` and its
+ * snake_case alias `organization_id`. Returns the value `resolveBillingOrgId` expects
+ * (null = personal, undefined = unspecified). Both keys present with different values is a 422:
+ * picking one would silently bill the wrong account.
+ */
+export function resolveBillingOrgInput(body: {
+  organizationId?: string | null;
+  organization_id?: string | null;
+}): string | null | undefined {
+  const { organizationId, organization_id: alias } = body;
+  if (organizationId !== undefined && alias !== undefined && organizationId !== alias) {
+    throw new UnprocessableEntityError('organizationId and organization_id disagree; send only one');
+  }
+  return organizationId !== undefined ? organizationId : alias;
+}
+
+const ACCEPTED_BILLING_ORG_KEYS = new Set(['organizationId', 'organization_id']);
+
+// Matched against the letters-only lowercase key. No real field of the two image bodies contains
+// any of these tokens (pinned by the orgAccess test), so substring matching cannot over-reject.
+const BILLING_ORG_KEY_SHAPE = /org|billing|billed|payer/;
+
+/**
+ * Reject a body key that is spelled like a billing-org field but is not one of the two accepted
+ * names (`organizationID`, `billing_org_id`, `payerOrgId`, `billingAccountId`, ...). The request
+ * schemas strip unknown keys, so without this the value would vanish and the request would bill
+ * the caller's home org with a 200. Scoped to the public image routes; it is deliberately not a
+ * global strict-body policy. Pass the RAW body: the validated one has already lost the key.
+ */
+export function assertNoStrayBillingOrgKeys(rawBody: unknown): void {
+  if (!rawBody || typeof rawBody !== 'object') return;
+  for (const key of Object.keys(rawBody)) {
+    if (ACCEPTED_BILLING_ORG_KEYS.has(key)) continue;
+    if (BILLING_ORG_KEY_SHAPE.test(key.toLowerCase().replace(/[^a-z]/g, ''))) {
+      throw new UnprocessableEntityError(
+        `Unknown field "${key}"; send the billing org as organizationId or organization_id`
+      );
+    }
   }
 }

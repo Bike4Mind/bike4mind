@@ -9,24 +9,18 @@ import {
   type IUserDocument,
   type IUserRepository,
 } from '@bike4mind/common';
-import type { Logger } from '@bike4mind/observability';
+import type { ILogger } from '@bike4mind/observability';
 import {
   deductCreditsWithOrgSupport,
   type DeductCreditsAdapters,
   type DeductCreditsParams,
 } from './deductCreditsWithOrgSupport';
 import { isMemberCreditCapExceeded } from './memberCreditCap';
-import { subtractCredits, type SubtractCreditsParameters } from './subtractCredits';
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 
 /** The ledger row a settlement writes, minus what the hold already knows. */
-export type CreditLedgerEntry =
-  | DistributiveOmit<DeductCreditsParams, 'user' | 'organization' | 'credits'>
-  | DistributiveOmit<
-      Extract<SubtractCreditsParameters, { type: 'text_to_speech_usage' | 'speech_to_text_usage' }>,
-      'ownerId' | 'ownerType' | 'credits'
-    >;
+export type CreditLedgerEntry = DistributiveOmit<DeductCreditsParams, 'user' | 'organization' | 'credits'>;
 
 /** Defined in common so a job document can carry it; see CreditHoldRecord. */
 export type CreditHold = CreditHoldRecord;
@@ -60,8 +54,7 @@ export async function holdCredits(
     organizationId: string | null;
     requiredCredits: number;
     featureLabel: string;
-    // Only error is used, so a route-level ILogger fits too.
-    logger: Pick<Logger, 'error'>;
+    logger: ILogger;
     /** Runs after the user/org are loaded and before any balance moves; throw to refuse. */
     assertBillable?: (user: IUserDocument, organization: IOrganizationDocument | null) => void;
   },
@@ -149,14 +142,14 @@ export async function releaseCreditHold(hold: CreditHold, adapters: HolderAdapte
 
 /**
  * Keep `chargedCredits` (clamped to [0, reservedCredits]), refund the rest, and write the ledger
- * row. Returns the credits actually charged. Never throws: the balance already moved at hold time,
- * so a failed refund or ledger write is logged and only the audit trail is affected.
+ * row. Returns the credits actually charged. By default failures are logged after the balance moved.
+ * Transactional callers set throwOnWriteFailure so every failed write aborts their settlement instead.
  */
 export async function settleCreditHold(
   hold: CreditHold,
   chargedCredits: number,
   entry: CreditLedgerEntry,
-  context: { featureLabel: string; logger: Pick<Logger, 'error'> },
+  context: { featureLabel: string; logger: ILogger; throwOnWriteFailure?: boolean },
   adapters: CreditHoldAdapters
 ): Promise<number> {
   const { featureLabel, logger } = context;
@@ -181,6 +174,7 @@ export async function settleCreditHold(
       settledHolder =
         (await holderMethodsFor(hold, adapters).incrementCredits(hold.ownerId, overReserved)) ?? settledHolder;
     } catch (err) {
+      if (context.throwOnWriteFailure) throw err;
       logger.error(`${featureLabel} over-reserved credit refund failed - caller over-charged`, {
         ownerId: hold.ownerId,
         overReserved,
@@ -191,20 +185,6 @@ export async function settleCreditHold(
   if (charged === 0) return 0;
 
   try {
-    // Speech has no organization-usage rollup in deductCreditsWithOrgSupport. Reuse the same
-    // hold/refund policy and write these existing ledger shapes through their native writer.
-    if (entry.type === 'text_to_speech_usage' || entry.type === 'speech_to_text_usage') {
-      await subtractCredits(
-        { ...entry, ownerId: hold.ownerId, ownerType: hold.ownerType, credits: charged },
-        {
-          db: { creditTransactions: adapters.creditTransactions },
-          creditHolderMethods: holderMethodsFor(hold, adapters),
-          skipBalanceUpdate: true,
-          currentCreditHolder: settledHolder,
-        }
-      );
-      return charged;
-    }
     // Loaded here, not carried on the hold, so a different process can settle it.
     const user = await adapters.users.findById(hold.userId);
     if (!user) throw new Error('User not found');
@@ -226,6 +206,7 @@ export async function settleCreditHold(
       { skipBalanceUpdate: true, currentCreditHolder: settledHolder }
     );
   } catch (err) {
+    if (context.throwOnWriteFailure) throw err;
     logger.error(`${featureLabel} usage transaction write failed - credits charged, ledger row missing`, {
       userId: hold.userId,
       organizationId: hold.organizationId ?? undefined,

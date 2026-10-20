@@ -15,7 +15,7 @@ const handler = nextRouteForContract(createTranscriptionContract, {
   rateLimit: perUserRateLimit('POST /api/v1/transcriptions'),
 }).post(async (req, res) => {
   const { text } = await transcribeUpload({
-    userId: req.user.id,
+    user: req.user,
     fileKey: req.validated.file_key,
     receivedAt: req.receivedAt,
     logger: req.logger,

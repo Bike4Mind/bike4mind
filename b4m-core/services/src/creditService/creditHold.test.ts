@@ -180,12 +180,12 @@ describe('settleCreditHold', () => {
     expect(state.user).toBe(70);
   });
 
+  // Speech is quest-less but not special: it settles through the same org-aware ledger writer as
+  // everything else, so a member's speech spend reaches the same usage rollup.
   it.each(['text_to_speech_usage', 'speech_to_text_usage'] as const)(
-    'settles %s through the shared refund policy and its native ledger writer',
+    'settles %s through the shared refund policy and the org-aware ledger writer',
     async type => {
       const { adapters, state } = makeAdapters({ user: 100 });
-      const createTransaction = vi.fn().mockResolvedValue(undefined);
-      adapters.creditTransactions = { createTransaction } as unknown as CreditHoldAdapters['creditTransactions'];
       const hold = await holdCredits(
         { userId: 'u1', organizationId: null, requiredCredits: 30, featureLabel: 'speech', logger },
         adapters
@@ -201,11 +201,11 @@ describe('settleCreditHold', () => {
 
       expect(charged).toBe(20);
       expect(state.user).toBe(80);
-      expect(createTransaction).toHaveBeenCalledWith(
-        type,
-        expect.objectContaining({ ownerId: 'u1', credits: -20, model: 'speech-model', sessionId: 's1' })
+      expect(deductCreditsWithOrgSupport).toHaveBeenCalledWith(
+        expect.objectContaining({ type, credits: 20, model: 'speech-model', sessionId: 's1' }),
+        expect.anything(),
+        expect.objectContaining({ skipBalanceUpdate: true })
       );
-      expect(deductCreditsWithOrgSupport).not.toHaveBeenCalled();
       expect(adapters.users.incrementCredits).toHaveBeenCalledTimes(2);
     }
   );
@@ -254,6 +254,32 @@ describe('settleCreditHold', () => {
       'video usage transaction write failed - credits charged, ledger row missing',
       { userId: 'u1', organizationId: undefined, error: 'ledger down' }
     );
+  });
+  it('throws a partial-refund failure when settlement must roll back its transaction', async () => {
+    const { adapters } = makeAdapters({ user: 100 });
+    const hold = await holdCredits(
+      { userId: 'u1', organizationId: null, requiredCredits: 30, featureLabel: 'video', logger },
+      adapters
+    );
+    vi.spyOn(adapters.users, 'incrementCredits').mockRejectedValueOnce(new Error('refund down'));
+
+    await expect(
+      settleCreditHold(hold, 20, entry, { featureLabel: 'video', logger, throwOnWriteFailure: true }, adapters)
+    ).rejects.toThrow('refund down');
+    expect(deductCreditsWithOrgSupport).not.toHaveBeenCalled();
+  });
+
+  it('throws a ledger failure when settlement must roll back its transaction', async () => {
+    const { adapters } = makeAdapters({ user: 100 });
+    const hold = await holdCredits(
+      { userId: 'u1', organizationId: null, requiredCredits: 30, featureLabel: 'video', logger },
+      adapters
+    );
+    vi.mocked(deductCreditsWithOrgSupport).mockRejectedValueOnce(new Error('ledger down'));
+
+    await expect(
+      settleCreditHold(hold, 30, entry, { featureLabel: 'video', logger, throwOnWriteFailure: true }, adapters)
+    ).rejects.toThrow('ledger down');
   });
 });
 

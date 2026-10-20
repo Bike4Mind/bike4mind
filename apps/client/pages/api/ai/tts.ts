@@ -11,6 +11,7 @@ import {
 import { TtsProviderNotConfiguredError } from '@server/utils/resolveTtsProvider';
 import { synthesizeTts, upstreamStatus, isCredentialRejection } from '@server/utils/synthesizeTts';
 import { deductTtsCredits } from '@server/utils/deductTtsCredits';
+import { resolveAudioBillingOrgId } from '@server/billing/resolveAudioBillingOrgId';
 import { estimateTtsHoldCredits } from '@server/utils/ttsCandidates';
 import {
   holdPreflightCredits,
@@ -38,8 +39,19 @@ import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
  * typed body.
  */
 const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, res) => {
-  const { text, provider, model, voice, format, encoding, stability, similarityBoost, languageCode, preview } =
-    req.validated;
+  const {
+    text,
+    provider,
+    model,
+    voice,
+    format,
+    encoding,
+    stability,
+    similarityBoost,
+    languageCode,
+    preview,
+    organization_id,
+  } = req.validated;
 
   const vendor = provider ?? DEFAULT_TTS_PROVIDER;
 
@@ -64,15 +76,18 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
   }
 
   // Hold the estimate before incurring provider cost, so concurrent calls cannot overdraw the balance.
+  // Omitted keeps the historical personal default; a key bills its own account
+  // (resolveAudioBillingOrgId 403s any other target).
+  const billingOrganizationId = await resolveAudioBillingOrgId(req, organization_id, 'user');
   const userId = req.user?.id;
   let hold: PreflightCreditHold | undefined;
-  if (userId) {
+  if (userId && req.user) {
     try {
       hold = await holdPreflightCredits({
-        userId,
-        estimatedCredits: estimateTtsHoldCredits(vendor, model, text.length),
+        req: { user: req.user, apiKeyInfo: req.apiKeyInfo, logger: req.logger },
+        requiredCredits: estimateTtsHoldCredits(vendor, model, text.length),
         featureLabel: 'text-to-speech',
-        logger: req.logger,
+        billingOrganizationId,
       });
     } catch (error) {
       if (error instanceof InsufficientCreditsPreflightError) {

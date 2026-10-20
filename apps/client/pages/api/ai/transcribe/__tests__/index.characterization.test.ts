@@ -67,7 +67,21 @@ const { fakeHold } = vi.hoisted(() => ({
 
 vi.mock('@server/utils/creditPreflight', () => ({
   assertPreflightCredits: async () => undefined,
-  holdPreflightCredits: async (args: Parameters<typeof fakeHold>[1]) => fakeHold(mockSubtractCredits, args),
+  holdPreflightCredits: async ({
+    req,
+    requiredCredits,
+    featureLabel,
+  }: {
+    req: { user: { id: string }; logger: Parameters<typeof fakeHold>[1]['logger'] };
+    requiredCredits: number;
+    featureLabel: string;
+  }) =>
+    fakeHold(mockSubtractCredits, {
+      userId: req.user.id,
+      estimatedCredits: requiredCredits,
+      featureLabel,
+      logger: req.logger,
+    }),
   InsufficientCreditsPreflightError: class extends Error {},
 }));
 vi.mock('@bike4mind/database', () => ({

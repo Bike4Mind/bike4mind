@@ -13,3 +13,7 @@ export const DEFAULT_STORAGE_LIMIT_MB = 1000;
 export const DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB = 10_000;
 
 export const storageLimitToBytes = (storageLimitMb: number): number => storageLimitMb * BYTES_PER_STORAGE_MB;
+
+/** An organization's effective quota in bytes: its own `storageLimit`, else DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB. */
+export const organizationStorageLimitBytes = (organization: { storageLimit?: number | null }): number =>
+  storageLimitToBytes(organization.storageLimit ?? DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB);

@@ -1,17 +1,40 @@
 import { ResearchModeParamsSchema, ModelInfo } from '@bike4mind/common';
-import { type ICompletionOptions, getLlmByModel } from '@bike4mind/llm-adapters';
+import { type ICompletionOptions, getLlmByModel, resolveOutputMaxTokens } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
+import { DEFAULT_OUTPUT_MAX_TOKENS } from '@bike4mind/utils';
 import { z } from 'zod';
 
 export interface ResearchModeResult {
   configurationId: string;
+  /** The configuration's model, which its usage is priced on. */
+  model: string;
   success: boolean;
+  /** Characters streamed before the configuration finished or failed, to price an interrupted run. */
+  streamedChars: number;
   response?: string;
   error?: string;
   completionInfo?: {
     inputTokens: number;
     outputTokens: number;
   };
+}
+
+/**
+ * The output ceiling a research configuration runs with: its own requested maxTokens (else the
+ * turn's), clamped to its model's cap. ChatCompletionProcess reserves credits on this same value,
+ * so the hold and what each configuration may spend agree.
+ */
+export function researchConfigMaxTokens(
+  requested: number | undefined,
+  baseMaxTokens: number | undefined,
+  modelInfo: ModelInfo
+): number {
+  return resolveOutputMaxTokens({
+    requested: requested ?? baseMaxTokens,
+    fallback: DEFAULT_OUTPUT_MAX_TOKENS,
+    modelInfo,
+    modelMaxOutputTokens: modelInfo.max_tokens,
+  });
 }
 
 export class ResearchModeService {
@@ -55,7 +78,9 @@ export class ResearchModeService {
         this.logger.error(`🔬 [Research Mode] Configuration ${configId} failed:`, result.reason);
         return {
           configurationId: configId,
+          model: enabledConfigs[index].model,
           success: false,
+          streamedChars: 0,
           error: result.reason?.message || 'Unknown error',
         };
       }
@@ -71,9 +96,11 @@ export class ResearchModeService {
   ): Promise<ResearchModeResult> {
     // A Stop that landed before this configuration started must not reach the provider at all.
     if (abortSignal?.aborted) {
-      return { configurationId: config.id, success: false, error: 'Cancelled' };
+      return { configurationId: config.id, model: config.model, success: false, streamedChars: 0, error: 'Cancelled' };
     }
 
+    // Kept outside the try so a configuration that fails mid-stream still reports what it streamed.
+    let finalResponse = '';
     try {
       this.logger.info(`🔬 [Research Mode] Processing configuration: ${config.label || config.model} (${config.id})`);
 
@@ -99,14 +126,13 @@ export class ResearchModeService {
       const options: ICompletionOptions = {
         ...baseOptions,
         temperature: config.parameters?.temperature ?? baseOptions.temperature,
-        maxTokens: config.parameters?.maxTokens ?? baseOptions.maxTokens,
+        maxTokens: researchConfigMaxTokens(config.parameters?.maxTokens, baseOptions.maxTokens, modelInfo),
         topP: config.parameters?.topP ?? baseOptions.topP,
         presencePenalty: config.parameters?.presencePenalty ?? baseOptions.presencePenalty,
         frequencyPenalty: config.parameters?.frequencyPenalty ?? baseOptions.frequencyPenalty,
         ...(abortSignal ? { abortSignal } : {}),
       };
 
-      let finalResponse = '';
       let completionInfo: any = undefined;
 
       // Create a timeout promise (120 seconds timeout)
@@ -163,8 +189,10 @@ export class ResearchModeService {
 
       return {
         configurationId: config.id,
+        model: config.model,
         success: true,
         response: finalResponse,
+        streamedChars: finalResponse.length,
         completionInfo,
       };
     } catch (error) {
@@ -172,7 +200,9 @@ export class ResearchModeService {
 
       return {
         configurationId: config.id,
+        model: config.model,
         success: false,
+        streamedChars: finalResponse.length,
         error: error instanceof Error ? error.message : 'Unknown error',
       };
     }

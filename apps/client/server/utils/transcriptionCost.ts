@@ -1,5 +1,6 @@
 import { usdToCredits } from '@bike4mind/utils';
 import type { ILogger } from '@bike4mind/observability';
+import type { IUserDocument } from '@bike4mind/common';
 import {
   assertPreflightCredits,
   holdPreflightCredits,
@@ -49,14 +50,20 @@ export async function assertTranscriptionCredits(userId: string, estimatedCredit
   }
 }
 
-// The holding twin of assertTranscriptionCredits, run right before the provider call.
+// The holding twin of assertTranscriptionCredits, run right before the provider call. Transcription
+// has no organization pool, so the reservation bills the user.
 export async function holdTranscriptionCredits(
-  userId: string,
+  user: IUserDocument,
   estimatedCredits: number,
   logger: ILogger
 ): Promise<PreflightCreditHold> {
   try {
-    return await holdPreflightCredits({ userId, estimatedCredits, featureLabel: 'transcription', logger });
+    return await holdPreflightCredits({
+      req: { user, logger },
+      requiredCredits: estimatedCredits,
+      featureLabel: 'transcription',
+      billingOrganizationId: null,
+    });
   } catch (error) {
     if (error instanceof InsufficientCreditsPreflightError) throw new BadRequestError(error.message);
     throw error;

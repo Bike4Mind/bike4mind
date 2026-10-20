@@ -17,7 +17,7 @@ const handler = baseApi().post(
     }
     return res.json(
       await transcribeUpload({
-        userId: req.user.id,
+        user: req.user,
         fileKey: parsed.data.fileKey,
         receivedAt: req.receivedAt,
         logger: req.logger,

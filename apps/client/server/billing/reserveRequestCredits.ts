@@ -1,12 +1,26 @@
 import { CreditHolderType, IUserDocument } from '@bike4mind/common';
-import { creditTransactionRepository, organizationRepository, userRepository } from '@bike4mind/database';
+import {
+  creditTransactionRepository,
+  organizationRepository,
+  pendingCreditHoldRepository,
+  userRepository,
+  withTransaction,
+} from '@bike4mind/database';
 import { creditService } from '@bike4mind/services';
 import type { CreditLedgerEntry } from '@bike4mind/services/creditService';
-import type { Logger } from '@bike4mind/observability';
+import type { ILogger } from '@bike4mind/observability';
 import { BadRequestError } from '@server/utils/errors';
 import { assertApiKeyOrgMembership } from '@server/billing/assertApiKeyOrgMembership';
 
 export type { CreditLedgerEntry };
+
+/**
+ * How long a reservation may stay unsettled before apps/workers/src/cron/creditHoldSweep.ts refunds it.
+ * Requests still running after this deadline may be refunded by the sweep.
+ */
+export const CREDIT_HOLD_TTL_MS = 60 * 60_000;
+
+const SETTLEMENT_ATTEMPTS = 3;
 
 export type CreditReservation = {
   ownerId: string;
@@ -15,14 +29,14 @@ export type CreditReservation = {
   reservedCredits: number;
   /**
    * Return the whole reservation - the provider call failed and incurred no cost. Never throws: the route
-   * is already answering with the provider failure, so a failed refund is logged (with the owner, for a
-   * manual credit) rather than replacing that answer with a 500.
+   * is already answering with the provider failure, so a failed refund is logged and left for the sweep
+   * rather than replacing that answer with a 500.
    */
   refund(): Promise<void>;
   /**
    * Keep `chargedCredits` (at most the reservation), refund the rest, and write the ledger row.
-   * Returns the credits actually charged. A ledger-write failure is logged, not thrown: the balance
-   * already moved at reservation, so the customer was charged and only the audit row is missing.
+   * Returns the credits actually charged when confirmed. All writes commit together; an aborted
+   * settlement leaves the reservation available for the sweep. Unconfirmed outcomes are logged.
    */
   settle(chargedCredits: number, entry: CreditLedgerEntry): Promise<number>;
 };
@@ -31,7 +45,7 @@ export type CreditReservation = {
 type BillingRequest = {
   user?: IUserDocument;
   apiKeyInfo?: Pick<Express.ApiKeyInfo, 'billingOwnerType' | 'organizationId'>;
-  logger: Logger;
+  logger: ILogger;
 };
 
 type ReserveRequestCreditsParams = {
@@ -41,6 +55,12 @@ type ReserveRequestCreditsParams = {
   enforceCredits: boolean | undefined;
   /** Noun phrase for the insufficient-credits copy, e.g. "music generation". */
   featureLabel: string;
+  /**
+   * Route-resolved payer for a browser/JWT caller: an org id bills that org, `null` bills the user,
+   * `undefined` keeps the home-org fallback. Ignored for API-key callers, whose target is fixed on
+   * the key.
+   */
+  billingOrganizationId?: string | null;
 };
 
 /**
@@ -51,8 +71,9 @@ type ReserveRequestCreditsParams = {
  * Billing owner, in precedence order:
  *   1. Org-billed API key -> its organization (billingOwnerType invariant).
  *   2. User-billed API key -> the user (explicit intent; ignore the org seat).
- *   3. Browser/JWT caller -> the user's own organization seat if any, matching
- *      image/video generation; otherwise the user.
+ *   3. Browser/JWT caller -> the route-resolved `billingOrganizationId` when given (null = the
+ *      user); else the user's own organization seat if any, matching image/video generation;
+ *      otherwise the user.
  * The user always stays the actor for attribution + per-member usage tracking.
  *
  * Gated on enforceCredits, so self-host / credits-off deployments run free; the owner is still
@@ -64,6 +85,7 @@ export async function reserveRequestCredits({
   requiredCredits,
   enforceCredits,
   featureLabel,
+  billingOrganizationId: explicitBillingOrgId,
 }: ReserveRequestCreditsParams): Promise<CreditReservation> {
   if (!req.user) throw new BadRequestError('User not found');
   const userId = req.user.id;
@@ -71,7 +93,9 @@ export async function reserveRequestCredits({
     ? req.apiKeyInfo.billingOwnerType === CreditHolderType.Organization
       ? req.apiKeyInfo.organizationId
       : undefined
-    : (req.user.organizationId?.toString() ?? undefined);
+    : explicitBillingOrgId !== undefined
+      ? (explicitBillingOrgId ?? undefined)
+      : (req.user.organizationId?.toString() ?? undefined);
   const ownerId = billingOrganizationId ?? userId;
   const ownerType = billingOrganizationId ? CreditHolderType.Organization : CreditHolderType.User;
 
@@ -85,19 +109,34 @@ export async function reserveRequestCredits({
     creditTransactions: creditTransactionRepository,
     deductCredits: creditService.deductCreditsWithOrgSupport,
   };
-  const hold = await creditService.holdCredits(
-    {
-      userId,
-      organizationId: billingOrganizationId ?? null,
-      requiredCredits,
-      featureLabel,
-      logger: req.logger,
-      // Re-checked against the roster holdCredits just fetched - no extra query.
-      assertBillable: (billingUser, billingOrg) =>
-        assertApiKeyOrgMembership({ billingOrg, billingUser, isApiKeyCaller: Boolean(req.apiKeyInfo) }),
-    },
-    holdAdapters
-  );
+  // One transaction, so the balance never moves without a pending row the sweep can find, and a row
+  // never exists for a balance that did not move.
+  const { hold, pending } = await withTransaction(async () => {
+    const hold = await creditService.holdCredits(
+      {
+        userId,
+        organizationId: billingOrganizationId ?? null,
+        requiredCredits,
+        featureLabel,
+        logger: req.logger,
+        // Re-checked against the roster holdCredits just fetched - no extra query.
+        assertBillable: (billingUser, billingOrg) =>
+          assertApiKeyOrgMembership({ billingOrg, billingUser, isApiKeyCaller: Boolean(req.apiKeyInfo) }),
+      },
+      holdAdapters
+    );
+    const expiresAt = new Date(Date.now() + CREDIT_HOLD_TTL_MS);
+    return { hold, pending: await pendingCreditHoldRepository.record(hold, featureLabel, expiresAt) };
+  });
+
+  const logHoldError = (message: string, err?: unknown) =>
+    req.logger.error(`${featureLabel} ${message}`, {
+      holdId: pending.id,
+      ownerId: hold.ownerId,
+      ownerType: hold.ownerType,
+      reservedCredits: hold.reservedCredits,
+      ...(err === undefined ? {} : { error: err instanceof Error ? err.message : 'Unknown error' }),
+    });
 
   return {
     ownerId: hold.ownerId,
@@ -105,17 +144,57 @@ export async function reserveRequestCredits({
     reservedCredits: hold.reservedCredits,
     refund: async () => {
       try {
-        await creditService.releaseCreditHold(hold, holdAdapters);
-      } catch (err) {
-        req.logger.error(`${featureLabel} refund failed - caller charged for a failed request`, {
-          ownerId: hold.ownerId,
-          ownerType: hold.ownerType,
-          reservedCredits: hold.reservedCredits,
-          error: err instanceof Error ? err.message : 'Unknown error',
+        // Claim and release commit together: a failed release keeps the row, and the sweep refunds it later.
+        const refunded = await withTransaction(async () => {
+          if (!(await pendingCreditHoldRepository.claim(pending.id))) return false;
+          await creditService.releaseCreditHold(hold, holdAdapters);
+          return true;
         });
+        if (!refunded) {
+          req.logger.warn(`${featureLabel} refund found its credit hold already swept`, { holdId: pending.id });
+        }
+      } catch (err) {
+        logHoldError('refund failed - left for the expired-hold sweep', err);
       }
     },
-    settle: (chargedCredits, entry) =>
-      creditService.settleCreditHold(hold, chargedCredits, entry, { featureLabel, logger: req.logger }, holdAdapters),
+    settle: async (chargedCredits, entry) => {
+      const charged = Number.isFinite(chargedCredits)
+        ? Math.min(Math.max(chargedCredits, 0), hold.reservedCredits)
+        : hold.reservedCredits;
+      for (let attempt = 1; ; attempt++) {
+        try {
+          // The receipt, partial refund, member usage and ledger commit together. A process death or
+          // failed write leaves either the original refundable hold or the completed settlement.
+          return await withTransaction(async () => {
+            if (!(await pendingCreditHoldRepository.markSettled(pending.id, charged))) {
+              const settled = await pendingCreditHoldRepository.findSettlement(pending.id);
+              if (settled !== null) return settled;
+              logHoldError('settle found its credit hold already swept - request not charged');
+              return 0;
+            }
+            return creditService.settleCreditHold(
+              hold,
+              chargedCredits,
+              entry,
+              { featureLabel, logger: req.logger, throwOnWriteFailure: true },
+              holdAdapters
+            );
+          });
+        } catch (err) {
+          // A commit can succeed while its acknowledgement is lost. Never infer a refund from a
+          // missing claim: the durable receipt tells us whether this settlement already committed.
+          try {
+            const settled = await pendingCreditHoldRepository.findSettlement(pending.id);
+            if (settled !== null) return settled;
+          } catch (reconcileError) {
+            logHoldError('settle could not read its settlement receipt', reconcileError);
+          }
+          if (attempt >= SETTLEMENT_ATTEMPTS) {
+            logHoldError('settle could not confirm outcome - any pending hold remains refundable', err);
+            return 0;
+          }
+        }
+      }
+    },
   };
 }

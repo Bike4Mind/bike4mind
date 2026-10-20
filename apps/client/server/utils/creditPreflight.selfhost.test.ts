@@ -36,7 +36,7 @@ describe('assertPreflightCredits under self-host', () => {
     mocks.findById.mockResolvedValue({ currentCredits: 0 });
     await expect(
       assertPreflightCredits({ userId: 'u1', estimatedCredits: 100, featureLabel: 'text-to-speech' })
-    ).resolves.toBe(false);
+    ).resolves.toBeUndefined();
   });
 
   it('still rejects a zero-balance user when the setting is explicitly on', async () => {

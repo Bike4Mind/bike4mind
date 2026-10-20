@@ -3,8 +3,11 @@ import {
   isBlankSettingValue,
   SreAgentConfig,
   SRE_SECRET_PLACEHOLDER,
+  formatUsdPerCredit,
   isMaskedSensitiveSettingValue,
+  isPricePerCreditBelowFloor,
   maskSensitiveSettingValue,
+  MIN_PRICE_PER_CREDIT_USD,
   settingsMap,
 } from '@bike4mind/common';
 import { AdminSettings } from '@bike4mind/database/infra';
@@ -52,6 +55,14 @@ const handler = baseApi().put(
 
     if (key === 'forcedRetrievalMinSimilarityPct' && req.body.confirmAboveMeasuredFloor !== true) {
       await refuseFloorAboveMeasured(Number(value), req.logger);
+    }
+
+    // pricePerCredit is not scope-capable, so this is its only write path; a stored value that
+    // predates the floor is still refused at charge time (lib/credits/utils.ts).
+    if (key === 'pricePerCredit' && isPricePerCreditBelowFloor(Number(value))) {
+      throw new BadRequestError(
+        `Price Per Credit must be at least ${formatUsdPerCredit(MIN_PRICE_PER_CREDIT_USD)}, the per-credit sale price including markup.`
+      );
     }
 
     const isSensitiveSetting = settingsMap[key].isSensitive === true;

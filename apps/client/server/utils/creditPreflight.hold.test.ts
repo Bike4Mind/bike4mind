@@ -1,178 +1,158 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { CreditHolderType, UnprocessableEntityError } from '@bike4mind/common';
 
-const { mocks, balance } = vi.hoisted(() => {
-  process.env.B4M_SELF_HOST = 'false';
-  return {
-    balance: { current: 0, failRefund: false },
-    mocks: {
-      getSettingsMap: vi.fn(),
-      createTransaction: vi.fn(),
-    },
-  };
-});
-
-// An in-memory user whose incrementCredits is atomic, like the Mongo $inc it stands in for.
-vi.mock('@bike4mind/database', () => ({
-  adminSettingsRepository: {},
-  organizationRepository: {},
-  creditTransactionRepository: { createTransaction: (...a: unknown[]) => mocks.createTransaction(...a) },
-  userRepository: {
-    findById: async (id: string) => ({ id, currentCredits: balance.current }),
-    incrementCredits: async (id: string, delta: number) => {
-      if (delta > 0 && balance.failRefund) throw new Error('mongo blip');
-      balance.current += delta;
-      return { id, currentCredits: balance.current };
-    },
+const { mocks } = vi.hoisted(() => ({
+  mocks: {
+    reserve: vi.fn(),
+    refund: vi.fn(),
+    reservedSettle: vi.fn(),
+    deductCreditsWithOrgSupport: vi.fn(),
+    userFindById: vi.fn(),
+    orgFindById: vi.fn(),
+    getSettingsMap: vi.fn(),
   },
 }));
-vi.mock('@bike4mind/utils', async importOriginal => ({
-  ...(await importOriginal<typeof import('@bike4mind/utils')>()),
+
+vi.mock('@server/billing/reserveRequestCredits', () => ({
+  reserveRequestCredits: (...a: unknown[]) => mocks.reserve(...a),
+}));
+vi.mock('@bike4mind/services', () => ({
+  creditService: {
+    isMemberCreditCapExceeded: vi.fn(() => false),
+    deductCreditsWithOrgSupport: (...a: unknown[]) => mocks.deductCreditsWithOrgSupport(...a),
+  },
+}));
+vi.mock('@bike4mind/database', () => ({
+  adminSettingsRepository: {},
+  userRepository: { findById: (...a: unknown[]) => mocks.userFindById(...a) },
+  organizationRepository: { findById: (...a: unknown[]) => mocks.orgFindById(...a) },
+  creditTransactionRepository: {},
+}));
+vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: (...a: unknown[]) => mocks.getSettingsMap(...a),
+  getSettingsValue: (_name: string, settings: { enforceCredits?: string }) => settings.enforceCredits === 'true',
 }));
 
 import { holdPreflightCredits, InsufficientCreditsPreflightError } from './creditPreflight';
-import { estimateTtsCreditCost } from '@bike4mind/common';
-import { estimateTtsHoldCredits } from './ttsCandidates';
 
-const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
-const hold = (estimatedCredits: number) =>
+const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+const user = { id: 'u1' };
+
+const held = (overrides: Record<string, unknown> = {}) => ({
+  ownerId: 'u1',
+  ownerType: CreditHolderType.User,
+  reservedCredits: 100,
+  refund: (...a: unknown[]) => mocks.refund(...a),
+  settle: (...a: unknown[]) => mocks.reservedSettle(...a),
+  ...overrides,
+});
+
+const hold = (overrides: Record<string, unknown> = {}) =>
   holdPreflightCredits({
-    userId: 'u1',
-    estimatedCredits,
+    req: { user: user as never, logger: logger as never },
+    requiredCredits: 100,
     featureLabel: 'text-to-speech',
-    logger: logger as never,
+    ...overrides,
   });
-const entry = { type: 'text_to_speech_usage' as const, model: 'tts-1', sessionId: 's1' };
 
 beforeEach(() => {
   Object.values(mocks).forEach(m => m.mockReset());
-  logger.error.mockClear();
-  mocks.getSettingsMap.mockResolvedValue({});
-  mocks.createTransaction.mockResolvedValue(undefined);
-  balance.failRefund = false;
+  mocks.getSettingsMap.mockResolvedValue({ enforceCredits: 'true' });
+  mocks.reserve.mockResolvedValue(held());
+  mocks.reservedSettle.mockResolvedValue(60);
+  mocks.refund.mockResolvedValue(undefined);
+  mocks.deductCreditsWithOrgSupport.mockResolvedValue(undefined);
+  mocks.userFindById.mockResolvedValue({ id: 'u1' });
+  mocks.orgFindById.mockResolvedValue({ id: 'org1' });
 });
 
 describe('holdPreflightCredits', () => {
-  it('admits only the calls the balance covers when they run concurrently, so it never goes negative', async () => {
-    balance.current = 10;
+  it('reserves on the durable request-credit primitive, with the org the route resolved', async () => {
+    await hold({ billingOrganizationId: 'org1' });
 
-    const results = await Promise.allSettled([hold(6), hold(6), hold(6)]);
-
-    expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(1);
-    for (const r of results.filter(r => r.status === 'rejected')) {
-      expect((r as PromiseRejectedResult).reason).toBeInstanceOf(InsufficientCreditsPreflightError);
-    }
-    expect(balance.current).toBe(4);
-  });
-
-  it('settles the measured cost against the hold and refunds the rest', async () => {
-    balance.current = 10;
-    const held = await hold(6);
-
-    await expect(held.settle(4, entry)).resolves.toBe(4);
-
-    expect(balance.current).toBe(6);
-    expect(mocks.createTransaction).toHaveBeenCalledWith(
-      'text_to_speech_usage',
-      expect.objectContaining({ ownerId: 'u1', credits: -4, model: 'tts-1' })
+    expect(mocks.reserve).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requiredCredits: 100,
+        enforceCredits: true,
+        featureLabel: 'text-to-speech',
+        billingOrganizationId: 'org1',
+      })
     );
   });
 
-  it('never charges past the hold, whatever the settlement asks for', async () => {
-    balance.current = 6;
-    const held = await hold(6);
+  it('settles the measured cost against the reservation and reports who was billed', async () => {
+    const reservation = held({ ownerId: 'org1', ownerType: CreditHolderType.Organization });
+    mocks.reserve.mockResolvedValue(reservation);
 
-    await expect(held.settle(50, entry)).resolves.toBe(6);
-    expect(balance.current).toBe(0);
+    const preflight = await hold({ billingOrganizationId: 'org1' });
+    const charged = await preflight.settle(60, { type: 'text_to_speech_usage', model: 'tts-1', sessionId: 's1' });
+
+    expect(charged).toBe(60);
+    expect(mocks.reservedSettle).toHaveBeenCalledWith(60, expect.objectContaining({ type: 'text_to_speech_usage' }));
+    expect(preflight.ownerId).toBe('org1');
+    expect(preflight.ownerType).toBe(CreditHolderType.Organization);
   });
 
-  it('charges the full cost of a pricier TTS fallback and refunds a successful primary', async () => {
-    const reservedCredits = estimateTtsHoldCredits('openai', 'tts-1', 1000);
-    const fallbackCredits = estimateTtsCreditCost('elevenlabs', 'eleven_multilingual_v2', 1000);
-    const primaryCredits = estimateTtsCreditCost('openai', 'tts-1', 1000);
-    balance.current = reservedCredits;
+  it('returns the whole reservation when the provider call fails', async () => {
+    const preflight = await hold();
+    await preflight.release();
 
-    const fallbackHold = await hold(reservedCredits);
-    await expect(fallbackHold.settle(fallbackCredits, { ...entry, model: 'eleven_multilingual_v2' })).resolves.toBe(
-      fallbackCredits
-    );
-    expect(balance.current).toBe(0);
-    expect(mocks.createTransaction).toHaveBeenLastCalledWith(
-      'text_to_speech_usage',
-      expect.objectContaining({ credits: -fallbackCredits, model: 'eleven_multilingual_v2' })
-    );
-
-    balance.current = reservedCredits;
-    const primaryHold = await hold(reservedCredits);
-    await expect(primaryHold.settle(primaryCredits, entry)).resolves.toBe(primaryCredits);
-    expect(balance.current).toBe(reservedCredits - primaryCredits);
+    expect(mocks.refund).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps the whole hold, and still writes its ledger row, on a non-finite charge', async () => {
-    balance.current = 10;
-    const held = await hold(6);
+  it('maps a credit refusal onto the preflight error the routes already answer', async () => {
+    mocks.reserve.mockRejectedValue(new UnprocessableEntityError('not enough credits'));
 
-    await expect(held.settle(NaN, entry)).resolves.toBe(6);
-
-    expect(balance.current).toBe(4);
-    expect(mocks.createTransaction).toHaveBeenCalledWith(
-      'text_to_speech_usage',
-      expect.objectContaining({ credits: -6 })
-    );
+    await expect(hold()).rejects.toBeInstanceOf(InsufficientCreditsPreflightError);
   });
 
-  it('still writes the ledger row when the over-reserve refund fails', async () => {
-    balance.current = 10;
-    const held = await hold(6);
-    balance.failRefund = true;
+  it('passes a non-billing failure through untouched', async () => {
+    const boom = new Error('settings down');
+    mocks.reserve.mockRejectedValue(boom);
 
-    await expect(held.settle(4, entry)).resolves.toBe(4);
-
-    expect(mocks.createTransaction).toHaveBeenCalledWith(
-      'text_to_speech_usage',
-      expect.objectContaining({ credits: -4 })
-    );
+    await expect(hold()).rejects.toBe(boom);
   });
 
-  it('returns the whole hold when the provider call fails', async () => {
-    balance.current = 10;
-    const held = await hold(6);
+  // With enforcement off the reservation holds nothing, so settlement charges directly - these
+  // routes have always billed, credits setting or not.
+  describe('when nothing was reserved', () => {
+    beforeEach(() => {
+      mocks.getSettingsMap.mockResolvedValue({ enforceCredits: 'false' });
+      mocks.reserve.mockResolvedValue(
+        held({ ownerId: 'org1', ownerType: CreditHolderType.Organization, reservedCredits: 0 })
+      );
+    });
 
-    await held.release();
+    it('charges the measured cost against the payer the reservation resolved', async () => {
+      const preflight = await hold({ billingOrganizationId: 'org1' });
+      const charged = await preflight.settle(25, { type: 'text_to_speech_usage', model: 'tts-1', sessionId: 's1' });
 
-    expect(balance.current).toBe(10);
-    expect(mocks.createTransaction).not.toHaveBeenCalled();
-  });
+      expect(charged).toBe(25);
+      expect(mocks.deductCreditsWithOrgSupport).toHaveBeenCalledWith(
+        expect.objectContaining({ credits: 25, organization: { id: 'org1' }, type: 'text_to_speech_usage' }),
+        expect.anything()
+      );
+      expect(mocks.reservedSettle).not.toHaveBeenCalled();
+    });
 
-  it('holds nothing with enforcement off and charges on settle, as these routes always have', async () => {
-    mocks.getSettingsMap.mockResolvedValue({ enforceCredits: 'false' });
-    balance.current = 0;
-    const held = await hold(6);
-    expect(balance.current).toBe(0);
+    it('logs the billing miss and resolves when the direct charge fails', async () => {
+      mocks.deductCreditsWithOrgSupport.mockRejectedValue(new Error('ledger down'));
+      const preflight = await hold();
 
-    await expect(held.settle(6, entry)).resolves.toBe(6);
-    expect(balance.current).toBe(-6);
-  });
+      await expect(
+        preflight.settle(25, { type: 'speech_to_text_usage', model: 'openai', sessionId: 's1' })
+      ).resolves.toBe(0);
+      expect(logger.error).toHaveBeenCalledWith(
+        'text-to-speech credit settlement failed - billing may be missed',
+        expect.objectContaining({ userId: 'u1', charged: 25 })
+      );
+    });
 
-  it('resolves the charge when the ledger write rejects, so a delivered result is not failed by billing', async () => {
-    balance.current = 10;
-    const held = await hold(6);
-    mocks.createTransaction.mockRejectedValueOnce(new Error('ledger write failed'));
+    it('returns a refund without touching the ledger', async () => {
+      const preflight = await hold();
+      await preflight.release();
 
-    await expect(held.settle(4, entry)).resolves.toBe(4);
-
-    // The over-reserve still went back to the user even though its ledger row did not land.
-    expect(balance.current).toBe(6);
-    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('ledger row missing'), expect.anything());
-  });
-
-  it('resolves release when the refund write rejects, so the provider error still reaches the caller', async () => {
-    balance.current = 10;
-    const held = await hold(6);
-    balance.failRefund = true;
-
-    await expect(held.release()).resolves.toBeUndefined();
-
-    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('refund failed'), expect.anything());
+      expect(mocks.deductCreditsWithOrgSupport).not.toHaveBeenCalled();
+    });
   });
 });

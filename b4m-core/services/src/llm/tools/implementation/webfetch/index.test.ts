@@ -23,7 +23,8 @@ vi.mock('./plainFetch', () => ({
 const dnsLookup = vi.fn(async () => [{ address: '93.184.216.34', family: 4 }]);
 vi.mock('node:dns/promises', () => ({ lookup: (...args: unknown[]) => dnsLookup(...args) }));
 
-import { firecrawlFetch, truncationMarker, webFetchBody, webFetchTool } from './index';
+import { FirecrawlError } from '@mendable/firecrawl-js';
+import { firecrawlFetch, truncationMarker, UnsupportedScrapeTargetError, webFetchBody, webFetchTool } from './index';
 import { UnsafeScrapeTargetError } from './errors';
 import { createFirecrawlApp } from './firecrawlApp';
 import { plainFetchScrape } from './plainFetch';
@@ -242,6 +243,43 @@ describe('webFetchTool result + citable', () => {
     expect(citable.metadata.truncated).toBe(false);
     expect(citable.metadata.originalContentLength).toBe(10_000);
     expect(citable.metadata.contentLength).toBe(10_000);
+  });
+});
+
+describe('firecrawlFetch provider refusals', () => {
+  const unsupportedSite = () =>
+    new FirecrawlError(
+      'Failed to scrape URL. Status code: 403. Error: We apologize for the inconvenience but we do not support this site.',
+      403
+    );
+
+  it('rethrows a Firecrawl 403 as a 422 UnsupportedScrapeTargetError carrying the original', async () => {
+    const refusal = unsupportedSite();
+    scrapeUrl.mockRejectedValueOnce(refusal);
+
+    const error = await firecrawlFetch(adapters, 'https://www.example.com/post/1').catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(UnsupportedScrapeTargetError);
+    expect(error).toMatchObject({ statusCode: 422, cause: refusal });
+    expect((error as Error).message).toBe(
+      "This site can't be fetched: the web scraper does not support www.example.com."
+    );
+  });
+
+  it.each([401, 402, 429])('leaves a Firecrawl %i as is so it still reports as a server fault', async statusCode => {
+    const failure = new FirecrawlError(`Status code: ${statusCode}`, statusCode);
+    scrapeUrl.mockRejectedValueOnce(failure);
+
+    await expect(firecrawlFetch(adapters, 'https://example.com/doc')).rejects.toBe(failure);
+  });
+
+  it('still gives the web_fetch tool its web_search hint for an unsupported site', async () => {
+    scrapeUrl.mockRejectedValueOnce(unsupportedSite());
+
+    const { result } = await runTool('https://www.example.com/post/1');
+
+    expect(result).toContain('This site cannot be accessed by the web scraper');
+    expect(result).toContain('web_search');
   });
 });
 

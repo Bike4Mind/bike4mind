@@ -39,7 +39,9 @@ const resolveActor = async (req: AuditRequest, scope: AuditActor['scope']): Prom
   const { user, apiKeyInfo } = req;
   if (!user) throw new Error('recordAdminActionFromRequest requires an authenticated request');
 
-  const { impersonatedBy } = user;
+  // Declared locally: the `impersonatedBy` augmentation lives in apps/client/global.d.ts, which a
+  // program importing this file from outside apps/client does not load.
+  const { impersonatedBy } = user as typeof user & { impersonatedBy?: string };
   // The acting identity is the real admin; req.user is the account being impersonated.
   const admin = impersonatedBy ? await lookUpImpersonator(req, impersonatedBy) : undefined;
   const base: AuditActor = !impersonatedBy

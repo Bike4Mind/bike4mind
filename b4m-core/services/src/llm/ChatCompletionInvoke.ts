@@ -204,17 +204,28 @@ export class ChatCompletionInvoke {
         );
       }
     }
-    const model = modelInfo.find(m => m.id === resolvedModelId);
-    if (!model) throw new BadRequestError(`Invalid model: "${params.model}" is not available`);
     // A disabled model is still listed (so the picker can show it greyed out) but must never
     // run. Reject it here with a clean message rather than letting the request reach the backend
     // and fail with a raw provider error (e.g. the Anthropic 404 for gated Fable 5). This also
     // covers sessions/agents already pinned to a model that has since been disabled.
-    if (model.disabled) {
-      throw new BadRequestError(
-        `Model "${model.id}" is currently unavailable${model.disabledReason ? `: ${model.disabledReason}` : ''}`
-      );
-    }
+    const availableModel = (id: string, requested: string) => {
+      const found = modelInfo.find(m => m.id === id);
+      if (!found) throw new BadRequestError(`Invalid model: "${requested}" is not available`);
+      if (found.disabled) {
+        throw new BadRequestError(
+          `Model "${found.id}" is currently unavailable${found.disabledReason ? `: ${found.disabledReason}` : ''}`
+        );
+      }
+      return found;
+    };
+    const model = availableModel(resolvedModelId, params.model);
+
+    // Research mode runs every enabled configuration's model instead of the primary, so each must
+    // pass the same availability gate; the access gate below covers them too.
+    const researchModelIds = researchMode?.enabled
+      ? [...new Set(researchMode.configurations.filter(c => c.enabled).map(c => c.model))]
+      : [];
+    for (const researchModelId of researchModelIds) availableModel(researchModelId, researchModelId);
 
     // What promptMeta.model.type is allowed to record. A completion legitimately resolves to text,
     // image or video - the media backends run through this same path - and speech-to-text is the
@@ -425,21 +436,25 @@ export class ChatCompletionInvoke {
       const modelToUse = originalModel;
 
       if (modelConfigurations.length > 0) {
-        const primaryModelConfig = modelConfigurations.find(config => config.id === originalModel);
-        if (primaryModelConfig) {
-          // Entitlement-aware admission: a tag-less subscriber can reach an
-          // entitlement-gated model via their resolved keys. Fail-safe to [].
-          // Only resolve when keys can change the outcome - skip the DB lookup
-          // for admins (always allowed) and for models with no allowedEntitlements
-          // (tag-only), keeping the entitlement branch inert.
-          const isAdmin = this.user.isAdmin || false;
-          const needsEntitlements = !isAdmin && (primaryModelConfig.allowedEntitlements?.length ?? 0) > 0;
-          const entitlementKeys = needsEntitlements ? await this.resolveEntitlementKeys() : [];
-          const hasUserAccess = isModelAccessible(primaryModelConfig, this.user.tags || [], isAdmin, entitlementKeys);
+        // Entitlement-aware admission: a tag-less subscriber can reach an
+        // entitlement-gated model via their resolved keys. Fail-safe to [].
+        // Only resolve when keys can change the outcome - skip the DB lookup
+        // for admins (always allowed) and for models with no allowedEntitlements
+        // (tag-only), keeping the entitlement branch inert. Research-mode
+        // configuration models are admitted by the same rule as the primary.
+        const isAdmin = this.user.isAdmin || false;
+        let entitlementKeys: string[] | undefined;
+        for (const gatedModelId of [originalModel, ...researchModelIds]) {
+          const gatedConfig = modelConfigurations.find(config => config.id === gatedModelId);
+          if (!gatedConfig) continue;
+          if (!isAdmin && (gatedConfig.allowedEntitlements?.length ?? 0) > 0) {
+            entitlementKeys ??= await this.resolveEntitlementKeys();
+          }
+          const hasUserAccess = isModelAccessible(gatedConfig, this.user.tags || [], isAdmin, entitlementKeys ?? []);
 
-          if (!primaryModelConfig.enabled || !hasUserAccess) {
-            this.logger.error(`Primary model ${originalModel} is not accessible and no fallback available`);
-            throw new ForbiddenError(`Model "${originalModel}" is not accessible and no fallback available`);
+          if (!gatedConfig.enabled || !hasUserAccess) {
+            this.logger.error(`Model ${gatedModelId} is not accessible and no fallback available`);
+            throw new ForbiddenError(`Model "${gatedModelId}" is not accessible and no fallback available`);
           }
         }
       }

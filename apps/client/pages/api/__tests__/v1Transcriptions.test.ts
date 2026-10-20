@@ -173,7 +173,9 @@ describe('POST /api/v1/transcriptions', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ text: 'hello world' });
     expect(TranscriptionResponseSchema.safeParse(res._getJSONData()).success).toBe(true);
-    expect(mockTranscribe).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u1', fileKey: KEY }));
+    expect(mockTranscribe).toHaveBeenCalledWith(
+      expect.objectContaining({ user: expect.objectContaining({ id: 'u1' }), fileKey: KEY })
+    );
   });
 
   it('rejects an unknown body field before transcribing', async () => {

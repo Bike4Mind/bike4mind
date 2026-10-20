@@ -350,6 +350,30 @@ describe('creditService - deductCreditsWithOrgSupport', () => {
       expect('questId' in calledWith).toBe(false);
     });
 
+    it('should handle speech_to_text_usage type (quest-less, questId omitted)', async () => {
+      const params: DeductCreditsParams = {
+        type: 'speech_to_text_usage',
+        user: mockUser,
+        organization: null,
+        credits: 12,
+        sessionId: 'session1',
+        model: 'openai',
+        source: 'api',
+      };
+
+      await deductCreditsWithOrgSupport(params, mockAdapters);
+
+      const [calledWith] = mockSubtractCredits.mock.calls.at(-1)!;
+      expect(calledWith).toMatchObject({
+        type: 'speech_to_text_usage',
+        ownerId: 'user1',
+        ownerType: CreditHolderType.User,
+        credits: 12,
+      });
+      // Quest-less: no questId key is forwarded for transcription.
+      expect('questId' in calledWith).toBe(false);
+    });
+
     it('should bill the org pool and track userDetails for org-billed sound effects', async () => {
       const params: DeductCreditsParams = {
         type: 'sound_effects_usage',

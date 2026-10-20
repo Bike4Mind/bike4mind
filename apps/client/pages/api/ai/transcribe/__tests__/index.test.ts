@@ -39,8 +39,8 @@ vi.mock('@client/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModel: (...a: unknown[]) => mocks.getOperationsModel(...a) },
   getEffectiveApiKeyByBackend: (...a: unknown[]) => mocks.getEffectiveApiKeyByBackend(...a),
 }));
-// Stands in for the real hold (creditPreflight.hold.test.ts covers it): settle writes the ledger
-// row through subtractCredits and, like the real one, logs rather than throws when that write fails.
+// Stands in for the real reservation: settle writes the ledger row through subtractCredits and, like
+// the real one, logs rather than throws when that write fails.
 const { fakeHold } = vi.hoisted(() => ({
   fakeHold: (
     subtract: (...a: unknown[]) => unknown,
@@ -60,9 +60,25 @@ const { fakeHold } = vi.hoisted(() => ({
 
 vi.mock('@server/utils/creditPreflight', () => ({
   assertPreflightCredits: (...a: unknown[]) => mocks.assertPreflightCredits(...a),
-  holdPreflightCredits: async ({ logger, ...args }: Parameters<typeof fakeHold>[1] & Record<string, unknown>) => {
+  holdPreflightCredits: async ({
+    req,
+    requiredCredits,
+    featureLabel,
+    billingOrganizationId,
+  }: {
+    req: { user: { id: string }; logger: Parameters<typeof fakeHold>[1]['logger'] };
+    requiredCredits: number;
+    featureLabel: string;
+    billingOrganizationId?: string | null;
+  }) => {
+    const args = {
+      userId: req.user.id,
+      estimatedCredits: requiredCredits,
+      featureLabel,
+      billingOrganizationId,
+    };
     await mocks.assertPreflightCredits(args);
-    return fakeHold(mocks.subtractCredits, { ...args, logger } as Parameters<typeof fakeHold>[1]);
+    return fakeHold(mocks.subtractCredits, { ...args, logger: req.logger });
   },
   InsufficientCreditsPreflightError,
 }));
@@ -132,6 +148,7 @@ describe('POST /api/ai/transcribe', () => {
         userId: 'u1',
         estimatedCredits: expected,
         featureLabel: 'transcription',
+        billingOrganizationId: null,
       });
       expect(res._getJSONData()).toEqual({ text: 'hi' });
       // Charged at the same backend-rate estimate the gate admitted on, so the
