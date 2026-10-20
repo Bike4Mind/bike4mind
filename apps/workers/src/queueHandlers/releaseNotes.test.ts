@@ -20,7 +20,9 @@ vi.mock('@bike4mind/database', () => ({
   releaseNoteRepository: { upsertGenerated: h.upsertGenerated },
   slackDevWorkspaceRepository: { findBySlackTeamIdWithToken: h.findWorkspace },
 }));
-vi.mock('@server/utils/cloudwatch', () => ({ emitModalGenerationMetrics: h.emitModalGenerationMetrics }));
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
+  emitModalGenerationMetrics: h.emitModalGenerationMetrics,
+}));
 vi.mock('./releaseNotes/generate', () => ({
   triageReleaseNotes: h.triageReleaseNotes,
   writeReleaseNotes: h.writeReleaseNotes,

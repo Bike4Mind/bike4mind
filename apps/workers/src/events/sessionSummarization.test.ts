@@ -112,7 +112,7 @@ vi.mock('@client/services/operationsModelService', () => ({
   },
 }));
 
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ upload: h.upload, getSignedUrl: vi.fn(async () => 'https://example.test/signed') }),
 }));
 
@@ -155,6 +155,28 @@ describe('sessionSummarization summary-file lookup', () => {
     await run();
 
     expect(h.findOne).toHaveBeenCalledWith({ sessionId: SESSION_ID, userId: OWNER });
+  });
+
+  it('labels a new library file as an automatic summary', async () => {
+    await run();
+
+    expect(h.createFabFile).toHaveBeenCalledWith(
+      OWNER,
+      expect.objectContaining({ fileName: '[Automatic summary] Notebook.txt' }),
+      expect.anything()
+    );
+  });
+
+  it('labels an existing summary file when refreshing it', async () => {
+    h.fabFileStore.push({ id: 'summary-1', userId: OWNER, sessionId: SESSION_ID, fileName: 'Notebook Summary.txt' });
+
+    await run();
+
+    expect(h.updateFabFile).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ id: 'summary-1', fileName: '[Automatic summary] Notebook.txt' }),
+      expect.anything()
+    );
   });
 
   it('leaves a stranger-owned file carrying the session id alone and creates its own summary', async () => {

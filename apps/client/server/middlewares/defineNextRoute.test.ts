@@ -79,7 +79,7 @@ vi.mock('@server/auth/auth', async orig => {
 });
 
 import { ApiKeyScope, ScopeForbiddenErrorSchema, defineEndpoint, sessionCloneContract } from '@bike4mind/common';
-import { UnauthorizedError } from '@server/utils/errors';
+import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { baseApi, methodNotAllowedHandler } from './baseApi';
 import { nextRouteForContract } from './defineNextRoute';
 

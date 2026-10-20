@@ -1556,6 +1556,8 @@ export function usePurgeDataLakeDocument(dataLakeId: string | null) {
         toast.success(
           `Deleted permanently: the document and its ${receipt.chunksBefore} chunk(s) and vectors are gone.`
         );
+      } else if (receipt.heldForModeration) {
+        toast.warning('Kept under moderation hold: the document and its stored copies were preserved.');
       } else {
         toast.error(`Deletion did not finish: ${receipt.chunksRemaining} chunk(s) still remain.`);
       }

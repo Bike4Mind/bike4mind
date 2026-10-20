@@ -1,7 +1,7 @@
 import { organizationRepository, userRepository, withTransaction } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { ApiKeyScope } from '@bike4mind/common';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { baseApi } from '@server/middlewares/baseApi';

@@ -60,7 +60,7 @@ import {
   publishContextSummarizeSession,
 } from './sessionSideEffects';
 import { ClientMessageSender } from '@bike4mind/utils';
-import { ActivityType } from '@client/config/activityType';
+import { ActivityType } from '@bike4mind/server-utils/config/activityType';
 import type { ISessionDocument } from '@bike4mind/common';
 import type { Ability } from '@server/auth/ability';
 import type { Logger } from '@bike4mind/observability';

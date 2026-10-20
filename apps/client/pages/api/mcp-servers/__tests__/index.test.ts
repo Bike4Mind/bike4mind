@@ -2,10 +2,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-const { mockFind, mockFindOne, mockUpdate, mockInvoke, mockCreateBodyParse } = vi.hoisted(() => ({
+const { mockFind, mockFindOne, mockUpdate, mockCreate, mockInvoke, mockCreateBodyParse } = vi.hoisted(() => ({
   mockFind: vi.fn(),
   mockFindOne: vi.fn(),
   mockUpdate: vi.fn(),
+  mockCreate: vi.fn(),
   mockInvoke: vi.fn(),
   mockCreateBodyParse: vi.fn(() => ({ success: true })),
 }));
@@ -30,6 +31,7 @@ vi.mock('@bike4mind/database', () => ({
     find: (...a: unknown[]) => mockFind(...a),
     findOne: (...a: unknown[]) => mockFindOne(...a),
     update: (...a: unknown[]) => mockUpdate(...a),
+    create: (...a: unknown[]) => mockCreate(...a),
   },
   adminSettingsRepository: {},
 }));
@@ -38,7 +40,7 @@ vi.mock('@bike4mind/mcp', () => ({}));
 // The EnableMCPServer gate itself is pinned by mcpServerFlagGate.test.ts.
 vi.mock('@server/utils/mcpServerFlag', () => ({ assertMcpServerEnabled: vi.fn() }));
 vi.mock('@server/utils/invokeMcpHandler', () => ({ invokeMcpHandler: (...a: unknown[]) => mockInvoke(...a) }));
-vi.mock('@server/utils/errors', () => ({
+vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   BadRequestError: class extends Error {},
   NotFoundError: class extends Error {},
 }));
@@ -228,5 +230,38 @@ describe('POST /api/mcp-servers', () => {
     mockCreateBodyParse.mockReturnValue({ success: true, data: { name: 'notion', envVariables: [], enabled: true } });
 
     await expect(runPost()).rejects.toThrow('MCP Server not found');
+  });
+
+  it('returns the saved server with the connect failure instead of a 400', async () => {
+    mockFindOne.mockResolvedValue(null);
+    mockCreate.mockResolvedValue(server({ name: 'linkedin' }));
+    mockInvoke.mockRejectedValue(new Error('MCP error -32000: Connection closed'));
+    mockCreateBodyParse.mockReturnValue({
+      success: true,
+      data: { name: 'linkedin', envVariables: [{ key: 'LINKEDIN_ACCESS_TOKEN', value: 'test-token-1' }] },
+    });
+
+    const res = await runPost();
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockCreate).toHaveBeenCalledOnce();
+    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(res._getJSONData()).toMatchObject({
+      id: 's1',
+      name: 'linkedin',
+      tools: [],
+      connectionError: 'MCP error -32000: Connection closed',
+    });
+  });
+
+  it('omits connectionError when the connect succeeds', async () => {
+    mockFindOne.mockResolvedValue(server());
+    mockUpdate.mockResolvedValue(server({ tools: ['search'] }));
+    mockInvoke.mockResolvedValue([{ name: 'search' }]);
+    mockCreateBodyParse.mockReturnValue({ success: true, data: { name: 'notion', envVariables: [], enabled: true } });
+
+    const res = await runPost();
+
+    expect(res._getJSONData()).not.toHaveProperty('connectionError');
   });
 });

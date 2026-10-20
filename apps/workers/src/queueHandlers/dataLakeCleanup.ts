@@ -22,7 +22,7 @@ import { shredPrincipalMemory } from '@bike4mind/server-utils/memory/ledgerMemor
 import { releaseDriveConnectionForLake } from '@server/integrations/google/drive/common';
 import { releaseGitHubLakeConnectionForLake } from '@server/integrations/github/dataLake/githubLakeConnection';
 import { createKeyProvider } from '@bike4mind/server-utils/memory/factCipher';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { BadRequestError } from '@bike4mind/utils';
 import { ZodError } from 'zod';
 import { CleanupPayload } from '@bike4mind/server-utils/dataLakes/dataLakeCleanupPayload';

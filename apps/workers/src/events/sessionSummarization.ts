@@ -25,7 +25,7 @@ import {
 import { BadRequestError } from '@bike4mind/utils';
 import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { logEvent } from '@server/utils/analyticsLog';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import { recordSessionOperationalUsage } from '@workers/events/recordSessionOperationalUsage';
@@ -205,7 +205,7 @@ export const handler = withEventContext(async (event, logger) => {
   // used for RAG prompting
   const fabFileData = {
     userId: session.userId,
-    fileName: `${session.name || 'Notebook'} Summary.txt`,
+    fileName: `[Automatic summary] ${session.name || 'Notebook'}.txt`,
     fileContent: summaryContent,
     fileSize: Buffer.byteLength(summaryContent),
     mimeType: SupportedFabFileMimeTypes.TXT_PLAIN,

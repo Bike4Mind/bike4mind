@@ -48,7 +48,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 
 vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe: vi.fn() }));
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ upload: vi.fn(), getSignedUrl: h.signUrl, getMetadata: vi.fn() }),
 }));
 

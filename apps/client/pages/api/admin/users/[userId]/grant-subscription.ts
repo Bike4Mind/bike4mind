@@ -6,10 +6,10 @@ import {
   withTransaction,
 } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { organizationService, creditService } from '@bike4mind/services';
 import { ApiKeyScope, CreditHolderType, IOrganizationDocument } from '@bike4mind/common';
-import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@client/lib/subscriptions/constants';
+import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@bike4mind/server-utils/lib/subscriptions/constants';
 import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
 import { entitlementsForPriceIds } from '@client/lib/entitlements/registry';
 import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';

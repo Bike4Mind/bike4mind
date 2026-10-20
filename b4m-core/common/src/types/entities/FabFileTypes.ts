@@ -472,6 +472,27 @@ export interface IFabFile {
   moderationClaimedAt?: Date;
 
   /**
+   * ETag of the stored object version the moderation verdict covers, recorded before the bytes are
+   * read, so a verdict always covers that version or a newer one. A landing with a different ETag
+   * (the object was overwritten) resets the verdict to `pending` for a rescan. Opaque: a multipart
+   * upload's ETag has a `-N` suffix and is never compared as a hash.
+   */
+  moderationETag?: string;
+
+  /** Monotonic identity of moderation-version writes; distinguishes A -> B -> A from unchanged A. */
+  moderationRevision?: number;
+
+  /**
+   * Set by the doors that hand a client a URL to PUT this row's bytes to (a presign, or the self-host
+   * proxy). Only such a row's landing is judged by the measured-size gate (apps/client/server/s3/uploadSizeGate.ts):
+   * a server-side door writes bytes it already holds, and judging those would discard its file.
+   */
+  clientUpload?: boolean;
+
+  /** Keeps rejected upload tombstones discoverable for object cleanup on event redelivery. */
+  uploadRejectedAt?: Date;
+
+  /**
    * Compare-only watermark for charging `currentStorageSize`: an S3 event is charged only if its
    * time is newer. Advanced by compare-and-set, so an upload is charged once whether the ObjectCreated
    * handler or a notebook import charges it (packages/server-utils/src/s3/storageCharge.ts). Imported rows
@@ -2202,9 +2223,16 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * already soft-deleted, and `findById` hides those rows behind the soft-delete plugin.
    *
    * Optional for the same source-compatibility reason as `setLakeSupersession` above; the purge
-   * requires it locally.
+   * requires it locally. Moderation state rides along so the purge can keep an evidence-held
+   * file's bytes (see isModerationEvidenceHold).
    */
-  findStorageKeysByIds?(
-    fabFileIds: string[]
-  ): Promise<Array<{ id: string; filePath?: string; versions?: Array<Pick<IFabFileVersion, 'filePath'>> }>>;
+  findStorageKeysByIds?(fabFileIds: string[]): Promise<
+    Array<
+      {
+        id: string;
+        filePath?: string;
+        versions?: Array<Pick<IFabFileVersion, 'filePath'>>;
+      } & Pick<IFabFile, 'moderationStatus' | 'blockReason'>
+    >
+  >;
 }

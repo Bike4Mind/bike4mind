@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 
 // Public health probe. No DB query of its own, but `baseApi` opens a Mongo
 // connection in its middleware chain - so a hard DB outage will surface as a

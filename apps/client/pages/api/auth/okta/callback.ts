@@ -33,11 +33,11 @@ import { logSignInSuccess, resolveSecondFactor, type SecondFactorOutcome } from 
 import { logEvent } from '@server/utils/analyticsLog';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { AuthEvents, AuthStrategy } from '@bike4mind/common';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { requireNonSystemUser } from '@server/auth/requireNonSystemUser';
 import { validateAppUrl } from '@server/utils/validators';
 import { encryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { authSessionService } from '@bike4mind/services';
 import { Logger } from '@bike4mind/observability';
 import { decideAutoLink, applyAccountLink } from '@server/utils/auth/oauthAccountLink';
@@ -46,9 +46,9 @@ import { applyEmailVerifiedGrants } from '@server/auth/emailVerifiedGrants';
 import { applyOAuthSignupDomainGrant } from '@server/utils/auth/oauthSignupGrants';
 import { emailMatchesIdpDomain, IDP_EMAIL_DOMAIN_MISMATCH } from '@server/utils/auth/idpEmailDomain';
 import { isLocalAppUrl } from '@server/utils/validators';
-import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
+import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 import { stampOAuthSourceTag } from '@server/utils/auth/oauthSourceTag';
-import { getClientIp } from '@server/utils/ip';
+import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 
 /**
  * Type guard to validate query parameter is a non-empty string.

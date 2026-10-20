@@ -45,7 +45,7 @@ import type { RetrievalLakeScope } from '@server/dataLakes/resolveRetrievalLakeS
 import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
 import { getRequestMembershipOrgIds } from '@bike4mind/server-utils/dataLakes/requestMembership';
 import { assertApiKeyOrgMembership } from '@server/billing/assertApiKeyOrgMembership';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { resolveApiKeyOwnerType } from '@server/utils/resolveApiKeyOwnerType';
 import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
 

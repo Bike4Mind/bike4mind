@@ -41,6 +41,9 @@ interface BedrockOptions {
   stream: boolean;
 }
 
+// Bedrock rewords context overflow per model family; Llama says "maximum context length".
+const CONTEXT_OVERFLOW_MESSAGES = ['Input is too long', 'maximum context length'];
+
 // Harden Bedrock retries for transient 503 (ServiceUnavailableException) and
 // throttling. The AWS SDK default is maxAttempts:3 with sub-second standard backoff -
 // too shallow for brief Bedrock capacity blips.
@@ -324,7 +327,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     // the reactive ValidationException catches below remain the safety net for those cases.
     const contextWindow = this.getModelContextWindow(model);
     if (contextWindow > 0) {
-      const baseOutputTokens = typeof options.maxTokens === 'number' ? options.maxTokens : 4096;
+      const baseOutputTokens = this.getEffectiveMaxOutputTokens(options);
       // Extended thinking reserves additional tokens on top of max_tokens in the actual payload.
       const thinkingBudget = options.thinking?.budget_tokens ?? 0;
       const reservedOutputTokens = baseOutputTokens + thinkingBudget;
@@ -1118,7 +1121,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
   private handleBedrockError(err: unknown): never {
     const errName = (err as { name?: string })?.name;
     const errMsg = (err as { message?: string })?.message ?? '';
-    if (errName === 'ValidationException' && errMsg.includes('Input is too long')) {
+    if (errName === 'ValidationException' && CONTEXT_OVERFLOW_MESSAGES.some(m => errMsg.includes(m))) {
       Logger.globalInstance.warn(
         '[ContextOverflow] Bedrock ValidationException: input too long — surfacing user-friendly error'
       );
@@ -1144,6 +1147,11 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
    */
   protected getModelContextWindow(_model: string): number {
     return 0;
+  }
+
+  /** Output reservation must match any provider-specific limit applied to the payload. */
+  protected getEffectiveMaxOutputTokens(options: Partial<ICompletionOptions>): number {
+    return typeof options.maxTokens === 'number' ? options.maxTokens : 4096;
   }
 
   /**

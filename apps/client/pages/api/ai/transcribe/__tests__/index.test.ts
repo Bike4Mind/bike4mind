@@ -99,7 +99,7 @@ vi.mock('@bike4mind/database', () => ({
   usageEventRepository: { record: () => Promise.resolve() },
 }));
 
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { estimateTranscriptionCost, transcriptionUsdPerMinute } from '@server/utils/transcriptionCost';
 import handler from '../index';
 

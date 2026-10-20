@@ -17,8 +17,8 @@ import { loadAccessibleFabFile } from '@server/files/loadAccessibleFabFile';
 import { deleteFileForUser } from '@server/files/deleteFileForUser';
 import { updateFileForUser } from '@server/files/updateFileForUser';
 import { toPublicFile, toPublicFileSummary } from '@server/files/toPublicFile';
-import { isValidObjectId } from '@server/utils/objectId';
-import { NotFoundError } from '@server/utils/errors';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 
 // A malformed id is a 404, not a CastError from deep in the query (CONVENTIONS.md status table).
 function assertValidFileId(id: string) {

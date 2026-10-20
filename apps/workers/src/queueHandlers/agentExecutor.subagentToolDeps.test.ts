@@ -45,7 +45,7 @@ vi.mock('./agentExecutor.subagentToolConfig', async () => {
   return { ...actual, buildSubagentToolConfig: vi.fn().mockReturnValue({}) };
 });
 
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: vi.fn().mockReturnValue({}),
   getGeneratedImageStorage: vi.fn().mockReturnValue({}),
 }));

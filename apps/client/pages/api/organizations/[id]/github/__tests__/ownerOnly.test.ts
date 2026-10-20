@@ -38,7 +38,7 @@ vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({
   decryptSecret: h.decryptSecret,
   isEncrypted: () => false,
 }));
-vi.mock('@server/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: 'test-key' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: 'test-key' } }));
 vi.mock('@server/integrations/github/githubConnectionAuditLog', () => ({
   logConnectionCreated: vi.fn(),
   logConnectionUpdated: vi.fn(),

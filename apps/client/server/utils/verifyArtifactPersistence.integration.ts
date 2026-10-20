@@ -30,7 +30,7 @@
 
 import { connectDB, Artifact, ArtifactContent, ArtifactVersion } from '@bike4mind/database';
 import { persistAgentArtifacts, buildAgentArtifactPayloads } from './persistAgentArtifacts';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import mongoose from 'mongoose';
 
 const RUN = `itest-${Date.now().toString(36)}`;

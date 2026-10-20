@@ -7,7 +7,7 @@ import {
   InsufficientCreditsPreflightError,
   type PreflightCreditHold,
 } from '@server/utils/creditPreflight';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 // File size is used as a proxy for duration since the actual duration is not
 // available pre-transcription. PCM baseline (16-bit 16kHz mono) is multiplied

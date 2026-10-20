@@ -12,7 +12,7 @@ import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
-import { ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { validateAgentUpdate } from '@server/utils/agentValidation';
 import { assertAgentAccess } from '@server/agents/assertAgentAccess';
 import { deleteAgent } from '@server/agents/deleteAgent';

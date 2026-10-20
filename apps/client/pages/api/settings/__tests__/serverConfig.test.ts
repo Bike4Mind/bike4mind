@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // heavy DB/service deps; the two compute* helpers are thin delegations this test verifies.
 vi.mock('@server/middlewares/baseApi', () => ({ baseApi: () => ({ get: (fn: unknown) => fn }) }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
-vi.mock('@server/utils/config', () => ({ Config: {} }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: {} }));
 vi.mock('sst', () => ({ Resource: {} }));
 
 vi.mock('@bike4mind/database', () => ({

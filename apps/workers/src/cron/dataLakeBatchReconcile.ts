@@ -28,14 +28,14 @@ import {
 import { dataLakeService } from '@bike4mind/services';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import {
   recordReconcilerForcedTerminal,
   recordStuckBatchGauge,
   recordReconcileRun,
   recordChunkRescueSweep,
   type ChunkRescueOutcome,
-} from '@server/utils/cloudwatch';
+} from '@bike4mind/server-utils/utils/cloudwatch';
 import { enqueueTaxonomyAnalysisIfWanted } from '@server/dataLakes/dataLakeBatchProgress';
 import { runChunkRescueSweep } from '@workers/s3/chunkRescueSweep';
 import { runModerationRescueSweep } from '@workers/s3/moderationRescueSweep';
@@ -44,7 +44,7 @@ import {
   CHUNK_CLAIM_STALE_MS,
   VECTORIZE_ENQUEUE_RESCUE_MIN_AGE_MS,
 } from '@workers/s3/chunkScan';
-import { sendToQueue } from '@server/utils/sqs';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { Resource } from 'sst';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 

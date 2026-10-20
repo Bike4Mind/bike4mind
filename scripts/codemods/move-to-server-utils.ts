@@ -1,13 +1,15 @@
 #!/usr/bin/env tsx
 /**
- * Rewrites every module specifier that points at a file just moved from apps/client/server into
+ * Rewrites every module specifier that points at a file just moved from apps/client into
  * packages/server-utils/src.
  *
- * Usage (after `git mv`-ing the files, colocated tests included, to the same tail under src/):
+ * Usage (after `git mv`-ing the files, colocated tests included, to their package path):
  *   pnpm tsx scripts/codemods/move-to-server-utils.ts apps/client/server/memory/factCipher.ts ...
  *
- * Arguments are the files' OLD paths, and only .ts files can be moved: the package's exports map
- * resolves `./src/*.ts`. Every .ts/.tsx/.mts/.cts/.js/.mjs file (.d.ts included) under apps/client,
+ * Arguments are the files' OLD paths. A file under apps/client/server/X lands at src/X; one under
+ * apps/client/{lib,shared,config,services,app/utils}/X keeps its client-relative path, so
+ * apps/client/lib/X lands at src/lib/X. No other client directory can move. Only .ts files can be
+ * moved: the package's exports map resolves `./src/*.ts`. Every .ts/.tsx/.mts/.cts/.js/.mjs file (.d.ts included) under apps/client,
  * apps/workers, packages, b4m-core and infra is parsed with the TypeScript compiler API. A
  * specifier that resolves (through the @server/, @client/, @/, @pages/, @public/ or @workers/
  * alias, a relative path, or an `@bike4mind/server-utils/<tail>` self-reference) to a moved file
@@ -26,18 +28,23 @@
  *
  * A moved file that still imports a file left behind in apps/ makes the run throw: the package
  * must stay below both apps (eslint.config.mjs enforces the same boundary). Every file is checked
- * before any is written, so a throw leaves the tree untouched. Idempotent: a second run changes
- * nothing.
+ * before any is written, so a throw leaves the tree untouched. It also throws when two arguments
+ * map to the same package path, or when an old path still holds anything but a one-line re-export
+ * shim of its package path (the move did not happen, or the target belongs to another file).
+ * Idempotent: a second run changes nothing, including after the shims are added.
  */
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import ts from 'typescript';
 
-export const CLIENT_SERVER = 'apps/client/server';
+export const CLIENT_ROOT = 'apps/client';
+export const CLIENT_SERVER = `${CLIENT_ROOT}/server`;
 export const PACKAGE_SRC = 'packages/server-utils/src';
 export const PACKAGE_NAME = '@bike4mind/server-utils';
 
+/** Client directories a file can move from; only server/ drops its prefix in the package. */
+const MOVABLE_ROOTS = ['server', 'lib', 'shared', 'config', 'services', 'app/utils'];
 const SCAN_ROOTS = ['apps/client', 'apps/workers', 'packages', 'b4m-core', 'infra'];
 const OVERLAY_DIR = 'packages/premium/';
 const SKIP_DIRS = new Set(['node_modules', '.next', 'dist', '.turbo', 'premium-generated', 'coverage']);
@@ -122,14 +129,17 @@ export interface Move {
 
 export function toMove(oldPath: string): Move {
   const normalized = path.posix.normalize(oldPath.split(path.sep).join('/'));
-  if (!normalized.startsWith(`${CLIENT_SERVER}/`) || !SOURCE_EXT.test(normalized)) {
-    throw new Error(`Not a source file under ${CLIENT_SERVER}/: ${oldPath}`);
+  const clientPath = normalized.startsWith(`${CLIENT_ROOT}/`) ? normalized.slice(CLIENT_ROOT.length + 1) : '';
+  const root = MOVABLE_ROOTS.find(r => clientPath.startsWith(`${r}/`));
+  if (!root || !SOURCE_EXT.test(normalized)) {
+    throw new Error(`Not a source file under ${CLIENT_ROOT}/{${MOVABLE_ROOTS.join(',')}}/: ${oldPath}`);
   }
   if (!normalized.endsWith('.ts') || normalized.endsWith('.d.ts')) {
     throw new Error(`Only .ts files can be moved (the package exports map resolves ./src/*.ts): ${oldPath}`);
   }
   const from = normalized.replace(STRIP_EXT, '');
-  return { from, to: `${PACKAGE_SRC}/${from.slice(CLIENT_SERVER.length + 1)}` };
+  const tail = root === 'server' ? clientPath.slice('server/'.length) : clientPath;
+  return { from, to: `${PACKAGE_SRC}/${tail.replace(STRIP_EXT, '')}` };
 }
 
 function isRelative(specifier: string): boolean {
@@ -220,7 +230,7 @@ export function findRewrites(
   const warnings: string[] = [];
   for (const head of dynamicHeads) {
     const target = resolveSpecifier(head, resolveFromDir);
-    if (target?.startsWith(`${CLIENT_SERVER}/`) && moves.some(m => m.from.startsWith(target))) {
+    if (target?.startsWith(`${CLIENT_ROOT}/`) && moves.some(m => m.from.startsWith(target))) {
       warnings.push(`${file}: dynamic specifier starting '${head}' may point at a moved file; update by hand`);
     }
   }
@@ -245,6 +255,19 @@ export function rewriteSource(source: string, file: string, moves: Move[], warni
   return applyEdits(source, found.edits);
 }
 
+/** True when `source` only re-exports the package path `to` (the shims left for the overlays). */
+function isShimOf(source: string, to: string): boolean {
+  const specifier = `${PACKAGE_NAME}/${to.slice(PACKAGE_SRC.length + 1)}`;
+  const lines = source.split('\n').filter(line => line.trim() !== '' && !line.trim().startsWith('//'));
+  return (
+    lines.length > 0 &&
+    lines.every(
+      line =>
+        line.trim() === `export * from '${specifier}';` || line.trim() === `export { default } from '${specifier}';`
+    )
+  );
+}
+
 function* walk(dir: string): Generator<string> {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (entry.isDirectory()) {
@@ -261,10 +284,23 @@ function* walk(dir: string): Generator<string> {
  */
 export function run(root: string, oldPaths: string[]): { changed: string[]; warnings: string[] } {
   const moves = oldPaths.map(toMove);
+  const seen = new Map<string, string>();
   moves.forEach((move, i) => {
+    const clash = seen.get(move.to);
+    if (clash !== undefined) {
+      throw new Error(`${clash} and ${oldPaths[i]} would both move to ${move.to}.ts - rename one first.`);
+    }
+    seen.set(move.to, oldPaths[i]);
     const moved = `${move.to}${path.extname(oldPaths[i])}`;
     if (!existsSync(path.join(root, moved))) {
       throw new Error(`${moved} does not exist - git mv the file there before running this.`);
+    }
+    const old = path.join(root, oldPaths[i]);
+    if (existsSync(old) && !isShimOf(readFileSync(old, 'utf8'), move.to)) {
+      throw new Error(
+        `${oldPaths[i]} still exists, so ${moved} is not it - git mv it, or move the file already at ` +
+          `${moved} out of the way.`
+      );
     }
   });
 
@@ -298,7 +334,7 @@ export function run(root: string, oldPaths: string[]): { changed: string[]; warn
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const args = process.argv.slice(2);
   if (args.length === 0) {
-    console.error('Usage: pnpm tsx scripts/codemods/move-to-server-utils.ts <old apps/client/server path>...');
+    console.error('Usage: pnpm tsx scripts/codemods/move-to-server-utils.ts <old apps/client path>...');
     process.exit(1);
   }
   const { changed, warnings } = run(process.cwd(), args);

@@ -25,7 +25,7 @@ vi.mock('@bike4mind/observability', () => ({
     error = loggerError;
   },
 }));
-vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://host/%STAGE%' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://host/%STAGE%' } }));
 vi.mock('sst', () => ({ Resource: { App: { stage: 'dev' } } }));
 
 const { handler, isModelDiscoveryStale, MODEL_DISCOVERY_STALE_AFTER_MS } = await import('./modelDiscoveryStaleness');

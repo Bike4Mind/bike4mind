@@ -64,7 +64,7 @@ vi.mock('@bike4mind/database', () => ({
   CreditLot: { aggregate: vi.fn() },
 }));
 
-vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://fixture/%STAGE%' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://fixture/%STAGE%' } }));
 vi.mock('sst', () => ({ Resource: { App: { stage: 'fixture' } } }));
 
 // Imports after mocks

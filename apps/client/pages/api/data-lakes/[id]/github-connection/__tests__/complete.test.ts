@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ConflictError, ForbiddenError } from '@server/utils/errors';
+import { ConflictError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 // Unit test of the repository-pick completion route. The connect lib (which has its own dedicated
 // unit tests) is mocked; the request body's Zod validation runs for real.

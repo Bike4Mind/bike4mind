@@ -1,4 +1,4 @@
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 /**
  * Reads the optional `targetSurface` field of a clone/fork/move body: `undefined` when absent

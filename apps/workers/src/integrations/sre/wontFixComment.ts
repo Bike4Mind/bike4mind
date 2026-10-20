@@ -8,7 +8,7 @@
  * ping real GitHub users/teams from a hallucinated handle).
  */
 
-import { escapeMarkdown } from '@server/utils/markdownEscape';
+import { escapeMarkdown } from '@bike4mind/server-utils/utils/markdownEscape';
 
 /** HTML marker used to dedup `wont_fix` comments on a single issue. */
 export const WONT_FIX_COMMENT_MARKER = '<!-- sre-wont-fix -->';

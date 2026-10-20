@@ -91,7 +91,7 @@ vi.mock('@server/utils/saveGeneratedAssetToFiles', () => ({
 }));
 
 // Only the oversized-audio offload touches storage; the delivery module itself is real.
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({
     upload: (...a: unknown[]) => mocks.upload(...a),
     getSignedUrl: (...a: unknown[]) => mocks.getSignedUrl(...a),

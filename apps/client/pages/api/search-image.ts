@@ -2,9 +2,9 @@ import { cacheRepository } from '@bike4mind/database';
 import { isExecutableUploadMimeType, stripImageUrlSignature, verifyImageUrlSignature } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { Config } from '@server/utils/config';
-import { BadRequestError, TooManyRequestsError } from '@server/utils/errors';
-import { safeFetch, SsrfError } from '@server/utils/ssrfProtection';
+import { Config } from '@bike4mind/server-utils/utils/config';
+import { BadRequestError, TooManyRequestsError } from '@bike4mind/server-utils/utils/errors';
+import { safeFetch, SsrfError } from '@bike4mind/server-utils/utils/ssrfProtection';
 import { streamWithSizeLimit } from '@server/utils/streamWithSizeLimit';
 import { z } from 'zod';
 

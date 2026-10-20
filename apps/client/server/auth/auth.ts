@@ -5,7 +5,7 @@ import { AuthStrategy, type IUserDocument } from '@bike4mind/common';
 import ability from '@server/auth/ability';
 import { User } from '@bike4mind/database';
 import { verifyCallback } from '@server/utils/auth/verifyCallback';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 
 import { Request, RequestHandler, Response } from 'express';
 import GoogleStrategy from 'passport-google-oauth20';

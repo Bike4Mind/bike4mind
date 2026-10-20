@@ -16,7 +16,7 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   isDevelopment: vi.fn(),
 }));
 
@@ -28,7 +28,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 import { organizationRepository, userRepository } from '@bike4mind/database';
 import { organizationService } from '@bike4mind/services';
-import { isDevelopment } from '@server/utils/config';
+import { isDevelopment } from '@bike4mind/server-utils/utils/config';
 
 describe('POST /api/organizations/create-dev', () => {
   const mockReq = {

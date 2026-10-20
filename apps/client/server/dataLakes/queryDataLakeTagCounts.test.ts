@@ -51,7 +51,7 @@ vi.mock('@bike4mind/database', async () => {
   };
 });
 
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getSignedUrl: vi.fn() }) }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({ getSignedUrl: vi.fn() }) }));
 
 import { DATA_LAKES } from '@bike4mind/common';
 import { queryDataLakeTagCounts, queryScopedDataLakeTagCounts } from './index';

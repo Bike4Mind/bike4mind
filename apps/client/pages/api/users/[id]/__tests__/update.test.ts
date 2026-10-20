@@ -66,7 +66,7 @@ vi.mock('@server/utils/telemetryDeletion', () => ({
   triggerTelemetryDeletion: vi.fn(),
 }));
 
-vi.mock('@server/utils/ip', () => ({
+vi.mock('@bike4mind/server-utils/utils/ip', () => ({
   getClientIp: () => '127.0.0.1',
   truncateIp: (ip: string) => ip,
 }));

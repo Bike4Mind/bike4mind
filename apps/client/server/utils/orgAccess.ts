@@ -25,8 +25,8 @@ import {
   type IUserDocument,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError, UnprocessableEntityError } from '@bike4mind/utils';
-import { isValidObjectId } from '@server/utils/objectId';
-import { resolveActiveOrg } from './resolveActiveOrg';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
+import { resolveActiveOrg } from '@bike4mind/server-utils/utils/resolveActiveOrg';
 import type { Request } from 'express';
 
 /**

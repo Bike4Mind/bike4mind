@@ -2,7 +2,7 @@ import { rapidReplyMappingRepository } from '@bike4mind/database/ai';
 import { rapidReplyAuditLogRepository } from '@bike4mind/database/ai';
 import { ApiKeyScope, RapidReplyResponseStylesCommon } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, NotFoundError, ForbiddenError } from '@server/utils/errors';
+import { BadRequestError, NotFoundError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 
 // Every field is copied into an update payload, which casts before validators run. `enabled` is

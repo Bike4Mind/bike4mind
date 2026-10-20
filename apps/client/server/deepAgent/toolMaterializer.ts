@@ -26,7 +26,7 @@ import type { RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclus
 import type { IUserDocument } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { lakeWriteToolDb } from '@server/dataLakes/lakeWriteToolDb';
-import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
+import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import type { ToolMaterializer } from '@bike4mind/agents';
 import { buildSystemApiKeyTable } from '@bike4mind/server-utils/deepAgent/resolveBackend';
 import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';

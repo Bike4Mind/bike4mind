@@ -42,10 +42,10 @@ import {
 import { checkRateLimit, checkApiKeyRateLimitOrThrow, type ApiKeyInfo } from '@server/cli/auth';
 import { resolveContractAuth } from '@server/cli/resolveContractAuth';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { flattenHeaders } from '@server/utils/flattenHeaders';
-import { serializeError } from '@server/utils/serializeError';
-import { createMethodGuard } from '@server/utils/allowedMethods';
+import { serializeError } from '@bike4mind/server-utils/utils/serializeError';
+import { createMethodGuard } from '@bike4mind/server-utils/utils/allowedMethods';
 import { buildErrorBody, httpErrorToResponse } from '@server/middlewares/errorHandler';
 import { emitProcessingFailed } from '../processingFailedMetric';
 import { fromZodError } from 'zod-validation-error';
@@ -106,7 +106,9 @@ function toStreamErrorFrame(error: unknown, requestId: string): SSEErrorEvent {
       frameError = new Error('The model declined this request');
       code = 'content_blocked';
     } else if (status === 401 || status === 403) {
-      frameError = new Error('Model provider rejected our credentials');
+      frameError = new Error(
+        status === 401 ? 'Model provider rejected our credentials' : 'Model provider denied access to this model'
+      );
       code = 'provider_rejected';
     } else {
       const upstream = status === undefined ? '' : ` (upstream ${status})`;
@@ -334,7 +336,8 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
     } catch (error) {
       const jsonError = toJsonError(error, requestId);
       const level = jsonError.status < 500 ? 'warn' : 'error';
-      logger[level]('[CLI_LLM] Handler error', { requestId, error: serializeError(error) });
+      const upstreamStatus = error instanceof Error ? getHttpStatus(error) : undefined;
+      logger[level]('[CLI_LLM] Handler error', { requestId, upstreamStatus, error: serializeError(error) });
       track(emitProcessingFailed('cli-sse', error));
 
       try {

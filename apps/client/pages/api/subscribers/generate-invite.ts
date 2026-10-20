@@ -1,11 +1,11 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { subscriberRepository, registrationInviteRepository } from '@bike4mind/database';
 import { generateCode } from '@server/managers/regInviteManager';
 import { RegInviteStatusType, requireEnv } from '@bike4mind/common';
 import { EmailEvents } from '@server/utils/eventBus';
-import { getLogoUrl, buildEmailLogoImg, escapeHtml } from '@server/utils/mailer/emailHelpers';
+import { getLogoUrl, buildEmailLogoImg, escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 import { z } from 'zod';
 
 const generateInviteSchema = z.object({

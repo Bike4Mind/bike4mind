@@ -39,7 +39,12 @@ describe('FabFileRepository.findStorageKeysByIds', () => {
     expect(await fabFileRepository.findById(file._id.toString())).toBeNull();
 
     await expect(fabFileRepository.findStorageKeysByIds([file._id.toString()])).resolves.toEqual([
-      { id: file._id.toString(), filePath: 'org/doc-v2.txt', versions: [{ filePath: 'org/doc-v1.txt' }] },
+      {
+        id: file._id.toString(),
+        filePath: 'org/doc-v2.txt',
+        versions: [{ filePath: 'org/doc-v1.txt' }],
+        moderationStatus: 'pending',
+      },
     ]);
   });
 
@@ -52,6 +57,18 @@ describe('FabFileRepository.findStorageKeysByIds', () => {
     const rows = await fabFileRepository.findStorageKeysByIds([live._id.toString(), deleted._id.toString(), missing]);
 
     expect(rows.map(row => row.filePath).sort()).toEqual(['org/deleted.txt', 'org/live.txt']);
+  });
+
+  it("carries a soft-deleted blocked row's moderation state, so the purge can keep held evidence", async () => {
+    const file = await makeFile('org/evidence.png');
+    await FabFile.collection.updateOne(
+      { _id: file._id },
+      { $set: { moderationStatus: 'blocked', blockReason: 'explicit', deletedAt: new Date() } }
+    );
+
+    const [row] = await fabFileRepository.findStorageKeysByIds([file._id.toString()]);
+
+    expect(row).toMatchObject({ moderationStatus: 'blocked', blockReason: 'explicit' });
   });
 
   it('short-circuits an empty id list without a query', async () => {

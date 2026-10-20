@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import type { OverwatchUtm } from '@bike4mind/common';
-import type { AcquisitionTouches } from '@client/lib/subscriptions/acquisition';
+import type { AcquisitionTouches } from '@bike4mind/server-utils/lib/subscriptions/acquisition';
 import { emitProductEvent, HOST_PRODUCT_ID, ingestKeyFor } from './emitActiveEvent';
 import { pseudonymizeUserId } from './pseudonymize';
 

@@ -29,7 +29,7 @@ import {
 } from '@bike4mind/server-utils/integrations/github/types';
 import { dispatchReviewToSreRevision } from '@server/integrations/github/sreRevisionDispatch';
 import { sanitizeDispatchError, sanitizeHandlerError, sanitizeNotificationError } from './sanitizeWebhookError';
-import { emitWebhookDeliveryMetric, WebhookMetrics } from '@server/utils/cloudwatch';
+import { emitWebhookDeliveryMetric, WebhookMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 
 /**
@@ -458,7 +458,7 @@ async function emitDeliveryFailureMetrics(
 
   // Dimensionless copy of the total: webhookDeliveryHighFailures (infra/alarms.ts) alarms on
   // this metric with no dimension filter, so it needs its own dimensionless data point to
-  // receive any data - see apps/client/server/utils/cloudwatch.ts:recordWebhookDeliveryFailure
+  // receive any data - see packages/server-utils/src/utils/cloudwatch.ts:recordWebhookDeliveryFailure
   // for the same pattern on the per-user MCP delivery path.
   const totalFailureCount = counts.handlerErrorCount + counts.perUserFailureCount + counts.dispatchErrorCount;
   if (totalFailureCount > 0) {

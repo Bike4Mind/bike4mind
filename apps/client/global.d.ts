@@ -7,7 +7,7 @@ import {
   IUserDocument,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import type { EntitlementKey } from '@client/lib/entitlements/types';
+import type { EntitlementKey } from '@bike4mind/server-utils/lib/entitlements/types';
 
 declare global {
   namespace Express {

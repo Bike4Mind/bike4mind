@@ -2,9 +2,9 @@ import { z } from 'zod';
 import type { Request } from 'express';
 import { AdminSupportAccessAction, ISessionDocument } from '@bike4mind/common';
 import { adminSupportAccessAuditLogRepository, sessionRepository } from '@bike4mind/database';
-import { ForbiddenError, NotFoundError } from '@server/utils/errors';
-import { getClientIp } from '@server/utils/ip';
-import { isValidObjectId } from '@server/utils/objectId';
+import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { getClientIp } from '@bike4mind/server-utils/utils/ip';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 
 /**
  * Shared gate for the admin support READ endpoints (`/api/admin/sessions/...`).

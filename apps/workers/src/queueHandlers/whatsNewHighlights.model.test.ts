@@ -23,7 +23,7 @@ vi.mock('@bike4mind/llm-adapters', async importOriginal => {
   return { ...actual, getAvailableModels: vi.fn(), getLlmByModel: vi.fn() };
 });
 
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   emitModalGenerationMetrics: vi.fn().mockResolvedValue(undefined),
 }));
 

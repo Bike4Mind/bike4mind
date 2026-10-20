@@ -15,7 +15,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { ForbiddenError, BadRequestError } from '@server/utils/errors';
+import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { adminSettingsRepository, sreErrorTrackingRepository, cacheRepository } from '@bike4mind/database';
 import { classifyForScan } from '@bike4mind/database/infra';
 import { SreAgentConfigSchema, resolveFullConfig } from '@bike4mind/common';

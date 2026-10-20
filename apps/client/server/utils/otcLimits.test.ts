@@ -20,8 +20,8 @@ vi.mock('@bike4mind/database', () => ({
     decrementCounter: mocks.decrementCounter,
   },
 }));
-vi.mock('@server/utils/ip', () => ({ getClientIp: () => '203.0.113.7' }));
-vi.mock('@server/utils/config', () => ({ isE2EEnabled: () => mocks.isE2EEnabled() }));
+vi.mock('@bike4mind/server-utils/utils/ip', () => ({ getClientIp: () => '203.0.113.7' }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ isE2EEnabled: () => mocks.isE2EEnabled() }));
 
 import {
   OTC_LIMITS,

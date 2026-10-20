@@ -9,7 +9,7 @@ import { artifactService } from '@bike4mind/services';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { decodeCursor, encodeCursor } from '@server/utils/cursorPagination';
-import { UnprocessableEntityError } from '@server/utils/errors';
+import { UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
 import { toPublicArtifactVersion } from '@server/artifacts/toPublicArtifact';
 import { ARTIFACT_DB, hideArtifactDenial } from '@server/artifacts/artifactAccess';
 

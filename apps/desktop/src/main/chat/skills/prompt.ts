@@ -45,6 +45,10 @@ const MAX_DESCRIPTION_BYTES = 3_000;
  * dropped first, matching the precedence the CLI's own grouping states.
  */
 export function buildSkillsSection(commands: readonly CustomCommand[], limit = MAX_SKILLS_PROMPT_BYTES): string {
+  // An import's description is a stranger's text, and this section is the trusted system prompt.
+  // The CLI formatter lists only project and global skills today; this keeps that true for imports
+  // if it ever grows an account group. The skill tool still runs an import by name.
+  commands = commands.filter(command => !command.untrusted);
   const ordered = [
     ...commands.filter(command => command.source === 'project'),
     ...commands.filter(command => command.source !== 'project'),

@@ -74,7 +74,7 @@ import {
 import RechartsRenderer from '../Charts/RechartsRenderer';
 import ChessBoard from '../Chess/ChessBoard';
 import { useSessions } from '@client/app/contexts/SessionsContext';
-import { extractReplies, extractThinking } from '@client/shared/replyUtils';
+import { extractReplies, extractThinking } from '@bike4mind/server-utils/shared/replyUtils';
 import DeepResearchProgress from '../GenAI/DeepResearchProgress';
 import PromptEnhancementBanner from './PromptEnhancementBanner';
 import { extractCodeBlockTitle } from '@client/app/utils/codeBlockTitleExtractor';

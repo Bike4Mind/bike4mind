@@ -3,8 +3,8 @@ import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { BadRequestError } from '@server/utils/errors';
-import { MAX_FILE_SIZE_DEFAULT_MB } from '@server/utils/maxFileSizeDefault';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { MAX_FILE_SIZE_DEFAULT_MB } from '@bike4mind/server-utils/utils/maxFileSizeDefault';
 import { getValidUserDriveAccessToken } from '@server/integrations/google/drive/common';
 import {
   createDriveClient,

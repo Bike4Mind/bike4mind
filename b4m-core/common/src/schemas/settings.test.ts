@@ -216,6 +216,13 @@ describe('releaseNotesConfig', () => {
   });
 });
 
+describe('first-session feature defaults', () => {
+  it('keeps Hearth off until a user opts in', () => {
+    expect(settingsMap.EnableHearthDefault.defaultValue).toBe(false);
+    expect(settingsMap.EnableHearthDefault.schema.parse(undefined)).toBe(false);
+  });
+});
+
 describe('public settings projection (M2.5 security boundary)', () => {
   describe('userReadableSettingKeys', () => {
     it('excludes admin-only operational config a non-admin has no claim to', () => {

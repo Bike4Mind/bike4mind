@@ -21,7 +21,7 @@ export type GeneratedImageOwnershipLookup = {
  * `userId` is the caller. Being a share recipient does not count - a tool call derives new content -
  * but cloning a shared session or importing a notebook copies `images` into a session the caller
  * owns, so this is "owns a session that references it", not "generated it".
- * The lookup chain mirrors userCanAccessGeneratedImage (apps/client/server/utils/generatedImageAccess.ts),
+ * The lookup chain mirrors userCanAccessGeneratedImage (packages/server-utils/src/utils/generatedImageAccess.ts),
  * which additionally serves share recipients for viewing - keep the two in sync.
  * Caveat: this guards the bare-key route only. While the CDN serves `/generated/<key>` publicly
  * (infra/buckets.ts), anyone holding a key can fetch it directly, so this is not yet a

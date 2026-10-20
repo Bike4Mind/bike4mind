@@ -4,7 +4,7 @@ import { CounterLog } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { BadRequestError, UnprocessableEntityError, InternalServerError } from '@bike4mind/utils';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { ReportQueryParamsSchema } from '../../../types/api';
 
 const ONE_MINUTE_MS = 60 * 1000;

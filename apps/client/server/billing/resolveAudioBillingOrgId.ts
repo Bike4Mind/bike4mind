@@ -1,5 +1,5 @@
 import { BILLING_ORGANIZATION_MISMATCH_ERROR_CODE, CreditHolderType } from '@bike4mind/common';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { resolveApiKeyOwnerType } from '@server/utils/resolveApiKeyOwnerType';
 import { resolveMediaBillingOrgId } from './resolveMediaBillingOrgId';
 

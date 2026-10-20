@@ -12,7 +12,7 @@ import {
   lakeAccessEventRepository,
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { fabFilesService } from '@bike4mind/services';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { getFileMembershipArm, type DataLakeMembershipArm, type IFabFileDocument } from '@bike4mind/common';

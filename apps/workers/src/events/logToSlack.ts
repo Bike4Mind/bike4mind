@@ -1,9 +1,9 @@
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { CloudWatchLogsEvent, Context } from 'aws-lambda';
 import { notifyEventLogsToSlack } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
-import { sendToQueue } from '@server/utils/sqs';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { connectDB } from '@bike4mind/database';
 import { extractErrorType, normalizeErrorMessage } from '@server/services/liveopsFingerprint';

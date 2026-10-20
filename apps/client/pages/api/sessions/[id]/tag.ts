@@ -4,7 +4,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Session } from '@bike4mind/database/auth';
 import { SessionEvents } from '@server/utils/eventBus';
-import { isValidObjectId } from '@server/utils/objectId';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { assertSessionOperationalCredits } from '@server/utils/sessionOperationalCreditPreflight';
 
 const handler = baseApi().post(

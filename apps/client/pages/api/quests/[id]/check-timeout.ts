@@ -1,7 +1,7 @@
 import { chatMessageResponseSchema, redactPromptMetaForViewer } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { respond } from '@server/utils/respond';
-import { BadRequestError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { questRepository, sessionRepository } from '@bike4mind/database';
 import {
   resolveQuestTimeoutRecovery,

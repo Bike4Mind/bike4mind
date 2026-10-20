@@ -18,6 +18,9 @@ const ImportOptionsSchema = z.object({
   namePrefix: z.string().optional(),
 });
 
+// Same ceiling as the history-import upload that shares this bucket (MAX_HISTORY_UPLOAD_BYTES).
+const MAX_NOTEBOOK_IMPORT_BYTES = 1024 * 1024 * 1024; // 1 GB
+
 const handler = baseApi().post(
   asyncHandler(async (req, res) => {
     const userId = req.user?.id;
@@ -36,6 +39,9 @@ const handler = baseApi().post(
     }
 
     const options = ImportOptionsSchema.parse(req.body);
+    // The upload's byte length: the hosted PUT is bound to it (S3 refuses any other length), and the
+    // self-host proxy checks the body against it.
+    const { size } = z.object({ size: z.number().int().positive().max(MAX_NOTEBOOK_IMPORT_BYTES) }).parse(req.body);
 
     const bucket = Resource.historyImportBucket.name; // reuses the history-import bucket
     const s3 = new S3Storage(bucket);
@@ -49,7 +55,7 @@ const handler = baseApi().post(
 
     let uploadUrl = '';
     if (process.env.B4M_SELF_HOST !== 'true') {
-      uploadUrl = await s3.getSignedUrl(dataKey, 'put', { expiresIn: 600 });
+      uploadUrl = await s3.getSignedUrl(dataKey, 'put', { expiresIn: 600, ContentLength: size });
     }
 
     req.logger.info('Prepared notebook import upload', {
@@ -61,7 +67,7 @@ const handler = baseApi().post(
     // Self-host gets the same-origin proxy below; hosted keeps the presign untouched.
     return res.json({
       success: true,
-      uploadUrl: resolveBrowserNotebookImportUploadUrl(String(timestamp), uploadUrl),
+      uploadUrl: resolveBrowserNotebookImportUploadUrl(String(timestamp), size, uploadUrl),
       importId: timestamp,
     });
   })

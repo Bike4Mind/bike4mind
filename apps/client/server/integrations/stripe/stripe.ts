@@ -1,6 +1,6 @@
 import { organizationRepository, userRepository } from '@bike4mind/database';
 import { isPlaceholderValue } from '@bike4mind/common';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import Stripe from 'stripe';
 
 /**

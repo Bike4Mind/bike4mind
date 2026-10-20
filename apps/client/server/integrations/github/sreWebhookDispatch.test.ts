@@ -28,11 +28,11 @@ vi.mock('@bike4mind/common', () => ({
   resolveFullConfig: (...args: unknown[]) => mockResolveFullConfig(...args),
 }));
 
-vi.mock('@server/utils/dlqRegistry', () => ({
+vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({
   getSourceQueueUrl: (...args: unknown[]) => mockGetSourceQueueUrl(...args),
 }));
 
-vi.mock('@server/utils/sqs', () => ({
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({
   sendToQueue: (...args: unknown[]) => mockSendToQueue(...args),
 }));
 

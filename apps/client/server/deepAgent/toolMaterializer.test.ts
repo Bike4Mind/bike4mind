@@ -58,7 +58,7 @@ vi.mock('@bike4mind/llm-adapters', async importOriginal => {
 vi.mock('@bike4mind/server-utils/deepAgent/resolveBackend', () => ({
   buildSystemApiKeyTable: vi.fn().mockResolvedValue({}),
 }));
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({}),
   getGeneratedImageStorage: () => ({}),
 }));

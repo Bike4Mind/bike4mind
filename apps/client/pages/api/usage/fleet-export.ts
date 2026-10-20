@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { connectDB, CounterLog } from '@bike4mind/database';
 import { FleetUsageExportQuerySchema, type FleetUsageExport } from '@bike4mind/common';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import {
   authorizeFleetUsageExport,
   FleetUsageExportTooLargeError,

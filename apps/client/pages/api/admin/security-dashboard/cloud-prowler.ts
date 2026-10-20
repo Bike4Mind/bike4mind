@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { securityDashboardSnapshotRepository } from '@bike4mind/database';
 import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
 import { Resource } from 'sst';

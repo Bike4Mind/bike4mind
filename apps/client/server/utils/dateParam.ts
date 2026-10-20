@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 // A caller-supplied date string that does not parse becomes an Invalid Date, and an Invalid
 // Date on a Date-typed filter throws a Mongoose CastError. errorHandler only maps a cast on

@@ -45,7 +45,7 @@ vi.mock('@server/services/publish/invalidatePublishCdn', () => ({
 vi.mock('@server/services/publish/restrictDuplicatePublications', () => ({
   restrictDuplicatePublications: mocks.restrictDuplicatePublications,
 }));
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ download: mocks.download }),
 }));
 

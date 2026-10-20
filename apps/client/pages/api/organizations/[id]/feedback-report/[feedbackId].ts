@@ -7,8 +7,8 @@ import { orgFeedbackItem } from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { ForbiddenError, NotFoundError } from '@server/utils/errors';
-import { isValidObjectId } from '@server/utils/objectId';
+import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
 import { Request, Response } from 'express';
 

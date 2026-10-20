@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ApiKeyScope, MEMENTO_EMBEDDING_ID } from '@bike4mind/common';
 import { Memento } from '@bike4mind/database';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { reembedMementosForUser } from '@server/memory/reembedMementos';
 
 /**
