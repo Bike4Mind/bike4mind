@@ -37,7 +37,14 @@ const LifecycleInput = z.object({
 });
 
 // unarchive and restore report what they brought back, not the lake (UnarchiveResult).
-const restoreResultResponseSchema = z.object({ restoredCount: z.number(), skippedDuplicates: z.number() });
+// Held to what the service returns: a field added to UnarchiveResult fails the build until it is
+// listed, so the boundary can never silently strip it.
+type RestoreResult = Awaited<ReturnType<typeof dataLakeService.unarchiveDataLake>>;
+
+const restoreResultResponseSchema = z.object({
+  restoredCount: z.number(),
+  skippedDuplicates: z.number(),
+} satisfies Record<keyof RestoreResult, z.ZodTypeAny>);
 
 /**
  * Undefined everywhere except self-host OpenSearch (see ports.ts) - Atlas's vector index lives
