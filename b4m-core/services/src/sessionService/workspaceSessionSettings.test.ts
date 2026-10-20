@@ -146,6 +146,28 @@ describe.each(Object.entries(copies))('%s with contributed workspace session set
 });
 
 describe('cloneSession by a share holder with contributed workspace session settings', () => {
+  it('keeps safe main-list settings when the clone enters and leaves an owning workspace', async () => {
+    const db = makeDb(sourceSession({ surface: undefined, userId: 'owner-1' }));
+    const settings = { ...table, opti: table[WORKSPACE] };
+
+    await copies.clone(db, settings, 'opti');
+
+    const created = createdCopy(db);
+    expect(created.systemPromptText).toBeUndefined();
+    expect(created.userSetFields).toEqual(['enabledTools', 'disableUserIntegrations', 'temperature', 'maxToolCalls']);
+    for (const field of ['enabledTools', 'disableUserIntegrations', 'temperature', 'maxToolCalls'] as const) {
+      expect(created[field]).toEqual(OWNED_VALUES[field]);
+    }
+    db.sessions.findByIdAndUserId.mockResolvedValue({ id: 'copy-1', ...created });
+    await moveSession(
+      'caller-1',
+      { id: 'copy-1', targetSurface: null },
+      { db: db as never, workspaceSessionSettings: settings }
+    );
+
+    expect(db.sessions.update).toHaveBeenCalledWith({ id: 'copy-1' }, { unset: ['surface', 'systemPromptText'] });
+  });
+
   it('drops every owned field, including ones the owner set explicitly', async () => {
     const db = makeDb(sourceSession({ userId: 'owner-1', userSetFields: ['temperature', 'maxToolCalls'] }));
 
