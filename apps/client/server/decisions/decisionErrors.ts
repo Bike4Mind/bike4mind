@@ -5,8 +5,34 @@ import { DecisionImageError } from './resolveDecisionInput';
 
 type DecisionErrorReply = { status: number; error: string; errorCode?: DecisionsErrorCode; param?: string };
 
+/**
+ * A decision failure whose status and public error code are decided where it is thrown - the
+ * model/provider/validation gates that live in `runDecision`, away from the HTTP response. Mapped
+ * here first so those gates keep the statuses and codes the route returned inline.
+ */
+export class DecisionRequestError extends Error {
+  constructor(
+    readonly status: number,
+    readonly errorCode: DecisionsErrorCode,
+    readonly param: string | undefined,
+    message: string
+  ) {
+    super(message);
+    this.name = 'DecisionRequestError';
+  }
+}
+
 /** Maps a decision-call failure onto the public envelope, or null for an unexpected error the route rethrows. */
 export const toDecisionErrorReply = (error: unknown): DecisionErrorReply | null => {
+  if (error instanceof DecisionRequestError) {
+    // Omit `param` rather than send it as null/'' - the route never serialized one for these.
+    return {
+      status: error.status,
+      error: error.message,
+      errorCode: error.errorCode,
+      ...(error.param === undefined ? {} : { param: error.param }),
+    };
+  }
   if (error instanceof DecisionImageError) {
     return { status: error.status, error: error.message, errorCode: error.errorCode, param: error.param };
   }
