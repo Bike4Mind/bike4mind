@@ -31,11 +31,13 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
+import TerminalIcon from '@mui/icons-material/Terminal';
 import { useNavigate } from '@tanstack/react-router';
 import { toast } from 'sonner';
 import type { SkillListingReportReason } from '@bike4mind/common';
 import { getErrorMessage } from '@client/app/utils/error';
 import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
+import ClaudeCodeExportDialog from '@client/app/components/SkillsManagement/ClaudeCodeExportDialog';
 import {
   conflictInfo,
   useImportListing,
@@ -384,6 +386,7 @@ const ListingDetail: FC<{ listingId?: string; token?: string }> = ({ listingId, 
   const { data, isLoading, isError } = useListingDetail({ id: listingId, token });
   const [reportOpen, setReportOpen] = useState(false);
   const [delistOpen, setDelistOpen] = useState(false);
+  const [claudeCodeOpen, setClaudeCodeOpen] = useState(false);
   const moderate = useModerateListing();
 
   if (isLoading) {
@@ -490,6 +493,16 @@ const ListingDetail: FC<{ listingId?: string; token?: string }> = ({ listingId, 
             </Stack>
           </Box>
           <Stack direction="row" spacing={1} alignItems="flex-start" flexWrap="wrap" useFlexGap>
+            {version?.snapshot ? (
+              <Button
+                variant="outlined"
+                startDecorator={<TerminalIcon />}
+                onClick={() => setClaudeCodeOpen(true)}
+                data-testid="skill-claude-code-btn"
+              >
+                Use in Claude Code
+              </Button>
+            ) : null}
             {shareUrl && listing.visibility === 'unlisted' ? (
               <Button
                 variant="outlined"
@@ -654,6 +667,17 @@ const ListingDetail: FC<{ listingId?: string; token?: string }> = ({ listingId, 
       {reportOpen ? <ReportDialog listingId={listing.id} token={token} onClose={() => setReportOpen(false)} /> : null}
       {delistOpen ? (
         <DelistDialog listingId={listing.id} name={listing.name} onClose={() => setDelistOpen(false)} />
+      ) : null}
+      {claudeCodeOpen && version?.snapshot ? (
+        // The share token is left out of the source path so an unlisted link never ends up in a file.
+        <ClaudeCodeExportDialog
+          onClose={() => setClaudeCodeOpen(false)}
+          skill={version.snapshot}
+          sourcePath={`/skills/market/${encodeURIComponent(listing.id)}`}
+          version={version.version}
+          thirdParty
+          showImportHint={!data.myImport?.skill}
+        />
       ) : null}
     </Box>
   );
