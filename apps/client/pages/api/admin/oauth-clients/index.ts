@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { ensureAdmin, parseOrBadRequest } from '@server/utils/errors';
+import { ensureAdmin, parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { createOAuthClient, listOAuthClients } from '@bike4mind/database';
 import { ApiKeyScope, createOAuthClientSchema } from '@bike4mind/common';

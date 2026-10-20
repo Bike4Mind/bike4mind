@@ -1,7 +1,7 @@
 import { Octokit } from '@octokit/rest';
 import { createAppAuth } from '@octokit/auth-app';
 import { parseRateLimitHeaders, resolveRetryAfterDelayMs } from '@bike4mind/common';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import type { GitHubTreeEntry } from '@bike4mind/server-utils/integrations/github/dataLake/lakeFileFilter';
 
 /**

@@ -36,7 +36,7 @@ import {
   interpolateTemplate,
   PRIORITY_GUIDELINES,
 } from '@bike4mind/server-utils/services/liveopsTriagePrompt';
-import { getNextScheduledRun } from '@client/shared/liveopsScheduleUtils';
+import { getNextScheduledRun } from '@bike4mind/server-utils/shared/liveopsScheduleUtils';
 import {
   generateFingerprint,
   extractFingerprintFromIssueBody,

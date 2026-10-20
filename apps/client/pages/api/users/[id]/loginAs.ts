@@ -4,7 +4,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { userRepository } from '@bike4mind/database';
 import { issueBrowserSession } from '@server/auth/issueSession';
 import { readRefreshCookie, setAdminReturnCookie } from '@bike4mind/server-utils/auth/refreshCookie';
-import { UnauthorizedError } from '@server/utils/errors';
+import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
 import { redactUserSecretsForSelf } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';

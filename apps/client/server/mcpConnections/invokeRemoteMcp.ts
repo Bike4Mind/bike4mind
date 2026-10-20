@@ -34,8 +34,8 @@ import { Resource } from 'sst';
 import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
 import { decryptToken } from '@server/security/tokenEncryption';
 import { CircuitBreakerError, getBreaker, type OperationType } from '@server/services/mcpCircuitBreakers';
-import { recordCircuitBreakerRejection } from '@server/utils/cloudwatch';
-import { resolveMcpTenantKey } from '@server/utils/mcpTenantKey';
+import { recordCircuitBreakerRejection } from '@bike4mind/server-utils/utils/cloudwatch';
+import { resolveMcpTenantKey } from '@bike4mind/server-utils/utils/mcpTenantKey';
 import {
   evaluateConnectionPolicy,
   isSelfHost,

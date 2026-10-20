@@ -24,8 +24,8 @@ import {
   DRIVE_LAKE_POLL_INTERVAL_MS,
   readDriveLakePollFlags,
 } from '@bike4mind/server-utils/integrations/google/drive/drivePollSchedule';
-import { Config } from '@server/utils/config';
-import { sendToQueue } from '@server/utils/sqs';
+import { Config } from '@bike4mind/server-utils/utils/config';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { Resource } from 'sst';
 
 const logger = new Logger({ metadata: { service: 'driveLakeResyncPoll' } });
