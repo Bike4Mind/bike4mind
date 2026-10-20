@@ -82,6 +82,14 @@ export function webFetchBody(result: WebFetchResult): string {
   return result.truncated ? result.markdown + truncationMarker(result) : result.markdown;
 }
 
+/**
+ * Leads an indexed turn's fetched page with the number the turn gave it (ToolContext.numberCitables).
+ * A directive for the same reason as INDEXED_TOOL_CITATION_RULE.
+ */
+export function webFetchCitationLine(citationIndex: number): string {
+  return `This page is source [${citationIndex}]. Cite content from it ONLY as [${citationIndex}], placed immediately after the claim it supports.\n\n`;
+}
+
 function isPdfUrl(url: string): boolean {
   try {
     const { pathname } = new URL(url);
@@ -361,10 +369,15 @@ export const webFetchTool: ToolDefinition = {
           },
         };
 
+        const citationIndex = context.numberCitables?.([citable])?.[0].metadata?.citationIndex;
         await context.statusUpdate(
           {
             promptMeta: {
-              citables: [citable],
+              citables: [
+                citationIndex === undefined
+                  ? citable
+                  : { ...citable, metadata: { ...citable.metadata, citationIndex } },
+              ],
             },
           },
           'WebFetch completed successfully'
@@ -374,7 +387,7 @@ export const webFetchTool: ToolDefinition = {
 
         // Surface truncation in-band (with the next offset to continue) so the model reasons
         // about incompleteness rather than assuming it received the whole page.
-        return webFetchBody(result);
+        return (citationIndex === undefined ? '' : webFetchCitationLine(citationIndex)) + webFetchBody(result);
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 

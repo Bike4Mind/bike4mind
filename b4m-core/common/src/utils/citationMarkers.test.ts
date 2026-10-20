@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { findCitationMarkers, sourceNamedIn } from './citationMarkers';
+import { areCitablesNumbered, findCitationMarkers, sourceNamedIn } from './citationMarkers';
 
 const valuesOf = (text: string) => findCitationMarkers(text).map(match => match.numbers.map(n => n.value));
 
@@ -60,5 +60,19 @@ describe('sourceNamedIn', () => {
   it('matches nothing for a name with no words', () => {
     expect(sourceNamedIn('anything at all', '')).toBe(false);
     expect(sourceNamedIn('anything at all', ' - ')).toBe(false);
+  });
+});
+
+describe('areCitablesNumbered', () => {
+  const stamped = (citationIndex?: number) => (citationIndex === undefined ? {} : { metadata: { citationIndex } });
+
+  it('holds when every citable carries the stamp of its own position', () => {
+    expect(areCitablesNumbered([stamped(1), stamped(2)])).toBe(true);
+    expect(areCitablesNumbered([])).toBe(true);
+  });
+
+  it('fails on a missing or misplaced stamp', () => {
+    expect(areCitablesNumbered([stamped(1), stamped()])).toBe(false);
+    expect(areCitablesNumbered([stamped(2), stamped(1)])).toBe(false);
   });
 });
