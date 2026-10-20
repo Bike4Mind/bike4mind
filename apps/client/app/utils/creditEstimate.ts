@@ -3,6 +3,7 @@ import {
   ARTIFACT_EMISSION_PROMPT,
   getTextModelCreditsPer1M,
   HELP_CENTER_PROMPT,
+  isModelDeprecated,
   REPLY_CHOICES_GUIDANCE,
   tokenEstimateMultiplier,
   type ModelInfo,
@@ -88,7 +89,7 @@ export function findAffordableModelOffer(
   if (selectedCredits === null || selectedCredits <= credits) return null;
 
   const affordable = models
-    .filter(model => model.type === 'text' && model.id !== selectedModelId && !model.disabled)
+    .filter(model => model.type === 'text' && model.id !== selectedModelId && !model.disabled && !isModelDeprecated(model))
     .map(model => ({ model, credits: preflightAnswerCredits(model) }))
     .filter((candidate): candidate is { model: ModelInfo; credits: number } => candidate.credits !== null)
     .filter(candidate => candidate.credits <= credits && candidate.credits < selectedCredits)
