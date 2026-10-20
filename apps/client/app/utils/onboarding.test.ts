@@ -3,6 +3,7 @@ import { PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 import {
   isAwaitingEmailVerification,
   isBrandNewAccount,
+  resendVerificationErrorMessage,
   shouldShowVerificationNag,
   NEW_ACCOUNT_GRACE_MS,
   EMAIL_VERIFICATION_NAG_INTERVAL_MS,
@@ -85,5 +86,27 @@ describe('isAwaitingEmailVerification', () => {
   it('is false with no user', () => {
     expect(isAwaitingEmailVerification(null)).toBe(false);
     expect(isAwaitingEmailVerification(undefined)).toBe(false);
+  });
+});
+
+describe('resendVerificationErrorMessage', () => {
+  it('names the 15 minute wait on a 429', () => {
+    expect(resendVerificationErrorMessage({ response: { status: 429 } })).toMatch(/wait 15 minutes/i);
+  });
+
+  it('passes through the server message on a 503 config error, with a fallback when it has none', () => {
+    expect(
+      resendVerificationErrorMessage({
+        response: { status: 503, data: { isConfigError: true, message: 'Not set up.' } },
+      })
+    ).toBe('Not set up.');
+    expect(resendVerificationErrorMessage({ response: { status: 503, data: { isConfigError: true } } })).toBe(
+      'Email service is not configured.'
+    );
+  });
+
+  it('uses the response message for other errors, else a generic one', () => {
+    expect(resendVerificationErrorMessage({ response: { status: 500, data: { message: 'Boom' } } })).toBe('Boom');
+    expect(resendVerificationErrorMessage({})).toBe('Failed to send verification email. Please try again later.');
   });
 });
