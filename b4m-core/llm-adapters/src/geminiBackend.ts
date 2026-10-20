@@ -207,11 +207,9 @@ export class GeminiBackend implements ICompletionBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          // List is $2/$12 per 1M up to 200k and $4/$18 above ($0.20/$0.40 cache read). Held flat until
-          // every billing path picks the tier per request: summed tool-loop or agent-run input would
-          // cross 200k and bill the whole run at the upper rate.
           // @see https://ai.google.dev/gemini-api/docs/pricing
-          2097152: { input: 2 / 1000000, output: 18 / 1000000, cache_read: 0.2 / 1000000 },
+          200000: { input: 2 / 1000000, output: 12 / 1000000, cache_read: 0.2 / 1000000 }, // <=200k
+          2097152: { input: 4 / 1000000, output: 18 / 1000000, cache_read: 0.4 / 1000000 }, // >200k
         },
         supportsVision: true,
         supportsTools: true,
@@ -257,10 +255,8 @@ export class GeminiBackend implements ICompletionBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          // List is $2/$12 per 1M up to 200k and $4/$18 above. Held flat until every billing path
-          // picks the tier per request: summed tool-loop or agent-run input would cross 200k and
-          // bill the whole run at the upper rate.
-          2097152: { input: 2 / 1000000, output: 18 / 1000000 },
+          200000: { input: 2 / 1000000, output: 12 / 1000000 }, // <=200k
+          2097152: { input: 4 / 1000000, output: 18 / 1000000 }, // >200k
         },
         supportsVision: true,
         supportsTools: true,
@@ -379,11 +375,9 @@ export class GeminiBackend implements ICompletionBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          // <=200K rates: $1.25 in, $10 out, $0.125 cache read per 1M (>200K is $2.50 / $15 /
-          // $0.25). Held flat until every billing path picks the tier per request: summed tool-loop
-          // or agent-run input would cross 200k and bill the whole run at the upper rate.
           // @see https://ai.google.dev/gemini-api/docs/pricing
-          2097152: { input: 1.25 / 1000000, output: 10.0 / 1000000, cache_read: 0.125 / 1000000 },
+          200000: { input: 1.25 / 1000000, output: 10.0 / 1000000, cache_read: 0.125 / 1000000 }, // <=200k
+          2097152: { input: 2.5 / 1000000, output: 15.0 / 1000000, cache_read: 0.25 / 1000000 }, // >200k
         },
         supportsVision: true,
         supportsTools: true,

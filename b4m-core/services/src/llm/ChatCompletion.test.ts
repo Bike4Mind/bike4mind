@@ -6337,6 +6337,25 @@ describe('ChatCompletionProcess', () => {
         expect(usage.estimatedCost).toBeCloseTo(first + second, 10);
       });
 
+      it.each([
+        { cacheReadInputTokens: 190_000, cacheCreationInputTokens: 0, expectedCost: 0.174 },
+        { cacheReadInputTokens: 0, cacheCreationInputTokens: 190_000, expectedCost: 1.048 },
+        { cacheReadInputTokens: 95_000, cacheCreationInputTokens: 95_000, expectedCost: 0.611 },
+      ])(
+        'tiers aggregate provider usage on the whole prompt with $cacheReadInputTokens reads and $cacheCreationInputTokens writes',
+        async ({ cacheReadInputTokens, cacheCreationInputTokens, expectedCost }) => {
+          const usage = await settle(100, {
+            inputTokens: 20_000,
+            outputTokens: 1_000,
+            cacheReadInputTokens,
+            cacheCreationInputTokens,
+          });
+
+          expect(usage.settledBasis).toBe('provider');
+          expect(usage.estimatedCost).toBeCloseTo(expectedCost, 10);
+        }
+      );
+
       it('tiers the local estimate on the whole prompt, not the cache-discounted remainder', async () => {
         // Partial provider usage -> local basis. 250K local prompt, 200K of it cache reads.
         const usage = await settle(250_000, { cacheReadInputTokens: 200_000 });

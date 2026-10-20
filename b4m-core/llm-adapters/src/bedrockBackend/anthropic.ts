@@ -603,8 +603,8 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         thinkingStyle: 'adaptive',
         pricing: {
           1_000_000: {
-            input: 3 / 1000000, // $3 per 1M input tokens
-            output: 15 / 1000000, // $15 per 1M output tokens
+            input: 2 / 1000000, // $2 per 1M input tokens
+            output: 10 / 1000000, // $10 per 1M output tokens
           },
         },
         supportsVision: true,
