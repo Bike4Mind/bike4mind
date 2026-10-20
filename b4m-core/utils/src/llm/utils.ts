@@ -2561,13 +2561,6 @@ export async function buildAndSortMessages(
   messages: IMessage[];
   messageTruncation: MessageTruncationInfo | null;
   injectedBlocks: BuilderInjectedBlock[];
-  /**
-   * How many messages at the END of `messages` belong to the current turn (the user prompt, plus any
-   * attached-content and image messages assembled with it) rather than to history. A caller that sets
-   * a prompt-cache breakpoint on history needs it to exclude exactly these, or the breakpoint lands on
-   * content that is rebuilt every turn and never matches. Absent when no payload was built.
-   */
-  currentTurnMessageCount?: number;
 }> {
   // Negated like processMessages' budget guard so a NaN lands here rather than sailing past every
   // comparison below.
@@ -3246,7 +3239,6 @@ export async function buildAndSortMessages(
       messages: ensureToolPairingIntegrity(assemble(reducedContentMessages, processedPreviousMessages), logger),
       messageTruncation: buildDebugInfo(reducedContentMessages),
       injectedBlocks,
-      currentTurnMessageCount: userPrompt.length + imageMessages.length + reducedContentMessages.length,
     };
   }
 
@@ -3275,6 +3267,5 @@ export async function buildAndSortMessages(
     messages: ensureToolPairingIntegrity(messages, logger),
     messageTruncation: buildDebugInfo(processedContentMessages),
     injectedBlocks,
-    currentTurnMessageCount: userPrompt.length + imageMessages.length + processedContentMessages.length,
   };
 }
