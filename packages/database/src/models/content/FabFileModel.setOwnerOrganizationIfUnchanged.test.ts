@@ -51,6 +51,40 @@ describe('FabFileRepository.setOwnerOrganizationIfUnchanged', () => {
     expect((await FabFile.findById(file.id).lean())?.organizationId).toBeUndefined();
   });
 
+  it('refuses to unstamp a file a concurrent join put into another lake', async () => {
+    // Request 1 removes the file from its only lake and reads no lakes, so it resolves to personal.
+    // Request 2 then adds it to another lake of the same org: the stamp is already right, so its
+    // reassign writes nothing. Request 1's CAS must lose, or the lake member ends up billed to its
+    // uploader for good.
+    const file = await makeFile({ organizationId: 'org-1', tags: [] });
+    const removalRead = await fabFileRepository.findById(file.id);
+    await fabFileRepository.pushTagsByFabFileId(file.id, ['datalake:b']);
+
+    expect(await fabFileRepository.setOwnerOrganizationIfUnchanged(file.id, removalRead!, undefined)).toBe(false);
+    expect((await FabFile.findById(file.id).lean())?.organizationId).toBe('org-1');
+  });
+
+  it('refuses a row that lost a tag since it was read', async () => {
+    const file = await makeFile({ tags: [{ name: 'datalake:a', strength: 0 }] });
+    const read = await fabFileRepository.findById(file.id);
+    await fabFileRepository.pullTagsByFabFileId(file.id, ['datalake:a']);
+
+    expect(await fabFileRepository.setOwnerOrganizationIfUnchanged(file.id, read!, 'org-1')).toBe(false);
+  });
+
+  it('restamps a row whose tag set is unchanged, regardless of order', async () => {
+    const file = await makeFile({
+      tags: [
+        { name: 'datalake:a', strength: 0 },
+        { name: 'notes', strength: 1 },
+      ],
+    });
+    const read = await fabFileRepository.findById(file.id);
+    read!.tags = [...read!.tags].reverse();
+
+    expect(await fabFileRepository.setOwnerOrganizationIfUnchanged(file.id, read!, 'org-1')).toBe(true);
+  });
+
   it('unstamps a row when the next owner is personal', async () => {
     const file = await makeFile({ organizationId: 'org-1' });
     const read = await fabFileRepository.findById(file.id);

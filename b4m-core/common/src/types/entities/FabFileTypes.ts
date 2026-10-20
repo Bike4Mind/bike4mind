@@ -1533,14 +1533,15 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
 
   /**
    * Restamps a live file's owning org (unset when `nextOrganizationId` is undefined, so the file
-   * bills its uploader again), but only while the stamp and the fields `chargedBytes` reads still
-   * equal `expected`. Returns false when a concurrent write moved any of them, so the caller can
-   * re-read instead of moving a stale byte count between counters. See reassignStorageOwner in
-   * b4m-core/services/src/fabFileService/reassignStorageOwner.ts.
+   * bills its uploader again), but only while the stamp, the fields `chargedBytes` reads, and the set
+   * of stored tag names the owner was derived from still equal `expected`. Returns false when a
+   * concurrent write moved any of them, so the caller can re-read instead of moving a stale byte
+   * count between counters or stamping an owner a concurrent tag write already changed. See
+   * reassignStorageOwner in b4m-core/services/src/fabFileService/reassignStorageOwner.ts.
    */
   setOwnerOrganizationIfUnchanged(
     fabFileId: string,
-    expected: Pick<IFabFileDocument, 'organizationId' | 'fileSize' | 'storageChargedAt' | 'status'>,
+    expected: Pick<IFabFileDocument, 'organizationId' | 'fileSize' | 'storageChargedAt' | 'status' | 'tags'>,
     nextOrganizationId: string | undefined
   ): Promise<boolean>;
 

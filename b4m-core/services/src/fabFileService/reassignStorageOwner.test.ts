@@ -202,6 +202,39 @@ describe('reassignStorageOwner', () => {
     expect(counters.users.get('u1')).toBe(-100);
   });
 
+  it('keeps the org stamp when a concurrent join lands between a removal read and its write', async () => {
+    // Request 1 already pulled the file out of its only lake (acme) and reads no lake tags.
+    // Request 2 then adds it to another acme-org lake; its own reassign sees the stamp already
+    // right and writes nothing. Request 1 must not unstamp the file on the strength of its read.
+    const row = file([], { organizationId: 'org-acme' });
+    const { db, raw, counters } = makeDb(row);
+    raw.dataLakes.findByDatalakeTags.mockImplementation(async (tags: string[]) =>
+      [...LAKES, orgLake('acme-two', 'org-acme', '2026-04-01')].filter(lake => tags.includes(lake.datalakeTag))
+    );
+    raw.fabFiles.findById.mockImplementationOnce(async () => {
+      const removalRead = { ...row, tags: [...row.tags] };
+      row.tags.push({ name: 'datalake:acme-two', strength: 1 });
+      return removalRead;
+    });
+    // The repository CAS compares the stored tag-name set with the read's.
+    raw.fabFiles.setOwnerOrganizationIfUnchanged.mockImplementation(
+      async (_id: string, expected: unknown, next: string | undefined) => {
+        const read = expected as FakeFile;
+        const names = (tags: FakeFile['tags']) => [...new Set(tags.map(tag => tag.name))].sort().join('|');
+        if (read.organizationId !== row.organizationId || names(read.tags) !== names(row.tags)) return false;
+        row.organizationId = next;
+        return true;
+      }
+    );
+
+    expect(await reassignStorageOwner('f1', db)).toBeNull();
+
+    expect(row.organizationId).toBe('org-acme');
+    expect(raw.fabFiles.findById).toHaveBeenCalledTimes(2);
+    expect(counters.users.size).toBe(0);
+    expect(counters.orgs.size).toBe(0);
+  });
+
   it('gives up loudly when the row never settles', async () => {
     const { db, raw } = makeDb(file(['datalake:acme']), { casResults: [false, false, false] });
 
