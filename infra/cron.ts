@@ -281,8 +281,8 @@ const creditLotSweepCron = new sst.aws.Cron('creditLotSweep', {
 // Voice Hold Sweep - settles voice credit holds no client ever ended (closed tab, crashed browser,
 // failed connect) on connected time. Self-host twin: apps/workers/src/selfhost/voiceHoldSweep.ts;
 // keep the schedules in step. Settlement is DB-only and capped at VOICE_HOLD_SWEEP_LIMIT holds per
-// run. Overlapping runs (at-least-once delivery) are safe because
-// settleVoiceHold claims each hold atomically, so a losing settler moves no credit.
+// run. Overlapping runs (at-least-once delivery) are safe because settleVoiceHold claims each hold
+// atomically, so a losing settler moves no credit.
 const voiceHoldSweepCron = new sst.aws.Cron('voiceHoldSweep', {
   schedule: 'rate(5 minutes)',
   function: {
