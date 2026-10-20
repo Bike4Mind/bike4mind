@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { StorageLimitError } from '@bike4mind/common';
+import { ConflictError, StorageLimitError } from '@bike4mind/common';
 import { assertStorageOwnerTransferFits, reassignStorageOwner } from './reassignStorageOwner';
 
 const CHARGED = new Date('2026-10-10T00:00:00Z');
@@ -235,11 +235,15 @@ describe('reassignStorageOwner', () => {
     expect(counters.orgs.size).toBe(0);
   });
 
-  it('gives up loudly when the row never settles', async () => {
-    const { db, raw } = makeDb(file(['datalake:acme']), { casResults: [false, false, false] });
+  it('gives up with a ConflictError after three lost compare-and-sets, moving nothing', async () => {
+    const row = file(['datalake:acme']);
+    const { db, raw, counters } = makeDb(row, { casResults: [false, false, false] });
 
-    await expect(reassignStorageOwner('f1', db)).rejects.toThrow(/kept changing/);
-    expect(raw.organizations.incrementCurrentStorage).not.toHaveBeenCalled();
+    await expect(reassignStorageOwner('f1', db)).rejects.toBeInstanceOf(ConflictError);
+    expect(raw.fabFiles.setOwnerOrganizationIfUnchanged).toHaveBeenCalledTimes(3);
+    expect(row.organizationId).toBeUndefined();
+    expect(counters.users.size).toBe(0);
+    expect(counters.orgs.size).toBe(0);
   });
 
   it('does nothing for a file that is gone', async () => {

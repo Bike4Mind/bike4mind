@@ -1,5 +1,6 @@
 import {
   chargedBytes,
+  ConflictError,
   DATA_LAKE_SLUG_UNRESOLVABLE_STATUSES,
   isDataLakeTagName,
   NotFoundError,
@@ -138,5 +139,5 @@ export async function reassignStorageOwner(
     await adjustOwnerStorage(db, transfer.to, transfer.bytes);
     return transfer;
   }
-  throw new Error(`reassignStorageOwner: file ${fabFileId} kept changing under the owner transfer`);
+  throw new ConflictError(`File ${fabFileId} kept changing during the storage owner transfer; try again`);
 }
