@@ -12,7 +12,7 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
 import { api } from '@client/app/contexts/ApiContext';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useUser } from '@client/app/contexts/UserContext';
-import { useCreditSyncSignal } from '@client/app/hooks/useEffectiveCredits';
+import { POST_STREAM_HOLD_MAX_MS, useCreditSyncSignal } from '@client/app/hooks/useEffectiveCredits';
 import { useStreamingState } from '@client/app/hooks/useStreamingState';
 import CreditBalanceSyncListener, { BALANCE_SYNC_DELAYS_MS } from './CreditBalanceSyncListener';
 
@@ -92,6 +92,55 @@ describe('CreditBalanceSyncListener', () => {
 
     expect(useUser.getState().currentUser?.currentCredits).toBe(10_000);
     expect(useCreditSyncSignal.getState().syncCount).toBe(before + 1);
+  });
+
+  it('keeps the display hold backstop longer than the last scheduled pull', () => {
+    expect(POST_STREAM_HOLD_MAX_MS).toBeGreaterThan(BALANCE_SYNC_DELAYS_MS[BALANCE_SYNC_DELAYS_MS.length - 1]);
+  });
+
+  describe('an org refresh still running from an earlier turn', () => {
+    // Holds the next org invalidation open so the pull is mid-refresh when the next turn ends.
+    const holdNextOrgRefresh = () => {
+      let resolve!: () => void;
+      const invalidate = vi.spyOn(queryClient, 'invalidateQueries').mockImplementationOnce(
+        () =>
+          new Promise<void>(res => {
+            resolve = res;
+          })
+      );
+      return { invalidate, release: () => resolve() };
+    };
+
+    it('is cancelled when a newer turn ends, and the stale pull then fetches nothing', async () => {
+      useLLM.setState({ organizationId: 'org-1' });
+      const cancel = vi.spyOn(queryClient, 'cancelQueries');
+      const { release } = holdNextOrgRefresh();
+      renderListener();
+      runTurn();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(BALANCE_SYNC_DELAYS_MS[0]);
+      });
+      expect(cancel).not.toHaveBeenCalled();
+
+      runTurn();
+      expect(cancel).toHaveBeenCalledWith({ queryKey: ['organizations'] });
+
+      await act(async () => {
+        release();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(api.get).not.toHaveBeenCalled();
+    });
+
+    it('leaves the organization queries alone when no pull is running', () => {
+      useLLM.setState({ organizationId: 'org-1' });
+      const cancel = vi.spyOn(queryClient, 'cancelQueries');
+      renderListener();
+      runTurn();
+      runTurn();
+
+      expect(cancel).not.toHaveBeenCalled();
+    });
   });
 
   describe('a pull still in flight from an earlier turn', () => {
