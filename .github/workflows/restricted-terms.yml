@@ -34,12 +34,15 @@ permissions:
 
 concurrency:
   group: restricted-terms-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: true
+  # PR runs only: a push to main is the backstop and must not be cancelled.
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
 
 jobs:
   check:
     name: Restricted terms
-    if: github.repository == (vars.CANONICAL_REPO || 'Bike4Mind/bike4mind')
+    # Public repo only: the check exists to keep terms out of public logs and
+    # history, and the secret is set here alone.
+    if: github.repository == (vars.OPEN_CORE_REPO || 'Bike4Mind/bike4mind')
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     timeout-minutes: 10
     steps:
