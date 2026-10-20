@@ -3,11 +3,13 @@ import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useUser } from '@client/app/contexts/UserContext';
 import { CREDITS_BALANCE_KEY, fetchCreditsBalance } from '@client/app/hooks/data/credits';
+import { useCreditSyncSignal } from '@client/app/hooks/useEffectiveCredits';
 import { useStreamingState } from '@client/app/hooks/useStreamingState';
 
 /**
  * After a turn ends, settlement can land a beat later, so pull twice: the first catches the
  * usual case within about a second, the second a slow settle (ms, from the end of streaming).
+ * `POST_STREAM_HOLD_MAX_MS` in useEffectiveCredits must stay above the last entry.
  */
 export const BALANCE_SYNC_DELAYS_MS = [1500, 5000] as const;
 
@@ -48,6 +50,7 @@ export async function syncCreditBalance(queryClient: QueryClient): Promise<void>
  */
 const CreditBalanceSyncListener = () => {
   const queryClient = useQueryClient();
+  const markSynced = useCreditSyncSignal(state => state.markSynced);
 
   useEffect(() => {
     let timers: ReturnType<typeof setTimeout>[] = [];
@@ -57,7 +60,13 @@ const CreditBalanceSyncListener = () => {
       const streaming = state.isAnyStreaming();
       if (wasStreaming && !streaming) {
         timers.forEach(clearTimeout);
-        timers = BALANCE_SYNC_DELAYS_MS.map(delay => setTimeout(() => void syncCreditBalance(queryClient), delay));
+        timers = BALANCE_SYNC_DELAYS_MS.map((delay, index) =>
+          setTimeout(() => {
+            const sync = syncCreditBalance(queryClient);
+            // Only the last pull confirms the balance: an unchanged first pull may just be a slow settle.
+            void (index === BALANCE_SYNC_DELAYS_MS.length - 1 ? sync.finally(markSynced) : sync);
+          }, delay)
+        );
       }
       wasStreaming = streaming;
     });
@@ -66,7 +75,7 @@ const CreditBalanceSyncListener = () => {
       unsubscribe();
       timers.forEach(clearTimeout);
     };
-  }, [queryClient]);
+  }, [queryClient, markSynced]);
 
   return null;
 };
