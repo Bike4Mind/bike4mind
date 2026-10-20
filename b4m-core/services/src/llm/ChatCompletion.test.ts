@@ -8080,6 +8080,7 @@ describe('ChatCompletionProcess', () => {
 
       const turn = await runTurn({ surface: 'settings-surface' }, table);
 
+      expect(turn.processError).toBeUndefined();
       expect(resolve).toHaveBeenCalledWith(
         expect.objectContaining({
           user: expect.objectContaining({ id: 'user1' }),
@@ -8103,6 +8104,9 @@ describe('ChatCompletionProcess', () => {
       );
 
       expect(resolve).toHaveBeenCalledOnce();
+      expect(turn.processError).toEqual(
+        expect.objectContaining({ cause: expect.objectContaining({ message: 'workspace lookup failed' }) })
+      );
       expect(turn.modelCalled).toBe(false);
       expect(turn.sessionPrompt).toBeUndefined();
     });
@@ -8115,6 +8119,8 @@ describe('ChatCompletionProcess', () => {
         table
       );
 
+      expect(turn.processError).toBeUndefined();
+      expect(turn.modelCalled).toBe(true);
       expect(turn.sessionPrompt).toBeUndefined();
       expect(turn.maxToolCalls).toBeUndefined();
     });
