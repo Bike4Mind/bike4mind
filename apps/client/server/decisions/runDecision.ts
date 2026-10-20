@@ -84,22 +84,22 @@ const describeFailure = (error: unknown) => {
   };
 };
 
-/** The first model this deployment serves whose provider the caller holds a usable key for. */
-const firstCallableDecisionModel = async (userId: string, logger: Logger): Promise<DecisionModelId> => {
-  const models = getDecisionProviderRegistry().models();
-  const providers = [...new Set(models.map(model => getDecisionModelCapabilities(model).provider))];
-  const callable = await resolveCallableDecisionProviders(userId, providers, logger);
-  const model = models.find(id => callable.has(getDecisionModelCapabilities(id).provider));
-  if (!model) {
-    throw new DecisionRequestError(
-      503,
-      'provider_not_configured',
-      undefined,
-      'No decision provider credential is configured for this caller.'
-    );
-  }
-  return model;
-};
+/** The first model this deployment serves whose provider the caller holds a usable key for. */ const firstCallableDecisionModel =
+  async (userId: string, logger: Logger): Promise<DecisionModelId> => {
+    const models = getDecisionProviderRegistry().models();
+    const providers = [...new Set(models.map(model => getDecisionModelCapabilities(model).provider))];
+    const callable = await resolveCallableDecisionProviders(userId, providers, logger);
+    const model = models.find(id => callable.has(getDecisionModelCapabilities(id).provider));
+    if (!model) {
+      throw new DecisionRequestError(
+        503,
+        'provider_not_configured',
+        undefined,
+        'No decision provider credential is configured for this caller.'
+      );
+    }
+    return model;
+  };
 
 /**
  * Answers one decision request and returns the wire response. Throws `DecisionRequestError` for a

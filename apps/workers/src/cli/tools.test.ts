@@ -36,6 +36,9 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/services', () => ({ cliTools: { executeServerTool: vi.fn() } }));
 
 vi.mock('@server/decisions/runDecision', () => ({ runDecision: vi.fn() }));
+// decisionErrors pulls the input resolver and the data-lake access chain in at import time; this
+// handler test only needs the executor to exist.
+vi.mock('@server/decisions/decisionErrors', () => ({ describeDecisionFailure: vi.fn() }));
 
 vi.mock('@server/cli/auth', () => ({
   // verifyApiKey is imported by resolveContractAuth; unused on the jwtOnly tools

@@ -1,8 +1,7 @@
-import { userRepository } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import type { ServerToolExecutors } from '@bike4mind/services';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { runDecision, type DecisionRunBody } from '@server/decisions/runDecision';
+import { buildDecideExecutor } from '@server/decisions/cliDecideExecutor';
 import { executeToolWithLogging } from '@bike4mind/server-utils/cli/toolsHandler.shared';
 import { executeToolContract } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
@@ -19,17 +18,7 @@ import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
  * socket hang ups; Next.js API works reliably in local dev.
  */
 /** Same executor wiring as the Lambda entry - see apps/workers/src/cli/tools.ts. */
-const buildExecutors = (logger: Logger): ServerToolExecutors => ({
-  decide: async request => {
-    const user = await userRepository.findById(request.userId);
-    if (!user) throw new Error('No such user');
-    const result = await runDecision({
-      caller: { userId: request.userId, user, logger, source: 'cli' },
-      body: request.input as unknown as DecisionRunBody,
-    });
-    return JSON.stringify({ id: result.id, model: result.model, answers: result.answers });
-  },
-});
+const buildExecutors = (logger: Logger): ServerToolExecutors => ({ decide: buildDecideExecutor(logger) });
 
 const handler = nextRouteForContract(executeToolContract, {
   // Passed as an option so the adapter orders it before validation (a malformed

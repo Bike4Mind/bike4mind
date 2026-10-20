@@ -74,15 +74,29 @@ export const toDecisionErrorReply = (error: unknown): DecisionErrorReply | null 
   }
 };
 
-/** Writes the reply; returns false for an unexpected error so the caller rethrows it to errorHandler. */
-export const sendDecisionError = (res: Response, error: unknown): boolean => {
-  const reply = toDecisionErrorReply(error);
-  if (!reply) return false;
-  if (reply.errorCode === 'provider_overloaded') {
-    const seconds = error instanceof DecisionOverloadedError ? error.retryAfterSeconds : 1;
-    res.setHeader('Retry-After', String(seconds));
-  }
-  const { status, ...body } = reply;
-  res.status(status).json(body);
-  return true;
+/**
+ * A failure's class, with no message, for a host that persists it: the CLI tool path writes whatever
+ * its executor throws into `toolExecutionLog`, and a provider message can quote the caller's input.
+ * Same discipline as the runner's own `describeFailure`, extended to the pre-provider gates.
+ */
+export const describeDecisionFailure = (error: unknown): string => {
+  if (error instanceof DecisionRequestError) return `decision_request_error: ${error.errorCode}`;
+  if (error instanceof DecisionImageError) return `decision_input_error: ${error.errorCode}`;
+  if (error instanceof DecisionResponseMismatchError) return 'provider_error: response_mismatch';
+  const providerError = error instanceof DecisionOverloadedError ? error.providerError : error;
+  if (providerError instanceof DecisionProviderError) return `provider_error: ${providerError.kind}`;
+  return error instanceof Error ? error.name : 'unknown_error';
 };
+
+/** Writes the reply; returns false for an unexpected error so the caller rethrows it to errorHandler. */ export const sendDecisionError =
+  (res: Response, error: unknown): boolean => {
+    const reply = toDecisionErrorReply(error);
+    if (!reply) return false;
+    if (reply.errorCode === 'provider_overloaded') {
+      const seconds = error instanceof DecisionOverloadedError ? error.retryAfterSeconds : 1;
+      res.setHeader('Retry-After', String(seconds));
+    }
+    const { status, ...body } = reply;
+    res.status(status).json(body);
+    return true;
+  };
