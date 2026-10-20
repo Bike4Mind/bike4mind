@@ -11,7 +11,11 @@ import {
   type ModelInfo,
   usdToCredits,
 } from '@bike4mind/common';
-import { buildThinkingParams, reasonsWithinOutputBudget, resolveDispatchForRecord } from '@bike4mind/llm-adapters';
+import {
+  buildThinkingParams,
+  reasonsWithinOutputBudget,
+  resolveDispatchForRecord,
+} from '@bike4mind/llm-adapters/model-sizing';
 import { computeDefaultMaxTokens } from './aiSettingsUtils';
 
 // ~4.3 chars per cl100k token measured on the blocks below; 4 rounds the overhead up, never down.

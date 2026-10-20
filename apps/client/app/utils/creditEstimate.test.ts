@@ -10,7 +10,7 @@ import {
   type ModelInfo,
   usdToCredits,
 } from '@bike4mind/common';
-import { buildThinkingParams } from '@bike4mind/llm-adapters';
+import { buildThinkingParams } from '@bike4mind/llm-adapters/model-sizing';
 import {
   APP_PROMPT_TOKENS,
   estimateAnswerCount,
