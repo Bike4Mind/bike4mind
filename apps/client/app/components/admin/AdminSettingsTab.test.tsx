@@ -87,10 +87,20 @@ describe('AdminSettingsTab reviewer emails setting', () => {
     expect(screen.queryByTestId('generic-setting-ImageModerationReviewerEmails')).toBeNull();
   });
 
-  it('does not give the string-list editor to other object settings', () => {
-    renderSecurityTab();
+  it('gives the generic field to an object setting that defaults to an array', () => {
+    // The editor belongs to the listed keys, not to every object setting that happens to hold a
+    // list. No other rendered setting ships an array default, so lend one the shape here.
+    const setting = settingsMap.customMcpBlockedHosts;
+    const original = setting.defaultValue;
+    (setting as { defaultValue: unknown }).defaultValue = [];
+    try {
+      renderTab(findTab(setting.category));
 
-    expect(screen.queryByTestId('string-list-setting-recommendedModelIds')).toBeNull();
+      expect(screen.getByTestId('generic-setting-customMcpBlockedHosts')).toBeTruthy();
+      expect(screen.queryByTestId('string-list-setting-customMcpBlockedHosts')).toBeNull();
+    } finally {
+      (setting as { defaultValue: unknown }).defaultValue = original;
+    }
   });
 });
 
