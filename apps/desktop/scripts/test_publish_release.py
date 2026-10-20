@@ -20,6 +20,7 @@ with open(os.environ['GH_CALLS'], 'a') as output:
 if args[0] == 'api':
     path = next(arg for arg in args if arg.startswith('repos/'))
     if '/commits/' in path:
+        if os.environ['TAG_FAIL'] == 'commit': sys.exit(1)
         print(json.dumps({'sha': 'target-commit'}))
     elif '/git/' in path:
         if os.environ['TAG_FAIL'] == 'lookup' and '--include' in args:
@@ -30,8 +31,8 @@ if args[0] == 'api':
             if state == 'missing':
                 print('HTTP/2.0 404 Not Found\\n\\n{}')
                 sys.exit(1)
-            obj = {'type': 'tag' if state == 'annotated' else 'commit',
-                   'sha': 'existing-tag' if state == 'annotated' else 'other' if state == 'wrong' else 'target-commit'}
+            obj = {'type': 'tag' if state.startswith('annotated') else 'commit',
+                   'sha': 'existing-tag' if state.startswith('annotated') else 'other' if state == 'wrong' else 'target-commit'}
             print('HTTP/2.0 200 OK\\n\\n' + json.dumps({'object': obj}))
         elif '--input' in args:
             payload = json.load(sys.stdin)
@@ -40,7 +41,10 @@ if args[0] == 'api':
             if os.environ['TAG_FAIL'] and path.endswith(os.environ['TAG_FAIL']): sys.exit(1)
             print(json.dumps({'sha': 'annotated-tag'}))
         else:
-            print(json.dumps({'object': {'type': 'commit', 'sha': 'target-commit'}}))
+            if os.environ['TAG_FAIL'] == 'annotation': sys.exit(1)
+            print(json.dumps({'object': {
+                'type': 'tree' if os.environ['TAG_STATE'] == 'annotated-noncommit' else 'commit',
+                'sha': 'other' if os.environ['TAG_STATE'] == 'annotated-wrong' else 'target-commit'}}))
     elif '--slurp' in args:
         if os.environ['API_FAIL'] == 'true': sys.exit(1)
         print(os.environ['RELEASES'])
@@ -114,6 +118,30 @@ if args[:2] == ['release', 'download']:
         status, calls = self.publish(state='true', tag_state='annotated')
         self.assertEqual(status, 0)
         self.assertFalse(any(call[0] == 'payload' for call in calls))
+
+    def test_invalid_annotated_target_never_writes_or_publishes(self):
+        for tag_state in ('annotated-wrong', 'annotated-noncommit'):
+            with self.subTest(tag_state=tag_state):
+                status, calls = self.publish(state='true', tag_state=tag_state)
+                self.assertNotEqual(status, 0)
+                self.assertFalse(any(call[0] == 'payload' for call in calls))
+                self.assertFalse(any(call[:2] == ['release', 'edit'] for call in calls))
+
+    def test_target_lookup_failures_never_write_or_publish(self):
+        for tag_fail in ('commit', 'annotation'):
+            with self.subTest(tag_fail=tag_fail):
+                status, calls = self.publish(state='true', tag_state='annotated', tag_fail=tag_fail)
+                self.assertNotEqual(status, 0)
+                self.assertFalse(any(call[0] == 'payload' for call in calls))
+                self.assertFalse(any(call[:2] == ['release', 'edit'] for call in calls))
+
+    def test_lightweight_tag_update_failure_never_publishes(self):
+        status, calls = self.publish(state='true', tag_state='lightweight',
+                                     tag_fail='/git/refs/tags/desktop-v0.1.1')
+        self.assertNotEqual(status, 0)
+        self.assertIn(['payload', 'repos/example/dist/git/refs/tags/desktop-v0.1.1',
+                       {'sha': 'annotated-tag', 'force': True}], calls)
+        self.assertFalse(any(call[:2] == ['release', 'edit'] for call in calls))
 
     def test_tag_failures_do_not_publish(self):
         for options in ({'tag_fail': 'lookup'}, {'tag_fail': '/git/tags'},
