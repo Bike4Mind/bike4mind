@@ -24,6 +24,7 @@ vi.mock('@client/app/hooks/data/skillMarket', () => ({
   useRateListing: hooks.mutation,
   useReportListing: hooks.mutation,
   useModerateListing: hooks.mutation,
+  useMarketMe: () => ({ data: undefined }),
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
