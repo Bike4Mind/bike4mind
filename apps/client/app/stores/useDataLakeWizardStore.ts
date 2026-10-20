@@ -72,7 +72,6 @@ export interface DataLakeFormValues {
 export type UploadErrorKind = 'validation' | 'network' | 'upload' | 'server' | 'unknown';
 
 export interface UploadProgress {
-  startedAt?: number;
   totalFiles: number;
   uploadedFiles: number;
   chunkedFiles: number;

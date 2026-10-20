@@ -48,14 +48,30 @@ vi.mock('@client/app/components/Credits/AccountSelector', () => ({
 vi.mock('@client/app/hooks/useEffectiveCredits', () => ({ useEffectiveCredits: () => state.credits }));
 vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: logEvent }) }));
 vi.mock('./CreditsSection', () => ({
-  CreditsSection: ({ onClose }: { onClose: () => void }) => (
+  CreditsSection: ({
+    onClose,
+    onPurchase,
+    onPaymentPending,
+  }: {
+    onClose: () => void;
+    onPurchase?: () => void;
+    onPaymentPending?: () => void;
+  }) => (
     <div data-testid="credits-section-body">
       <button type="button" data-testid="credits-section-see-usage" onClick={onClose} />
+      <button type="button" data-testid="credits-purchase-success" onClick={onPurchase} />
+      <button type="button" data-testid="credits-payment-pending" onClick={onPaymentPending} />
+      <button type="button" data-testid="credits-payment-failed" />
     </div>
   ),
 }));
 vi.mock('./PlansSection', () => ({
-  PlansSection: () => <div data-testid="plans-section-body" />,
+  PlansSection: ({ onSubscriptionChanged }: { onSubscriptionChanged?: () => void }) => (
+    <div data-testid="plans-section-body">
+      <button type="button" data-testid="subscription-changed" onClick={onSubscriptionChanged} />
+      <button type="button" data-testid="subscription-canceled" />
+    </div>
+  ),
   PlansSectionSkeleton: () => <div data-testid="plans-section-skeleton" />,
 }));
 
@@ -133,6 +149,26 @@ describe('BillingModal', () => {
       type: 'billing_closed_without_purchase',
       metadata: { entry: 'credits_chip', focus: 'credits' },
     });
+  });
+
+  it.each([
+    ['credits-purchase-success', false],
+    ['credits-payment-pending', false],
+    ['subscription-changed', false],
+    ['credits-payment-failed', true],
+    ['subscription-canceled', true],
+  ])('records abandonment correctly after %s', (testId, abandoned) => {
+    const content = (open: boolean) => (
+      <TestWrapper>
+        <BillingModal open={open} onClose={vi.fn()} />
+      </TestWrapper>
+    );
+    const { rerender } = render(content(true));
+    fireEvent.click(screen.getByTestId(testId));
+    rerender(content(false));
+    const abandonment = expect.objectContaining({ type: 'billing_closed_without_purchase' });
+    if (abandoned) expect(logEvent).toHaveBeenCalledWith(abandonment);
+    else expect(logEvent).not.toHaveBeenCalledWith(abandonment);
   });
 
   it('does not count leaving for the usage page as a close without purchase', () => {

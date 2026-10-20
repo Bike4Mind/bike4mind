@@ -20,11 +20,9 @@ vi.mock('@client/app/hooks/data/dataLakeWizard', () => ({
 }));
 
 const promoteMutate = vi.fn();
-const logEvent = vi.hoisted(() => vi.fn());
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
   usePromoteDataLake: () => ({ mutate: promoteMutate, isPending: false }),
 }));
-vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: logEvent }) }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: ReactNode }) => (
@@ -56,28 +54,6 @@ describe('UploadStep — completion summary', () => {
   afterEach(() => {
     useDataLakeWizardStore.getState().resetWizard();
     vi.restoreAllMocks();
-    logEvent.mockClear();
-  });
-
-  it('logs upload-to-vectorized readiness in milliseconds', () => {
-    vi.spyOn(Date, 'now').mockReturnValue(1_500);
-    renderComplete({ totalFiles: 2, uploadedFiles: 2, chunkedFiles: 2, vectorizedFiles: 2, startedAt: 1_000 });
-    expect(logEvent).toHaveBeenCalledWith({
-      type: 'file_ready_ms',
-      metadata: { milliseconds: 500, files: 2 },
-    });
-  });
-
-  it('does not log readiness while later files of the batch are still uploading', () => {
-    renderComplete({
-      status: 'uploading',
-      totalFiles: 5,
-      uploadedFiles: 2,
-      chunkedFiles: 2,
-      vectorizedFiles: 2,
-      startedAt: 1_000,
-    });
-    expect(logEvent).not.toHaveBeenCalled();
   });
 
   it('claims chunked and vectorized only when both counts reach the total', () => {

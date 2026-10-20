@@ -17,7 +17,7 @@ import { useGetIdentify } from '@client/app/hooks/data/user';
 import useGetLogo from '@client/app/hooks/useGetLogo';
 import { ExternalLinks, CHECKBOX_LABEL_LINK_SX } from '@client/app/utils/externalLinks';
 import { applyRedirect } from '@client/app/utils/authRedirect';
-import { useLogEvent } from '@client/app/hooks/data/analytics';
+import { useLogEvent, useLogPoliciesShown } from '@client/app/hooks/data/analytics';
 
 // One backoff retry before giving up on a submit 401 - see the isRetryable predicate below.
 const SUBMIT_RETRY_DELAY_MS = 1000;
@@ -39,6 +39,7 @@ const AcceptPoliciesPage = () => {
   const identity = useGetIdentify();
   const logoUrl = useGetLogo();
   const { mutate: logEvent } = useLogEvent();
+  const { mutate: logPoliciesShown } = useLogPoliciesShown();
   const shownRef = useRef(false);
 
   const [acceptPolicies, setAcceptPolicies] = useState(false);
@@ -58,13 +59,6 @@ const AcceptPoliciesPage = () => {
   }, []);
 
   const redirectTo = (search as { redirectTo?: string }).redirectTo;
-  useEffect(() => {
-    // No token means the redirect to /login below runs instead of showing the policies.
-    if (shownRef.current || !accessToken) return;
-    shownRef.current = true;
-    logEvent({ type: FirstRunEvents.POLICIES_SHOWN, metadata: { path: 'interstitial' } });
-  }, [accessToken, logEvent]);
-
   // True only once identify has both a confirmed 401 (not mfaPending, which both ApiContext's
   // interceptor and UserContext's bootstrap effect also exempt - no refresh token is issued
   // during mfaPending by design, so a 401 there is expected) AND retryCount >= 1, meaning
@@ -78,6 +72,16 @@ const AcceptPoliciesPage = () => {
     !mfaPending &&
     getAxiosErrorStatus(identity.error) === 401 &&
     getAxiosRetryCount(identity.error) >= 1;
+
+  useEffect(() => {
+    // Count the actionable interstitial, excluding sessions that immediately redirect away
+    // or are still completing MFA.
+    if (shownRef.current || !accessToken || currentUser?.aupAcceptedVersion || sessionUnverified || mfaPending) {
+      return;
+    }
+    shownRef.current = true;
+    logPoliciesShown();
+  }, [accessToken, currentUser?.aupAcceptedVersion, sessionUnverified, mfaPending, logPoliciesShown]);
 
   // Guard the guard: no token -> login; already-accepted user -> don't trap them on this page;
   // unverifiable session -> tear down the same way any other unrecoverable 401 does instead of

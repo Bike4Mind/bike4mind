@@ -124,6 +124,7 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
   const { mutate: logEvent } = useLogEvent();
   const openedMetadataRef = useRef<{ entry: BillingEntry; focus: string } | null>(null);
   const purchasedRef = useRef(false);
+  const paymentPendingRef = useRef(false);
   const leftForUsageRef = useRef(false);
 
   // Abandonment is logged on the open -> closed transition, not in a close handler, so closes made
@@ -132,11 +133,12 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
   useEffect(() => {
     if (!open) {
       const opened = openedMetadataRef.current;
-      if (opened && !purchasedRef.current && !leftForUsageRef.current) {
+      if (opened && !purchasedRef.current && !paymentPendingRef.current && !leftForUsageRef.current) {
         logEvent({ type: FirstRunEvents.BILLING_CLOSED_WITHOUT_PURCHASE, metadata: opened });
       }
       openedMetadataRef.current = null;
       purchasedRef.current = false;
+      paymentPendingRef.current = false;
       leftForUsageRef.current = false;
       return;
     }
@@ -203,7 +205,11 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
             : t('billing.plans_upgrade_sub', 'Get a monthly credit allowance instead of topping up by hand.')
       }
     >
-      <PlansSection />
+      <PlansSection
+        onSubscriptionChanged={() => {
+          purchasedRef.current = true;
+        }}
+      />
     </Section>
   );
   const creditsSection = (
@@ -225,6 +231,9 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
         onClose={() => {
           leftForUsageRef.current = true;
           onClose();
+        }}
+        onPaymentPending={() => {
+          paymentPendingRef.current = true;
         }}
         onPurchase={() => {
           purchasedRef.current = true;

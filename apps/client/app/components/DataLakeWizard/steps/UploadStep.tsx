@@ -7,10 +7,8 @@ import { useDataLakeWizardStore, type UploadProgress } from '@client/app/stores/
 import { DATA_LAKE, DATA_LAKES } from '@client/app/components/datalake/dataLakeBranding';
 import { useBatchProgressListener } from '@client/app/hooks/data/dataLakeWizard';
 import { usePromoteDataLake } from '@client/app/hooks/data/dataLakes';
-import { FirstRunEvents, deriveLakeServingState, MIN_DATA_LAKE_SLUG_LENGTH } from '@bike4mind/common';
-import { useLogEvent } from '@client/app/hooks/data/analytics';
+import { deriveLakeServingState, MIN_DATA_LAKE_SLUG_LENGTH } from '@bike4mind/common';
 import type { DataLakeStatus } from '@bike4mind/common';
-import { useEffect, useRef } from 'react';
 
 /**
  * Background AI-tag suggestion status, shown only while the wizard's Complete screen
@@ -260,8 +258,6 @@ function ProgressRow({ label, current, total }: { label: string; current: number
 
 export default function UploadStep() {
   const progress = useDataLakeWizardStore(s => s.uploadProgress);
-  const { mutate: logEvent } = useLogEvent();
-  const readyLoggedRef = useRef(false);
   const closeWizard = useDataLakeWizardStore(s => s.closeWizard);
   const resetWizard = useDataLakeWizardStore(s => s.resetWizard);
   const setStep = useDataLakeWizardStore(s => s.setStep);
@@ -279,18 +275,6 @@ export default function UploadStep() {
   const wantsTaxonomy = useDataLakeWizardStore(s => s.optionalSteps.taxonomy) && !isAppendMode;
   const { uploadedFiles, chunkedFiles, vectorizedFiles } = progress;
   const fullyProcessed = uploadedFiles > 0 && chunkedFiles >= uploadedFiles && vectorizedFiles >= uploadedFiles;
-
-  useEffect(() => {
-    // Gate on 'complete': under the upload concurrency limit the first files can be vectorized
-    // before the rest have uploaded, which would log a partial batch.
-    if (progress.status !== 'complete' || !fullyProcessed || readyLoggedRef.current || progress.startedAt === undefined)
-      return;
-    readyLoggedRef.current = true;
-    logEvent({
-      type: FirstRunEvents.FILE_READY_MS,
-      metadata: { milliseconds: Math.max(0, Date.now() - progress.startedAt), files: uploadedFiles },
-    });
-  }, [progress.status, fullyProcessed, progress.startedAt, uploadedFiles, logEvent]);
 
   // Subscribe to real-time chunk/vectorize progress from WebSocket
   useBatchProgressListener();

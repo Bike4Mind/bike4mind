@@ -72,7 +72,12 @@ import { useMcpServerSync } from './useMcpServerSync';
 import { useMessageDraft } from './useMessageDraft';
 import { useSessionFiles } from './useSessionFiles';
 import { useSendMessage } from './useSendMessage';
-import { createBlockedSendToastGate, getSendBlockedReason } from './sendBlockedReason';
+import {
+  createBlockedSendToastGate,
+  getBlockedSendToastLabel,
+  getSendBlockedReason,
+  type SendBlockedReason,
+} from './sendBlockedReason';
 import { sendPromptViaComposer } from './sendPromptViaComposer';
 import { useModerationScanFallback } from './useModerationScanFallback';
 import { useRollDice } from './useRollDice';
@@ -358,6 +363,14 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
 
   const [shouldToastBlockedSend] = useState(() => createBlockedSendToastGate());
   const [shouldToastBlockedClick] = useState(() => createBlockedSendToastGate({ toastEveryReason: true }));
+  const handleVoiceSendBlocked = useCallback(
+    (reason: SendBlockedReason) => {
+      if (!shouldToastBlockedClick(reason)) return;
+      logEvent({ type: FirstRunEvents.SEND_BLOCKED, metadata: { reason } });
+      toast.info(getBlockedSendToastLabel(reason, t));
+    },
+    [shouldToastBlockedClick, logEvent, t]
+  );
   const handleEditorSubmit = useCallback(async () => {
     // Same gate as the Send button: Enter must not send what the button would refuse. The
     // tooltip explaining why is out of sight while typing, so say it here too.
@@ -836,6 +849,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
           handleStopMessage={handleStopMessage}
           pendingAutoSubmitGoal={pendingAutoSubmitGoal}
           sendBlockedReason={sendBlockedReason}
+          onVoiceSendBlocked={handleVoiceSendBlocked}
           isModelsLoading={isModelsLoading}
           isVoiceSessionEnabled={isVoiceSessionEnabled}
           voiceEngine={voiceEngine}

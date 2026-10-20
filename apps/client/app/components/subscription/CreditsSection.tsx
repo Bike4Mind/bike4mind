@@ -24,6 +24,7 @@ interface CreditsSectionProps {
   /** Closes the Billing modal before navigating away (the usage link). */
   onClose: () => void;
   onPurchase?: () => void;
+  onPaymentPending?: () => void;
 }
 
 type PurchaseTransaction = Extract<ICreditTransaction, { type: 'purchase' }>;
@@ -35,7 +36,13 @@ const statusColor = (status: PurchaseTransaction['status']) =>
   status === 'completed' ? 'success' : status === 'pending' ? 'warning' : 'danger';
 
 /** One-time credit packs and the purchase history, for the Billing modal. */
-export const CreditsSection = ({ transactions, transactionsLoading, onClose, onPurchase }: CreditsSectionProps) => {
+export const CreditsSection = ({
+  transactions,
+  transactionsLoading,
+  onClose,
+  onPurchase,
+  onPaymentPending,
+}: CreditsSectionProps) => {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const historyHeadingId = useId();
@@ -200,6 +207,7 @@ export const CreditsSection = ({ transactions, transactionsLoading, onClose, onP
               })}
               ariaLabel={purchaseCreditsAriaLabel(selected.credits, selected.price)}
               onPayment={handlePaymentComplete}
+              onPaymentPending={onPaymentPending}
             />
           </Box>
         </Box>
