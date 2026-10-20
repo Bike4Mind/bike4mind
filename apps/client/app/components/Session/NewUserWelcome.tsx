@@ -6,7 +6,7 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { useGetOwnSessions } from '@client/app/hooks/data/sessions';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { useEffectiveCredits } from '@client/app/hooks/useEffectiveCredits';
-import { useAnswerCostReference } from '@client/app/hooks/useAnswerCostReference';
+import { useSelectedModelAnswerCost } from '@client/app/hooks/useSelectedModelAnswerCost';
 import { formatAnswersEstimate } from '@client/app/utils/creditEstimate';
 import useChatActions from '@client/app/hooks/useChatActions';
 import { useChatInput } from '@client/app/hooks/useChatInput';
@@ -37,7 +37,7 @@ const NewUserWelcome = () => {
   const enforceCredits = !!useGetSettingsValue('enforceCredits');
   const defaultFreeCredits = Number(useGetSettingsValue('defaultFreeCredits')) || 0;
   const balance = useEffectiveCredits();
-  const answerCostReference = useAnswerCostReference();
+  const answerCost = useSelectedModelAnswerCost();
   const sendPrompt = useChatActions(s => s.sendPrompt);
   const setChatInputValue = useChatInput(s => s.setChatInputValue);
   const requestFocus = useChatInput(s => s.requestFocus);
@@ -90,7 +90,7 @@ const NewUserWelcome = () => {
   });
   // Same credits the line above quotes: the pending grant before verification, else the live balance.
   const estimateCredits = awaitingVerification ? (currentUser?.pendingCreditGrant ?? defaultFreeCredits) : balance;
-  const answersEstimate = creditsLine ? formatAnswersEstimate(estimateCredits, answerCostReference) : null;
+  const answersEstimate = creditsLine ? formatAnswersEstimate(estimateCredits, answerCost) : null;
 
   return (
     <Sheet
