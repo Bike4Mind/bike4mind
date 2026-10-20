@@ -120,7 +120,7 @@ describe('runExternalActivityReport', () => {
     const report = await run();
 
     expect(report.externalUsers).toBe(3);
-    expect(report.excluded).toEqual({ noUser: 2, admin: 1, staffDomain: 1, testPattern: 1 });
+    expect(report.excluded).toEqual({ noUser: 2, admin: 1, staffDomain: 1, testPattern: 1, synthetic: 0 });
     const dau = Object.fromEntries(report.dau.map(row => [row.day, row.users]));
     expect(report.dau).toHaveLength(30);
     expect(dau['2026-10-09']).toBe(0); // carol's voice quest is not a chat message
@@ -158,7 +158,7 @@ describe('runExternalActivityReport', () => {
     expect(internal['2026-10-11']).toBe(0); // API UsageEvents only
     expect(internal['2026-10-12']).toBe(2); // AgentExecutions
     expect(report.externalUsers).toBe(3); // internal users are in no external figure
-    expect(report.excluded).toEqual({ noUser: 2, admin: 1, staffDomain: 2, testPattern: 1 });
+    expect(report.excluded).toEqual({ noUser: 2, admin: 1, staffDomain: 2, testPattern: 1, synthetic: 0 });
     expect(lines[0]).toMatch(/Day\s+DAU\s+API users\s+Internal/);
     expect(lines[0]).toMatch(/2026-10-10\s+3\s+0\s+2/);
     expect(lines[0]).toContain('Internal users with app, CLI or desktop activity: 2');
