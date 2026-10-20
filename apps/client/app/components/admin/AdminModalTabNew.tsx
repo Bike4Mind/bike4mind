@@ -35,7 +35,7 @@ import 'filepond/dist/filepond.min.css';
 const FilePondComponent = FilePond as any;
 import 'filepond-plugin-image-preview/dist/filepond-plugin-image-preview.css';
 
-import { IModal } from '@bike4mind/common';
+import { IModal, getModalVideoErrors } from '@bike4mind/common';
 
 // Icons
 import CloseIcon from '@mui/icons-material/Close';
@@ -307,6 +307,9 @@ const EditModalNew: React.FC<EditModalProps> = ({ isOpen, onClose, modalData, on
     }
   };
 
+  // Banners have no slider slot for a video, so their video is dropped rather than validated or saved
+  const hasVideoErrors = () => !modalFields.isBanner && Object.keys(getModalVideoErrors(modalFields.video)).length > 0;
+
   const validateCurrentStep = (): boolean => {
     const errors: Record<string, string> = {};
 
@@ -318,6 +321,9 @@ const EditModalNew: React.FC<EditModalProps> = ({ isOpen, onClose, modalData, on
       case 'banner-content':
         if (!modalFields.title) errors.title = 'Banner title is required';
         if (!modalFields.textMessage) errors.textMessage = 'Banner message is required';
+        break;
+      case 'media':
+        if (hasVideoErrors()) errors.video = 'Fix the product video URLs';
         break;
       case 'targeting':
         if (!modalFields.startDate) errors.startDate = 'Start date is required';
@@ -346,7 +352,13 @@ const EditModalNew: React.FC<EditModalProps> = ({ isOpen, onClose, modalData, on
       return;
     }
 
-    onSave(modalFields);
+    if (hasVideoErrors()) {
+      setValidationErrors({ video: 'Fix the product video URLs' });
+      setCurrentStep(steps.findIndex(s => s.id === 'media'));
+      return;
+    }
+
+    onSave(modalFields.isBanner ? { ...modalFields, video: null } : modalFields);
     onClose();
   };
 
@@ -688,6 +700,11 @@ const EditModalNew: React.FC<EditModalProps> = ({ isOpen, onClose, modalData, on
                       onChange={video => setModalFields(prev => ({ ...prev, video }))}
                       bucketName={fabfileBucketName}
                     />
+                    {validationErrors.video && (
+                      <Typography level="body-sm" color="danger" data-testid="modal-video-step-error">
+                        {validationErrors.video}
+                      </Typography>
+                    )}
                   </>
                 )}
               </Stack>

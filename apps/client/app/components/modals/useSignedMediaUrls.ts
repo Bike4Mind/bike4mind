@@ -10,7 +10,8 @@ export type ResolvedMediaUrls = Record<string, string | null>;
 
 /**
  * Resolves modal media URLs for playback. A stored upload is presigned like slide images; `refresh`
- * re-signs one URL so a looping video recovers when its signature expires mid-session.
+ * re-signs one URL so a looping video recovers when its signature expires mid-session. It returns false
+ * when there is nothing to retry (an unsigned URL, or one already re-signed in the last 30s).
  */
 export function useSignedMediaUrls(urls: string[]) {
   const { mutateAsync: sign } = useGetPresignedUrl();
@@ -60,15 +61,16 @@ export function useSignedMediaUrls(urls: string[]) {
   }, [urlsKey, resolve]);
 
   const refresh = useCallback(
-    (url: string) => {
-      if (!storageKeyOf(url)) return;
+    (url: string): boolean => {
+      if (!storageKeyOf(url)) return false;
       const now = Date.now();
-      if (now - (lastRefresh.current.get(url) ?? 0) < MIN_REFRESH_INTERVAL_MS) return;
+      if (now - (lastRefresh.current.get(url) ?? 0) < MIN_REFRESH_INTERVAL_MS) return false;
       lastRefresh.current.set(url, now);
       void resolve([url]).then(next => {
         // A failed re-sign keeps the old URL rather than tearing down a video that may still be buffered
         if (next[url]) setResolved(prev => ({ ...prev, ...next }));
       });
+      return true;
     },
     [resolve]
   );

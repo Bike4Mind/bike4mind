@@ -77,6 +77,13 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger,
   const { resetTrigger } = useModalTrigger();
   const slideVideoUrls = useMemo(() => activeModalList.flatMap(modal => videoUrlsOf(modal.video)), [activeModalList]);
   const { resolved: videoUrls, refresh: refreshVideoUrl } = useSignedMediaUrls(slideVideoUrls);
+  const [failedVideos, setFailedVideos] = useState<ReadonlySet<string>>(new Set());
+  const handleVideoError = useCallback(
+    (src: string) => {
+      if (!refreshVideoUrl(src)) setFailedVideos(prev => new Set(prev).add(src));
+    },
+    [refreshVideoUrl]
+  );
 
   // Refs for accessibility
   const modalRef = useRef<HTMLDivElement>(null);
@@ -567,24 +574,38 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger,
   const currentImageUrl = urlImages?.[currentModal._id || ''];
   const { displayDate, subtitle: subtitleText } = parseSubtitleForDisplay(currentModal.subtitle);
 
-  // A video replaces the slide image unless the server withheld its URL, then the image shows instead
+  // A video replaces the slide image. When it cannot play (URL withheld, or a playback error that
+  // re-signing cannot fix) the slide shows its image, else the video's poster in the video slot.
   const pickedVideo = pickSlideVideo(currentModal.video, isMobile);
-  const slideVideo = pickedVideo && videoUrls[pickedVideo.src] !== null ? pickedVideo : null;
+  const videoUnplayable = !!pickedVideo && (videoUrls[pickedVideo.src] === null || failedVideos.has(pickedVideo.src));
+  const slideVideo = pickedVideo && !(videoUnplayable && currentModal.imageUrl) ? pickedVideo : null;
   const showImage = !slideVideo && !!currentModal.imageUrl;
   const isLandscapeVideo = slideVideo?.orientation === 'landscape';
 
   const renderVideo = () => {
     if (!slideVideo) return null;
+    const poster = (slideVideo.poster && videoUrls[slideVideo.poster]) || undefined;
+    if (videoUnplayable) {
+      return poster ? (
+        <Box
+          component="img"
+          src={poster}
+          alt={currentTitle}
+          data-testid="whats-new-slide-video-poster"
+          sx={{ width: '100%', height: '100%', objectFit: 'contain', borderRadius: '12px' }}
+        />
+      ) : null;
+    }
     const src = videoUrls[slideVideo.src];
     if (!src) return <CircularProgress size="lg" />;
     return (
       <WhatsNewSlideVideo
         key={`${currentModal._id}:${slideVideo.src}`}
         src={src}
-        poster={(slideVideo.poster && videoUrls[slideVideo.poster]) || undefined}
+        poster={poster}
         title={currentTitle}
         active={isOpen}
-        onSourceError={() => refreshVideoUrl(slideVideo.src)}
+        onSourceError={() => handleVideoError(slideVideo.src)}
       />
     );
   };
@@ -737,6 +758,8 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger,
           <Box
             sx={{
               width: isMobile ? '100%' : slideVideo || showImage ? '400px' : '100%',
+              // flex-basis 0 ignores the width; this floor makes a landscape video shrink first
+              ...(!isMobile && isLandscapeVideo && { minWidth: '300px' }),
               padding: 0,
               display: 'flex',
               flexDirection: 'column',
@@ -934,8 +957,8 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger,
             </Box>
           </Box>
 
-          {/* 16:9 needs a wider slot than the square image one; the fixed 600px sheet height rules out
-              stacking it above the text */}
+          {/* 16:9 needs a wider slot than the square image one (up to 520px, shrinking on narrow
+              viewports); the fixed 600px sheet height rules out stacking it above the text */}
           {!isMobile && slideVideo && (
             <Box
               data-testid="whats-new-slide-video-slot"
@@ -945,7 +968,9 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                ...(isLandscapeVideo ? { width: '520px', aspectRatio: '16 / 9' } : { width: '400px', height: '400px' }),
+                ...(isLandscapeVideo
+                  ? { flex: '0 1 520px', minWidth: 0, aspectRatio: '16 / 9' }
+                  : { width: '400px', height: '400px' }),
               }}
             >
               {renderVideo()}

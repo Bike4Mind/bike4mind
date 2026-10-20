@@ -42,7 +42,7 @@ describe('storageKeyOf', () => {
   });
 
   it('is null for other urls', () => {
-    expect(storageKeyOf('https://cdn.example.com/modals/a.mp4')).toBeNull();
+    expect(storageKeyOf('https://d111.cloudfront.net/modals/a.mp4')).toBeNull();
     expect(storageKeyOf('not a url')).toBeNull();
   });
 });

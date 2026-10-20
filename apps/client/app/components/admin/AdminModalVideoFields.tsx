@@ -1,4 +1,6 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import axios from 'axios';
+import prettyBytes from 'pretty-bytes';
 import {
   Box,
   Button,
@@ -13,14 +15,20 @@ import {
 import MovieIcon from '@mui/icons-material/Movie';
 import ImageIcon from '@mui/icons-material/Image';
 import { toast } from 'sonner';
-import { KnowledgeType, type ModalVideo } from '@bike4mind/common';
+import {
+  KnowledgeType,
+  getModalVideoErrors,
+  isAllowedModalMediaUrl,
+  parseStorageLimitErrorInfo,
+  type ModalVideo,
+  type ModalVideoField,
+} from '@bike4mind/common';
 import { createFabFileOnServerWithUpload } from '@client/app/utils/filesAPICalls';
 import { getS3Url } from '@client/app/utils/s3';
+import { serverStorageLimitMessage } from '@client/app/utils/storageQuota';
 import { useSignedMediaUrls } from '@client/app/components/modals/useSignedMediaUrls';
 
-type VideoField = keyof ModalVideo;
-
-const SLOTS: { field: VideoField; slot: string; label: string; kind: 'video' | 'image' }[] = [
+const SLOTS: { field: ModalVideoField; slot: string; label: string; kind: 'video' | 'image' }[] = [
   { field: 'landscapeUrl', slot: 'landscape-video', label: '16:9 video (desktop)', kind: 'video' },
   { field: 'landscapePosterUrl', slot: 'landscape-poster', label: '16:9 poster', kind: 'image' },
   { field: 'portraitUrl', slot: 'portrait-video', label: '9:16 video (mobile)', kind: 'video' },
@@ -37,6 +45,27 @@ const EMPTY_VIDEO: ModalVideo = {
 const isAcceptedFile = (kind: 'video' | 'image', file: File) =>
   kind === 'video' ? file.type === 'video/mp4' : file.type.startsWith('image/');
 
+function uploadErrorMessage(error: unknown): string {
+  if (axios.isAxiosError(error)) {
+    const info = parseStorageLimitErrorInfo(error.response?.data);
+    if (info?.errorCode === 'file_too_large') {
+      return info.limit_bytes === undefined
+        ? 'File is too large for the upload size limit'
+        : `File is too large: uploads are limited to ${prettyBytes(info.limit_bytes)}`;
+    }
+  }
+  return serverStorageLimitMessage(error) ?? 'Failed to upload file';
+}
+
+const previewableUrls = (video: ModalVideo): Partial<Record<ModalVideoField, string>> => {
+  const out: Partial<Record<ModalVideoField, string>> = {};
+  for (const { field } of SLOTS) {
+    const url = video[field];
+    if (url && isAllowedModalMediaUrl(url)) out[field] = url;
+  }
+  return out;
+};
+
 /** Null when every slot is empty, so a modal without a video stores `video: null`. */
 export function normalizeModalVideo(video: ModalVideo): ModalVideo | null {
   const next = { ...EMPTY_VIDEO };
@@ -52,13 +81,29 @@ interface AdminModalVideoFieldsProps {
 
 const AdminModalVideoFields: React.FC<AdminModalVideoFieldsProps> = ({ value, onChange, bucketName }) => {
   const video = value ?? EMPTY_VIDEO;
-  const fileInputs = useRef<Partial<Record<VideoField, HTMLInputElement | null>>>({});
-  const [uploading, setUploading] = useState<Partial<Record<VideoField, boolean>>>({});
-  const { resolved } = useSignedMediaUrls(SLOTS.map(({ field }) => video[field]).filter((url): url is string => !!url));
+  const fileInputs = useRef<Partial<Record<ModalVideoField, HTMLInputElement | null>>>({});
+  const [uploading, setUploading] = useState<Partial<Record<ModalVideoField, boolean>>>({});
+  // Previews follow committed URLs (blur, upload, initial value) so typing does not sign every keystroke
+  const [previewed, setPreviewed] = useState(() => previewableUrls(video));
+  const { resolved } = useSignedMediaUrls(Object.values(previewed));
+  const errors = getModalVideoErrors(video);
 
-  const setField = (field: VideoField, url: string | null) => onChange(normalizeModalVideo({ ...video, [field]: url }));
+  // An upload resolves after other edits may have landed; it must merge into the latest value
+  const latest = useRef(video);
+  useEffect(() => {
+    latest.current = video;
+  });
 
-  const upload = async (field: VideoField, kind: 'video' | 'image', file: File) => {
+  const setField = (field: ModalVideoField, url: string | null) =>
+    onChange(normalizeModalVideo({ ...latest.current, [field]: url }));
+
+  const commitPreview = (field: ModalVideoField, url: string | null) =>
+    setPreviewed(prev => {
+      const { [field]: _dropped, ...rest } = prev;
+      return url && isAllowedModalMediaUrl(url) ? { ...rest, [field]: url } : rest;
+    });
+
+  const upload = async (field: ModalVideoField, kind: 'video' | 'image', file: File) => {
     if (!isAcceptedFile(kind, file)) {
       toast.error(kind === 'video' ? 'Videos must be MP4 files' : 'Posters must be image files');
       return;
@@ -81,10 +126,12 @@ const AdminModalVideoFields: React.FC<AdminModalVideoFieldsProps> = ({ value, on
         file
       );
       if (!fabFile.filePath) throw new Error('Upload returned no file path');
-      setField(field, getS3Url({ bucket: bucketName, key: fabFile.filePath }));
+      const url = getS3Url({ bucket: bucketName, key: fabFile.filePath });
+      setField(field, url);
+      commitPreview(field, url);
     } catch (e) {
       console.error(e);
-      toast.error('Failed to upload file');
+      toast.error(uploadErrorMessage(e));
     } finally {
       setUploading(prev => ({ ...prev, [field]: false }));
     }
@@ -97,18 +144,19 @@ const AdminModalVideoFields: React.FC<AdminModalVideoFieldsProps> = ({ value, on
       </Typography>
       <Typography level="body-sm">
         Replaces the image in the What&apos;s New slider. Desktop plays the 16:9 cut and mobile the 9:16 cut; each falls
-        back to the other when only one is set.
+        back to the other when only one is set. Pasted URLs must be https on amazonaws.com or cloudfront.net.
       </Typography>
       {SLOTS.map(({ field, slot, label, kind }) => {
         const url = video[field] ?? '';
-        const previewUrl = url ? resolved[url] : null;
+        const previewUrl = url && previewed[field] === url ? resolved[url] : undefined;
         return (
-          <FormControl key={field}>
+          <FormControl key={field} error={!!errors[field]}>
             <FormLabel>{label}</FormLabel>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
               <Input
                 value={url}
                 onChange={e => setField(field, e.target.value)}
+                onBlur={() => commitPreview(field, url)}
                 placeholder={kind === 'video' ? 'MP4 URL' : 'Poster image URL'}
                 startDecorator={kind === 'video' ? <MovieIcon /> : <ImageIcon />}
                 sx={{ flex: 1 }}
@@ -141,7 +189,10 @@ const AdminModalVideoFields: React.FC<AdminModalVideoFieldsProps> = ({ value, on
                 variant="plain"
                 color="neutral"
                 disabled={!url}
-                onClick={() => setField(field, null)}
+                onClick={() => {
+                  setField(field, null);
+                  commitPreview(field, null);
+                }}
                 data-testid={`modal-video-${slot}-clear-btn`}
               >
                 Clear
@@ -167,7 +218,10 @@ const AdminModalVideoFields: React.FC<AdminModalVideoFieldsProps> = ({ value, on
                 )}
               </Box>
             )}
-            {url && previewUrl === null && (
+            {errors[field] && (
+              <FormHelperText data-testid={`modal-video-${slot}-error`}>{errors[field]}</FormHelperText>
+            )}
+            {!errors[field] && previewUrl === null && (
               <FormHelperText>Preview unavailable; a fresh upload may still be processing.</FormHelperText>
             )}
           </FormControl>

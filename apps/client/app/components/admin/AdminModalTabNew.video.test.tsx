@@ -35,23 +35,48 @@ const existing: IModal = {
   numberOfViews: { type: 'firstTimeView', value: 0, threshold: 1 },
   imageUrl: null,
   textMessage: null,
-  video: { portraitUrl: 'https://cdn.example.com/tall.mp4' },
+  video: { portraitUrl: 'https://d111.cloudfront.net/tall.mp4' },
 };
 
-describe('EditModalNew video', () => {
-  it('saves a pasted 16:9 url alongside the stored 9:16 one', () => {
-    const onSave = vi.fn();
-    render(
-      <CssVarsProvider theme={appTheme}>
-        <EditModalNew isOpen onClose={vi.fn()} modalData={existing} onSave={onSave} isEditMode />
-      </CssVarsProvider>
-    );
+const renderEditor = (modalData: IModal, onSave = vi.fn()) => {
+  render(
+    <CssVarsProvider theme={appTheme}>
+      <EditModalNew isOpen onClose={vi.fn()} modalData={modalData} onSave={onSave} isEditMode />
+    </CssVarsProvider>
+  );
+  return onSave;
+};
 
-    const next = () => fireEvent.click(screen.getByRole('button', { name: /^Next/ }));
+const next = () => fireEvent.click(screen.getByRole('button', { name: /^Next/ }));
+
+describe('EditModalNew video', () => {
+  it('blocks leaving the media step while a video url is invalid', () => {
+    renderEditor(existing);
     next(); // content
     next(); // media
     fireEvent.change(screen.getByTestId('modal-video-landscape-video-input'), {
       target: { value: 'https://cdn.example.com/wide.mp4' },
+    });
+    next();
+
+    expect(screen.getByTestId('modal-video-step-error')).toBeTruthy();
+    expect(screen.getByTestId('modal-video-landscape-video-input')).toBeTruthy();
+  });
+
+  it('drops the video when the modal is saved as a banner', () => {
+    const onSave = renderEditor({ ...existing, isBanner: true, textMessage: 'Banner text' });
+    for (let i = 0; i < 5; i++) next();
+    fireEvent.click(screen.getByRole('button', { name: /Update Banner/ }));
+
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ isBanner: true, video: null }));
+  });
+
+  it('saves a pasted 16:9 url alongside the stored 9:16 one', () => {
+    const onSave = renderEditor(existing);
+    next(); // content
+    next(); // media
+    fireEvent.change(screen.getByTestId('modal-video-landscape-video-input'), {
+      target: { value: 'https://d111.cloudfront.net/wide.mp4' },
     });
     next(); // targeting
     next(); // behavior
@@ -62,9 +87,9 @@ describe('EditModalNew video', () => {
     expect(onSave).toHaveBeenCalledWith(
       expect.objectContaining({
         video: {
-          landscapeUrl: 'https://cdn.example.com/wide.mp4',
+          landscapeUrl: 'https://d111.cloudfront.net/wide.mp4',
           landscapePosterUrl: null,
-          portraitUrl: 'https://cdn.example.com/tall.mp4',
+          portraitUrl: 'https://d111.cloudfront.net/tall.mp4',
           portraitPosterUrl: null,
         },
       })

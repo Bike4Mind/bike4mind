@@ -9,24 +9,64 @@ export interface ModalImage {
   height?: number;
 }
 
-const modalVideoUrl = z
-  .url({ protocol: /^https?$/ })
-  .max(2048)
-  .nullable()
-  .optional();
+export interface ModalVideo {
+  landscapeUrl?: string | null;
+  landscapePosterUrl?: string | null;
+  portraitUrl?: string | null;
+  portraitPosterUrl?: string | null;
+}
+
+export type ModalVideoField = keyof ModalVideo;
+
+// Origins the app CSP allows in media-src and img-src on every deploy (apps/client/proxy.ts); keep in sync
+const MODAL_MEDIA_HOST_SUFFIXES = ['.amazonaws.com', '.cloudfront.net'];
+const MODAL_MEDIA_URL_MAX_LENGTH = 2048;
+
+export const MODAL_MEDIA_URL_HINT = 'Use an https URL on amazonaws.com or cloudfront.net';
+
+export function isAllowedModalMediaUrl(url: string): boolean {
+  if (url.length > MODAL_MEDIA_URL_MAX_LENGTH) return false;
+  try {
+    const { protocol, hostname } = new URL(url);
+    return protocol === 'https:' && MODAL_MEDIA_HOST_SUFFIXES.some(suffix => hostname.endsWith(suffix));
+  } catch {
+    return false;
+  }
+}
+
+/** Per-field problems with a modal video, empty when it is valid. Shared by the admin form and the API. */
+export function getModalVideoErrors(video: ModalVideo | null | undefined): Partial<Record<ModalVideoField, string>> {
+  const errors: Partial<Record<ModalVideoField, string>> = {};
+  if (!video) return errors;
+  for (const field of ['landscapeUrl', 'landscapePosterUrl', 'portraitUrl', 'portraitPosterUrl'] as const) {
+    const url = video[field];
+    if (url && !isAllowedModalMediaUrl(url)) errors[field] = MODAL_MEDIA_URL_HINT;
+  }
+  if (video.landscapePosterUrl && !video.landscapeUrl) {
+    errors.landscapePosterUrl ??= 'A 16:9 poster needs its 16:9 video';
+  }
+  if (video.portraitPosterUrl && !video.portraitUrl) {
+    errors.portraitPosterUrl ??= 'A 9:16 poster needs its 9:16 video';
+  }
+  return errors;
+}
 
 /**
  * Product video for a modal slide. Landscape is the 16:9 cut shown on desktop, portrait the 9:16 cut
  * shown on mobile; the slider falls back to the other orientation when one is missing.
  */
-export const ModalVideoSchema = z.object({
-  landscapeUrl: modalVideoUrl,
-  landscapePosterUrl: modalVideoUrl,
-  portraitUrl: modalVideoUrl,
-  portraitPosterUrl: modalVideoUrl,
-});
-
-export type ModalVideo = z.infer<typeof ModalVideoSchema>;
+export const ModalVideoSchema = z
+  .object({
+    landscapeUrl: z.string().nullable().optional(),
+    landscapePosterUrl: z.string().nullable().optional(),
+    portraitUrl: z.string().nullable().optional(),
+    portraitPosterUrl: z.string().nullable().optional(),
+  })
+  .superRefine((video, ctx) => {
+    for (const [field, message] of Object.entries(getModalVideoErrors(video))) {
+      ctx.addIssue({ code: 'custom', path: [field], message });
+    }
+  });
 
 /**
  * Generation metadata for auto-generated modals (e.g., What's New).

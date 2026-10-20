@@ -103,7 +103,7 @@ describe('PUT /api/modals/[id] - video', () => {
   const video = {
     landscapeUrl: 'https://bucket.s3.us-east-2.amazonaws.com/modals/demo-16x9.mp4',
     landscapePosterUrl: 'https://bucket.s3.us-east-2.amazonaws.com/modals/demo-16x9.png',
-    portraitUrl: 'https://cdn.example.com/demo-9x16.mp4',
+    portraitUrl: 'https://d111.cloudfront.net/demo-9x16.mp4',
     portraitPosterUrl: null,
   };
 
@@ -128,8 +128,12 @@ describe('PUT /api/modals/[id] - video', () => {
     expect(update.$set.video).toBeNull();
   });
 
-  it('rejects a non-http video url', async () => {
-    const { req, res } = mocks({ video: { ...video, landscapeUrl: 'javascript:alert(1)' } });
+  it.each([
+    ['a non-http url', { ...video, landscapeUrl: 'javascript:alert(1)' }],
+    ['a host the CSP does not allow', { ...video, landscapeUrl: 'https://cdn.example.com/a.mp4' }],
+    ['a poster without its video', { portraitPosterUrl: video.landscapePosterUrl }],
+  ])('rejects %s', async (_case, bad) => {
+    const { req, res } = mocks({ video: bad });
     await expect(mockRefs.putHandler!(req, res)).rejects.toThrow();
     expect(mockRefs.findOneAndUpdate).not.toHaveBeenCalled();
   });

@@ -116,7 +116,7 @@ describe('WhatsNewSliderModal video slides', () => {
     expect(video.hasAttribute('controls')).toBe(true);
     expect(video.hasAttribute('playsinline')).toBe(true);
     expect(screen.queryByRole('img', { name: 'Slide a' })).toBeNull();
-    expect(play).toHaveBeenCalled();
+    await waitFor(() => expect(play).toHaveBeenCalled());
   });
 
   it('plays the portrait cut on mobile', async () => {
@@ -138,6 +138,8 @@ describe('WhatsNewSliderModal video slides', () => {
     renderSlider([slide('a', '2026-03-05T00:00:00Z', { video: VIDEO })]);
 
     await videoEl();
+    // Let the mount effects and any pending re-renders settle before asserting the negative
+    await waitFor(() => expect(pause).toHaveBeenCalled());
     expect(play).not.toHaveBeenCalled();
   });
 
@@ -170,6 +172,62 @@ describe('WhatsNewSliderModal video slides', () => {
 
     expect(await screen.findByRole('img', { name: 'Slide a' })).toBeTruthy();
     expect(screen.queryByTestId('whats-new-slide-video')).toBeNull();
+  });
+
+  it('pauses the video when the slider closes', async () => {
+    renderSlider([slide('a', '2026-03-05T00:00:00Z', { video: VIDEO })]);
+    await videoEl();
+    pause.mockClear();
+
+    fireEvent.click(screen.getByTestId('whats-new-slider-modal-close-btn-icon-container'));
+
+    await waitFor(() => expect(pause).toHaveBeenCalled());
+  });
+
+  it('shows the image when an unsigned (CDN) video fails to play', async () => {
+    renderSlider([
+      slide('a', '2026-03-05T00:00:00Z', {
+        video: { landscapeUrl: 'https://d111.cloudfront.net/wide.mp4' },
+        imageUrl: `${S3}/modals/shot.png`,
+      }),
+    ]);
+    const video = await videoEl();
+    expect(video.getAttribute('src')).toBe('https://d111.cloudfront.net/wide.mp4');
+
+    fireEvent.error(video);
+
+    expect(await screen.findByRole('img', { name: 'Slide a' })).toBeTruthy();
+    expect(screen.queryByTestId('whats-new-slide-video')).toBeNull();
+    expect(mocks.mutateAsync).not.toHaveBeenCalledWith(
+      expect.objectContaining({ filePaths: expect.arrayContaining([expect.stringContaining('wide.mp4')]) })
+    );
+  });
+
+  it('shows the poster when a video without a slide image fails to play', async () => {
+    renderSlider([
+      slide('a', '2026-03-05T00:00:00Z', {
+        video: { landscapeUrl: 'https://d111.cloudfront.net/wide.mp4', landscapePosterUrl: `${S3}/modals/wide.png` },
+      }),
+    ]);
+    fireEvent.error(await videoEl());
+
+    const poster = await screen.findByTestId('whats-new-slide-video-poster');
+    expect(poster.getAttribute('src')).toBe(sign('modals/wide.png'));
+  });
+
+  it('re-signs at most once per 30s, then falls back to the image', async () => {
+    renderSlider([slide('a', '2026-03-05T00:00:00Z', { video: VIDEO, imageUrl: `${S3}/modals/shot.png` })]);
+    const video = await videoEl();
+    const callsBefore = vi.mocked(mocks.mutateAsync).mock.calls.length;
+
+    mocks.signature = 2;
+    fireEvent.error(video);
+    await waitFor(() => expect(video.getAttribute('src')).toBe(sign('modals/wide.mp4', 2)));
+    fireEvent.error(video);
+
+    expect(await screen.findByRole('img', { name: 'Slide a' })).toBeTruthy();
+    expect(screen.queryByTestId('whats-new-slide-video')).toBeNull();
+    expect(vi.mocked(mocks.mutateAsync).mock.calls.length).toBe(callsBefore + 1);
   });
 
   it('re-signs the video url when playback fails, e.g. on an expired signature', async () => {
