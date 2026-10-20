@@ -67,7 +67,7 @@ import {
 } from './tools/ToolBuilder';
 import type { VideoToolConfig } from './tools/implementation/videoGeneration';
 import type { MusicToolConfig } from './tools/implementation/musicGeneration';
-import { SYSTEM_PROMPT_PRIORITY } from './systemPromptSources';
+import { SYSTEM_PROMPT_PRIORITY, TURN_CONTEXT_END, TURN_CONTEXT_HEADER } from './systemPromptSources';
 import { SkillsFeature } from './features/SkillsFeature';
 import { LakeMemoryFeature } from './ChatCompletionFeatures';
 import type { ISkill, IDataLakeDocument } from '@bike4mind/common';
@@ -9240,9 +9240,10 @@ describe('ChatCompletionProcess', () => {
 
   // The provider's prompt cache matches on a prefix (tools, system, messages), so anything that
   // changes between turns in front of the history re-writes the whole conversation. These pin the
-  // two per-turn inputs the process controls here: the history count and the session-sticky tool set.
+  // three per-turn inputs the process controls: the history count, where per-turn context rides,
+  // and the session-sticky tool set.
   describe('prompt-cache stability', () => {
-    const wireTurn = () => {
+    const wireTurn = (opts: { builderReturnsContext?: boolean } = {}) => {
       mockedGetLlmByModel.mockReturnValue({
         complete: vi.fn().mockImplementation(async (_m: any, _msgs: any, _opts: any, cb: any) => {
           await cb(['Hi!'], { inputTokens: 100, outputTokens: 50 });
@@ -9263,10 +9264,17 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ] as any);
-      mockedBuildAndSortMessages.mockResolvedValue({
-        messages: [{ role: 'user', content: 'Hello' }],
-        messageTruncation: null,
-      } as any);
+      if (opts.builderReturnsContext) {
+        // The admitted system messages BY REFERENCE, as the real builder emits them, then the prompt.
+        mockedBuildAndSortMessages.mockImplementation(async (_prev: any, context: any[], prompt: any[]) => {
+          return { messages: [...context, ...prompt], messageTruncation: null } as any;
+        });
+      } else {
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: 'Hello' }],
+          messageTruncation: null,
+        } as any);
+      }
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
       return { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
@@ -9276,6 +9284,12 @@ describe('ChatCompletionProcess', () => {
       const complete = vi.mocked(mockedGetLlmByModel.mock.results.at(-1)!.value.complete);
       return complete.mock.calls.at(-1)!;
     };
+
+    const systemText = (messages: IMessage[]) =>
+      messages
+        .filter(m => m.role === 'system')
+        .map(m => m.content)
+        .join('\n');
 
     describe('history count', () => {
       it.each([
@@ -9290,6 +9304,83 @@ describe('ChatCompletionProcess', () => {
         }
 
         expect(resolved).toEqual([expected, expected, expected]);
+      });
+    });
+
+    describe('per-turn context', () => {
+      const VOLATILE = ['MEMENTO-FACT', 'RETRIEVED-PASSAGE', 'LAKE-FACT', '[Current View Context]'];
+      const memento = { role: 'system' as const, content: 'MEMENTO-FACT' };
+      const retrieval = { role: 'system' as const, content: 'RETRIEVED-PASSAGE' };
+      const lakeFact = { role: 'system' as const, content: 'LAKE-FACT' };
+      const identity = { role: 'system' as const, content: '[ADMIN_PROMPT:bike4mind_identity]\nIdentity' };
+      const viewContext = {
+        role: 'system' as const,
+        content: '[Current View Context] User is on the Admin dashboard.',
+      };
+
+      const runWithContext = async (extra: Record<string, unknown> = {}) => {
+        mockSession.contextSummary = 'RUNNING-SUMMARY';
+        const body = {
+          ...wireTurn({ builderReturnsContext: true }),
+          extraContextMessages: [identity, viewContext],
+          ...extra,
+        };
+        service.features.set('mementos', { getContextMessages: async () => [memento] } as any);
+        service.features.set('knowledgeRetrieval', { getContextMessages: async () => [retrieval] } as any);
+        service.features.set('lakeMemory', { getContextMessages: async () => [lakeFact] } as any);
+        await service.process({ body, logger: mockLogger });
+        const [, messages, options] = lastComplete();
+        return { messages: messages as IMessage[], options: options as any };
+      };
+
+      it('carries the volatile sources in the last user message, delimited, and not in system', async () => {
+        const { messages } = await runWithContext();
+
+        for (const volatile of VOLATILE) expect(systemText(messages)).not.toContain(volatile);
+
+        const last = messages.at(-1)!;
+        expect(last.role).toBe('user');
+        const text = last.content as string;
+        expect(text.startsWith(TURN_CONTEXT_HEADER)).toBe(true);
+        for (const volatile of VOLATILE) expect(text).toContain(volatile);
+        // The user's own words follow the delimiter, untouched.
+        expect(text.endsWith(`${TURN_CONTEXT_END}Hello`)).toBe(true);
+      });
+
+      it('keeps the session-stable sources in system', async () => {
+        const { messages } = await runWithContext();
+
+        expect(systemText(messages)).toContain('RUNNING-SUMMARY');
+        expect(systemText(messages)).toContain('[ADMIN_PROMPT:bike4mind_identity]');
+        expect(systemText(messages)).toContain('Current date:');
+      });
+
+      it('moves the history cache breakpoint ahead of the current turn when it carries context', async () => {
+        const { options } = await runWithContext();
+
+        expect(options.cacheStrategy.historyCacheExcludeTrailingCount).toBe(1);
+      });
+
+      it('leaves the history breakpoint on the last message when nothing per-turn was added', async () => {
+        const body = wireTurn();
+        await service.process({ body, logger: mockLogger });
+
+        expect(lastComplete()[2].cacheStrategy).not.toHaveProperty('historyCacheExcludeTrailingCount');
+      });
+
+      it('does not persist the injected context on the quest', async () => {
+        await runWithContext();
+
+        expect(mockQuest.prompt ?? '').not.toContain('MEMENTO-FACT');
+        expect(mockQuest.promptMeta.prompt).toBe('Hello');
+        expect(JSON.stringify(mockDb.quests.update.mock.calls)).not.toContain(TURN_CONTEXT_HEADER);
+      });
+
+      it('leaves every source in system under a promptMode, which asked for the request it supplied', async () => {
+        const { messages } = await runWithContext({ promptMode: 'grounded' });
+
+        expect(messages.at(-1)).toEqual({ role: 'user', content: 'Hello' });
+        expect(systemText(messages)).toContain('[Current View Context]');
       });
     });
 

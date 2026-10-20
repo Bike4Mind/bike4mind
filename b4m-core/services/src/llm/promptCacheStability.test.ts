@@ -2,8 +2,8 @@
  * Anthropic's prompt cache matches on a prefix, in the order tools, system, messages. A turn reads
  * what the previous turn wrote only if the request's prefix up to the previous turn's history
  * breakpoint is byte-identical. This builds the real outbound Anthropic request for consecutive turns
- * of a long session - real history window, real message builder, real session-sticky tool set, real
- * caching adapter - and pins that identity, turn over turn.
+ * of a long session - real history window, real message builder, real per-turn context placement,
+ * real caching adapter - and pins that identity, turn over turn.
  *
  * Deliberately short of ChatCompletionProcess.process(): that is covered by its own wiring tests in
  * ChatCompletion.test.ts. The pieces assembled here are the ones that decide the prefix.
@@ -17,7 +17,10 @@ import { resolveModelAwareHistoryCount } from './ChatCompletionProcess';
 import {
   buildTaggedContextMessages,
   filterByPromptMode,
+  isPerTurnContext,
   markShareablePrefixBoundary,
+  relocatePerTurnContext,
+  resolveHistoryCacheExcludeTrailingCount,
   SYSTEM_PROMPT_PRIORITY,
 } from './systemPromptSources';
 
@@ -37,21 +40,10 @@ const tokenizer = {
   warmUpCache: async () => {},
 };
 
-// Alternating a bare query and a long analytical one: neither may move the history window or the prefix.
-// The only turn with a trigger is the blog request; the tool must outlive it.
-const messageFor = (priorQuestCount: number) =>
-  priorQuestCount === TOOL_TURN
-    ? 'Turn this into a blog post'
-    : priorQuestCount % 2 === 0
-      ? 'thanks'
-      : `Compare the trade-offs of approach ${priorQuestCount} against the alternatives we discussed, step by step, and recommend one.`;
-
-// The in-flight quest (n = priorQuestCount + 1) carries the message being sent, as it does in a real
-// session, so what a turn sent last time is what the next turn's history replays.
 const makeQuest = (n: number) => ({
   id: String(n).padStart(24, '0'),
   sessionId: 'session1',
-  prompt: messageFor(n - 1),
+  prompt: `question ${n}`,
   reply: `answer ${n}`,
   replies: [`answer ${n}`],
   timestamp: new Date(n * 1000),
@@ -116,15 +108,22 @@ interface SessionState {
   persistedTools: string[];
 }
 
-async function runTurn(priorQuestCount: number, state: SessionState, verbatimTokenBudget?: number): Promise<Turn> {
+async function runTurn(priorQuestCount: number, state: SessionState, opts: { relocate: boolean; verbatimTokenBudget?: number }): Promise<Turn> {
   const session = { id: 'session1' } as unknown as ISessionDocument;
   const [history, , meta] = await fetchAndProcessPreviousMessages(session, LIMIT, {
     db: { quests: repository(priorQuestCount) },
-    verbatimTokenBudget,
+    verbatimTokenBudget: opts.verbatimTokenBudget,
   });
   const windowStart = Number(meta.oldestIncludedQuestId);
 
-  const message = messageFor(priorQuestCount);
+  // Alternating a bare query and a long analytical one: neither may move the history window or the prefix.
+  const question =
+    priorQuestCount % 2 === 0
+      ? 'thanks'
+      : `Compare the trade-offs of approach ${priorQuestCount} against the alternatives we discussed, step by step, and recommend one.`;
+
+  // The only turn with a trigger is the blog request; the tool must outlive it.
+  const message = priorQuestCount === TOOL_TURN ? 'Turn this into a blog post' : question;
   const blog = shouldOfferBlogTools({ isAdmin: true, hasBlogIntegration: false, message, priorToolNames: [] });
   const sticky = await resolveStickyAutoAddedTools({
     persisted: state.persistedTools,
@@ -139,20 +138,28 @@ async function runTurn(priorQuestCount: number, state: SessionState, verbatimTok
   state.persistedTools = [...new Set([...state.persistedTools, ...sticky.newlyTriggered])];
   const toolNames = [...BASE_TOOLS, ...sticky.tools];
 
-  // A stack shaped like process(), with session-stable sources only: a source in system whose text
-  // changes per turn moves the prefix whatever the window and the tool set do.
+  // A stack shaped like process(): a stable head, per-turn sources that change every turn, and the
+  // session-stable middle. Mementos and the view path change on every turn; retrieval on odd ones.
   const tagged = buildTaggedContextMessages({
     dateContext: [sys('Current date: Tuesday, October 20, 2026')],
     artifactEmission: [sys('artifact guidance')],
     helpCenter: [sys('help center guidance')],
     abstention: [sys('abstention guidance')],
     toolPrompt: [sys('tool guidance')],
-    extraContext: [sys('[ADMIN_PROMPT:bike4mind_identity]\nYou are the assistant.')],
+    extraContext: [
+      sys('[ADMIN_PROMPT:bike4mind_identity]\nYou are the assistant.'),
+      sys(`[Current View Context] User is on page ${priorQuestCount % 3}. Path: /p/${priorQuestCount % 3}`),
+    ],
     sessionPrompt: [sys('session prompt')],
+    knowledgeRetrieval: priorQuestCount % 2 === 1 ? [sys(`[Passages] chunk for turn ${priorQuestCount}`)] : [],
     contextSummary: [sys('[Context from earlier in this conversation]\nrunning summary')],
+    mementos: [
+      sys(`[Mementos] set ${priorQuestCount % 4}: likes ${'tea coffee juice milk'.split(' ')[priorQuestCount % 4]}`),
+    ],
   });
   const admitted = filterByPromptMode(tagged, undefined);
   markShareablePrefixBoundary(admitted);
+  const perTurn = new Set(opts.relocate ? admitted.filter(isPerTurnContext).map(t => t.message) : []);
   const priorities = new Map(admitted.map(t => [t.message, SYSTEM_PROMPT_PRIORITY[t.source]]));
   const prompt: IMessage[] = [{ role: 'user', content: message }];
 
@@ -167,12 +174,17 @@ async function runTurn(priorQuestCount: number, state: SessionState, verbatimTok
     tokenizer as never,
     { verbose: false, skipAdminPromptTemplates: true, systemMessagePriority: m => priorities.get(m) }
   );
+  const turnContext = relocatePerTurnContext(built.messages, perTurn, prompt[0]);
+  const exclude = opts.relocate
+    ? resolveHistoryCacheExcludeTrailingCount(turnContext.relocatedCount, built.currentTurnMessageCount)
+    : 0;
   const cacheStrategy: ICacheStrategy = {
     enableCaching: true,
     cacheSystemPrompt: true,
     cacheTools: true,
     cacheConversationHistory: true,
     cacheTTL: '5m',
+    ...(exclude > 0 ? { historyCacheExcludeTrailingCount: exclude } : {}),
   };
 
   const backend = new AnthropicBackend('test-key');
@@ -187,7 +199,7 @@ async function runTurn(priorQuestCount: number, state: SessionState, verbatimTok
   };
   await backend.complete(
     ChatModels.CLAUDE_4_8_OPUS,
-    built.messages,
+    turnContext.messages,
     { stream: false, tools: toolNames.map(tool), cacheStrategy },
     async () => {}
   );
@@ -201,11 +213,10 @@ async function runTurn(priorQuestCount: number, state: SessionState, verbatimTok
 const prefixThrough = (request: Request, messageIndex: number) =>
   canonical(normalizeContent(request), messageIndex + 1);
 
-async function runSession(verbatimTokenBudget?: number): Promise<Turn[]> {
+async function runSession(opts: { relocate: boolean; verbatimTokenBudget?: number }): Promise<Turn[]> {
   const state: SessionState = { persistedTools: [] };
   const turns: Turn[] = [];
-  for (let prior = FIRST_TURN; prior <= LAST_TURN; prior++)
-    turns.push(await runTurn(prior, state, verbatimTokenBudget));
+  for (let prior = FIRST_TURN; prior <= LAST_TURN; prior++) turns.push(await runTurn(prior, state, opts));
   return turns;
 }
 
@@ -230,7 +241,7 @@ function turnsThatBustThePrefix(turns: Turn[]): number[] {
 
 describe('prompt-cache prefix stability across turns of a long session', () => {
   it('starts past the history limit and crosses two step boundaries', async () => {
-    const turns = await runSession();
+    const turns = await runSession({ relocate: true });
     const starts = new Set(turns.map(t => t.windowStart));
 
     expect(FIRST_TURN).toBeGreaterThan(LIMIT);
@@ -239,7 +250,7 @@ describe('prompt-cache prefix stability across turns of a long session', () => {
   });
 
   it("reuses turn N's prefix, up to its history breakpoint, in turn N+1 - except where the window steps or a tool first appears", async () => {
-    const turns = await runSession();
+    const turns = await runSession({ relocate: true });
 
     // The two window steps (T = 61 and 71) and the turn the blog tool first appears.
     expect(turnsThatBustThePrefix(turns)).toEqual([61, TOOL_TURN, 71]);
@@ -253,8 +264,8 @@ describe('prompt-cache prefix stability across turns of a long session', () => {
     const BUDGET = 300;
 
     it('starts every window on the same step grid as the count window, and busts the prefix only there', async () => {
-      const turns = await runSession(BUDGET);
-      const countOnly = await runSession();
+      const turns = await runSession({ relocate: true, verbatimTokenBudget: BUDGET });
+      const countOnly = await runSession({ relocate: true });
 
       // Guard: the budget really binds, so some of these starts come from the trim, not the count window.
       expect(turns.filter(turn => turn.excluded > 0).length).toBeGreaterThan(0);
@@ -269,7 +280,7 @@ describe('prompt-cache prefix stability across turns of a long session', () => {
   });
 
   it('keeps the blog tool on every turn after the one that triggered it', async () => {
-    const turns = await runSession();
+    const turns = await runSession({ relocate: true });
 
     for (let i = 0; i < turns.length; i++) {
       const prior = FIRST_TURN + i;
@@ -277,8 +288,20 @@ describe('prompt-cache prefix stability across turns of a long session', () => {
     }
   });
 
+  it('anchors the history breakpoint ahead of the current turn, whose context rides in its user message', async () => {
+    const turns = await runSession({ relocate: true });
+
+    for (const { request, anchor } of turns) {
+      expect(anchor).toBe(request.messages.length - 2);
+      const last = request.messages.at(-1)!;
+      expect(JSON.stringify(last.content)).toContain('[Mementos]');
+      expect(JSON.stringify(request.system)).not.toContain('[Mementos]');
+      expect(JSON.stringify(request.system)).not.toContain('[Current View Context]');
+    }
+  });
+
   it('never exceeds the four cache breakpoints a request may carry', async () => {
-    const turns = await runSession();
+    const turns = await runSession({ relocate: true });
 
     for (const { request } of turns) {
       const markers =
@@ -287,5 +310,22 @@ describe('prompt-cache prefix stability across turns of a long session', () => {
         request.messages.filter(m => hasMarker(m.content)).length;
       expect(markers).toBeLessThanOrEqual(4);
     }
+  });
+
+  // Control arm: the same session with per-turn context left in the system prompt and the breakpoint
+  // on the last message, i.e. what every turn did before. It must bust turns the fixed path reuses.
+  it('would have missed on turns that did not step, with context in system and the anchor on the last message', async () => {
+    const turns = await runSession({ relocate: false });
+
+    let missesOnPlainTurns = 0;
+    for (let i = 0; i + 1 < turns.length; i++) {
+      const [current, next] = [turns[i], turns[i + 1]];
+      if (next.windowStart !== current.windowStart || next.toolNames.length > current.toolNames.length) continue;
+      if (prefixThrough(next.request, current.anchor) !== prefixThrough(current.request, current.anchor)) {
+        missesOnPlainTurns++;
+      }
+    }
+
+    expect(missesOnPlainTurns).toBeGreaterThan(0);
   });
 });

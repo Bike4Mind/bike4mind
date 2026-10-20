@@ -200,11 +200,14 @@ import {
   buildTaggedContextMessages,
   filterByPromptMode,
   filterFeaturesByPromptMode,
+  isPerTurnContext,
   markShareablePrefixBoundary,
   PROMPT_MODE_SOURCES,
   PROMPT_SOURCE_METADATA,
   resolveForcedRetrieval,
   SYSTEM_PROMPT_PRIORITY,
+  relocatePerTurnContext,
+  resolveHistoryCacheExcludeTrailingCount,
   resolveSkipAutoOffers,
   lakeContentTokens,
   toPromptDetails,
@@ -3736,6 +3739,12 @@ export class ChatCompletionProcess {
       // to translate it (Anthropic-family does, the others ignore it per the field's contract),
       // and the cacheStrategy built later in this method still governs the other breakpoints.
       markShareablePrefixBoundary(admittedContextMessages);
+      // The per-turn sources that ride in the current user turn instead of system (see
+      // PER_TURN_CONTEXT_SOURCES). Not under a promptMode: those callers asked for a request
+      // they can compare against the bare model, and moving their own system messages would alter it.
+      const perTurnContextMessages = new Set<IMessage>(
+        promptMode ? [] : admittedContextMessages.filter(isPerTurnContext).map(t => t.message)
+      );
       const contextAndSystemMessages: IMessage[] = admittedContextMessages.map(t => t.message);
       // Carries each message's source across into the builder, which sees only an IMessage[] and so
       // could otherwise decide what to drop on array position alone. Keyed by reference, which survives
@@ -3775,6 +3784,7 @@ export class ChatCompletionProcess {
         buildOptions
       );
       let messages = firstBuild.messages;
+      let currentTurnMessageCount = firstBuild.currentTurnMessageCount;
       const messageTruncationInfo = firstBuild.messageTruncation;
       // Unlike messageTruncationInfo, this DOES get refreshed by the overflow-recovery rebuild below -
       // that rebuild produces fresh message identities, so pinning to the first build would report
@@ -3938,7 +3948,11 @@ export class ChatCompletionProcess {
             // Reserve toolSchemaTokens up front: this loop recomputes inputTokens as effectiveTotalTokens
             // + toolSchemaTokens at the bottom of every iteration, so budgeting this rebuild on the raw
             // maxSafeInputTokens would let it report "fits" and still overflow once tools are added back.
-            const { messages: rebuilt, injectedBlocks: rebuiltBlocks } = await buildAndSortMessages(
+            const {
+              messages: rebuilt,
+              injectedBlocks: rebuiltBlocks,
+              currentTurnMessageCount: rebuiltTurnCount,
+            } = await buildAndSortMessages(
               recoveryHistory,
               contextAndSystemMessages,
               currentUserPromptMessages,
@@ -3957,6 +3971,7 @@ export class ChatCompletionProcess {
             // as an empty rebuild rather than accepting a completion missing its system-role content.
             if (hadSystemMessages && rebuilt.every(message => message.role !== 'system')) break;
             messages = rebuilt;
+            currentTurnMessageCount = rebuiltTurnCount;
             // Unlike messageTruncationInfo, refreshed here: the rebuild produces fresh message
             // identities, so the first build's injectedBlocks would misreport delivery against this
             // payload.
@@ -4626,6 +4641,16 @@ export class ChatCompletionProcess {
       // Start the cancellation watcher
       startCancellationWatcher();
 
+      // The request body. Per-turn context moves from the system prompt into the front of the current
+      // user message here, last: budgeting, delivery telemetry and overflow recovery above all work
+      // on the system-role form, and `messages` stays that form for everything persisted from it.
+      const turnContext = relocatePerTurnContext(messages, perTurnContextMessages, currentUserPromptMessages[0]);
+      let outboundMessages = turnContext.messages;
+      const historyCacheExcludeTrailingCount = resolveHistoryCacheExcludeTrailingCount(
+        turnContext.relocatedCount,
+        currentTurnMessageCount
+      );
+
       // Check if Research Mode is enabled and handle parallel processing
       if (isResearchMode) {
         logger.info(
@@ -4637,7 +4662,7 @@ export class ChatCompletionProcess {
         // Handle Research Mode parallel processing
         const researchResults = await researchModeService.processResearchMode(
           researchMode,
-          messages,
+          outboundMessages,
           options as ICompletionOptions,
           async (configId: string, streamedTexts: (string | null | undefined)[], completionInfo?: unknown) => {
             // Handle streaming for each configuration
@@ -4845,14 +4870,14 @@ export class ChatCompletionProcess {
             });
 
             // Determine cache strategy (enable for multi-turn conversations with 2+ messages)
-            const messageCount = messages.length;
+            const messageCount = outboundMessages.length;
             const hasTools = !!options.tools?.length;
 
             // Count message types for debugging
             const messageBreakdown = {
-              system: messages.filter(m => m.role === 'system').length,
-              user: messages.filter(m => m.role === 'user').length,
-              assistant: messages.filter(m => m.role === 'assistant').length,
+              system: outboundMessages.filter(m => m.role === 'system').length,
+              user: outboundMessages.filter(m => m.role === 'user').length,
+              assistant: outboundMessages.filter(m => m.role === 'assistant').length,
             };
 
             const cacheStrategy: ICacheStrategy = {
@@ -4862,6 +4887,7 @@ export class ChatCompletionProcess {
               cacheConversationHistory: messageCount >= 2, // Cache history for multi-turn
               cacheTTL: '5m', // Use 5-minute TTL for active conversations
               conversationId: quest.id, // Use quest ID for xAI cache affinity
+              ...(historyCacheExcludeTrailingCount > 0 ? { historyCacheExcludeTrailingCount } : {}),
             };
 
             // Log cache strategy decision with structured metadata
@@ -4894,7 +4920,7 @@ export class ChatCompletionProcess {
             if (
               process.env.E2E_ENDPOINTS_ENABLED === 'true' &&
               (currentModel.backend === ModelBackend.Bedrock || currentModel.backend === ModelBackend.Anthropic) &&
-              JSON.stringify(messages).includes(FORCE_FALLBACK_TEST_MARKER)
+              JSON.stringify(outboundMessages).includes(FORCE_FALLBACK_TEST_MARKER)
             ) {
               const forced = new Error(
                 `ServiceUnavailableException: simulated ${currentModel.backend} outage for fallback testing (preview only)`
@@ -4905,7 +4931,7 @@ export class ChatCompletionProcess {
 
             await currentLlm.complete(
               currentModel.id,
-              messages,
+              outboundMessages,
               {
                 ...options,
                 // The preference is set from a selector shown only for OpenAI-style reasoning models, so
@@ -5160,6 +5186,7 @@ export class ChatCompletionProcess {
                 `🔧 [Tool Pairing Recovery] Detected tool pairing error, stripping tool blocks from history and retrying`
               );
               messages = stripAllToolBlocks(messages, logger);
+              outboundMessages = stripAllToolBlocks(outboundMessages, logger);
 
               resetStreamStateForRetry();
 

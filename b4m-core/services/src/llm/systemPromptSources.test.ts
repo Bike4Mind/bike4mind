@@ -1,5 +1,6 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import type { IMessage } from '@bike4mind/common';
 import { FORMAT_PROMPT_PRIORITY, IMAGE_PROMPT_PRIORITY } from '@bike4mind/utils';
 import { describe, expect, it } from 'vitest';
 import { ALL_FEATURE_NAMES } from './ChatCompletionFeatures';
@@ -7,16 +8,21 @@ import {
   buildTaggedContextMessages,
   filterByPromptMode,
   filterFeaturesByPromptMode,
+  isPerTurnContext,
   LAKE_CONTENT_LAYER_NAMES,
   LAKE_CONTENT_SOURCES,
   lakeContentTokens,
+  PER_TURN_CONTEXT_SOURCES,
   PROMPT_SOURCE_METADATA,
   PROMPT_SOURCE_ORDER,
+  relocatePerTurnContext,
   resolveForcedRetrieval,
   markShareablePrefixBoundary,
   SHAREABLE_PREFIX_SOURCES,
   SIDE_EFFECT_ONLY_FEATURES,
   SYSTEM_PROMPT_PRIORITY,
+  TURN_CONTEXT_END,
+  TURN_CONTEXT_HEADER,
   toPromptDetails,
   type PromptSourceId,
   type SystemPromptDetail,
@@ -465,5 +471,132 @@ describe('feature-to-source reconciliation', () => {
         assemblySource
       )
     ).toBe(true);
+  });
+});
+
+describe('per-turn context placement', () => {
+  const user = (content: string) => ({ role: 'user' as const, content });
+  const tag = (source: PromptSourceId, message: IMessage) => ({ source, message });
+
+  describe('PER_TURN_CONTEXT_SOURCES', () => {
+    it('never overlaps the shareable head, which has to be identical for every caller', () => {
+      for (const source of PER_TURN_CONTEXT_SOURCES) {
+        expect(SHAREABLE_PREFIX_SOURCES).not.toContain(source);
+      }
+    });
+
+    it('keeps the session-stable sources out', () => {
+      for (const stable of ['contextSummary', 'project', 'organizationPrompt', 'sessionPrompt', 'callerPrompt']) {
+        expect(PER_TURN_CONTEXT_SOURCES).not.toContain(stable);
+      }
+    });
+  });
+
+  describe('isPerTurnContext', () => {
+    it.each(['mementos', 'knowledgeRetrieval', 'lakeMemory'] as PromptSourceId[])('moves a %s message', source => {
+      expect(isPerTurnContext(tag(source, sys('text')))).toBe(true);
+    });
+
+    it('keeps the stable sources in system', () => {
+      for (const source of ['contextSummary', 'project', 'callerPrompt', 'dateContext'] as PromptSourceId[]) {
+        expect(isPerTurnContext(tag(source, sys('text')))).toBe(false);
+      }
+    });
+
+    it('moves the caller-supplied extra context but not an admin-authored prompt riding with it', () => {
+      expect(isPerTurnContext(tag('extraContext', sys('[Current View Context] User is on the Admin page.')))).toBe(
+        true
+      );
+      expect(isPerTurnContext(tag('extraContext', sys('[ADMIN_PROMPT:bike4mind_identity]\nIdentity')))).toBe(false);
+    });
+
+    it('moves only the system-role notices of attached files, which are text, not the file messages', () => {
+      expect(isPerTurnContext(tag('attachedFiles', sys('# Available Files')))).toBe(true);
+      expect(isPerTurnContext(tag('attachedFiles', user('file body')))).toBe(false);
+      expect(isPerTurnContext(tag('urls', user('page body')))).toBe(false);
+    });
+
+    it('leaves block-array content where it is, since only text can be inlined', () => {
+      const blocks = { role: 'system' as const, content: [{ type: 'text', text: 'x' }] } as unknown as IMessage;
+
+      expect(isPerTurnContext(tag('mementos', blocks))).toBe(false);
+    });
+  });
+
+  describe('relocatePerTurnContext', () => {
+    const head = sys('stable head');
+    const summary = sys('stable summary');
+    const memento = sys('[Memento] likes tea');
+    const passage = sys('[Passages] chunk');
+    const prompt = user('what should I drink?');
+
+    const relocate = (messages: IMessage[], moved: IMessage[], current: IMessage = prompt) =>
+      relocatePerTurnContext(messages, new Set(moved), current);
+
+    it('lifts the per-turn messages out of system into the front of the current user message', () => {
+      const { messages, relocatedCount } = relocate([head, memento, summary, passage, prompt], [memento, passage]);
+
+      expect(relocatedCount).toBe(2);
+      expect(messages.slice(0, 2)).toEqual([head, summary]);
+      expect(messages).toHaveLength(3);
+      expect(messages[2]).toEqual({
+        role: 'user',
+        content: `${TURN_CONTEXT_HEADER}[Memento] likes tea\n\n[Passages] chunk${TURN_CONTEXT_END}what should I drink?`,
+      });
+    });
+
+    it('does not mutate its inputs', () => {
+      const input = [head, memento, prompt];
+
+      relocate(input, [memento]);
+
+      expect(input).toEqual([head, memento, prompt]);
+      expect(prompt.content).toBe('what should I drink?');
+    });
+
+    it('returns the same array when there is nothing to move', () => {
+      const input = [head, prompt];
+
+      expect(relocate(input, [])).toEqual({ messages: input, relocatedCount: 0 });
+      expect(relocate(input, [])).toHaveProperty('messages', input);
+    });
+
+    it('finds the prompt by identity when it is not the last message', () => {
+      const attachment = user('attached file');
+
+      const { messages } = relocate([head, memento, prompt, attachment], [memento]);
+
+      expect(messages.map(m => m.content)).toEqual([
+        'stable head',
+        `${TURN_CONTEXT_HEADER}[Memento] likes tea${TURN_CONTEXT_END}what should I drink?`,
+        'attached file',
+      ]);
+    });
+
+    it('prepends a text block to a prompt that already carries content blocks', () => {
+      const blocks = { role: 'user' as const, content: [{ type: 'text', text: 'hi' }] } as unknown as IMessage;
+
+      const { messages } = relocate([memento, blocks], [memento], blocks);
+
+      expect((messages[0].content as Array<{ text: string }>).map(b => b.text)).toEqual([
+        `${TURN_CONTEXT_HEADER}[Memento] likes tea${TURN_CONTEXT_END}`,
+        'hi',
+      ]);
+    });
+
+    it('leaves the messages where they were when no user turn can receive them', () => {
+      const input = [head, memento, sys('trailing system')];
+
+      expect(relocate(input, [memento])).toEqual({ messages: input, relocatedCount: 0 });
+    });
+
+    it('gives the same system prefix whatever the per-turn context was', () => {
+      const turn = (mementoText: string) => {
+        const m = sys(mementoText);
+        return relocate([head, m, summary, prompt], [m]).messages.filter(x => x.role === 'system');
+      };
+
+      expect(JSON.stringify(turn('[Memento] likes tea'))).toBe(JSON.stringify(turn('[Memento] likes coffee')));
+    });
   });
 });
