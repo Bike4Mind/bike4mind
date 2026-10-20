@@ -140,16 +140,118 @@ describe('PendingActionButtons (MCP confirmation card)', () => {
     typeof PendingActionButtons
   >['pendingAction'];
 
-  const renderCard = () =>
+  const renderCard = (action = pendingAction) =>
     render(
       <CssVarsProvider theme={appTheme}>
-        <PendingActionButtons pendingAction={pendingAction} messageId="quest-1" sessionId="session-1" />
+        <PendingActionButtons pendingAction={action} messageId="quest-1" sessionId="session-1" />
       </CssVarsProvider>
     );
 
   beforeEach(() => {
     postMock.mockReset();
     sessionStorage.clear();
+  });
+
+  it.each(['add_issue_to_project', 'update_project_item_fields'])(
+    'shows the resolved project and issue target before confirming %s',
+    async tool => {
+      postMock.mockResolvedValue({ data: { success: true, message: 'done' } });
+      renderCard({
+        ...pendingAction,
+        tool,
+        params: {
+          project_id: 'PVT_project',
+          issue_node_id: 'I_issue',
+          item_id: 'PVTI_item',
+          display_project_name: 'Release board',
+          display_issue_title: '#42 - Fix login',
+          display_repository: 'example/app',
+        },
+      });
+
+      const target = screen.getByTestId('mcp-project-action-target');
+      expect(target).toHaveTextContent('Project: Release board');
+      expect(target).toHaveTextContent('Item: #42 - Fix login');
+      expect(target).toHaveTextContent('Repository: example/app');
+      expect(postMock).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByTestId('mcp-confirm-btn'));
+      await waitFor(() =>
+        expect(postMock).toHaveBeenCalledExactlyOnceWith('/api/mcp/confirm', {
+          questId: 'quest-1',
+          sessionId: 'session-1',
+          confirmed: true,
+          pendingActionTs: pendingAction.ts,
+        })
+      );
+    }
+  );
+
+  it.each(['PR #9 - Update dependencies', 'Draft: Plan the release'])(
+    'shows a project item label without requiring a repository: %s',
+    displayIssueTitle => {
+      renderCard({
+        ...pendingAction,
+        tool: 'update_project_item_fields',
+        params: { display_project_name: 'Roadmap', display_issue_title: displayIssueTitle },
+      });
+
+      const target = screen.getByTestId('mcp-project-action-target');
+      expect(target).toHaveTextContent('Project: Roadmap');
+      expect(target).toHaveTextContent(`Item: ${displayIssueTitle}`);
+      expect(target).not.toHaveTextContent('Repository:');
+    }
+  );
+
+  it.each([
+    ['add_issue_to_project', { project_id: 'PVT_legacy', issue_node_id: 'I_legacy' }, 'I_legacy'],
+    ['update_project_item_fields', { project_id: 'PVT_legacy', item_id: 'PVTI_legacy' }, 'PVTI_legacy'],
+    [
+      'add_issue_to_project',
+      {
+        project_id: 'PVT_legacy',
+        issue_node_id: 'I_legacy',
+        display_project_name: {},
+        display_issue_title: '  ',
+        display_repository: [],
+      },
+      'I_legacy',
+    ],
+  ])('falls back to target ids for %s with missing or invalid labels', (tool, params, itemId) => {
+    renderCard({ ...pendingAction, tool, params });
+
+    const target = screen.getByTestId('mcp-project-action-target');
+    expect(target).toHaveTextContent('Project: PVT_legacy');
+    expect(target).toHaveTextContent(`Item: ${itemId}`);
+    expect(target).not.toHaveTextContent('Repository:');
+  });
+
+  it('handles missing target metadata without crashing', () => {
+    renderCard({ ...pendingAction, tool: 'add_issue_to_project' });
+
+    const target = screen.getByTestId('mcp-project-action-target');
+    expect(target).toHaveTextContent('Project: Unknown project');
+    expect(target).toHaveTextContent('Item: Unknown item');
+  });
+
+  it('renders labels as text rather than markup', () => {
+    renderCard({
+      ...pendingAction,
+      tool: 'add_issue_to_project',
+      params: { display_project_name: '<img src=x>', display_issue_title: '<b>Issue</b>' },
+    });
+
+    const target = screen.getByTestId('mcp-project-action-target');
+    expect(target).toHaveTextContent('<img src=x>');
+    expect(target).toHaveTextContent('<b>Issue</b>');
+    expect(target.querySelector('img, b')).toBeNull();
+  });
+
+  it('does not add project target details to other tools', () => {
+    renderCard({ ...pendingAction, params: { display_project_name: 'Unrelated' } });
+
+    expect(screen.queryByTestId('mcp-project-action-target')).toBeNull();
+    expect(screen.getByTestId('mcp-confirm-btn')).toBeInTheDocument();
   });
 
   it('renders no card for a pending action the confirm route will not execute', () => {

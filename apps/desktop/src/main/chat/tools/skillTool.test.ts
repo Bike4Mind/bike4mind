@@ -104,10 +104,7 @@ describe('the skill tool', () => {
 describe('the skill tool and where the skill came from', () => {
   it("vouches for a skill in the user's own folder", async () => {
     const report = reporter();
-    await skillTool.run(
-      { skill: 'ship' },
-      contextFor([command('ship', 'Ship it.', { source: 'global' })], [], report)
-    );
+    await skillTool.run({ skill: 'ship' }, contextFor([command('ship', 'Ship it.', { source: 'global' })], [], report));
 
     expect(report.ownContent).toHaveBeenCalledTimes(1);
   });
@@ -124,11 +121,23 @@ describe('the skill tool and where the skill came from', () => {
 
   it("does not vouch for an account skill, which may be someone else's", async () => {
     const report = reporter();
-    await skillTool.run(
-      { skill: 'ship' },
-      contextFor([command('ship', 'Ship it.', { source: 'remote' })], [], report)
+    await skillTool.run({ skill: 'ship' }, contextFor([command('ship', 'Ship it.', { source: 'remote' })], [], report));
+
+    expect(report.ownContent).not.toHaveBeenCalled();
+  });
+
+  it('returns a Skill Market import wrapped as untrusted, never told to follow it as is', async () => {
+    const report = reporter();
+    const result = await skillTool.run(
+      { skill: 'market-pick' },
+      contextFor([command('market-pick', 'Do the thing.', { source: 'remote', untrusted: true })], [], report)
     );
 
+    expect(result).toContain('is a Skill Market import written by someone else');
+    expect(result).not.toContain('Follow them.');
+    expect(result).toMatch(
+      /<<<UNTRUSTED_SKILL_CONTENT [0-9a-f]{16}>>>\nDo the thing\.\n<<<END_UNTRUSTED_SKILL_CONTENT/
+    );
     expect(report.ownContent).not.toHaveBeenCalled();
   });
 });

@@ -71,6 +71,49 @@ describe('CreditsWarning', () => {
     const actions = screen.getByTestId('credits-warning-actions');
     expect(within(actions).getByTestId('credit-offer-actions')).toHaveAttribute('data-moment', 'out');
   });
+
+  it('says why the balance is 0 and lists the free routes ahead of the paid actions', () => {
+    render(
+      <TestWrapper>
+        <CreditsWarning
+          show
+          reason="You've used all of your credits."
+          freeRoutes={<button data-testid="free-route-btn" />}
+        />
+      </TestWrapper>
+    );
+    expect(screen.getByTestId('credits-warning-reason')).toHaveTextContent("You've used all of your credits.");
+    const free = screen.getByTestId('credits-warning-free-routes');
+    expect(within(free).getByTestId('free-route-btn')).toBeInTheDocument();
+    const paid = screen.getByTestId('credits-warning-actions');
+    expect(free.compareDocumentPosition(paid) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('draws no free-routes block or reason when there is none to give', () => {
+    render(
+      <TestWrapper>
+        <CreditsWarning show />
+      </TestWrapper>
+    );
+    expect(screen.queryByTestId('credits-warning-free-routes')).toBeNull();
+    expect(screen.queryByTestId('credits-warning-reason')).toBeNull();
+  });
+
+  it('says the message is saved only when a draft exists', () => {
+    const { rerender } = render(
+      <TestWrapper>
+        <CreditsWarning show />
+      </TestWrapper>
+    );
+    expect(screen.queryByText(/your message is saved/i)).toBeNull();
+
+    rerender(
+      <TestWrapper>
+        <CreditsWarning show hasDraft />
+      </TestWrapper>
+    );
+    expect(screen.getByTestId('credits-warning-draft-saved')).toHaveTextContent(/your message is saved/i);
+  });
 });
 
 describe('LowCreditsWarning', () => {

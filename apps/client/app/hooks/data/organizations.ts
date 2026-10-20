@@ -32,6 +32,7 @@ export function useSearchUserOrganizations(
     queryKey: ['organizations', 'search', { userId, search, filters, orderBy }],
     initialPageParam: { page: 1 },
     queryFn: async params => {
+      const { signal } = params;
       const { page = 1 } = params.pageParam || {};
       try {
         // Merge provided filters with the userId constraint
@@ -40,6 +41,7 @@ export function useSearchUserOrganizations(
         const response = await api.get<{ data: WithId<IOrganizationDocument>[]; hasMore: boolean }>(
           '/api/organizations',
           {
+            signal,
             params: {
               query: search,
               filters: requestFilters,
@@ -52,12 +54,14 @@ export function useSearchUserOrganizations(
           }
         );
 
+        signal.throwIfAborted();
         response.data.data.forEach(organization => {
           queryClient.setQueryData(['organizations', organization.id], organization);
         });
 
         return response.data;
       } catch (e) {
+        signal.throwIfAborted();
         return { data: [], hasMore: false };
       }
     },
@@ -89,13 +93,14 @@ export function useSearchOrganizations(
 
   return useQuery({
     queryKey: ['organizations', 'search', params],
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       try {
         const response = await api.get<{
           data: WithId<IOrganizationDocument>[];
           hasMore: boolean;
           total: number;
         }>('/api/organizations', {
+          signal,
           params: {
             query: params.search,
             filters: params.filters,
@@ -107,6 +112,7 @@ export function useSearchOrganizations(
           },
         });
 
+        signal.throwIfAborted();
         response.data.data.forEach(organization => {
           queryClient.setQueryData(['organizations', organization.id], organization);
         });
@@ -117,6 +123,7 @@ export function useSearchOrganizations(
           totalOrganizations: response.data.total,
         };
       } catch (e) {
+        signal.throwIfAborted();
         return { data: [], totalPages: 0, totalOrganizations: 0 };
       }
     },
@@ -255,10 +262,11 @@ export function useGetUserOrganizations(userId: string | undefined | null) {
   const queryClient = useQueryClient();
   return useQuery({
     queryKey: ['organizations', 'user', userId],
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const { data } = await api.get<{ data: IOrganizationDocument[]; hasMore: boolean; total: number }>(
         '/api/organizations',
         {
+          signal,
           params: {
             filters: { userId },
             pagination: { page: 1, limit: 100 },
@@ -267,8 +275,13 @@ export function useGetUserOrganizations(userId: string | undefined | null) {
         }
       );
 
+      // Cancellation must also stop manual cache writes from a response already in flight.
+      signal.throwIfAborted();
       data.data.forEach(d => {
-        updateAllQueryData(queryClient, 'organizations', 'write', d);
+        updateAllQueryData(queryClient, 'organizations', 'write', d, {
+          keysAllowedToCreate: [],
+          synchronous: true,
+        });
       });
 
       return data.data;

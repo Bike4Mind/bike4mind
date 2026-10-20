@@ -58,7 +58,7 @@ vi.mock('@client/app/utils/uiSideEffectDispatcher', () => ({
   dispatchUiSideEffects: dispatchUiSideEffectsMock,
 }));
 
-import { useAgentExecutionSubscriptions, useAgentExecutionDispatch } from './useAgentExecution';
+import { useAgentExecutionSubscriptions, useAgentExecutionDispatch, failedRunReply } from './useAgentExecution';
 import { useAgentExecutionStore } from '@client/app/stores/useAgentExecutionStore';
 import { AGENT_TRACE_ROUTE } from '@client/app/utils/agentTraceLink';
 
@@ -706,5 +706,56 @@ describe('useAgentExecutionSubscriptions -- write preview raised mid-run', () =>
       pages: Array<{ data: Array<{ pendingAction?: unknown }> }>;
     };
     expect(cached.pages[0].data[0].pendingAction).toEqual(pendingAction);
+  });
+});
+
+describe('useAgentExecutionSubscriptions -- failed run reply', () => {
+  const questsKey = ['quests', 'session', 's1'];
+  const seeded = () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(questsKey, {
+      pages: [{ data: [{ id: 'q1', sessionId: 's1', prompt: 'post to slack', replies: [] }], hasMore: false }],
+      pageParams: [{ page: 1 }],
+    });
+    return queryClient;
+  };
+  const latestReplies = (queryClient: QueryClient) =>
+    (queryClient.getQueryData(questsKey) as { pages: Array<{ data: Array<{ replies?: string[] }> }> }).pages[0].data[0]
+      .replies;
+
+  beforeEach(() => {
+    Object.keys(handlers).forEach(k => delete handlers[k]);
+    useAgentExecutionStore.getState().clearAll();
+  });
+
+  it("shows the server's denial text instead of reporting a crash when a tool is denied", async () => {
+    const queryClient = seeded();
+    mountSubscriptions(queryClient);
+    useAgentExecutionStore.getState().startExecution('e1', 's1');
+
+    await handlers['failed']({
+      action: 'failed',
+      executionId: 'e1',
+      reason: 'tool_denied',
+      toolName: 'slack_post',
+      message: 'Execution stopped: you denied "slack_post".',
+    });
+
+    expect(latestReplies(queryClient)).toEqual(['Execution stopped: you denied "slack_post".']);
+  });
+
+  it('keeps the generic message for any other failure reason', async () => {
+    const queryClient = seeded();
+    mountSubscriptions(queryClient);
+    useAgentExecutionStore.getState().startExecution('e1', 's1');
+
+    await handlers['failed']({ action: 'failed', executionId: 'e1', reason: 'error', message: 'rate limited' });
+
+    expect(latestReplies(queryClient)).toEqual(['Agent execution failed.']);
+  });
+
+  it('still names the tool when a denial frame carries no message', () => {
+    expect(failedRunReply('tool_denied', 'slack_post')).toBe('Execution stopped: "slack_post" was denied.');
+    expect(failedRunReply('tool_denied')).toBe('Execution stopped: a tool call was denied.');
   });
 });
