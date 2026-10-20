@@ -8,7 +8,8 @@ const inserted = vi.hoisted(() => new Map<string, number>());
 // Per-test knobs: an existing sync marker, a collection whose insert fails, an empty preview
 // target, and an op log.
 const state = vi.hoisted(() => ({
-  marker: null as { syncedAt: Date } | null,
+  marker: null as { syncedAt: Date; stage?: string } | null,
+  failMarker: false,
   failInsertInto: undefined as string | undefined,
   emptyTarget: false,
   failFirstDeleteOn: undefined as string | undefined,
@@ -62,8 +63,9 @@ vi.mock('mongodb', () => {
       }),
       drop: vi.fn(async () => true),
       updateOne: vi.fn(async (...args: unknown[]) => {
+        if (state.failMarker) throw new Error('marker write failed');
         state.markerWrites.push(args);
-        state.marker = { syncedAt: new Date() };
+        state.marker = { syncedAt: new Date(), stage: process.env.SEED_STAGE_NAME };
         return {};
       }),
     };
@@ -78,8 +80,14 @@ vi.mock('mongodb', () => {
 });
 
 import { handler } from './dataSyncerHandler';
+import { Resource } from 'sst';
 
-const invoke = () => handler({ syncPreviewSettings: true }, {} as Context, () => undefined);
+const invoke = async () =>
+  (await handler({ syncPreviewSettings: true }, {} as Context, () => undefined)) as {
+    success: boolean;
+    message: string;
+    error?: string;
+  };
 
 describe('dataSyncerHandler', () => {
   const env = { ...process.env };
@@ -96,6 +104,7 @@ describe('dataSyncerHandler', () => {
     state.cursorEmptySources = [];
     state.failRollbackBulkWrite = false;
     state.markerWrites = [];
+    state.failMarker = false;
     state.findFilters = [];
     fetchSpy.mockReset();
     vi.stubGlobal('fetch', fetchSpy);
@@ -275,5 +284,83 @@ describe('dataSyncerHandler', () => {
 
     expect(inserted.size).toBe(0);
     expect(result?.message).toContain('is not a preview');
+  });
+});
+
+describe('strict seed result', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+  const strict = (syncPreviewSettings = true) =>
+    handler({ syncPreviewSettings, resultVersion: 1 }, {} as Context, () => undefined);
+  beforeEach(() => {
+    vi.stubEnv('SEED_STAGE_NAME', 'pr123');
+    vi.stubEnv('STAGING_MONGODB_URI', 'mongodb://staging/db');
+    state.marker = null;
+    state.emptySources = [];
+    state.cursorEmptySources = [];
+    state.failInsertInto = undefined;
+    state.failRollbackBulkWrite = false;
+    state.failMarker = false;
+  });
+  it('returns counts and a durable stage marker only after copying', async () => {
+    expect(await strict()).toEqual({
+      schemaVersion: 1,
+      status: 'seeded',
+      stage: 'pr123',
+      copiedCount: 2,
+      marker: { key: 'staging-config-sync', stage: 'pr123' },
+    });
+  });
+  it('requires a marker for this stage for already-seeded success', async () => {
+    state.marker = { syncedAt: new Date(), stage: 'pr123' };
+    expect(await strict()).toMatchObject({
+      status: 'already_seeded',
+      stage: 'pr123',
+      copiedCount: 0,
+      marker: { stage: 'pr123' },
+    });
+    state.marker = { syncedAt: new Date(), stage: 'pr999' };
+    expect(await strict()).toMatchObject({ status: 'failed' });
+    state.marker = { syncedAt: new Date() };
+    expect(await strict()).toMatchObject({ status: 'failed' });
+  });
+  it.each(['', 'production', 'pr0', 'pr001'])('rejects non-canonical stage %s', async stage => {
+    vi.stubEnv('SEED_STAGE_NAME', stage);
+    expect(await strict()).toMatchObject({ schemaVersion: 1, status: 'misconfigured' });
+  });
+  it('reports a missing target URI without returning an error field', async () => {
+    const original = Resource.MONGODB_URI.value;
+    try {
+      Resource.MONGODB_URI.value = '';
+      expect(await strict()).toEqual({ schemaVersion: 1, status: 'misconfigured', stage: 'pr123', copiedCount: 0 });
+    } finally {
+      Resource.MONGODB_URI.value = original;
+    }
+  });
+  it('requires sync settings and a distinct staging URI', async () => {
+    expect(await strict(false)).toMatchObject({ status: 'misconfigured' });
+    vi.stubEnv('STAGING_MONGODB_URI', '');
+    expect(await strict()).toMatchObject({ status: 'misconfigured' });
+    vi.stubEnv('STAGING_MONGODB_URI', 'mongodb://target/pr123');
+    expect(await strict()).toMatchObject({ status: 'misconfigured' });
+  });
+  it('fails empty sources and disappearing data, while allowing one empty collection', async () => {
+    state.emptySources = ['adminsettings', 'rapidreplymappings'];
+    expect(await strict()).toMatchObject({ status: 'failed', copiedCount: 0 });
+    state.emptySources = [];
+    state.cursorEmptySources = ['adminsettings', 'rapidreplymappings'];
+    expect(await strict()).toMatchObject({ status: 'failed' });
+    state.cursorEmptySources = ['rapidreplymappings'];
+    expect(await strict()).toMatchObject({ status: 'failed' });
+    state.cursorEmptySources = [];
+    state.emptySources = ['rapidreplymappings'];
+    expect(await strict()).toMatchObject({ status: 'seeded', copiedCount: 1 });
+  });
+  it.each(['copy', 'rollback', 'marker'])('reports %s failure without error text', async failure => {
+    if (failure === 'marker') state.failMarker = true;
+    else state.failInsertInto = 'rapidreplymappings';
+    if (failure === 'rollback') state.failRollbackBulkWrite = true;
+    expect(await strict()).toEqual({ schemaVersion: 1, status: 'failed', stage: 'pr123', copiedCount: 0 });
   });
 });
