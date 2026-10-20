@@ -198,7 +198,7 @@ jobs:
         continue-on-error: true
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.RELEASE_VIDEO_APP_ID }}
+          client-id: ${{ secrets.RELEASE_VIDEO_APP_CLIENT_ID }}
           private-key: ${{ secrets.RELEASE_VIDEO_APP_KEY }}
           owner: ${{ split(vars.RELEASE_VIDEO_REPO, '/')[0] }}
           repositories: ${{ split(vars.RELEASE_VIDEO_REPO, '/')[1] }}
