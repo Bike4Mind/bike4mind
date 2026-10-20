@@ -24,6 +24,7 @@ const updateOrgBodySchema = z.object({
   currentCredits: z.coerce.number().optional(),
   systemPrompt: z.string().max(10000).optional(),
   maxCreditsPerMember: z.number().int().positive().nullable().optional(),
+  storageLimit: z.number().min(0).nullable().optional(),
 });
 
 const handler = baseApi()

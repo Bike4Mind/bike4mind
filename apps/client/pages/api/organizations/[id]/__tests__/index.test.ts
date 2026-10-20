@@ -109,6 +109,24 @@ describe('PUT /api/organizations/[id] - URL id wins', () => {
     expect(params.name).toBe('renamed');
   });
 
+  it('forwards storageLimit (including a fractional MB and null) instead of stripping it', async () => {
+    for (const storageLimit of [0.5, null]) {
+      update.mockClear();
+      const { req, res } = mocks({ id: 'caller', isAdmin: true }, 'PUT');
+      (req as any).body = { storageLimit };
+      await mockRefs.putHandler!(req, res);
+      const [, params] = update.mock.calls[0];
+      expect(params.storageLimit).toBe(storageLimit);
+    }
+  });
+
+  it('rejects a negative storageLimit before reaching the service', async () => {
+    const { req, res } = mocks({ id: 'caller', isAdmin: true }, 'PUT');
+    (req as any).body = { storageLimit: -5 };
+    await expect(mockRefs.putHandler!(req, res)).rejects.toThrow();
+    expect(update).not.toHaveBeenCalled();
+  });
+
   it('rejects a missing id with BadRequestError before reaching the service', async () => {
     const { req, res } = createMocks({ method: 'PUT', query: {} });
     (req as any).user = { id: 'caller', isAdmin: true };

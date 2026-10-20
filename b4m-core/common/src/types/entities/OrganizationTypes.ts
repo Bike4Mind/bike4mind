@@ -49,8 +49,8 @@ export interface IOrganization extends ICreditHolder, IModelConfig {
   logo?: IAppFileDocument | null;
   stripeCustomerId?: string | null;
 
-  /** Cumulative storage ceiling in decimal MB; unset means DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB. */
-  storageLimit?: number;
+  /** Cumulative storage ceiling in decimal MB; unset or null means DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB. */
+  storageLimit?: number | null;
 
   /**
    * Bytes held by files this org OWNS (FabFile.organizationId), whoever uploaded them. Unset reads

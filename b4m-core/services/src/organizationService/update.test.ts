@@ -252,6 +252,45 @@ describe('organizationService - update', () => {
     expect(result.maxCreditsPerMember).toBe(5); // unchanged
   });
 
+  it('sets a fractional decimal-MB storage limit when admin', async () => {
+    const result = await update(mockAdminUser as IUserDocument, { id: 'org1', storageLimit: 0.5 }, mockAdapters);
+
+    expect(result.storageLimit).toBe(0.5);
+    expect(mockAdapters.db.organizations.update).toHaveBeenCalledWith({ id: 'org1', storageLimit: 0.5 });
+  });
+
+  it('rejects a negative storage limit', async () => {
+    await expect(
+      update(mockAdminUser as IUserDocument, { id: 'org1', storageLimit: -1 }, mockAdapters)
+    ).rejects.toThrow();
+    expect(mockAdapters.db.organizations.update).not.toHaveBeenCalled();
+  });
+
+  it('clears the storage limit to null so the org falls back to the default', async () => {
+    const limitedOrg = { ...existingOrganization, storageLimit: 50 };
+    mockAdapters.db.organizations.findById.mockResolvedValue(limitedOrg);
+
+    const result = await update(mockAdminUser as IUserDocument, { id: 'org1', storageLimit: null }, mockAdapters);
+
+    expect(result.storageLimit).toBeNull();
+    const persisted = mockAdapters.db.organizations.update.mock.calls[0][0];
+    expect(persisted.storageLimit).toBeNull();
+  });
+
+  it('ignores a storage limit change from a non-admin manager', async () => {
+    const limitedOrg = { ...existingOrganization, managerId: 'user1', storageLimit: 50 };
+    mockAdapters.db.organizations.shareable.findUpdateAccessById.mockResolvedValue(limitedOrg);
+
+    const result = await update(
+      mockRegularUser as IUserDocument,
+      { id: 'org1', storageLimit: 1_000_000 },
+      mockAdapters
+    );
+
+    expect(result.storageLimit).toBe(50);
+    expect(mockAdapters.db.organizations.update).toHaveBeenCalledWith({ id: 'org1' });
+  });
+
   it('should allow non-admin users to update other fields but not currentCredits', async () => {
     const updateParams = {
       id: 'org1',
