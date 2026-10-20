@@ -52,7 +52,7 @@ const migration: MigrationFile = {
           ? null
           : await User.collection.findOne(
               { _id: new mongoose.Types.ObjectId(managerId), deletedAt: { $exists: false } },
-              { projection: { email: 1, name: 1, organizationId: 1 } }
+              { projection: { email: 1, username: 1, name: 1, organizationId: 1 } }
             );
 
       if (manager) {
@@ -82,7 +82,7 @@ const migration: MigrationFile = {
             $push: {
               userDetails: {
                 id: managerId,
-                email: String(manager.email ?? ''),
+                email: String(manager.email ?? manager.username ?? ''),
                 name: String(manager.name ?? manager.email ?? ''),
                 usedCredits: 0,
                 lastCreditUsedAt: null,

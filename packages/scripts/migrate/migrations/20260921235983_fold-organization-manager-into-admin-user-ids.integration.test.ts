@@ -164,6 +164,15 @@ describe('fold-organization-manager-into-admin-user-ids migration (real DB)', ()
     expect((await readOrganization(orgId)).users).toEqual([{ userId: managerId, permissions: ['read'] }]);
   });
 
+  it('falls back to the username for the credit row email when the manager has no email', async () => {
+    const managerId = await insertManager({ email: undefined, username: 'mgr-user' });
+    const orgId = await insertOrganization({ managerId });
+
+    await migration.up();
+
+    expect((await readOrganization(orgId)).userDetails[0].email).toBe('mgr-user');
+  });
+
   it('only unsets a managerId that is the billing owner or names a missing or soft-deleted user', async () => {
     const ownerManagedId = await insertOrganization({ managerId: OWNER_ID });
     const danglingId = await insertOrganization({ managerId: new mongoose.Types.ObjectId().toString() });
