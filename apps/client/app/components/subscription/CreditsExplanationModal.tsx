@@ -2,6 +2,7 @@ import { Box, Button, Modal, ModalClose, ModalDialog, Typography } from '@mui/jo
 import { useMemo, useState } from 'react';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
+import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { useEffectiveCredits } from '@client/app/hooks/useEffectiveCredits';
 import { estimateAnswerCount, typicalAnswerCredits } from '@client/app/utils/creditEstimate';
 import { formatCreditAmount } from '@client/app/utils/formatCredits';
@@ -15,6 +16,9 @@ interface CreditsExplanationModalProps {
 const CreditsExplanationModal = ({ open, onClose }: CreditsExplanationModalProps) => {
   const [billingOpen, setBillingOpen] = useState(false);
   const model = useLLM(state => state.model);
+  const organizationId = useLLM(state => state.organizationId);
+  const defaultFreeCredits = Number(useGetSettingsValue('defaultFreeCredits')) || 0;
+  const showFreeCreditsNote = defaultFreeCredits > 0 && !organizationId;
   const credits = useEffectiveCredits();
   const { data: models } = useModelInfo();
   const selected = useMemo(() => models?.find(candidate => candidate.id === model), [models, model]);
@@ -55,7 +59,7 @@ const CreditsExplanationModal = ({ open, onClose }: CreditsExplanationModalProps
             </Typography>
           </Box>
           <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
-            Free starting credits require no card. Your chats and files remain yours if the balance runs out.
+            {showFreeCreditsNote && 'Free starting credits require no card. '}Your chats and files remain yours if the balance runs out.
           </Typography>
           <Button data-testid="credits-explanation-top-up" onClick={() => setBillingOpen(true)} sx={{ mt: 1 }}>
             See plans and top up
