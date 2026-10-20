@@ -256,6 +256,10 @@ const NOINDEX_META = '<meta name="robots" content="noindex,nofollow">';
 const NO_REFERRER_META = '<meta name="referrer" content="no-referrer">';
 
 const handler = baseApi({ auth: false }).get(async (req: Request, res: Response) => {
+  // Cache keys may omit Host; denials must not be reused on another artifact's origin either.
+  if (isUsercontentHost(req.headers.host) || req.query.__uc === '1') {
+    res.setHeader('Cache-Control', 'private, no-store');
+  }
   // Optional-auth shims populate req.user from a Bearer JWT or X-API-Key; anonymous
   // passes through. An INVALID X-API-Key short-circuits with 401 inside apiKeyAuth.
   await runShim(optionalJwtShim, req, res);
@@ -310,7 +314,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // Approach B: set by the `/uc/*` rewrite - this request is for the bundle on
   // its per-artifact isolated origin ({publicId}.usercontent.app.<domain>), served AS the page.
   const isIsolated = !isShare && req.query.__uc === '1';
-  if (isUsercontentHost(req.headers.host) && !isIsolated) {
+  if ((isUsercontentHost(req.headers.host) && !isIsolated) || (isIsolated && isFormatRaw)) {
     return res.status(404).json({ error: 'Not found' });
   }
   // `?export=md|html` (issue #1142) - hand the artifact's CONTENT back as a downloaded
@@ -745,9 +749,8 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     try {
       const buf = await storage.download(`${artifact.storageKeyPrefix}${assetPath}`);
       res.setHeader('Content-Type', fileEntry.mimeType);
-      if (/^(text\/html|application\/xhtml\+xml|image\/svg\+xml)(?:;|$)/i.test(fileEntry.mimeType)) {
-        res.setHeader('Content-Disposition', 'attachment');
-      }
+      // Publishers control MIME metadata; every asset navigation must download, even with an unknown type.
+      res.setHeader('Content-Disposition', 'attachment');
       res.setHeader('Content-Length', String(buf.length));
       res.setHeader(
         'Cache-Control',

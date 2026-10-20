@@ -98,5 +98,5 @@ display name or username does not select a publishing namespace.
 - If a user-scoped upload returns 403, check that `scopeId` is your user ID.
 - After too many incorrect passphrase attempts, wait for the retry interval before
   trying again. The limit applies to your IP address for that artifact.
-- A secondary HTML or SVG file in a published bundle downloads when opened directly.
+- A file in a published bundle downloads when opened directly as an asset URL.
   Open the published page's main link to view the artifact.

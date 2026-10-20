@@ -3279,10 +3279,18 @@ describe('GET /api/publish/serve - per-entry share-link view counts (#3255)', ()
 });
 
 describe('isolated origin and secondary document boundaries', () => {
+  it('keeps the public plain-text alternate on the app origin only', async () => {
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { uc: 'pub1', format: 'raw' });
+    await promise;
+    expect(res._getStatusCode()).toBe(404);
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
+    expect(mockDownload).not.toHaveBeenCalled();
+  });
   it('refuses app viewer mode on a usercontent host', async () => {
     const { res, promise } = run(['u', 'scope123', 'my-slug'], { host: 'pub1.usercontent.app.bike4mind.com' });
     await promise;
     expect(res._getStatusCode()).toBe(404);
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
     expect(mockDownload).not.toHaveBeenCalled();
   });
   it('checks the artifact host before serving any bundle asset', async () => {
@@ -3290,9 +3298,10 @@ describe('isolated origin and secondary document boundaries', () => {
     const { res, promise } = run(['u', 'scope123', 'my-slug', 'image.png'], { uc: 'another-artifact' });
     await promise;
     expect(res._getStatusCode()).toBe(404);
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
     expect(mockDownload).not.toHaveBeenCalled();
   });
-  it.each(['text/html', 'application/xhtml+xml', 'image/svg+xml'])(
+  it.each(['text/html', 'application/xhtml+xml', 'image/svg+xml', ' text/html ; charset=utf-8', ''])(
     'makes secondary %s documents inert attachments',
     async mimeType => {
       mockArtifactFindOne.mockReturnValue(bundle({ manifest: [{ path: 'secondary.html', mimeType }] }));
