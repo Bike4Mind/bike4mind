@@ -226,13 +226,38 @@ describe('prepareWireTools tool changes', () => {
     expect(() => prepareWireTools(tools, [...hi, change('tool_removal', 'a')], DIRECT)).not.toThrow();
   });
 
-  it('accepts a change after an assistant turn ending in a server tool result', () => {
+  it('accepts a change after an assistant turn ending in a tool search result', () => {
     const messages = [
       { role: 'user', content: 'find' },
       { role: 'assistant', content: [{ type: 'text', text: 'searching' }, serverResult] },
       change('tool_addition', 'b'),
     ] as IMessage[];
     expect(() => prepareWireTools(tools, messages, DIRECT)).not.toThrow();
+  });
+
+  it('refuses a change after an assistant turn ending in another server tool result', () => {
+    const messages = [
+      { role: 'user', content: 'find' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'searching' },
+          { ...serverResult, type: 'web_search_tool_result' },
+        ],
+      },
+      change('tool_addition', 'b'),
+    ] as IMessage[];
+    expect(refusal(() => prepareWireTools(tools, messages, DIRECT)).errorCode).toBe('invalid_tool_change');
+  });
+
+  it('refuses a change naming an MCP tool', () => {
+    const withMcp = [custom('a'), { ...custom('mcp_lookup'), _isMcpTool: true }] as CompletionTool[];
+    for (const type of ['tool_addition', 'tool_removal'] as const) {
+      expect(refusal(() => prepareWireTools(withMcp, [...hi, change(type, 'mcp_lookup')], DIRECT)).errorCode).toBe(
+        'invalid_tool_change'
+      );
+    }
+    expect(() => prepareWireTools(withMcp, [...hi, change('tool_addition', 'a')], DIRECT)).not.toThrow();
   });
 
   it('ignores plain system messages when judging neighbours', () => {
