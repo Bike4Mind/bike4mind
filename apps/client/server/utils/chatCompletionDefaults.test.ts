@@ -114,6 +114,13 @@ describe('chatCompletionDefaults factory lazy contract', () => {
     const second = mod.getDefaultChatCompletionOptions();
     expect(first).toBe(second);
   }, 20000);
+
+  // Optional prop: dropping this line typechecks, and `decide` then refuses on the chat surface
+  // even though availability advertises it. Pinned here because the wire-up has no other caller.
+  it('wires the decide tool seam into the default options', async () => {
+    const mod = await import('./chatCompletionDefaults');
+    expect(typeof mod.getDefaultChatCompletionOptions().decide).toBe('function');
+  }, 20000);
 });
 
 const makeModel = (id: string, backend: ModelBackend, type: ModelInfo['type'] = 'text'): ModelInfo =>
