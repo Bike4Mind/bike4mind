@@ -147,7 +147,8 @@ export const UsageEvent = z.object({
   priceRowId: z.string().optional(),
   /**
    * Rates of the tier applied. A multi-turn row whose turns hit different tiers carries the
-   * tier of its largest turn; turnUsage has each turn's own tierKey.
+   * tier of its largest turn; turnUsage has each turn's own tierKey, but not that tier's rates,
+   * so only a single-tier row is exactly recomputable from its own fields.
    */
   rates: UsageEventRates.optional(),
   /**

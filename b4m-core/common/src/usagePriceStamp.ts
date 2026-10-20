@@ -1,4 +1,10 @@
-import { pricingTierForTokens, resolveAppliedRates, type ModelInfo, type TurnUsage } from './models';
+import {
+  CACHE_READ_MULTIPLIER,
+  pricingTierForTokens,
+  resolveAppliedRates,
+  type ModelInfo,
+  type TurnUsage,
+} from './models';
 import {
   USAGE_EVENT_TURN_USAGE_CAP,
   type IUsageEventTurn,
@@ -11,6 +17,12 @@ export type UsagePriceStampBasis = {
   turns?: readonly TurnUsage[];
   /** The tierBasisTokens of the getTextModelCost call; read when there are no turns. */
   tierBasisTokens?: number;
+  /**
+   * The cost priced a local estimate rather than provider usage: cache reads fold into the input
+   * term at CACHE_READ_MULTIPLIER and cache writes are not billed at all. Rate the stamp the same
+   * way, or the stored rates would recompute to a charge that was never made.
+   */
+  localEstimate?: boolean;
 };
 
 // Same whole-prompt basis getTurnsCost tiers each request on.
@@ -35,6 +47,11 @@ const turnEntry = (turn: TurnUsage, tierKey: number): IUsageEventTurn => ({
  * tail (its tierKey is the highest tier in it) and `turnUsageTruncated` is set. A model with no
  * priced tier gets the source only, since there is no tier to name.
  *
+ * `rates` describes one tier, so a row it stamps is exactly recomputable only when every turn
+ * priced at that tier. When turns span tiers, `turnUsage[].tierKey` names each turn's tier but the
+ * other tiers' rates are not stored, and a truncated tail sums turns of several tiers under one
+ * key: treat such a row as indicative, not auditable to the cent.
+ *
  * Never throws: the stamp is analytics on a settlement path, and a malformed model must not take
  * the charge or the UsageEvent down with it.
  */
@@ -51,7 +68,11 @@ function stampFor(model: ModelInfo, basis: UsagePriceStampBasis): UsagePriceStam
   const tierBasisTokens = turns.length
     ? turns.reduce((largest, turn) => Math.max(largest, promptTokens(turn)), 0)
     : (basis.tierBasisTokens ?? 0);
-  const rates = resolveAppliedRates(model, tierBasisTokens);
+  const resolved = resolveAppliedRates(model, tierBasisTokens);
+  const rates =
+    resolved && basis.localEstimate
+      ? { ...resolved, cacheRead: resolved.input * CACHE_READ_MULTIPLIER, cacheWrite: 0 }
+      : resolved;
 
   const stamp: UsagePriceStamp = {
     priceSource: model.priceSource ?? 'literal',

@@ -5962,6 +5962,20 @@ describe('ChatCompletionProcess', () => {
         expect(event).not.toHaveProperty('turnUsage');
       });
 
+      it('rates local-estimate cache reads at the folded multiplier the charge used', async () => {
+        // The local branch bills cache reads inside the input term at CACHE_READ_MULTIPLIER and
+        // bills no cache writes; stamping the tier's own cacheRead would recompute to a charge
+        // ~9x the one made.
+        const event = await settle({ cacheReadInputTokens: 40 });
+        expect(event.settledBasis).toBe('local');
+        expect(event.cachedInputTokens).toBe(40);
+        expect(event.rates).toMatchObject({
+          ...LOW,
+          cacheRead: (2 / 1_000_000) * 0.1,
+          cacheWrite: 0,
+        });
+      });
+
       it('writes turnUsage with each turn tier for a multi-turn completion', async () => {
         const event = await settle({
           inputTokens: 281_000,

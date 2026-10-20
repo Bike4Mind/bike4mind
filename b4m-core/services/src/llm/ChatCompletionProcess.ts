@@ -6108,6 +6108,7 @@ export class ChatCompletionProcess {
             tierBasisTokens: hasProviderUsage
               ? settledInputTokens + cacheReadInputTokens + cacheCreationInputTokens
               : localInputTokens,
+            localEstimate: !hasProviderUsage,
           });
 
           // Dual-write usage event: ties frozen COGS to credits debited
