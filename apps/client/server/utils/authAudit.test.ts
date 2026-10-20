@@ -9,8 +9,8 @@ const { createLog, getClientIp, recordSessionReuseRevoked, recordSessionRecovere
 }));
 
 vi.mock('@bike4mind/database', () => ({ userAuthAuditLogRepository: { createLog } }));
-vi.mock('@server/utils/ip', () => ({ getClientIp }));
-vi.mock('@server/utils/cloudwatch', () => ({ recordSessionReuseRevoked, recordSessionRecovered }));
+vi.mock('@bike4mind/server-utils/utils/ip', () => ({ getClientIp }));
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ recordSessionReuseRevoked, recordSessionRecovered }));
 
 import { logAuthAudit } from './authAudit';
 
