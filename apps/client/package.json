@@ -211,7 +211,7 @@
     "remark-math": "^6.0.0",
     "remark-parse": "^11.0.0",
     "remark-stringify": "^11.0.0",
-    "sanitize-html": "^2.17.7",
+    "sanitize-html": "^2.18.0",
     "sharp": "^0.35.4",
     "sonner": "^2.0.8",
     "sst": "4.17.1",
