@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect } from 'vitest';
 import { URL_REGEX } from '@bike4mind/fab-pipeline';
 import {
   GATHERING_DATA_SOURCES_STATUS,
@@ -8,6 +8,10 @@ import {
 } from './dataSourceStatus';
 
 describe('turnGathersDataSources', () => {
+  afterEach(() => {
+    URL_REGEX.lastIndex = 0;
+  });
+
   it('is false for a source-free turn', () => {
     expect(turnGathersDataSources({ message: 'Hello' })).toBe(false);
     expect(

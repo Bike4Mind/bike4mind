@@ -2021,7 +2021,10 @@ describe('ChatCompletionProcess', () => {
 
     describe('data-source status copy', () => {
       // Literal copy, not the module constants: this pins what the user reads.
-      const processHelloTurn = async (messageFileIds: string[] = []) => {
+      const processStatusTurn = async (
+        messageFileIds: string[] = [],
+        { message = 'Hello', fabFileIds = [] }: { message?: string; fabFileIds?: string[] } = {}
+      ) => {
         mockedGetLlmByModel.mockReturnValue({
           complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
             await cb(['Hi!']);
@@ -2043,14 +2046,22 @@ describe('ChatCompletionProcess', () => {
           },
         ]);
         mockedBuildAndSortMessages.mockResolvedValue({
-          messages: [{ role: 'user', content: 'Hello' }],
+          messages: [{ role: 'user', content: message }],
           messageTruncation: null,
         });
         mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
-        mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+        mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: message });
 
         await service.process({
-          body: { ...startQuestParams, messageFileIds, tools: [], projectId: undefined, organizationId: undefined },
+          body: {
+            ...startQuestParams,
+            message,
+            messageFileIds,
+            fabFileIds,
+            tools: [],
+            projectId: undefined,
+            organizationId: undefined,
+          },
           logger: mockLogger,
         });
 
@@ -2058,14 +2069,14 @@ describe('ChatCompletionProcess', () => {
       };
 
       it('sends neutral copy, never the data-source copy, on a source-free turn', async () => {
-        const statuses = await processHelloTurn();
+        const statuses = await processStatusTurn();
 
         expect(statuses).toContain('Preparing context...');
         expect(statuses).not.toContain('Gathering data sources...');
       });
 
       it('sends the data-source copy when the turn has an attached file', async () => {
-        const statuses = await processHelloTurn(['file-a']);
+        const statuses = await processStatusTurn(['file-a']);
 
         expect(statuses).toContain('Gathering data sources...');
       });
@@ -2074,7 +2085,26 @@ describe('ChatCompletionProcess', () => {
         // No file ids: session knowledge is the only source signal, so this pins the call site's
         // knowledgeIds wiring - passing [] there would flip the status with every other test green.
         mockSession.knowledgeIds = ['knowledge-a'];
-        const statuses = await processHelloTurn();
+        const statuses = await processStatusTurn();
+
+        expect(statuses).toContain('Gathering data sources...');
+      });
+
+      it('sends the data-source copy when only session fab files are attached', async () => {
+        const statuses = await processStatusTurn([], { fabFileIds: ['file-a'] });
+
+        expect(statuses).toContain('Gathering data sources...');
+      });
+
+      it('sends the data-source copy when only forced retrieval is enabled', async () => {
+        mockSession.forceKnowledgeRetrieval = true;
+        const statuses = await processStatusTurn();
+
+        expect(statuses).toContain('Gathering data sources...');
+      });
+
+      it('sends the data-source copy when only the prompt contains a URL', async () => {
+        const statuses = await processStatusTurn([], { message: 'Summarize https://example.com' });
 
         expect(statuses).toContain('Gathering data sources...');
       });

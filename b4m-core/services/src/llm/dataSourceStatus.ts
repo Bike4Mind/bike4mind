@@ -3,13 +3,13 @@ import { detectURLs } from '@bike4mind/fab-pipeline';
 export const GATHERING_DATA_SOURCES_STATUS = 'Gathering data sources...';
 export const PREPARING_CONTEXT_STATUS = 'Preparing context...';
 
-export interface DataSourceStatusInput {
+export type DataSourceStatusInput = {
   message: string;
   sessionFabFileIds?: readonly string[];
   messageFileIds?: readonly string[];
   knowledgeIds?: readonly string[];
   forceKnowledgeRetrieval?: boolean;
-}
+};
 
 /**
  * True when this turn has anything for the data-source phase to gather: attached fab files (session
