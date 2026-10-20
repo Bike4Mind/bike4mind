@@ -193,6 +193,14 @@ const api: DesktopApi = {
     setProjectSkillsTrusted: (sessionId, trusted) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetProjectSkillsTrusted, sessionId, trusted),
   },
+  skillMarket: {
+    browse: (filters, page) => ipcRenderer.invoke(IPC_CHANNELS.skillMarketBrowse, filters, page),
+    recommended: () => ipcRenderer.invoke(IPC_CHANNELS.skillMarketRecommended),
+    listing: ref => ipcRenderer.invoke(IPC_CHANNELS.skillMarketListing, ref),
+    importListing: request => ipcRenderer.invoke(IPC_CHANNELS.skillMarketImport, request),
+    imports: () => ipcRenderer.invoke(IPC_CHANNELS.skillMarketImports),
+    openOnWeb: target => ipcRenderer.invoke(IPC_CHANNELS.skillMarketOpenOnWeb, target),
+  },
   browser: {
     setPane: (request: BrowserPaneRequest) => ipcRenderer.invoke(IPC_CHANNELS.browserSetPane, request),
     freezeFrame: (request: BrowserFreezeFrameRequest) => ipcRenderer.invoke(IPC_CHANNELS.browserFreezeFrame, request),

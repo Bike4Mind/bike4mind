@@ -48,6 +48,16 @@ import type { PrActionResult, PrBarState, PrOption, PrSummaryEvent } from './pul
 import type { SidebarSectionsState } from './sidebarSections';
 import type { SkillsState } from './skills';
 import type {
+  SkillMarketDetailResult,
+  SkillMarketFilters,
+  SkillMarketImportRequest,
+  SkillMarketImportResult,
+  SkillMarketImportsResult,
+  SkillMarketListingRef,
+  SkillMarketPage,
+  SkillMarketWebTarget,
+} from './skillMarket';
+import type {
   TerminalAttachment,
   TerminalCreateRequest,
   TerminalCreateResult,
@@ -168,6 +178,13 @@ export const IPC_CHANNELS = {
    * nothing the MODEL can reach may widen this - the same rule as toolsGrantAccess.
    */
   chatSetProjectSkillsTrusted: 'chat:set-project-skills-trusted',
+  skillMarketBrowse: 'skill-market:browse',
+  skillMarketRecommended: 'skill-market:recommended',
+  skillMarketListing: 'skill-market:listing',
+  /** Only from the Import / Update buttons: it writes a skill to the user's account. */
+  skillMarketImport: 'skill-market:import',
+  skillMarketImports: 'skill-market:imports',
+  skillMarketOpenOnWeb: 'skill-market:open-on-web',
   mcpGetServers: 'mcp:get-servers',
   mcpAddServer: 'mcp:add-server',
   mcpUpdateServer: 'mcp:update-server',
@@ -692,6 +709,26 @@ export interface DesktopApi {
      * Returns the state the picker should now draw.
      */
     setProjectSkillsTrusted(sessionId: string, trusted: boolean): Promise<SkillsState>;
+  };
+  /**
+   * The Skill Market, read through main (SkillMarket.ts). Nothing here rejects: a signed-out or
+   * failed call comes back as `error` (or `ok: false`) on the result, which the panel renders.
+   */
+  skillMarket: {
+    /** One page of listings, 1-based, with the web's filters. */
+    browse(filters: SkillMarketFilters, page: number): Promise<SkillMarketPage>;
+    recommended(): Promise<SkillMarketPage>;
+    /** A listing's detail, with an update offer when the user's imported copy is behind. */
+    listing(ref: SkillMarketListingRef): Promise<SkillMarketDetailResult>;
+    /**
+     * Import a listing, or update an imported copy in place. On success the next skills read
+     * (picker, Customize, a turn) sees it without waiting for the account-skill cache.
+     */
+    importListing(request: SkillMarketImportRequest): Promise<SkillMarketImportResult>;
+    /** The account's market imports, and which have a newer approved version. */
+    imports(): Promise<SkillMarketImportsResult>;
+    /** Open a market page on the web. False when there was nothing valid to open. */
+    openOnWeb(target: SkillMarketWebTarget): Promise<boolean>;
   };
   /**
    * The agent's browser, as something the user can watch.

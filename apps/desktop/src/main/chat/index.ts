@@ -28,6 +28,12 @@ import type {
   UpdateProjectRequest,
 } from '@shared/chat';
 import type { CookieImportRequest } from '@shared/browserCookies';
+import type {
+  SkillMarketFilters,
+  SkillMarketImportRequest,
+  SkillMarketListingRef,
+  SkillMarketWebTarget,
+} from '@shared/skillMarket';
 import type { ShareDirectoryResult } from '@shared/directoryRequest';
 import {
   IPC_CHANNELS,
@@ -52,6 +58,7 @@ import { AttachmentStore } from './AttachmentStore';
 import { BrowserManager, NO_PAGE } from './browser/BrowserManager';
 import { IMAGE_BYTE_CAP, isImageMediaType } from './attachments';
 import { ArtifactLibrary } from './artifacts/ArtifactLibrary';
+import { SkillMarket } from './skills/SkillMarket';
 import { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { SharePublisher } from './artifacts/SharePublisher';
 import { registerArtifactProtocol } from './artifacts/sandboxProtocol';
@@ -306,6 +313,13 @@ export function registerChat(
   registerArtifactProtocol();
   const artifacts = new ArtifactPublisher(() => auth.getApiClient(), logger);
   const artifactLibrary = new ArtifactLibrary(() => auth.getApiClient(), logger);
+  const skillMarket = new SkillMarket({
+    getApiClient: () => auth.getApiClient(),
+    getEnvironmentUrl: () => auth.getState().environment.url,
+    catalog: skills,
+    openExternal: url => shell.openExternal(url),
+    logger,
+  });
   const models = new ModelCatalog({
     logger,
     getApiClient: () => auth.getApiClient(),
@@ -447,6 +461,20 @@ export function registerChat(
   // trust, so anything that is not an explicit `true` has to land as "not trusted".
   ipcMain.handle(IPC_CHANNELS.chatSetProjectSkillsTrusted, (_event, sessionId: string, trusted: boolean) =>
     service.setProjectSkillsTrusted(sessionId, trusted === true)
+  );
+  ipcMain.handle(IPC_CHANNELS.skillMarketBrowse, (_event, filters: SkillMarketFilters, page: number) =>
+    skillMarket.browse(filters, Number.isInteger(page) && page > 0 ? page : 1)
+  );
+  ipcMain.handle(IPC_CHANNELS.skillMarketRecommended, () => skillMarket.recommended());
+  ipcMain.handle(IPC_CHANNELS.skillMarketListing, (_event, ref: SkillMarketListingRef) =>
+    skillMarket.listing(ref ?? {})
+  );
+  ipcMain.handle(IPC_CHANNELS.skillMarketImport, (_event, request: SkillMarketImportRequest) =>
+    skillMarket.importListing(request)
+  );
+  ipcMain.handle(IPC_CHANNELS.skillMarketImports, () => skillMarket.imports());
+  ipcMain.handle(IPC_CHANNELS.skillMarketOpenOnWeb, (_event, target: SkillMarketWebTarget) =>
+    skillMarket.openOnWeb(target)
   );
   ipcMain.handle(IPC_CHANNELS.chatSetSessionModel, (_event, sessionId: string, model: string) =>
     service.setSessionModel(sessionId, model)
