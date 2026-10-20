@@ -100,7 +100,7 @@ const ClaudeCodeMarketplaceTab: FC<ClaudeCodeMarketplaceTabProps> = ({ org, plug
       </Stack>
 
       <Stack spacing={1}>
-        <Typography level="title-sm">2. Start claude once, then install</Typography>
+        <Typography level="title-sm">2. Start a claude session (finish login), then install</Typography>
         {pluginName ? (
           <Typography component="pre" level="body-xs" sx={{ m: 0 }} data-testid="skill-claude-code-marketplace-install">
             /plugin install {pluginName}@{marketplace}
