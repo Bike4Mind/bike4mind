@@ -21,6 +21,7 @@ import {
   type UserCreditBalancePoint,
   type UserCreditHistory,
 } from '@bike4mind/common';
+import { adminAuditService } from '@bike4mind/services';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_ADJUSTMENT_MARKERS = 200;
@@ -119,7 +120,9 @@ export const authAuditRowToEntry = (
     summary: byOther ? `${actor.name}: ${label} for ${subject.name}` : label,
     details: {
       ...(row.strategy ? { strategy: row.strategy } : {}),
-      ...(row.metadata && Object.keys(row.metadata).length > 0 ? { metadata: row.metadata } : {}),
+      ...(row.metadata && Object.keys(row.metadata).length > 0
+        ? { metadata: adminAuditService.redactAuditPayload(row.metadata) }
+        : {}),
     },
     context: {
       ip: row.actorIp,
@@ -141,8 +144,8 @@ export const apiKeyAuditRowToEntry = (row: UserApiKeyAuditRow, subject: Activity
   target: { kind: 'apiKey', id: row.keyId, displayName: `API key ${row.keyId}` },
   summary: `API key ${row.action === 'mint' ? 'minted' : `${row.action}d`}`,
   details: {
+    ...(row.details ? adminAuditService.redactAuditPayload(row.details) : {}),
     ...(row.productId ? { productId: row.productId } : {}),
-    ...(row.details ?? {}),
   },
   context: { ip: row.actorIp, userAgent: row.actorUserAgent, source: 'user' },
 });
@@ -306,21 +309,12 @@ export const getUserCreditHistory = async (
   const windowDays = USER_CREDIT_HISTORY_DAYS;
   const from = windowStart(now, windowDays);
 
-  const [dailyNet, adjustmentRows, creditAuditPage] = await Promise.all([
+  const [dailyNet, adjustmentRows] = await Promise.all([
     creditTransactionRepository.dailyNetCreditsForOwner(user.id, CreditHolderType.User, from, now),
     creditTransactionRepository.findAdminAdjustmentsForUser(user.id, from, now, MAX_ADJUSTMENT_MARKERS + 1),
-    adminAuditLogRepository.list(
-      { targetKind: 'user', targetId: user.id, action: 'user.credits.adjusted', from: from.toISOString() },
-      { limit: MAX_ADJUSTMENT_MARKERS }
-    ),
   ]);
 
   const markerRows = adjustmentRows.slice(0, MAX_ADJUSTMENT_MARKERS);
-  const auditEntryIdByTransaction = new Map(
-    creditAuditPage.entries
-      .filter(entry => entry.related?.creditTransactionId)
-      .map(entry => [entry.related?.creditTransactionId as string, entry.id])
-  );
   const directory = await buildActorDirectory(
     markerRows.map(row => readString(row.metadata?.actorId)).filter((id): id is string => id !== undefined)
   );
@@ -334,7 +328,6 @@ export const getUserCreditHistory = async (
       actorUserId,
       actorName: actorUserId ? (directory.get(actorUserId)?.name ?? actorUserId) : 'Unknown admin',
       reason: readString(row.metadata?.note),
-      auditEntryId: auditEntryIdByTransaction.get(row.id),
     };
   });
 

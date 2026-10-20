@@ -36,8 +36,6 @@ export type UserCreditAdjustmentMarker = {
   actorUserId?: string;
   actorName: string;
   reason?: string;
-  /** The matching Audit Log entry, when one links to this ledger row. */
-  auditEntryId?: string;
 };
 
 export type UserCreditHistory = {

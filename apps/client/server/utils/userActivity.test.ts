@@ -120,6 +120,21 @@ describe('security-store adapters', () => {
     expect(entry.context.source).toBe('admin_ui');
   });
 
+  it('redacts secrets in auth metadata before it reaches the browser', () => {
+    const entry = authAuditRowToEntry(
+      {
+        _id: objectIdAt(1),
+        userId: USER_ID,
+        event: 'login',
+        metadata: { accessToken: 'abc', label: 'x' },
+        createdAt: new Date(),
+      },
+      subject,
+      new Map()
+    );
+    expect(entry.details?.metadata).toEqual({ accessToken: '[REDACTED]', label: 'x' });
+  });
+
   it('flags theft-detection revocation as critical', () => {
     const entry = authAuditRowToEntry(
       { _id: objectIdAt(1), userId: USER_ID, event: 'session_reuse_revoked', createdAt: new Date() },
@@ -143,6 +158,22 @@ describe('security-store adapters', () => {
       target: { kind: 'apiKey', id: 'key-1' },
       summary: 'API key revoked',
     });
+  });
+
+  it('keeps the row productId over a productId carried in details', () => {
+    const entry = apiKeyAuditRowToEntry(
+      {
+        _id: objectIdAt(1),
+        action: 'mint',
+        keyId: 'key-1',
+        actorUserId: USER_ID,
+        productId: 'real-product',
+        details: { productId: 'spoofed' },
+        createdAt: new Date(),
+      },
+      subject
+    );
+    expect(entry.details.productId).toBe('real-product');
   });
 });
 
@@ -282,7 +313,7 @@ describe('unreliableBoundary', () => {
 });
 
 describe('getUserCreditHistory', () => {
-  it('builds the series and markers, resolving actors and linking matching audit entries', async () => {
+  it('builds the series and markers, resolving actors', async () => {
     const now = new Date('2026-10-20T12:00:00Z');
     mocks.dailyNet.mockResolvedValue([{ day: '2026-10-20', netCredits: 25 }]);
     mocks.findAdjustments.mockResolvedValue([
@@ -293,20 +324,12 @@ describe('getUserCreditHistory', () => {
         metadata: { actorId: ADMIN_ID, note: 'Goodwill' },
       },
     ]);
-    mocks.adminList.mockResolvedValue({
-      entries: [{ ...adminEntry('audit-1', now), related: { creditTransactionId: 'tx-1' } }],
-      nextCursor: null,
-    });
     mocks.findUserById.mockResolvedValue({ name: 'Root', email: 'root@example.com', isAdmin: true });
 
     const history = await getUserCreditHistory({ id: USER_ID, currentCredits: 125 }, now);
 
     expect(mocks.dailyNet).toHaveBeenCalledWith(USER_ID, CreditHolderType.User, new Date('2026-07-22T00:00:00Z'), now);
     expect(mocks.findAdjustments).toHaveBeenCalledWith(USER_ID, new Date('2026-07-22T00:00:00Z'), now, 201);
-    expect(mocks.adminList).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'user.credits.adjusted', targetId: USER_ID }),
-      { limit: 200 }
-    );
     expect(history.points).toHaveLength(91);
     expect(history.points.at(-1)).toEqual({ day: '2026-10-20', balance: 125 });
     expect(history.points.at(-2)).toEqual({ day: '2026-10-19', balance: 100 });
@@ -318,7 +341,6 @@ describe('getUserCreditHistory', () => {
         actorUserId: ADMIN_ID,
         actorName: 'Root',
         reason: 'Goodwill',
-        auditEntryId: 'audit-1',
       },
     ]);
     expect(history.adjustmentsTruncated).toBe(false);
