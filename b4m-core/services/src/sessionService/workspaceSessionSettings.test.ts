@@ -67,21 +67,24 @@ const makeDb = (session: Record<string, unknown>) => ({
 const createdCopy = (db: ReturnType<typeof makeDb>) => db.sessions.create.mock.calls[0][0] as Record<string, unknown>;
 
 const copies = {
-  fork: (db: ReturnType<typeof makeDb>, settings: WorkspaceSessionSettingsTable) =>
+  fork: (db: ReturnType<typeof makeDb>, settings: WorkspaceSessionSettingsTable, targetSurface?: string) =>
     forkSession(
       'caller-1',
-      { sessionId: 'session-1', messageId: 'm1' },
-      { db: db as any, workspaceSessionSettings: settings }
+      { sessionId: 'session-1', messageId: 'm1', targetSurface },
+      { db: db as never, workspaceSessionSettings: settings, resolveSurfaceAccess: async () => ({ isAdmin: true }) }
     ),
-  snip: (db: ReturnType<typeof makeDb>, settings: WorkspaceSessionSettingsTable) =>
+  snip: (db: ReturnType<typeof makeDb>, settings: WorkspaceSessionSettingsTable, targetSurface?: string) =>
     snipSession(
       'caller-1',
-      { sessionId: 'session-1', messageId: 'm1' },
-      { db: db as any, workspaceSessionSettings: settings }
+      { sessionId: 'session-1', messageId: 'm1', targetSurface },
+      { db: db as never, workspaceSessionSettings: settings, resolveSurfaceAccess: async () => ({ isAdmin: true }) }
     ),
-  clone: (db: ReturnType<typeof makeDb>, settings: WorkspaceSessionSettingsTable) =>
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal adapter shape for this unit test
-    cloneSession('caller-1', { id: 'session-1' }, { db: db as any, workspaceSessionSettings: settings }),
+  clone: (db: ReturnType<typeof makeDb>, settings: WorkspaceSessionSettingsTable, targetSurface?: string) =>
+    cloneSession(
+      'caller-1',
+      { id: 'session-1', targetSurface },
+      { db: db as never, workspaceSessionSettings: settings, resolveSurfaceAccess: async () => ({ isAdmin: true }) }
+    ),
 };
 
 describe.each(Object.entries(copies))('%s with contributed workspace session settings', (_name, copy) => {
@@ -103,6 +106,26 @@ describe.each(Object.entries(copies))('%s with contributed workspace session set
 
     expect(createdCopy(db)).toEqual(expect.objectContaining({ temperature: 0.2, userSetFields: ['temperature'] }));
     expect(createdCopy(db).systemPromptText).toBeUndefined();
+  });
+
+  it('keeps a legacy main-list session settings after copying into an owning workspace and moving out', async () => {
+    const db = makeDb(sourceSession({ surface: undefined }));
+    const settings = { ...table, opti: table[WORKSPACE] };
+
+    await copy(db, settings, 'opti');
+
+    const created = createdCopy(db);
+    expect(created.surface).toBe('opti');
+    expect(created.userSetFields).toEqual(Object.keys(OWNED_VALUES));
+    db.sessions.findByIdAndUserId.mockResolvedValue({ id: 'copy-1', ...created });
+    await moveSession(
+      'caller-1',
+      { id: 'copy-1', targetSurface: null },
+      { db: db as never, workspaceSessionSettings: settings }
+    );
+
+    expect(db.sessions.update).toHaveBeenCalledWith({ id: 'copy-1' }, { unset: ['surface'] });
+    for (const [field, value] of Object.entries(OWNED_VALUES)) expect(created[field]).toEqual(value);
   });
 
   it('copies everything when no workspace contributes settings', async () => {
@@ -137,15 +160,15 @@ describe('cloneSession by a share holder with contributed workspace session sett
 describe('createSession records the owned fields the user set', () => {
   const create = (params: Record<string, unknown>, settings?: WorkspaceSessionSettingsTable) => {
     const db = makeDb({});
-    return createSession({ id: 'caller-1' } as any, { name: 'New', ...params } as any, {
-      db: db as any,
+    return createSession({ id: 'caller-1' } as never, { name: 'New', ...params } as never, {
+      db: db as never,
       workspaceSessionSettings: settings,
-    }) as Promise<Record<string, any>>;
+    }) as Promise<Record<string, unknown>>;
   };
 
   const roundTrip = async (session: Record<string, unknown>) => {
     const db = makeDb(session);
-    const adapters = { db: db as any, workspaceSessionSettings: table };
+    const adapters = { db: db as never, workspaceSessionSettings: table };
     const onWorkspace = await moveSession('caller-1', { id: 'session-1', targetSurface: WORKSPACE }, adapters);
     db.sessions.findByIdAndUserId.mockResolvedValue(onWorkspace);
     await moveSession('caller-1', { id: 'session-1', targetSurface: null }, adapters);
@@ -172,7 +195,7 @@ describe('createSession records the owned fields the user set', () => {
     await moveSession(
       'caller-1',
       { id: 'session-1', targetSurface: null },
-      { db: db as any, workspaceSessionSettings: table }
+      { db: db as never, workspaceSessionSettings: table }
     );
     expect(db.sessions.update.mock.calls[0][1].unset).toEqual(['surface', ...Object.keys(OWNED_VALUES)]);
   });
@@ -199,7 +222,7 @@ describe('moveSession with contributed workspace session settings', () => {
     const result = moveSession(
       'caller-1',
       { id: 'session-1', targetSurface },
-      { db: db as any, workspaceSessionSettings: table }
+      { db: db as never, workspaceSessionSettings: table }
     );
     return { db, result };
   };
@@ -244,7 +267,7 @@ describe('moveSession with contributed workspace session settings', () => {
   // Sessions created before userSetFields existed carry none; the main list owns nothing, so their values are the user's.
   it('keeps the values of a session without userSetFields across a round trip through the workspace', async () => {
     const db = makeDb(sourceSession({ surface: undefined }));
-    const adapters = { db: db as any, workspaceSessionSettings: table };
+    const adapters = { db: db as never, workspaceSessionSettings: table };
 
     const onWorkspace = await moveSession('caller-1', { id: 'session-1', targetSurface: WORKSPACE }, adapters);
     expect(db.sessions.update).toHaveBeenCalledWith({

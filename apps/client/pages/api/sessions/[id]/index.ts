@@ -46,7 +46,10 @@ const getHandler = nextRouteForContract(sessionGetContract).get(async (req, res)
     return res.json(redactSessionForClient(effective));
   } catch (error) {
     req.logger.warn('Workspace session settings unavailable for GET; returning without owned fields', error);
-    return res.json(redactSessionForClient(stripSurfaceOwnedFields(plain, premiumWorkspaceSessionSettings)));
+    // User-set provenance can preserve stored values during writes, but cannot make an owned
+    // value authoritative when its workspace resolver is unavailable.
+    const fallback = stripSurfaceOwnedFields(plain, premiumWorkspaceSessionSettings, { surface: plain.surface });
+    return res.json(redactSessionForClient(fallback));
   }
 });
 

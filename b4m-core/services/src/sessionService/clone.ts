@@ -7,6 +7,7 @@ import {
   rebindPromptMetaSession,
   redactPromptMetaForViewer,
   stripSurfaceOwnedFields,
+  userSetSessionFields,
   toPersistedSummaryTrigger,
   MAX_TOOL_CALLS_CEILING,
   type WorkspaceSessionSettingsTable,
@@ -140,7 +141,9 @@ export const cloneSession = async (
   const cloneParams = stripSurfaceOwnedFields(buildCloneSession, adapters.workspaceSessionSettings, ownedFieldsSource);
   const clonedSession = await createSession(user, cloneParams, adapters, {
     knowledgeIdsFromSourceSession: true,
-    userSetFields: isOwner ? session.userSetFields : undefined,
+    userSetFields: isOwner
+      ? userSetSessionFields(session, adapters.workspaceSessionSettings, session.userSetFields)
+      : undefined,
   });
 
   const messagesToClone = await db.chatHistories.findAllBySessionId(id);

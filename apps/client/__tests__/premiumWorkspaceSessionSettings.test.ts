@@ -95,11 +95,14 @@ describe('premium workspace session settings', () => {
     expect(out).toContain('= defineWorkspaceSessionSettingsTable({');
   });
 
-  it('rejects a contribution that is not an object', () => {
-    writeOverlay('malformed', { workspaceSessionSettingsExport: '@bike4mind/premium-malformed/settings' });
+  it.each([[null], [false], [[]], ['@bike4mind/premium-malformed/settings']])(
+    'rejects a contribution that is not an object: %j',
+    contribution => {
+      writeOverlay('malformed', { workspaceSessionSettingsExport: contribution });
 
-    expectFailure('invalid workspaceSessionSettingsExport from package');
-  });
+      expectFailure('expected an object of workspace id -> module specifier');
+    }
+  );
 
   it.each(['Example-Workspace', 'has space', '__proto__', 'constructor', 'prototype'])(
     'rejects the workspace id %s',

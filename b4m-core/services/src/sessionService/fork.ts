@@ -5,6 +5,7 @@ import {
   IUserRepository,
   rebindPromptMetaSession,
   stripSurfaceOwnedFields,
+  userSetSessionFields,
   toPersistedSummaryTrigger,
   MAX_TOOL_CALLS_CEILING,
   type WorkspaceSessionSettingsTable,
@@ -101,7 +102,10 @@ export const forkSession = async (userId: string, parameters: ForkSessionParamet
       session
     ),
     adapters,
-    { knowledgeIdsFromSourceSession: true, userSetFields: session.userSetFields }
+    {
+      knowledgeIdsFromSourceSession: true,
+      userSetFields: userSetSessionFields(session, adapters.workspaceSessionSettings, session.userSetFields),
+    }
   );
 
   const messagesToFork = await db.chatHistories.findAllBySessionIdAndLessThanOrEqualToTimestamp(

@@ -5,6 +5,7 @@ import {
   IUserRepository,
   rebindPromptMetaSession,
   stripSurfaceOwnedFields,
+  userSetSessionFields,
   toPersistedSummaryTrigger,
   MAX_TOOL_CALLS_CEILING,
   type WorkspaceSessionSettingsTable,
@@ -103,7 +104,10 @@ export const snipSession = async (userId: string, parameters: SnipSessionParamet
       session
     ),
     adapters,
-    { knowledgeIdsFromSourceSession: true, userSetFields: session.userSetFields }
+    {
+      knowledgeIdsFromSourceSession: true,
+      userSetFields: userSetSessionFields(session, adapters.workspaceSessionSettings, session.userSetFields),
+    }
   );
 
   const messagesToSnip = await db.chatHistories.findAllBySessionIdAndGreaterThanOrEqualToTimestamp(

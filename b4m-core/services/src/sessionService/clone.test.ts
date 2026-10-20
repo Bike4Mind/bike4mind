@@ -180,7 +180,7 @@ describe('cloneSession - redaction at the copy boundary', () => {
       maxToolCalls: 1000,
     });
 
-    await cloneSession('caller-1', { id: 'session-1' }, { db });
+    await cloneSession('caller-1', { id: 'session-1' }, { db, workspaceSessionSettings: {} });
 
     expect(db.sessions.create.mock.calls[0][0].maxToolCalls).toBe(MAX_TOOL_CALLS_CEILING);
   });

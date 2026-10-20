@@ -125,7 +125,7 @@ describe('forkSession', () => {
     });
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
 
-    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db, workspaceSessionSettings: {} });
 
     expect(db.sessions.create.mock.calls[0][0].maxToolCalls).toBe(MAX_TOOL_CALLS_CEILING);
   });
