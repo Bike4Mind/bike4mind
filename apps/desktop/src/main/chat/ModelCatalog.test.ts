@@ -1,5 +1,5 @@
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { publicVideoModel } from './media/__fixtures__/videoModels';
 import { ModelCatalog, resolveDefaultModel, selectUsableModels } from './ModelCatalog';
 
@@ -39,6 +39,18 @@ describe('selectUsableModels', () => {
     });
   });
 
+  it('gives a thinking switch only to an Ollama model the server says can think', () => {
+    const [thinker, plain, hosted] = selectUsableModels([
+      wireModel({ id: 'qwen3:8b', backend: 'ollama', can_think: true }),
+      wireModel({ id: 'llama3.2', backend: 'ollama', can_think: false }),
+      wireModel({ id: 'claude-sonnet-4-5-20250929', backend: 'anthropic', can_think: true }),
+    ]);
+
+    expect(thinker).toMatchObject({ thinkingToggle: true });
+    expect(plain).not.toHaveProperty('thinkingToggle');
+    expect(hosted).not.toHaveProperty('thinkingToggle');
+  });
+
   it('treats a non-array payload as no models rather than throwing', () => {
     expect(selectUsableModels(undefined)).toEqual([]);
     expect(selectUsableModels({ models: [] })).toEqual([]);
@@ -74,6 +86,10 @@ describe('ModelCatalog', () => {
   let environmentUrl: string;
   let catalog: ModelCatalog;
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   beforeEach(() => {
     get = vi.fn().mockResolvedValue({ models: [wireModel(), wireModel({ id: 'dall-e-3', type: 'image' })] });
     environmentUrl = 'http://localhost:3000';
@@ -88,6 +104,32 @@ describe('ModelCatalog', () => {
     expect((await catalog.list()).models.map(model => model.id)).toEqual(['claude-sonnet-4-5-20250929']);
     await catalog.list();
     expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains thinking capability through an expired failed read without offering stale models', async () => {
+    get.mockResolvedValueOnce({ models: [wireModel({ id: 'qwen3:8b', backend: 'ollama', can_think: true })] });
+    await catalog.list();
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 6 * 60_000);
+    get.mockRejectedValueOnce(new Error('temporary failure'));
+
+    expect(await catalog.list()).toMatchObject({ models: [], error: expect.any(String) });
+    expect(catalog.cached()).toBeNull();
+    expect(catalog.lastKnownThinkingToggle('qwen3:8b')).toBe(true);
+    expect(catalog.lastKnownThinkingToggle('unknown')).toBeUndefined();
+
+    environmentUrl = 'https://other.example.com';
+    expect(catalog.lastKnownThinkingToggle('qwen3:8b')).toBeUndefined();
+  });
+
+  it('forgets old thinking capabilities when a successful refresh removes the model', async () => {
+    get.mockResolvedValueOnce({ models: [wireModel({ id: 'qwen3:8b', backend: 'ollama', can_think: true })] });
+    await catalog.list();
+    get.mockResolvedValueOnce({ models: [] });
+    await catalog.list(true);
+    get.mockRejectedValueOnce(new Error('temporary failure'));
+    await catalog.list();
+
+    expect(catalog.lastKnownThinkingToggle('qwen3:8b')).toBeUndefined();
   });
 
   it('refetches when the environment changed, so one server never shows another one models', async () => {
