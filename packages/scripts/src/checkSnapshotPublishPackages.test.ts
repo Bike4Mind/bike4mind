@@ -11,8 +11,9 @@ import path from 'node:path';
  * nothing. What this enforces:
  *
  *   - the gate and `CHANGED_FILES` name the same roots;
- *   - `CHANGED_FILES` carries no exclusions, and no exclusion in either invocation covers a
- *     root - an exclusion is a pathspec that can negate a root and empty the file list;
+ *   - `CHANGED_FILES` carries no exclusions, and no exclusion in either invocation hides a
+ *     publishable source path under a root - an exclusion is a pathspec that can silently empty
+ *     the file list while the job exits 0 having published nothing;
  *   - every root has at least one `PKG_MAP` entry, and every entry sits under a root;
  *   - every non-private workspace package under a root has a live `PKG_MAP` row, apart from the
  *     packages in `KNOWN_UNMAPPED`.
@@ -68,8 +69,11 @@ function tokenizePathspecs(operand: string): string[] {
   return tokens;
 }
 
-/** Short and long form of a git exclusion pathspec. */
-const EXCLUSION = /^(?::!|:\(exclude\b[^)]*\))/;
+/** Short form, and the long form in any keyword order (`:(exclude)`, `:(exclude,glob)`, `:(glob,exclude)`). */
+const EXCLUSION = /^(?::!|:\((?=[^)]*\bexclude\b)[^)]*\))/;
+
+/** Long-form `glob` magic, which switches git from default wildmatch to segment-bounded wildcards. */
+const GLOB_MAGIC = /^:(?=[^)]*\bglob\b)/;
 
 const isExclusion = (token: string) => EXCLUSION.test(token);
 
@@ -107,53 +111,128 @@ const positiveRoots = (invocation: { tokens: string[] }) =>
 /** The bare pattern of an exclusion token: `:(exclude,glob)foo` -> `foo`. */
 const exclusionPattern = (token: string) => token.replace(EXCLUSION, '');
 
-/** Git pathspec glob (glob magic) as a matcher; `**` spans directories, `*` and `?` do not. */
-function globToRegExp(pattern: string): RegExp {
+/**
+ * An exclusion pathspec as a matcher, following git rather than the way the pattern looks.
+ *
+ * `:(glob)` magic keeps `*` and `?` inside one path segment and lets `**` span directories, while a
+ * `**` segment also matches zero directories - so a pattern with a nested `**` still covers the
+ * file next to it. Without the magic git uses default wildmatch, where `*` and `?` cross `/`, which
+ * is why `:(exclude)packages*` swallows every root.
+ */
+function pathspecMatcher(token: string): RegExp {
+  const glob = GLOB_MAGIC.test(token);
+  const pattern = exclusionPattern(token).replace(/^\.\//, '').replace(/\/+$/, '');
   let source = '';
   for (let i = 0; i < pattern.length; i++) {
     const char = pattern[i];
-    if (char === '*' && pattern[i + 1] === '*') {
-      source += '.*';
-      i++;
+    if (char === '*' && glob && pattern[i + 1] === '*') {
+      if (pattern[i + 2] === '/') {
+        source += '(?:.*/)?';
+        i += 2;
+      } else {
+        source += '.*';
+        i += 1;
+      }
     } else if (char === '*') {
-      source += '[^/]*';
+      source += glob ? '[^/]*' : '.*';
     } else if (char === '?') {
-      source += '[^/]';
+      source += glob ? '[^/]' : '.';
     } else {
-      source += char.replace(/[.+^${}()|[\]\\]/, '\\$&');
+      source += char.replace(/[.+^${}()|[\]\\]/g, '\\$&');
     }
   }
   return new RegExp(`^${source}$`);
 }
 
-/** Repo-relative directories of the non-private packages sitting at or directly under a root. */
-function listWorkspacePackages(roots: string[]): string[] {
-  const dirs = new Set<string>();
+/**
+ * Would this exclusion hide `file`? A pathspec also matches a leading directory of the path, and a
+ * trailing slash makes it match directories only.
+ */
+function excludes(token: string, file: string): boolean {
+  const matcher = pathspecMatcher(token);
+  const segments = file.split('/');
+  const directories = segments.slice(0, -1).map((_, index) => segments.slice(0, index + 1).join('/'));
+  const candidates = exclusionPattern(token).endsWith('/') ? directories : [file, ...directories];
+  return candidates.some(candidate => matcher.test(candidate));
+}
+
+/**
+ * `"<exclusion> hides <root>"` for every exclusion that can hide a publishable source path under a
+ * root of its invocation.
+ *
+ * Judged against source paths rather than the root path itself: a directory exclusion, a
+ * default-wildmatch glob and a deep match all miss the root while still emptying the gate for a
+ * branch that only touches sources - the silent no-publish this file exists to prevent.
+ */
+function hiddenRoots(invocations: { tokens: string[] }[], probes: string[]): string[] {
+  return invocations.flatMap(invocation =>
+    invocation.tokens.filter(isExclusion).flatMap(exclusion =>
+      positiveRoots(invocation)
+        .filter(root => probes.some(probe => isUnder(probe, root) && excludes(exclusion, probe)))
+        .map(root => `${exclusion} hides ${root}`)
+    )
+  );
+}
+
+/** Source-like paths a branch may publish, relative to a package directory. */
+const SOURCE_PROBES = [
+  'index.ts',
+  'src/index.ts',
+  'src/generated/index.ts',
+  'src/types/generated/api.ts',
+  'src/deep/nested/impl.ts',
+];
+
+/** Repo-relative packages sitting at or directly under a root, with their `private` flag. */
+function listPackages(roots: string[]): { dir: string; isPrivate: boolean }[] {
+  const packages = new Map<string, boolean>();
   for (const root of roots) {
-    const absolute = path.join(REPO_ROOT, root);
-    const candidates = [root];
-    for (const entry of fs.readdirSync(absolute, { withFileTypes: true })) {
-      if (entry.isDirectory()) candidates.push(`${root}/${entry.name}`);
-    }
-    for (const candidate of candidates) {
+    const children = fs
+      .readdirSync(path.join(REPO_ROOT, root), { withFileTypes: true })
+      .filter(entry => entry.isDirectory())
+      .map(entry => `${root}/${entry.name}`);
+    for (const candidate of [root, ...children]) {
       const manifest = path.join(REPO_ROOT, candidate, 'package.json');
       if (!fs.existsSync(manifest)) continue;
       const { private: isPrivate } = JSON.parse(fs.readFileSync(manifest, 'utf8')) as {
         private?: boolean;
       };
-      if (!isPrivate) dirs.add(candidate);
+      packages.set(candidate, Boolean(isPrivate));
     }
   }
-  return [...dirs].sort();
+  return [...packages].sort(([a], [b]) => a.localeCompare(b)).map(([dir, isPrivate]) => ({ dir, isPrivate }));
 }
+
+/** Paths an exclusion would hide if it covered a root: each package and its source-like files. */
+const sourceProbes = (roots: string[]): string[] =>
+  listPackages(roots).flatMap(({ dir }) => [dir, ...SOURCE_PROBES.map(probe => `${dir}/${probe}`)]);
+
+const isUnder = (dir: string, root: string) => dir === root || dir.startsWith(`${root}/`);
 
 describe('snapshot-publish package lists', () => {
   const workflow = fs.readFileSync(WORKFLOW, 'utf8');
   const invocations = extractPathspecLists(workflow);
   const pkgMap = extractPackageMap(workflow);
 
-  const isUnder = (dir: string, root: string) => dir === root || dir.startsWith(`${root}/`);
   const roots = invocations.flatMap(invocation => (invocation.quiet ? positiveRoots(invocation) : []));
+  const probes = sourceProbes(roots);
+
+  /** A gate invocation over the real roots plus the given exclusion tokens. */
+  const gateWith = (exclusions: string[]) =>
+    `if git diff --quiet main...HEAD -- b4m-core/ packages/cli/ packages/sdk/ ${exclusions
+      .map(exclusion => `'${exclusion}'`)
+      .join(' ')}; then\n  echo changed\nfi`;
+
+  /** Fixed probes for the fixtures below, so a spelling class is pinned independently of the live roots. */
+  const fixtureProbes = [
+    'b4m-core/agents/src/index.ts',
+    'b4m-core/agents/src/generated/index.ts',
+    'packages/cli/src/index.ts',
+    'packages/sdk',
+    'packages/sdk/index.ts',
+    'packages/sdk/src/index.ts',
+    'packages/sdk/src/generated/types.ts',
+  ];
 
   it('parses the same roots out of both diff invocations', () => {
     const expected = ['b4m-core', 'packages/cli', 'packages/sdk'];
@@ -166,16 +245,8 @@ describe('snapshot-publish package lists', () => {
     expect(listing[0].tokens.filter(isExclusion)).toEqual([]);
   });
 
-  it('never lets an exclusion cover a diff root', () => {
-    const covering = invocations.flatMap(invocation =>
-      invocation.tokens.filter(isExclusion).flatMap(exclusion => {
-        const matcher = globToRegExp(exclusionPattern(exclusion));
-        return positiveRoots(invocation)
-          .filter(root => matcher.test(root) || matcher.test(`${root}/probe.ts`))
-          .map(root => `${exclusion} covers ${root}`);
-      })
-    );
-    expect(covering).toEqual([]);
+  it('never lets an exclusion hide a publishable source path', () => {
+    expect(hiddenRoots(invocations, probes)).toEqual([]);
   });
 
   it('maps every root to at least one package', () => {
@@ -191,9 +262,10 @@ describe('snapshot-publish package lists', () => {
   });
 
   it('maps every non-private workspace package except the recorded gap', () => {
-    const unmapped = listWorkspacePackages(roots).filter(
-      dir => ![...pkgMap.keys()].some(mapped => isUnder(dir, mapped))
-    );
+    const unmapped = listPackages(roots)
+      .filter(({ isPrivate }) => !isPrivate)
+      .map(({ dir }) => dir)
+      .filter(dir => ![...pkgMap.keys()].some(mapped => isUnder(dir, mapped)));
     expect(unmapped).toEqual(KNOWN_UNMAPPED);
   });
 
@@ -230,5 +302,45 @@ describe('snapshot-publish package lists', () => {
     expect(positiveRoots(gate)).toEqual(['b4m-core', 'packages/cli', 'packages/foo']);
     expect(gate.tokens.filter(isExclusion)).toEqual([':(exclude)b4m-core/*/docs', ':(exclude,glob)**/*.md']);
     expect(positiveRoots(listing)).toEqual(['b4m-core', 'packages/cli']);
+  });
+
+  it('flags every exclusion spelling that can hide a root', () => {
+    const spellings = [
+      ':(exclude)packages/sdk/',
+      ':!packages/sdk/',
+      ':(exclude)packages*',
+      ':(exclude)packages/*.ts',
+      ':(exclude)*.ts',
+      ':(exclude)packages/sdk/**/index.ts',
+      ':(exclude)packages/sdk/**/generated/**',
+    ];
+
+    const [gate] = extractPathspecLists(gateWith(spellings));
+    const flagged = hiddenRoots([gate], fixtureProbes);
+    for (const exclusion of spellings) {
+      expect(
+        flagged.some(entry => entry.startsWith(`${exclusion} hides `)),
+        exclusion
+      ).toBe(true);
+    }
+  });
+
+  it('accepts exclusions that only hide docs, markdown and tests', () => {
+    const allowed = [
+      ':(exclude)b4m-core/*/docs',
+      ':(exclude)packages/cli/docs',
+      ':(exclude)packages/sdk/docs',
+      ':(exclude,glob)**/*.md',
+      ':(exclude,glob)**/test/**',
+      ':(exclude,glob)**/__tests__/**',
+      ':(exclude,glob)**/test-utils/**',
+      ':(exclude,glob)**/*.test.ts',
+      ':(exclude,glob)**/*.test.tsx',
+      ':(exclude,glob)**/*.spec.ts',
+      ':(exclude,glob)**/*.spec.tsx',
+    ];
+
+    const [gate] = extractPathspecLists(gateWith(allowed));
+    expect(hiddenRoots([gate], fixtureProbes)).toEqual([]);
   });
 });
