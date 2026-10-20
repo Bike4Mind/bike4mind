@@ -205,6 +205,70 @@ describe('triageReleaseNotes / writeReleaseNotes', () => {
   });
 });
 
+// Author notes from release v2026.10.20.1, each of which overstated what its change does.
+const overstatedRelease: ReleaseNotesJobPr[] = [
+  pr(4938, {
+    title: 'feat(storage): org-admin storage usage endpoint and Storage tab',
+    customerNote:
+      "Organization admins can now see how much of the organization's storage is used, and by whom, under Usage > Storage.",
+  }),
+  pr(4994, {
+    title: 'fix(music): ask the model to rephrase once when the provider blocks a song prompt',
+    customerNote:
+      'When a song request is refused because it names a real artist, the assistant now rewrites the request and tries again automatically instead of stopping at a blocked song.',
+  }),
+  pr(5040, {
+    title: 'fix(llm-adapters): run adaptive Claude at low effort for simple queries',
+    customerNote: 'Claude answers everyday questions and quick tool lookups faster.',
+  }),
+];
+
+describe('copy accuracy', () => {
+  it('gives the editorial pass each title beside its author note, under the accuracy rules', async () => {
+    const complete = vi.fn().mockResolvedValueOnce(editorialReply([4938]));
+
+    await generateReleaseNotes(overstatedRelease, complete);
+
+    const prompt: string = complete.mock.calls[0][0];
+    for (const { number, title, customerNote } of overstatedRelease) {
+      expect(prompt).toContain(JSON.stringify({ number, title, note: customerNote }));
+    }
+    expect(prompt).toContain('follow the narrower one');
+    expect(prompt).toContain('Never say which roles can see or use something');
+    expect(prompt).toContain('only when the title states that gain');
+    expect(prompt).toContain('Name an AI model or provider');
+    expect(prompt).toContain('Leave out changes a customer would not notice, even when they have a note');
+    expect(prompt).not.toContain('who it helps');
+  });
+
+  it('gives the triage pass the same accuracy rules and keeps security fixes out', async () => {
+    const complete = vi.fn().mockResolvedValueOnce(triageReply([{ number: 5075, customerFacing: false, note: '' }]));
+
+    await generateReleaseNotes([pr(5075)], complete);
+
+    const prompt: string = complete.mock.calls[0][0];
+    expect(prompt).toContain('Security fixes, internal refactors');
+    expect(prompt).toContain('Never say which roles can see or use something');
+  });
+
+  it('caps item text and asks for a repair when an item runs over', async () => {
+    const long = JSON.stringify({
+      headline: 'Storage usage by uploader',
+      summary: 'Organizations can see storage usage.',
+      items: [{ category: 'new', text: 'x'.repeat(161), importance: 1, sourcePrs: [4938] }],
+    });
+    const complete = vi
+      .fn()
+      .mockResolvedValueOnce(long)
+      .mockResolvedValueOnce(editorialReply([4938]));
+
+    await writeReleaseNotes(overstatedRelease, new Map([[4938, 'n']]), complete);
+
+    expect(complete.mock.calls[0][0]).toContain('at most 160 characters');
+    expect(complete.mock.calls[1][0]).toContain('items.0.text');
+  });
+});
+
 describe('extractJson', () => {
   it('throws when there is no object', () => {
     expect(() => extractJson('no json here')).toThrow(/no JSON object/);
