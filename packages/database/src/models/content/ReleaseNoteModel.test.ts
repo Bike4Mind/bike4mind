@@ -139,6 +139,23 @@ describe('ReleaseNoteRepository.findPublished', () => {
   });
 });
 
+describe('ReleaseNoteRepository.findPublishedById', () => {
+  it('finds a note only while the feed would list it', async () => {
+    const publishAt = new Date('2026-01-01T12:00:00Z');
+    const { note } = await releaseNoteRepository.upsertGenerated(makeNote({ publishAt }));
+
+    expect(await releaseNoteRepository.findPublishedById(note.id, new Date(publishAt.getTime() - 1))).toBeNull();
+    expect((await releaseNoteRepository.findPublishedById(note.id, publishAt))?.id).toBe(note.id);
+
+    await releaseNoteRepository.hide(note.id);
+    expect(await releaseNoteRepository.findPublishedById(note.id, publishAt)).toBeNull();
+  });
+
+  it('returns null for an id that is not an ObjectId', async () => {
+    expect(await releaseNoteRepository.findPublishedById('not-an-id', new Date())).toBeNull();
+  });
+});
+
 describe('ReleaseNoteRepository.findPublishedBetween', () => {
   const start = new Date('2026-01-01T00:00:00Z');
   const end = new Date('2026-01-07T23:59:59.999Z');

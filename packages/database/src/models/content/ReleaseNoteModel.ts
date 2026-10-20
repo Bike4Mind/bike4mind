@@ -89,6 +89,9 @@ const afterKeyset = (after: ReleaseNoteKeyset) => ({
   ],
 });
 
+// What readers may see at `now`: scheduled and past its embargo.
+const publishedAt = (now: Date) => ({ status: 'scheduled', publishAt: { $lte: now } });
+
 const isDuplicateKeyError = (err: unknown): boolean =>
   typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 11000;
 
@@ -148,7 +151,13 @@ export class ReleaseNoteRepository extends BaseRepository<IReleaseNoteDocument> 
     after?: ReleaseNoteKeyset;
     limit: number;
   }): Promise<ReleaseNotePage> {
-    return this.page({ status: 'scheduled', publishAt: { $lte: now } }, after, limit);
+    return this.page(publishedAt(now), after, limit);
+  }
+
+  /** One note by id, only while listPublished would include it at `now`; null for a malformed id. */
+  async findPublishedById(id: string, now: Date): Promise<IReleaseNoteDocument | null> {
+    if (!mongoose.isValidObjectId(id)) return null;
+    return this.model.findOne({ _id: id, ...publishedAt(now) });
   }
 
   async adminList({
