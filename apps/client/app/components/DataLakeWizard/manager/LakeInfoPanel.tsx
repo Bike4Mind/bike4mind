@@ -217,7 +217,7 @@ export function LakeInfoPanel({
         {/* Same gate and test id as SelectedLakeHeader, so both surfaces expose the same source controls. */}
         {canConnectLakeConnector(lake) && (
           <Box data-testid="datalake-selected-lake-source" sx={{ mb: 1 }}>
-            <LakeSourceConnectActions lake={lake} />
+            <LakeSourceConnectActions key={lake.id} lake={lake} />
           </Box>
         )}
         <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: 1, mb: 1 }}>
