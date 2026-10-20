@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { useEffect } from 'react';
 import { renderHook, act } from '@testing-library/react';
 import { POST_STREAM_HOLD_MAX_MS, useCreditSyncSignal, useEffectiveCredits } from '../useEffectiveCredits';
 import { useStreamingState } from '../useStreamingState';
@@ -132,15 +133,47 @@ describe('useEffectiveCredits', () => {
       expect(result.current).toBe(1500);
     });
 
-    it('goes straight from the pre-turn balance to the settled one with no hold-based value between', () => {
-      const { result, rerender } = endTurnWithHoldDippedBalance();
-      const seen: number[] = [result.current];
-
+    it('goes straight from the pre-turn balance to the settled one with no hold-based value ever committed', () => {
+      const committed: number[] = [];
+      const { rerender } = renderHook(() => {
+        const credits = useEffectiveCredits();
+        useEffect(() => {
+          committed.push(credits);
+        });
+        return credits;
+      });
+      act(() => useStreamingState.getState().startStreaming('session-1'));
+      mockUseUser.mockReturnValue({ currentUser: { id: 'user-1', currentCredits: 227 } });
+      rerender();
+      act(() => useStreamingState.getState().completeStreaming('session-1'));
       mockUseUser.mockReturnValue({ currentUser: { id: 'user-1', currentCredits: 1421 } });
       rerender();
-      seen.push(result.current);
 
-      expect(seen).toEqual([1500, 1421]);
+      expect(committed).not.toContain(227);
+      expect([...new Set(committed)]).toEqual([1500, 1421]);
+    });
+
+    it('still holds the pre-turn balance when the settled balance arrived before streaming ended, until the sync confirms', () => {
+      const { result, rerender } = renderHook(() => useEffectiveCredits());
+      act(() => useStreamingState.getState().startStreaming('session-1'));
+      mockUseUser.mockReturnValue({ currentUser: { id: 'user-1', currentCredits: 1421 } });
+      rerender();
+      act(() => useStreamingState.getState().completeStreaming('session-1'));
+      expect(result.current).toBe(1500);
+
+      act(() => useCreditSyncSignal.getState().markSynced());
+      expect(result.current).toBe(1421);
+    });
+
+    it('keeps the hold per hook instance: a chip mounted mid-hold shows the live balance', () => {
+      const first = endTurnWithHoldDippedBalance();
+      expect(first.result.current).toBe(1500);
+
+      const mountedMidHold = renderHook(() => useEffectiveCredits());
+      expect(mountedMidHold.result.current).toBe(227);
+
+      act(() => useCreditSyncSignal.getState().markSynced());
+      expect(first.result.current).toBe(227);
     });
 
     it('releases to the live balance when the post-turn balance sync completes with no change', () => {
