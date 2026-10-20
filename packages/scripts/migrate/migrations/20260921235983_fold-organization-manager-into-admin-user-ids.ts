@@ -61,6 +61,14 @@ const migration: MigrationFile = {
           { _id: organization._id, 'users.userId': { $ne: managerId } },
           { $push: { users: { userId: managerId, permissions: ['read'] } } }
         );
+        // An existing row with no membership permission would leave the holder a non-member.
+        await organizations.updateOne(
+          {
+            _id: organization._id,
+            users: { $elemMatch: { userId: managerId, permissions: { $nin: ['read', 'write'] } } },
+          },
+          { $addToSet: { 'users.$.permissions': 'read' } }
+        );
         // Owner + roster, the count addMember holds below `seats`.
         const seatsUsed = 1 + (organization.users?.length ?? 0) + rowAdded.modifiedCount;
         if (rowAdded.modifiedCount > 0 && organization.seats !== undefined && seatsUsed > organization.seats) {

@@ -152,6 +152,18 @@ describe('fold-organization-manager-into-admin-user-ids migration (real DB)', ()
     expect(organization.userDetails).toEqual([existingDetails]);
   });
 
+  it('gives an existing roster row with no membership permission the read permission', async () => {
+    const managerId = await insertManager();
+    const orgId = await insertOrganization({
+      managerId,
+      users: [{ userId: managerId, permissions: [] }],
+    });
+
+    await migration.up();
+
+    expect((await readOrganization(orgId)).users).toEqual([{ userId: managerId, permissions: ['read'] }]);
+  });
+
   it('only unsets a managerId that is the billing owner or names a missing or soft-deleted user', async () => {
     const ownerManagedId = await insertOrganization({ managerId: OWNER_ID });
     const danglingId = await insertOrganization({ managerId: new mongoose.Types.ObjectId().toString() });
