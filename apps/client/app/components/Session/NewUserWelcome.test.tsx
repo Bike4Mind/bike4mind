@@ -90,6 +90,19 @@ describe('NewUserWelcome', () => {
     expect(screen.queryAllByTestId(/^new-user-welcome-prompt-/)).toHaveLength(0);
   });
 
+  it('explains the empty card at 0 credits with no pending grant instead of showing only a title', () => {
+    state.balance = 0;
+    renderWelcome();
+    expect(screen.getByTestId('new-user-welcome-out-of-credits')).toHaveTextContent(/out of credits/i);
+    expect(screen.queryByTestId('new-user-welcome-credits')).not.toBeInTheDocument();
+    expect(screen.getByTestId('new-user-welcome-privacy-link')).toBeInTheDocument();
+  });
+
+  it('does not show the out-of-credits line while there is credit to start with', () => {
+    renderWelcome();
+    expect(screen.queryByTestId('new-user-welcome-out-of-credits')).not.toBeInTheDocument();
+  });
+
   it('keeps the starters at 0 credits when credits are not enforced', () => {
     state.balance = 0;
     state.enforceCredits = false;
