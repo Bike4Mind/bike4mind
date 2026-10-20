@@ -217,6 +217,47 @@ describe('toggleTags - data lake meta-tags', () => {
     expect(adapters.store.get('f2')?.tags).toEqual([]);
   });
 
+  it('gates a multi-lake join on the final owner only, not an org the file passes through', async () => {
+    const adapters = makeAdapters([
+      { ...file('f1'), fileSize: 400, storageChargedAt: new Date() },
+      { ...file('f2'), fileSize: 400, storageChargedAt: new Date() },
+    ]);
+    // Applied in request order, so each file briefly belongs to the newer lake's full org before
+    // the older lake's org wins the pick.
+    const newer = lake({
+      id: 'lake-new',
+      datalakeTag: 'datalake:new',
+      organizationId: 'org-full',
+      createdAt: new Date(2),
+    });
+    const older = lake({
+      id: 'lake-old',
+      datalakeTag: 'datalake:old',
+      organizationId: 'org-room',
+      createdAt: new Date(1),
+    });
+    adapters.db.dataLakes.findByDatalakeTag.mockImplementation(
+      async (tag: string) => [newer, older].find(l => l.datalakeTag === tag) ?? null
+    );
+    adapters.db.dataLakes.findByDatalakeTags.mockImplementation(async (tags: string[]) =>
+      [newer, older].filter(l => tags.includes(l.datalakeTag))
+    );
+    adapters.db.organizations.findById.mockImplementation(async (id: string) =>
+      id === 'org-full'
+        ? { id, currentStorageSize: 1024 * 1024, storageLimit: 1 }
+        : { id, currentStorageSize: 0, storageLimit: 1 }
+    );
+
+    await run(adapters, { ids: ['f1', 'f2'], tags: ['datalake:new', 'datalake:old'] });
+
+    for (const id of ['f1', 'f2']) {
+      expect(adapters.store.get(id)?.tags.map(t => t.name)).toEqual(
+        expect.arrayContaining(['datalake:new', 'datalake:old'])
+      );
+    }
+    expect(adapters.db.organizations.findById).not.toHaveBeenCalledWith('org-full');
+  });
+
   it('recomputes the lake stats in both directions', async () => {
     const leaving = makeAdapters([file('f1', [{ name: 'datalake:lake', strength: 1 }])]);
     await run(leaving, { ids: ['f1'], tags: ['datalake:lake'] });

@@ -407,9 +407,10 @@ export const toggleTags = async (
     const isMember = storedTagNames(file).includes(lake.datalakeTag);
     if (!isMember) {
       // This branch, and only this branch, makes the file a MEMBER - but the admission contract
-      // (#1680) it must satisfy is graded in the pre-write pass above, not here, so a refusal cannot
-      // land after earlier files in the batch have already joined. This function stays write-only.
-      await addFileToLake(actor, lake, file.id, { db, logger });
+      // (#1680) and the owner quota it must satisfy are graded in the pre-write pass above, not
+      // here, so a refusal cannot land after earlier files in the batch have already joined. This
+      // function stays write-only.
+      await addFileToLake(actor, lake, file.id, { db, logger }, { ownerTransferPreCleared: true });
     } else {
       try {
         await removeFileFromLake(actor, lake, file.id, { db, logger });

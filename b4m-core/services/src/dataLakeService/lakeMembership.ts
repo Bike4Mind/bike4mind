@@ -30,6 +30,15 @@ export interface MembershipOriginOptions {
   origin?: LakeMembershipChangeOrigin;
 }
 
+export interface AddMembershipOptions extends MembershipOriginOptions {
+  /**
+   * The caller already quota-gated this join against the file's FINAL owner (toggleTags' batch
+   * gate). Skips the per-file gate, which sees one lake at a time and so can grade an intermediate
+   * owner the file only passes through.
+   */
+  ownerTransferPreCleared?: boolean;
+}
+
 /** The acting principal for a membership write - resolved from auth, never from the body. */
 export type MembershipActor = ManageActor;
 
@@ -243,7 +252,7 @@ export const addFileToLake = async (
   lake: MembershipLake,
   fabFileId: string,
   { db, logger }: AddMembershipAdapters,
-  { origin = 'person' }: MembershipOriginOptions = {}
+  { origin = 'person', ownerTransferPreCleared = false }: AddMembershipOptions = {}
 ): Promise<void> => {
   if (!(await resolveCanManageLake(lake, actor, { db }))) {
     throw new BadRequestError('You do not have permission to add files to this data lake');
@@ -251,7 +260,7 @@ export const addFileToLake = async (
   assertLakeWritable(lake);
 
   // Gated before the push so a join refused for quota writes nothing, even outside a transaction.
-  const file = await db.fabFiles.findById(fabFileId);
+  const file = ownerTransferPreCleared ? null : await db.fabFiles.findById(fabFileId);
   if (file) {
     await assertStorageOwnerTransferFits(file, [...storedTagNames(file), lake.datalakeTag], db);
   }

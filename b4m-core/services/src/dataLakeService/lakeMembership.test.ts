@@ -63,6 +63,36 @@ describe('addFileToLake', () => {
     expect(adapters.db.fabFiles.pushTagReturningPriorState).not.toHaveBeenCalled();
   });
 
+  it('refuses a join onto a full org pool unless the caller already cleared the transfer', async () => {
+    const orgLake = lake({ organizationId: 'org-full', createdAt: new Date(0) });
+    const fullPoolAdapters = () => {
+      const adapters = makeAdapters();
+      adapters.db.fabFiles.findById.mockResolvedValue({
+        id: 'f1',
+        userId: 'owner',
+        fileSize: 400,
+        storageChargedAt: new Date(),
+        tags: [],
+      });
+      adapters.db.dataLakes.findByDatalakeTags.mockResolvedValue([orgLake]);
+      adapters.db.users.findById.mockResolvedValue({ id: 'owner' });
+      adapters.db.organizations.findById.mockResolvedValue({
+        id: 'org-full',
+        currentStorageSize: 1024 * 1024,
+        storageLimit: 1,
+      });
+      return adapters;
+    };
+
+    const gated = fullPoolAdapters();
+    await expect(addFileToLake(owner, orgLake, 'f1', gated)).rejects.toThrow(/storage limit/i);
+    expect(gated.db.fabFiles.pushTagReturningPriorState).not.toHaveBeenCalled();
+
+    const cleared = fullPoolAdapters();
+    await addFileToLake(owner, orgLake, 'f1', cleared, { ownerTransferPreCleared: true });
+    expect(cleared.db.fabFiles.pushTagReturningPriorState).toHaveBeenCalled();
+  });
+
   it('recomputes the owner even when the tag was already there, so a retry repairs a failed transfer', async () => {
     // Null pre-image: the filtered push matched nothing, as it does on a retry after the first
     // attempt threw between the tag write and the owner restamp.
