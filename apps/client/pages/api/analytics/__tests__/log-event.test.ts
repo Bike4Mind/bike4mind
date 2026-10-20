@@ -57,6 +57,7 @@ describe('POST /api/analytics/log-event', () => {
     CreditPurchaseEvents.CREDITS_GRANTED,
     CreditPurchaseEvents.CREDITS_ALREADY_GRANTED,
     FirstRunEvents.FIRST_ANSWER_CREDITS,
+    FirstRunEvents.POLICIES_SHOWN,
   ])('refuses the server-only %s event', async type => {
     const { run } = call({ type, metadata: { paymentIntentId: 'pi_forged', amount: 999, credits: 500 } });
 

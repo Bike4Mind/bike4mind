@@ -76,6 +76,7 @@ vi.mock('./PlansSection', () => ({
 }));
 
 import BillingModal from './BillingModal';
+import { consumeBillingCheckoutReturn, markBillingCheckoutReturn } from '@client/app/utils/billingCheckoutReturn';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: ReactNode }) => (
@@ -149,6 +150,24 @@ describe('BillingModal', () => {
       type: 'billing_closed_without_purchase',
       metadata: { entry: 'credits_chip', focus: 'credits' },
     });
+  });
+
+  it('logs nothing for the open and close that follow a Stripe return, then logs the next cycle', () => {
+    markBillingCheckoutReturn();
+    const content = (open: boolean) => (
+      <TestWrapper>
+        <BillingModal open={open} onClose={vi.fn()} />
+      </TestWrapper>
+    );
+    const { rerender } = render(content(true));
+    rerender(content(false));
+    expect(logEvent).not.toHaveBeenCalled();
+
+    rerender(content(true));
+    rerender(content(false));
+    expect(logEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'billing_opened' }));
+    expect(logEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'billing_closed_without_purchase' }));
+    expect(consumeBillingCheckoutReturn()).toBe(false);
   });
 
   it.each([

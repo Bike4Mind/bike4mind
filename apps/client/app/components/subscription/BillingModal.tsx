@@ -17,6 +17,7 @@ import { CreditsSection } from './CreditsSection';
 import { PlansSection, PlansSectionSkeleton } from './PlansSection';
 import { FirstRunEvents } from '@bike4mind/common';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
+import { consumeBillingCheckoutReturn } from '@client/app/utils/billingCheckoutReturn';
 
 export type BillingEntry = 'credits_chip' | 'credits_cta' | 'deep_link' | 'profile_menu' | 'unknown';
 
@@ -144,6 +145,10 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
     }
     if (openedMetadataRef.current) return;
     openedMetadataRef.current = { entry, focus: focus ?? 'overview' };
+    if (consumeBillingCheckoutReturn()) {
+      purchasedRef.current = true;
+      return;
+    }
     logEvent({ type: FirstRunEvents.BILLING_OPENED, metadata: openedMetadataRef.current });
   }, [open, entry, focus, logEvent]);
 

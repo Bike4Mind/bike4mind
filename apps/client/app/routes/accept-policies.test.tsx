@@ -235,6 +235,9 @@ describe('AcceptPoliciesPage', () => {
     acceptForm();
 
     await waitFor(() => expect(mockApiPost).toHaveBeenCalledTimes(2), RETRY_WAIT_OPTS);
+    await waitFor(() =>
+      expect(mockLogEvent).toHaveBeenCalledWith({ type: 'policies_accepted', metadata: { path: 'interstitial' } })
+    );
     expect(mockForceSessionExpiredRedirect).not.toHaveBeenCalled();
     expect(screen.queryByText('Unauthorized')).not.toBeInTheDocument();
   });

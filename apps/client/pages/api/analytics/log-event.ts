@@ -11,6 +11,7 @@ const SERVER_ONLY_EVENTS: ReadonlySet<string> = new Set([
   CreditPurchaseEvents.CREDITS_GRANTED,
   CreditPurchaseEvents.CREDITS_ALREADY_GRANTED,
   FirstRunEvents.FIRST_ANSWER_CREDITS,
+  FirstRunEvents.POLICIES_SHOWN,
 ]);
 
 const handler = baseApi().post(async (req: Request<{}, unknown, Omit<AnalyticsEventPayloads, 'userId'>>, res) => {

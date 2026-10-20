@@ -193,6 +193,7 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
     );
     // Ad-conversion signal fires exactly once for the freshly created account.
     expect(mocks.trackSignupConversion).toHaveBeenCalledTimes(1);
+    expect(mockLogEvent).toHaveBeenCalledWith({ type: 'policies_accepted', metadata: { path: 'inline_registration' } });
   });
 
   it('keeps Create account disabled until BOTH acceptance checkboxes are checked', async () => {

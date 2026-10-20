@@ -53,7 +53,9 @@ vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({ setCurrentUser: mocks.setCurrentUser, currentUser: null }),
 }));
 vi.mock('@client/app/hooks/useAccessToken', () => ({
-  useAccessToken: () => ({ setAccessToken: mocks.setAccessToken }),
+  useAccessToken: Object.assign(() => ({ setAccessToken: mocks.setAccessToken }), {
+    getState: () => ({ setVerifiedSession: vi.fn() }),
+  }),
 }));
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => mocks.navigate,
@@ -214,6 +216,17 @@ describe('Register - second-factor handoff', () => {
 
     await waitFor(() => expect(mocks.mfa.begin).toHaveBeenCalledTimes(1));
     expect(mocks.mfa.begin).toHaveBeenCalledWith({ userId: 'u1', mfaToken: 'pending-tok', mode: 'setup' });
+  });
+
+  it('logs policies_accepted once a new account is created', async () => {
+    mocks.verifyOTC.mockResolvedValueOnce({ user: { id: 'new-1', email: 'new@test.com' }, accessToken: 'atk' });
+    renderRegister();
+
+    await submitCode(userEvent.setup());
+
+    await waitFor(() =>
+      expect(mockLogEvent).toHaveBeenCalledWith({ type: 'policies_accepted', metadata: { path: 'registration' } })
+    );
   });
 
   it('sets the current user from the completed challenge', () => {

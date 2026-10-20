@@ -9,6 +9,7 @@ const { mockGet, mockTrackPurchaseConversion } = vi.hoisted(() => ({
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: mockGet } }));
 vi.mock('@client/app/utils/purchaseConversion', () => ({ trackPurchaseConversion: mockTrackPurchaseConversion }));
 
+import { consumeBillingCheckoutReturn } from '@client/app/utils/billingCheckoutReturn';
 import StripePaymentReturnHandler, { reportCreditPurchaseConversion } from './StripePaymentReturnHandler';
 
 const FACTS = {
@@ -57,6 +58,18 @@ describe('StripePaymentReturnHandler', () => {
 
     await waitFor(() => expect(mockTrackPurchaseConversion).toHaveBeenCalledOnce());
     expect(mockGet).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['succeeded', '&billing=credits', true],
+    ['processing', '&billing=credits', true],
+    ['failed', '&billing=credits', false],
+    ['succeeded', '', false],
+  ])('marks a billing checkout return for redirect_status=%s with %s: %s', (status, extra, marked) => {
+    consumeBillingCheckoutReturn();
+    returnTo(`?payment_intent=pi_test_1&payment_intent_client_secret=s&redirect_status=${status}${extra}`);
+
+    expect(consumeBillingCheckoutReturn()).toBe(marked);
   });
 
   it('reports a payment once, even if the return URL is loaded again', async () => {
