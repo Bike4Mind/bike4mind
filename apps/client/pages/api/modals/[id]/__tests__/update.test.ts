@@ -1,8 +1,14 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 // `any` below is deliberate test-mock plumbing for the next-connect / node-mocks-http chain,
 // matching the repo's handler-test convention.
+// Read when the route module loads, which is before any test body runs
+vi.hoisted(() => {
+  process.env.S3_PRESIGN_ENDPOINT = 'http://localhost:9000';
+  process.env.SERVER_DOMAIN = 'example.test';
+});
+
 const mockRefs = vi.hoisted(() => ({
   putHandler: null as null | ((req: any, res: any) => unknown),
   modal: null as any,
@@ -99,6 +105,11 @@ describe('PUT /api/modals/[id] - S3 distribution repository metadata', () => {
   });
 });
 
+afterAll(() => {
+  delete process.env.S3_PRESIGN_ENDPOINT;
+  delete process.env.SERVER_DOMAIN;
+});
+
 describe('PUT /api/modals/[id] - video', () => {
   const video = {
     landscapeUrl: 'https://bucket.s3.us-east-2.amazonaws.com/modals/demo-16x9.mp4',
@@ -129,6 +140,19 @@ describe('PUT /api/modals/[id] - video', () => {
   });
 
   it.each([
+    ['the self-host object store', 'http://localhost:9000/fab-bucket/modals/demo.mp4'],
+    ['the files host', 'https://files.dev.example.test/modals/demo.mp4'],
+  ])('accepts a url on %s', async (_case, url) => {
+    const { req, res } = mocks({ video: { landscapeUrl: url } });
+    await mockRefs.putHandler!(req, res);
+
+    const [, update] = mockRefs.findOneAndUpdate.mock.calls[0];
+    expect(update.$set.video).toEqual({ landscapeUrl: url });
+  });
+
+  it.each([
+    ['another port on the object store host', { landscapeUrl: 'http://localhost:9001/fab-bucket/a.mp4' }],
+    ['https on the http-only object store', { landscapeUrl: 'https://localhost:9000/fab-bucket/a.mp4' }],
     ['a non-http url', { ...video, landscapeUrl: 'javascript:alert(1)' }],
     ['a host the CSP does not allow', { ...video, landscapeUrl: 'https://cdn.example.com/a.mp4' }],
     ['a poster without its video', { portraitPosterUrl: video.landscapePosterUrl }],

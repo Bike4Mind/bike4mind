@@ -10,7 +10,13 @@ const mocks = vi.hoisted(() => ({
   upload: vi.fn(),
   mutateAsync: vi.fn(async ({ filePaths }: { filePaths: string[] }) => filePaths.map(p => `https://signed.test/${p}`)),
   toastError: vi.fn(),
+  s3Url: null as string | null,
 }));
+
+vi.mock('@client/app/utils/s3', async importOriginal => {
+  const actual = await importOriginal<typeof import('@client/app/utils/s3')>();
+  return { ...actual, getS3Url: (args: { bucket: string; key: string }) => mocks.s3Url ?? actual.getS3Url(args) };
+});
 
 vi.mock('@client/app/utils/filesAPICalls', () => ({ createFabFileOnServerWithUpload: mocks.upload }));
 vi.mock('@client/app/hooks/data/fabFiles', () => ({
@@ -53,6 +59,7 @@ describe('AdminModalVideoFields', () => {
     mocks.upload.mockReset();
     mocks.toastError.mockReset();
     mocks.mutateAsync.mockClear();
+    mocks.s3Url = null;
   });
 
   it('uploads a 16:9 mp4 publicly under the modals prefix and stores its S3 url', async () => {
@@ -75,6 +82,42 @@ describe('AdminModalVideoFields', () => {
       expect.objectContaining({ public: true, prefix: 'modals', mimeType: 'video/mp4' }),
       expect.any(File)
     );
+  });
+
+  it('accepts an uploaded self-host object-store url the static host list would reject', async () => {
+    const minioUrl = 'http://localhost:9000/fab-bucket/modals/u1/demo.mp4';
+    mocks.s3Url = minioUrl;
+    mocks.upload.mockResolvedValue({ id: 'f1', filePath: 'modals/u1/demo.mp4' });
+    const trusted = new Set<string>();
+    let value: ModalVideo | null = null;
+    const ui = () => (
+      <CssVarsProvider theme={appTheme}>
+        <AdminModalVideoFields
+          value={value}
+          onChange={next => {
+            value = next;
+          }}
+          bucketName="fab-bucket"
+          trustedUrls={trusted}
+          onUploaded={url => trusted.add(url)}
+        />
+      </CssVarsProvider>
+    );
+    const view = render(ui());
+
+    fireEvent.change(screen.getByTestId('modal-video-landscape-video-file-input'), {
+      target: { files: [file('demo.mp4', 'video/mp4')] },
+    });
+    await waitFor(() => expect(value?.landscapeUrl).toBe(minioUrl));
+    view.rerender(ui());
+
+    expect(trusted.has(minioUrl)).toBe(true);
+    expect(screen.queryByTestId('modal-video-landscape-video-error')).toBeNull();
+  });
+
+  it('still rejects the same self-host url when pasted', () => {
+    renderFields({ landscapeUrl: 'http://localhost:9000/fab-bucket/modals/u1/demo.mp4' });
+    expect(screen.getByTestId('modal-video-landscape-video-error').textContent).toBe(MODAL_MEDIA_URL_HINT);
   });
 
   it('rejects a non-mp4 video and a non-image poster', () => {

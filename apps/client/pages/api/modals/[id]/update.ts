@@ -3,7 +3,8 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
 import { z } from 'zod';
-import { ModalVideoSchema, WHATS_NEW_DEFAULT_REPOSITORY } from '@bike4mind/common';
+import { createModalVideoSchema, WHATS_NEW_DEFAULT_REPOSITORY } from '@bike4mind/common';
+import { deploymentMediaOrigins } from '@server/utils/deploymentMediaOrigins';
 import { cacheExternalImage, cacheExternalImages } from '@server/utils/cacheExternalImage';
 import { isValidObjectId } from '@server/utils/objectId';
 import { WhatsNewDistributionService } from '@server/services/whatsNewDistribution';
@@ -12,6 +13,8 @@ import { Logger } from '@bike4mind/observability';
 import { extractVariantForViewer, viewerClassifier, MODAL_SAFE_DEFAULT_KEY } from '@bike4mind/services';
 
 const logger = new Logger({ metadata: { service: 'modals/update' } });
+
+const ModalVideoSchema = createModalVideoSchema({ extraOrigins: deploymentMediaOrigins() });
 
 const ModalImageSchema = z.object({
   url: z.url(),

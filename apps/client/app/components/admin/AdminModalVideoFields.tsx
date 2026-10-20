@@ -20,6 +20,7 @@ import {
   getModalVideoErrors,
   isAllowedModalMediaUrl,
   parseStorageLimitErrorInfo,
+  type ModalMediaUrlPolicy,
   type ModalVideo,
   type ModalVideoField,
 } from '@bike4mind/common';
@@ -57,11 +58,11 @@ function uploadErrorMessage(error: unknown): string {
   return serverStorageLimitMessage(error) ?? 'Failed to upload file';
 }
 
-const previewableUrls = (video: ModalVideo): Partial<Record<ModalVideoField, string>> => {
+const previewableUrls = (video: ModalVideo, policy: ModalMediaUrlPolicy): Partial<Record<ModalVideoField, string>> => {
   const out: Partial<Record<ModalVideoField, string>> = {};
   for (const { field } of SLOTS) {
     const url = video[field];
-    if (url && isAllowedModalMediaUrl(url)) out[field] = url;
+    if (url && isAllowedModalMediaUrl(url, policy)) out[field] = url;
   }
   return out;
 };
@@ -77,16 +78,31 @@ interface AdminModalVideoFieldsProps {
   value: ModalVideo | null | undefined;
   onChange: (video: ModalVideo | null) => void;
   bucketName: string | undefined;
+  /**
+   * URLs accepted whatever their host: ones this form uploaded or the modal was loaded with. The
+   * browser cannot see a self-host object-store origin, so the static host list alone would reject them.
+   */
+  trustedUrls?: ReadonlySet<string>;
+  onUploaded?: (url: string) => void;
 }
 
-const AdminModalVideoFields: React.FC<AdminModalVideoFieldsProps> = ({ value, onChange, bucketName }) => {
+const NO_TRUSTED_URLS: ReadonlySet<string> = new Set();
+
+const AdminModalVideoFields: React.FC<AdminModalVideoFieldsProps> = ({
+  value,
+  onChange,
+  bucketName,
+  trustedUrls = NO_TRUSTED_URLS,
+  onUploaded,
+}) => {
+  const policy: ModalMediaUrlPolicy = { allowedUrls: trustedUrls };
   const video = value ?? EMPTY_VIDEO;
   const fileInputs = useRef<Partial<Record<ModalVideoField, HTMLInputElement | null>>>({});
   const [uploading, setUploading] = useState<Partial<Record<ModalVideoField, boolean>>>({});
   // Previews follow committed URLs (blur, upload, initial value) so typing does not sign every keystroke
-  const [previewed, setPreviewed] = useState(() => previewableUrls(video));
+  const [previewed, setPreviewed] = useState(() => previewableUrls(video, policy));
   const { resolved } = useSignedMediaUrls(Object.values(previewed));
-  const errors = getModalVideoErrors(video);
+  const errors = getModalVideoErrors(video, policy);
 
   // An upload resolves after other edits may have landed; it must merge into the latest value
   const latest = useRef(video);
@@ -97,10 +113,10 @@ const AdminModalVideoFields: React.FC<AdminModalVideoFieldsProps> = ({ value, on
   const setField = (field: ModalVideoField, url: string | null) =>
     onChange(normalizeModalVideo({ ...latest.current, [field]: url }));
 
-  const commitPreview = (field: ModalVideoField, url: string | null) =>
+  const commitPreview = (field: ModalVideoField, url: string | null, uploaded = false) =>
     setPreviewed(prev => {
       const { [field]: _dropped, ...rest } = prev;
-      return url && isAllowedModalMediaUrl(url) ? { ...rest, [field]: url } : rest;
+      return url && (uploaded || isAllowedModalMediaUrl(url, policy)) ? { ...rest, [field]: url } : rest;
     });
 
   const upload = async (field: ModalVideoField, kind: 'video' | 'image', file: File) => {
@@ -127,8 +143,9 @@ const AdminModalVideoFields: React.FC<AdminModalVideoFieldsProps> = ({ value, on
       );
       if (!fabFile.filePath) throw new Error('Upload returned no file path');
       const url = getS3Url({ bucket: bucketName, key: fabFile.filePath });
+      onUploaded?.(url);
       setField(field, url);
-      commitPreview(field, url);
+      commitPreview(field, url, true);
     } catch (e) {
       console.error(e);
       toast.error(uploadErrorMessage(e));

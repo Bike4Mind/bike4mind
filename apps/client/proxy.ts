@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { resolvePyodideMirrorOrigin } from '@client/app/utils/pyodideDistribution';
 import { getTrustedHeaderClientIp } from '@client/server/utils/trustedClientIpHeaders';
+import { resolveFilesOrigin, resolveObjectStoreOrigin } from '@client/server/utils/deploymentMediaOrigins';
 import type { NextRequest } from 'next/server';
 
 // Blocks path traversal and null-byte injection before reaching the ISR cache layer (#7190)
@@ -28,26 +29,6 @@ function originVerified(request: NextRequest, secret: string): boolean {
   let diff = 0;
   for (let i = 0; i < secret.length; i++) diff |= value.charCodeAt(i) ^ secret.charCodeAt(i);
   return diff === 0;
-}
-
-function resolveObjectStoreOrigin(raw: string | undefined): string {
-  const configured = raw?.trim();
-  if (!configured) return '';
-  try {
-    if (
-      /[\s;]/.test(configured) ||
-      [...configured].some(character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)
-    ) {
-      throw new Error('Invalid endpoint');
-    }
-    const url = new URL(configured);
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('Unsupported protocol');
-    if (/[\s;,'"*\\]/.test(url.origin)) throw new Error('Invalid origin');
-    return url.origin;
-  } catch {
-    console.warn('[csp] ignoring invalid S3_PRESIGN_ENDPOINT');
-    return '';
-  }
 }
 
 export function proxy(request: NextRequest) {
@@ -153,7 +134,8 @@ export function proxy(request: NextRequest) {
 
   // Deployment's own files subdomain for CSP, derived from the account-tied SERVER_DOMAIN with
   // no brand fallback (#9310/#9306); empty when unconfigured.
-  const filesHost = process.env.SERVER_DOMAIN ? ` https://files.dev.${process.env.SERVER_DOMAIN}` : '';
+  const filesOrigin = resolveFilesOrigin(process.env.SERVER_DOMAIN);
+  const filesHost = filesOrigin ? ` ${filesOrigin}` : '';
 
   // Operator blog host for the optional blog-integration feature, driven by the same
   // NEXT_PUBLIC_BLOG_HOST config the client uses (open-core #9392); no brand fallback, empty

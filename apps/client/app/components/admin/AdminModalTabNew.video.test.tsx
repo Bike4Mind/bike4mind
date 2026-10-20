@@ -63,6 +63,15 @@ describe('EditModalNew video', () => {
     expect(screen.getByTestId('modal-video-landscape-video-input')).toBeTruthy();
   });
 
+  it('accepts a stored self-host video url it was loaded with', () => {
+    const minioUrl = 'http://localhost:9000/fab-bucket/modals/u1/tall.mp4';
+    const onSave = renderEditor({ ...existing, video: { portraitUrl: minioUrl } });
+    for (let i = 0; i < 5; i++) next();
+    fireEvent.click(screen.getByRole('button', { name: /Update Modal/ }));
+
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ video: { portraitUrl: minioUrl } }));
+  });
+
   it('drops the video when the modal is saved as a banner', () => {
     const onSave = renderEditor({ ...existing, isBanner: true, textMessage: 'Banner text' });
     for (let i = 0; i < 5; i++) next();

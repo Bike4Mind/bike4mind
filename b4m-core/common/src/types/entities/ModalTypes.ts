@@ -22,12 +22,22 @@ export type ModalVideoField = keyof ModalVideo;
 const MODAL_MEDIA_HOST_SUFFIXES = ['.amazonaws.com', '.cloudfront.net'];
 const MODAL_MEDIA_URL_MAX_LENGTH = 2048;
 
-export const MODAL_MEDIA_URL_HINT = 'Use an https URL on amazonaws.com or cloudfront.net';
+export const MODAL_MEDIA_URL_HINT = 'Upload the file, or paste an https URL on amazonaws.com or cloudfront.net';
 
-export function isAllowedModalMediaUrl(url: string): boolean {
+/** What a deployment accepts beyond the static host list. */
+export interface ModalMediaUrlPolicy {
+  /** Exact origins (scheme, host, port), e.g. a self-host object store; an http origin allows http. */
+  extraOrigins?: readonly string[];
+  /** URLs accepted as-is, e.g. ones the admin upload itself produced. */
+  allowedUrls?: ReadonlySet<string>;
+}
+
+export function isAllowedModalMediaUrl(url: string, policy: ModalMediaUrlPolicy = {}): boolean {
   if (url.length > MODAL_MEDIA_URL_MAX_LENGTH) return false;
+  if (policy.allowedUrls?.has(url)) return true;
   try {
-    const { protocol, hostname } = new URL(url);
+    const { protocol, hostname, origin } = new URL(url);
+    if (policy.extraOrigins?.includes(origin)) return true;
     return protocol === 'https:' && MODAL_MEDIA_HOST_SUFFIXES.some(suffix => hostname.endsWith(suffix));
   } catch {
     return false;
@@ -35,12 +45,15 @@ export function isAllowedModalMediaUrl(url: string): boolean {
 }
 
 /** Per-field problems with a modal video, empty when it is valid. Shared by the admin form and the API. */
-export function getModalVideoErrors(video: ModalVideo | null | undefined): Partial<Record<ModalVideoField, string>> {
+export function getModalVideoErrors(
+  video: ModalVideo | null | undefined,
+  policy: ModalMediaUrlPolicy = {}
+): Partial<Record<ModalVideoField, string>> {
   const errors: Partial<Record<ModalVideoField, string>> = {};
   if (!video) return errors;
   for (const field of ['landscapeUrl', 'landscapePosterUrl', 'portraitUrl', 'portraitPosterUrl'] as const) {
     const url = video[field];
-    if (url && !isAllowedModalMediaUrl(url)) errors[field] = MODAL_MEDIA_URL_HINT;
+    if (url && !isAllowedModalMediaUrl(url, policy)) errors[field] = MODAL_MEDIA_URL_HINT;
   }
   if (video.landscapePosterUrl && !video.landscapeUrl) {
     errors.landscapePosterUrl ??= 'A 16:9 poster needs its 16:9 video';
@@ -53,20 +66,25 @@ export function getModalVideoErrors(video: ModalVideo | null | undefined): Parti
 
 /**
  * Product video for a modal slide. Landscape is the 16:9 cut shown on desktop, portrait the 9:16 cut
- * shown on mobile; the slider falls back to the other orientation when one is missing.
+ * shown on mobile; the slider falls back to the other orientation when one is missing. The API passes
+ * its deployment's extra origins; the bare `ModalVideoSchema` allows only the static host list.
  */
-export const ModalVideoSchema = z
-  .object({
-    landscapeUrl: z.string().nullable().optional(),
-    landscapePosterUrl: z.string().nullable().optional(),
-    portraitUrl: z.string().nullable().optional(),
-    portraitPosterUrl: z.string().nullable().optional(),
-  })
-  .superRefine((video, ctx) => {
-    for (const [field, message] of Object.entries(getModalVideoErrors(video))) {
-      ctx.addIssue({ code: 'custom', path: [field], message });
-    }
-  });
+export function createModalVideoSchema(policy: ModalMediaUrlPolicy = {}) {
+  return z
+    .object({
+      landscapeUrl: z.string().nullable().optional(),
+      landscapePosterUrl: z.string().nullable().optional(),
+      portraitUrl: z.string().nullable().optional(),
+      portraitPosterUrl: z.string().nullable().optional(),
+    })
+    .superRefine((video, ctx) => {
+      for (const [field, message] of Object.entries(getModalVideoErrors(video, policy))) {
+        ctx.addIssue({ code: 'custom', path: [field], message });
+      }
+    });
+}
+
+export const ModalVideoSchema = createModalVideoSchema();
 
 /**
  * Generation metadata for auto-generated modals (e.g., What's New).

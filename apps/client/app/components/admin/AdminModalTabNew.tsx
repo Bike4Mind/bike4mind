@@ -65,6 +65,7 @@ import { getS3Url } from '@client/app/utils/s3';
 import { useGetPresignedUrl } from '@client/app/hooks/data/fabFiles';
 import { useConfig } from '@client/app/hooks/data/settings';
 import AdminModalVideoFields from './AdminModalVideoFields';
+import { videoUrlsOf } from '@client/app/components/modals/whatsNewSlideMedia';
 
 interface EditModalProps {
   isOpen: boolean;
@@ -162,9 +163,15 @@ const EditModalNew: React.FC<EditModalProps> = ({ isOpen, onClose, modalData, on
       }
   );
 
+  // Stored and uploaded video URLs pass the form check whatever their host (see AdminModalVideoFields)
+  const [trustedVideoUrls, setTrustedVideoUrls] = useState<ReadonlySet<string>>(
+    () => new Set(videoUrlsOf(modalData?.video))
+  );
+
   useEffect(() => {
     if (modalData) {
       setModalFields(modalData);
+      setTrustedVideoUrls(new Set(videoUrlsOf(modalData.video)));
     }
   }, [modalData]);
 
@@ -308,7 +315,9 @@ const EditModalNew: React.FC<EditModalProps> = ({ isOpen, onClose, modalData, on
   };
 
   // Banners have no slider slot for a video, so their video is dropped rather than validated or saved
-  const hasVideoErrors = () => !modalFields.isBanner && Object.keys(getModalVideoErrors(modalFields.video)).length > 0;
+  const hasVideoErrors = () =>
+    !modalFields.isBanner &&
+    Object.keys(getModalVideoErrors(modalFields.video, { allowedUrls: trustedVideoUrls })).length > 0;
 
   const validateCurrentStep = (): boolean => {
     const errors: Record<string, string> = {};
@@ -699,6 +708,8 @@ const EditModalNew: React.FC<EditModalProps> = ({ isOpen, onClose, modalData, on
                       value={modalFields.video}
                       onChange={video => setModalFields(prev => ({ ...prev, video }))}
                       bucketName={fabfileBucketName}
+                      trustedUrls={trustedVideoUrls}
+                      onUploaded={url => setTrustedVideoUrls(prev => new Set(prev).add(url))}
                     />
                     {validationErrors.video && (
                       <Typography level="body-sm" color="danger" data-testid="modal-video-step-error">

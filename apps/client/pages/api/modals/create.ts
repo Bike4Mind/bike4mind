@@ -3,8 +3,11 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@server/utils/errors';
 import { z } from 'zod';
-import { ModalVideoSchema } from '@bike4mind/common';
+import { createModalVideoSchema } from '@bike4mind/common';
+import { deploymentMediaOrigins } from '@server/utils/deploymentMediaOrigins';
 import { cacheExternalImage, cacheExternalImages } from '@server/utils/cacheExternalImage';
+
+const ModalVideoSchema = createModalVideoSchema({ extraOrigins: deploymentMediaOrigins() });
 
 const ModalImageSchema = z.object({
   url: z.url(),

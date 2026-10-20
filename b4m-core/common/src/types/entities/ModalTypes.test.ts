@@ -22,6 +22,22 @@ describe('isAllowedModalMediaUrl', () => {
   });
 });
 
+describe('isAllowedModalMediaUrl policy', () => {
+  it('accepts an extra origin exactly, including http when the origin is http', () => {
+    const policy = { extraOrigins: ['http://localhost:9000'] };
+    expect(isAllowedModalMediaUrl('http://localhost:9000/fab/modals/a.mp4', policy)).toBe(true);
+    expect(isAllowedModalMediaUrl('https://localhost:9000/fab/modals/a.mp4', policy)).toBe(false);
+    expect(isAllowedModalMediaUrl('http://localhost:9001/fab/modals/a.mp4', policy)).toBe(false);
+    expect(isAllowedModalMediaUrl('http://cdn.example.com/a.mp4', policy)).toBe(false);
+  });
+
+  it('accepts an explicitly allowed url', () => {
+    const url = 'http://minio.local/fab/modals/a.mp4';
+    expect(isAllowedModalMediaUrl(url, { allowedUrls: new Set([url]) })).toBe(true);
+    expect(isAllowedModalMediaUrl(url)).toBe(false);
+  });
+});
+
 describe('getModalVideoErrors', () => {
   it('is empty for a valid or missing video', () => {
     expect(getModalVideoErrors(null)).toEqual({});
