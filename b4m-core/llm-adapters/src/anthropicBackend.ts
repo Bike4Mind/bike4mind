@@ -46,7 +46,9 @@ import {
 import { capCacheControlMarkers, getCachingAdapter, logCacheStats } from './caching/adapters';
 import { systemContentToText } from './systemContent';
 import { toAnthropicContent } from './anthropicContent';
+import { anthropicBetaHeader, PROMPT_CACHING_BETA, TOOL_CHANGES_BETA } from './toolChanges';
 import {
+  isToolChangeMessage,
   withRetry,
   isUserInitiatedAbort,
   isRetryableError,
@@ -978,7 +980,9 @@ export class AnthropicBackend implements ICompletionBackend {
     const anyUserOrAssistantCacheControlled = messages.some(
       m => m.cache === true && (m.role === 'user' || m.role === 'assistant')
     );
-    const anySystemCacheControlled = messages.some(m => m.cache === true && m.role === 'system');
+    const anySystemCacheControlled = messages.some(
+      m => m.cache === true && m.role === 'system' && !isToolChangeMessage(m)
+    );
     const anyMessageCacheControlled = anyUserOrAssistantCacheControlled || anySystemCacheControlled;
 
     const cacheStampedMessages: IMessage[] = anyUserOrAssistantCacheControlled
@@ -1019,7 +1023,7 @@ export class AnthropicBackend implements ICompletionBackend {
     const identityReminder = options.omitIdentityReminder ? null : buildIdentityReminder(model);
     let system: string | Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }> | undefined;
     if (anySystemCacheControlled) {
-      const systemMessages = messages.filter(m => m.role === 'system');
+      const systemMessages = messages.filter(m => m.role === 'system' && !isToolChangeMessage(m));
       const blocks: Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }> = [];
       for (const sm of systemMessages) {
         const text = systemContentToText(sm.content);
@@ -1136,7 +1140,9 @@ export class AnthropicBackend implements ICompletionBackend {
           })
         : (options.maxTokens ?? DEFAULT_ANTHROPIC_MAX_TOKENS),
       messages: filteredMessages.map(m => ({
-        role: m.role === 'user' ? 'user' : 'assistant',
+        // Only a tool change message keeps the system role (filterRelevantMessages drops the rest); the
+        // SDK's role type predates mid-conversation system messages.
+        role: (m.role === 'user' ? 'user' : m.role === 'system' ? 'system' : 'assistant') as 'user' | 'assistant',
         // Per-message cache stamping happened in `cacheStampedMessages` above; the
         // cache_control survives both sanitization and this translation because it's
         // part of the content blocks.
@@ -1239,8 +1245,12 @@ export class AnthropicBackend implements ICompletionBackend {
     // headers. Prompt caching is GA so the beta header is no longer required
     // by current models, but we still send it; it's harmless on the wire
     // if Anthropic ignores unknown betas.
-    const requestExtraHeaders: Record<string, string> | undefined = anyMessageCacheControlled
-      ? { 'anthropic-beta': 'prompt-caching-2024-07-31' }
+    const betaHeader = anthropicBetaHeader([
+      anyMessageCacheControlled && PROMPT_CACHING_BETA,
+      filteredMessages.some(isToolChangeMessage) && TOOL_CHANGES_BETA,
+    ]);
+    const requestExtraHeaders: Record<string, string> | undefined = betaHeader
+      ? { 'anthropic-beta': betaHeader }
       : undefined;
 
     // Add thinking parameters for models that support it. A catalog-only model
@@ -3168,13 +3178,13 @@ export class AnthropicBackend implements ICompletionBackend {
 
   /**
    * Filter out irrelevant messages for Anthropic API.
-   * Remove all messages with `system` role.
+   * Remove all messages with `system` role, except tool change messages, which stay in place.
    * Remove messages that have no reply from the assistant, except for the last one.
    * Also remove the first message if it's from the assistant.
    */
   private filterRelevantMessages(messages: IMessage[]): IMessage[] {
     const formattedMessages = messages
-      .filter(m => m.role !== 'system')
+      .filter(m => m.role !== 'system' || isToolChangeMessage(m))
       .map(m => this.sanitizeMessageContent(m))
       .filter((m): m is IMessage => m !== null)
       .reduce((cur, value, index, array) => {
@@ -3263,7 +3273,7 @@ export class AnthropicBackend implements ICompletionBackend {
    * and pass it as a parameter to the API.
    */
   private consolidateSystemMessages(messages: IMessage[]): string | undefined {
-    const systemMessages = messages.filter(m => m.role === 'system');
+    const systemMessages = messages.filter(m => m.role === 'system' && !isToolChangeMessage(m));
     if (systemMessages.length === 0) return undefined;
 
     // Array-valued content must go through systemContentToText: a bare join coerces
