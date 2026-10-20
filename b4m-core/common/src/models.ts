@@ -174,6 +174,7 @@ export enum ChatModels {
   // GPT 5.4
   GPT5_4 = 'gpt-5.4',
   GPT5_4_MINI = 'gpt-5.4-mini',
+  GPT5_4_MINI_2026_03_17 = 'gpt-5.4-mini-2026-03-17',
   GPT5_4_NANO = 'gpt-5.4-nano',
 
   // GPT 5.5
@@ -321,9 +322,11 @@ export enum ChatModels {
   DEEPSEEK_FLASH = 'deepseek-flash',
   DEEPSEEK_V4_PRO = 'deepseek-v4-pro',
 }
-export const CHAT_MODELS = Object.values(ChatModels);
-export const supportedChatModels = z.enum(ChatModels);
+// The dated snapshot is excluded until it has a catalog row: the adapter tables hold no entry for
+// it, so getAvailableModels returns no ModelInfo (pricing, limits) for it unless a catalog row adds one.
+export const supportedChatModels = z.enum(ChatModels).exclude(['GPT5_4_MINI_2026_03_17']);
 export type ChatModelName = z.infer<typeof supportedChatModels>;
+export const CHAT_MODELS: string[] = [...supportedChatModels.options];
 
 /**
  * Every `ChatModels` Gemini entry is named `gemini...` (see the GEMINI block above) - a prefix
@@ -357,6 +360,7 @@ export const REASONING_SUPPORTED_MODELS: ReadonlySet<string> = new Set([
   ChatModels.GPT5_2,
   ChatModels.GPT5_4,
   ChatModels.GPT5_4_MINI,
+  ChatModels.GPT5_4_MINI_2026_03_17,
   ChatModels.GPT5_4_NANO,
   ChatModels.GPT5_6_SOL,
   ChatModels.GPT5_6_LUNA,
@@ -446,6 +450,7 @@ export const REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS: ReadonlySet<string
   ChatModels.GPT5_2,
   ChatModels.GPT5_4,
   ChatModels.GPT5_4_MINI,
+  ChatModels.GPT5_4_MINI_2026_03_17,
   ChatModels.GPT5_4_NANO,
   // GPT-5.6 (Sol/Luna/Terra) also hard-reject tools+reasoning_effort with a 400, but
   // unlike the 5.4 family the chat-path drop does NOT rescue them (they still 400 with
@@ -625,6 +630,8 @@ export type SpeechToTextModelName = z.infer<typeof supportedSpeechToTextModels>;
 /**
  * All supported models
  */
+// Deliberately not excluding the dated snapshot (unlike supportedChatModels): this is used as the
+// ModelName type only, and excluding it narrows ModelName so ChatModels values stop assigning to it.
 export const supportedModels = z.enum({
   ...ChatModels,
   ...ImageModels,

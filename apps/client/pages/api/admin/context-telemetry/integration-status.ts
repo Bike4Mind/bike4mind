@@ -142,7 +142,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
     }
 
     if (config?.modelId) {
-      const isValidModel = (CHAT_MODELS as readonly string[]).includes(config.modelId);
+      const isValidModel = CHAT_MODELS.includes(config.modelId);
       if (isValidModel) {
         checks.push({
           name: 'LLM Analysis',
@@ -153,7 +153,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
         checks.push({
           name: 'LLM Analysis',
           status: 'warning',
-          message: `Unknown model: ${config.modelId}`,
+          message: `Model not servable: ${config.modelId}`,
         });
       }
     } else {

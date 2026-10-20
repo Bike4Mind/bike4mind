@@ -13,6 +13,10 @@ import {
   McpDiscoveryUpdate,
   McpOAuthTokenUpdate,
   McpToolSettingsUpdate,
+  McpToolVersionConflictError,
+  McpConnectionSettingsUpdate,
+  McpApiKeyUpdate,
+  McpConnectionCapError,
   MCP_CONNECTION_LIMITS,
   MCP_CONNECTION_PROTECTED_FIELDS,
   mcpConnectionOwnerProblem,
@@ -44,20 +48,73 @@ export class McpConnectionOwnerError extends Error {
   }
 }
 
+/**
+ * JSON Schema keys collide with Mongo field-name rules: `$defs`, `$ref` and `$schema` start with `$`
+ * and property names may contain `.`. Mongoose's update casting silently dropped a top-level `$defs`
+ * (leaving a dangling `$ref`), so every writer of `tools` escapes the keys (`escapeToolSchemas`) and
+ * the path getter restores them on read. `~` is the escape character and is itself escaped, so any
+ * key round-trips. Not a setter: update casting strips the keys before a setter would run.
+ */
+function escapeSchemaKey(key: string): string {
+  return key.replace(/~/g, '~t').replace(/\./g, '~p').replace(/^\$/, '~d');
+}
+
+function unescapeSchemaKey(key: string): string {
+  return key.replace(/~(d|p|t)/g, (_match, code: string) => (code === 'd' ? '$' : code === 'p' ? '.' : '~'));
+}
+
+// Discovery refuses schemas nested deeper than 32 (toolDiscovery.ts in @bike4mind/server-utils);
+// this bound only keeps a hand-written value from exhausting the stack.
+const SCHEMA_KEY_MAP_MAX_DEPTH = 64;
+
+function mapSchemaKeys(value: unknown, mapKey: (key: string) => string, depth = 0): unknown {
+  if (depth > SCHEMA_KEY_MAP_MAX_DEPTH) throw new RangeError('Tool input schema is nested too deeply');
+  if (Array.isArray(value)) return value.map(item => mapSchemaKeys(item, mapKey, depth + 1));
+  if (value && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype) {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+        mapKey(key),
+        mapSchemaKeys(item, mapKey, depth + 1),
+      ])
+    );
+  }
+  return value;
+}
+
+function escapeToolSchemas(tools: IMcpConnectionTool[] | undefined): IMcpConnectionTool[] | undefined {
+  return tools?.map(tool => ({
+    ...tool,
+    inputSchema: mapSchemaKeys(tool.inputSchema ?? {}, escapeSchemaKey) as Record<string, unknown>,
+  }));
+}
+
+/**
+ * Bytes `tools` occupies once its schema keys are escaped, which is what the `maxToolsBytes` bound
+ * is held to. Discovery uses it to drop tools that would not fit instead of failing the write.
+ */
+export function measureStoredMcpToolsBytes(tools: IMcpConnectionTool[]): number {
+  return Buffer.byteLength(JSON.stringify(escapeToolSchemas(tools)));
+}
+
 const McpConnectionToolSchema = new Schema<IMcpConnectionTool>(
   {
     name: { type: String, required: true, maxlength: MCP_CONNECTION_LIMITS.toolNameLength },
     title: { type: String, maxlength: MCP_CONNECTION_LIMITS.serverInfoFieldLength },
     description: { type: String, default: '', maxlength: MCP_CONNECTION_LIMITS.toolDescriptionLength },
     descriptionRawHash: { type: String, required: true },
-    inputSchema: { type: Schema.Types.Mixed, default: {} },
+    inputSchema: {
+      type: Schema.Types.Mixed,
+      default: {},
+      get: (value: unknown) => mapSchemaKeys(value, unescapeSchemaKey),
+    },
     annotations: { type: Schema.Types.Mixed },
+    versionHash: { type: String },
     enabled: { type: Boolean, required: true },
     approval: { type: String, enum: MCP_TOOL_APPROVAL_MODES, default: 'default' },
     state: { type: String, enum: MCP_TOOL_STATES, required: true },
     firstSeenAt: { type: Date, required: true },
   },
-  { _id: false }
+  { _id: false, minimize: false }
 );
 
 function toolsWithinBounds(tools: unknown): boolean {
@@ -182,6 +239,18 @@ const McpConnectionSchema = new Schema<IMcpConnectionDocument>(
     toolsFingerprint: { type: String },
     toolsFetchedAt: { type: Date },
     toolsDropped: { type: Number },
+    toolsRevision: { type: Number, default: 0 },
+    authChallenge: {
+      type: new Schema(
+        {
+          resourceMetadataUrl: { type: String, maxlength: MCP_CONNECTION_LIMITS.authChallengeUrlLength },
+          scope: { type: String, maxlength: MCP_CONNECTION_LIMITS.requiredScopeLength },
+          at: { type: Date, required: true },
+        },
+        { _id: false }
+      ),
+      required: false,
+    },
     enabled: { type: Boolean, required: true, default: true },
     lastUsedAt: { type: Date },
     refreshLease: {
@@ -194,8 +263,10 @@ const McpConnectionSchema = new Schema<IMcpConnectionDocument>(
   },
   {
     timestamps: true,
-    toJSON: { virtuals: true },
-    toObject: { virtuals: true },
+    minimize: false,
+    // `getters` restores the escaped tool input-schema keys on every read.
+    toJSON: { virtuals: true, getters: true, minimize: false },
+    toObject: { virtuals: true, getters: true, minimize: false },
   }
 );
 
@@ -286,6 +357,9 @@ function oauthTokenWrite(
   return { $set, $unset };
 }
 
+// A probe or refresh that finishes after a disconnect must not re-offer an OAuth connection with no token.
+const CONNECTABLE_FILTER = { $or: [{ 'auth.kind': { $ne: 'oauth' } }, { 'auth.oauth.hasAccessToken': true }] };
+
 const TOOL_APPROVAL_MODES: ReadonlySet<string> = new Set(MCP_TOOL_APPROVAL_MODES);
 const TOOL_STATES: ReadonlySet<string> = new Set(MCP_TOOL_STATES);
 
@@ -336,9 +410,10 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
     const problem = mcpConnectionOwnerProblem(data);
     if (problem) throw new McpConnectionOwnerError(problem);
     const oauth = data.auth?.oauth;
+    const escaped = { ...data, tools: escapeToolSchemas(data.tools) ?? [] };
     const withMarkers = oauth
       ? {
-          ...data,
+          ...escaped,
           auth: {
             ...data.auth,
             oauth: {
@@ -348,13 +423,29 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
             },
           },
         }
-      : data;
+      : escaped;
     try {
       return stripSecrets(await super.create(withMarkers));
     } catch (error) {
       if (isOwnerSlugDuplicate(error)) throw new McpConnectionSlugConflictError(data.slug);
       throw error;
     }
+  }
+
+  async createWithinUserCap(
+    data: Omit<IMcpConnectionDocument, 'id' | 'updatedAt' | 'createdAt'>,
+    cap: number
+  ): Promise<IMcpConnectionDocument> {
+    if (data.ownerType !== 'user') throw new McpConnectionOwnerError('The per-user cap applies to user connections');
+    if ((await this.countForUser(data.userId)) >= cap) throw new McpConnectionCapError(cap);
+    const created = await this.create(data);
+    // Re-count once the insert is visible. The last survivor to insert counted every other survivor,
+    // so survivors never exceed the cap; racers at the boundary may all roll back (a retry fixes it).
+    if ((await this.countForUser(data.userId)) > cap) {
+      await this.model.deleteOne({ _id: created.id });
+      throw new McpConnectionCapError(cap);
+    }
+    return created;
   }
 
   async findByIdForOwner(id: string, owner: McpConnectionOwner): Promise<IMcpConnectionDocument | null> {
@@ -436,18 +527,28 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
     return this.updateForOwner(id, owner, { enabled });
   }
 
-  /**
-   * One `arrayFilters` update (identifier `t<i>` per tool name), so a partial failure cannot leave
-   * half a review applied. Duplicate names collapse to the last entry: two filters resolving to the
-   * same element would make the server reject the whole write as a path conflict.
-   */
   async setToolSettings(
     id: string,
     owner: McpConnectionOwner,
     settings: McpToolSettingsUpdate[]
   ): Promise<IMcpConnectionDocument | null> {
+    return this.updateSettings(id, owner, { tools: settings });
+  }
+
+  /**
+   * One update: `arrayFilters` (identifier `t<i>` per tool) for the review, so a partial failure
+   * cannot leave half a review applied. A versioned entry is also an `$elemMatch` on the query, so
+   * a tool that changed since review makes the whole write match nothing. Duplicate names collapse
+   * to the last entry: two filters resolving to the same element would make the server reject the
+   * whole write as a path conflict.
+   */
+  async updateSettings(
+    id: string,
+    owner: McpConnectionOwner,
+    update: McpConnectionSettingsUpdate
+  ): Promise<IMcpConnectionDocument | null> {
     const byName = new Map<string, McpToolSettingsUpdate>();
-    for (const entry of settings) {
+    for (const entry of update.tools ?? []) {
       if (entry.approval !== undefined && !TOOL_APPROVAL_MODES.has(entry.approval)) {
         throw new Error(`Invalid tool approval mode: ${entry.approval}`);
       }
@@ -458,29 +559,41 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
     }
 
     const set: Record<string, unknown> = {};
+    if (update.displayName !== undefined) set.displayName = update.displayName;
+    if (update.enabled !== undefined) set.enabled = update.enabled;
     const arrayFilters: Record<string, string>[] = [];
+    const versionGuards: Record<string, unknown>[] = [];
     for (const entry of byName.values()) {
+      if (entry.versionHash !== undefined) {
+        versionGuards.push({ tools: { $elemMatch: { name: entry.name, versionHash: entry.versionHash } } });
+      }
       const fields = (['enabled', 'approval', 'state'] as const).filter(field => entry[field] !== undefined);
       if (fields.length === 0) continue;
       const ident = `t${arrayFilters.length}`;
       arrayFilters.push({ [`${ident}.name`]: entry.name });
       for (const field of fields) set[`tools.$[${ident}].${field}`] = entry[field];
     }
-    if (arrayFilters.length === 0) return this.findByIdForOwner(id, owner);
-
     if (!mongoose.isObjectIdOrHexString(id)) return null;
-    const result = await this.model.findOneAndUpdate(
-      { _id: id, ownerType: owner.ownerType, ownerKey: owner.ownerKey },
-      { $set: set },
-      { new: true, arrayFilters }
-    );
-    return result?.toJSON() ?? null;
+    const ownerFilter = { _id: id, ownerType: owner.ownerType, ownerKey: owner.ownerKey };
+    const filter = versionGuards.length > 0 ? { ...ownerFilter, $and: versionGuards } : ownerFilter;
+    const touchesTools = arrayFilters.length > 0;
+    const result =
+      Object.keys(set).length === 0
+        ? await this.model.findOne(filter)
+        : await this.model.findOneAndUpdate(
+            filter,
+            { $set: set, ...(touchesTools ? { $inc: { toolsRevision: 1 } } : {}) },
+            { new: true, runValidators: true, ...(touchesTools ? { arrayFilters } : {}) }
+          );
+    if (result) return result.toJSON();
+    if (versionGuards.length > 0 && (await this.findByIdForOwner(id, owner))) throw new McpToolVersionConflictError();
+    return null;
   }
 
   async updateDiscovery(id: string, update: McpDiscoveryUpdate): Promise<IMcpConnectionDocument | null> {
     if (!mongoose.isObjectIdOrHexString(id)) return null;
     const set: Record<string, unknown> = {
-      tools: update.tools,
+      tools: escapeToolSchemas(update.tools),
       toolsFingerprint: update.fingerprint,
       toolsFetchedAt: new Date(),
       toolsDropped: update.dropped ?? 0,
@@ -494,10 +607,81 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
           .map(([key, value]) => [key, (value as string).slice(0, MCP_CONNECTION_LIMITS.serverInfoFieldLength)])
       );
     }
-    // `toolsFingerprint: null` also matches a document that never had one.
+    if (update.markConnected) set.status = 'connected';
+    // `null` also matches a document that never had the field, for both guards.
+    const revisionFilter = update.expectedRevision === 0 ? { $in: [0, null] } : update.expectedRevision;
     const result = await this.model.findOneAndUpdate(
-      { _id: id, toolsFingerprint: update.expectedFingerprint },
-      { $set: set },
+      {
+        _id: id,
+        toolsFingerprint: update.expectedFingerprint,
+        toolsRevision: revisionFilter,
+        ...(update.markConnected ? CONNECTABLE_FILTER : {}),
+        ...(update.expectedApiKeyValueEnc !== undefined
+          ? { 'auth.kind': 'api_key', 'auth.apiKey.valueEnc': update.expectedApiKeyValueEnc }
+          : {}),
+      },
+      {
+        $set: set,
+        $inc: { toolsRevision: 1 },
+        ...(update.markConnected ? { $unset: { lastError: 1, authChallenge: 1 } } : {}),
+      },
+      { new: true, runValidators: true }
+    );
+    return result?.toJSON() ?? null;
+  }
+
+  async setApiKey(
+    id: string,
+    owner: McpConnectionOwner,
+    apiKey: McpApiKeyUpdate
+  ): Promise<IMcpConnectionDocument | null> {
+    if (!mongoose.isObjectIdOrHexString(id) || owner.ownerType !== 'user') return null;
+    const result = await this.model.findOneAndUpdate(
+      { _id: id, ownerType: 'user', ownerKey: owner.ownerKey, 'auth.kind': 'api_key' },
+      {
+        $set: {
+          'auth.apiKey.headerName': apiKey.headerName,
+          'auth.apiKey.scheme': apiKey.scheme,
+          'auth.apiKey.valueEnc': apiKey.valueEnc,
+          'auth.apiKey.last4': apiKey.last4,
+        },
+      },
+      { new: true, runValidators: true }
+    );
+    return result?.toJSON() ?? null;
+  }
+
+  async setPendingAuth(
+    id: string,
+    challenge: { resourceMetadataUrl?: string; scope?: string; message: string }
+  ): Promise<IMcpConnectionDocument | null> {
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    const now = new Date();
+    const scope = challenge.scope?.slice(0, MCP_CONNECTION_LIMITS.requiredScopeLength);
+    // An over-long metadata URL is dropped rather than cut: a truncated URL would point somewhere else.
+    const resourceMetadataUrl =
+      challenge.resourceMetadataUrl &&
+      challenge.resourceMetadataUrl.length <= MCP_CONNECTION_LIMITS.authChallengeUrlLength
+        ? challenge.resourceMetadataUrl
+        : undefined;
+    const result = await this.model.findByIdAndUpdate(
+      id,
+      {
+        $set: {
+          status: 'pending_auth',
+          authChallenge: {
+            ...(resourceMetadataUrl ? { resourceMetadataUrl } : {}),
+            ...(scope ? { scope } : {}),
+            at: now,
+          },
+          lastError: {
+            code: 'auth_required',
+            message: challenge.message.slice(0, MCP_CONNECTION_LIMITS.lastErrorMessageLength),
+            at: now,
+            ...(scope ? { requiredScope: scope } : {}),
+          },
+        },
+      },
       { new: true, runValidators: true }
     );
     return result?.toJSON() ?? null;
@@ -521,12 +705,14 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
   setStatus(
     id: string,
     status: 'error' | 'needs_reconnect',
-    lastError: McpConnectionLastErrorInput
+    lastError: McpConnectionLastErrorInput,
+    expectedApiKeyValueEnc?: string | null
   ): Promise<IMcpConnectionDocument | null>;
   async setStatus(
     id: string,
     status: McpConnectionStatus,
-    lastError?: McpConnectionLastErrorInput
+    lastError?: McpConnectionLastErrorInput,
+    expectedApiKeyValueEnc?: string | null
   ): Promise<IMcpConnectionDocument | null> {
     if ((status === 'error' || status === 'needs_reconnect') && !lastError) {
       throw new Error(`setStatus(${status}) requires a lastError`);
@@ -549,11 +735,13 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
                 : {}),
             },
           };
-    // A probe or refresh that finishes after a disconnect must not re-offer an OAuth connection with no token.
-    const filter =
-      status === 'connected'
-        ? { _id: id, $or: [{ 'auth.kind': { $ne: 'oauth' } }, { 'auth.oauth.hasAccessToken': true }] }
-        : { _id: id };
+    const filter = {
+      _id: id,
+      ...(status === 'connected' ? CONNECTABLE_FILTER : {}),
+      ...(expectedApiKeyValueEnc !== undefined
+        ? { 'auth.kind': 'api_key', 'auth.apiKey.valueEnc': expectedApiKeyValueEnc }
+        : {}),
+    };
     const result = await this.model.findOneAndUpdate(filter, update, { new: true, runValidators: true });
     return result?.toJSON() ?? null;
   }

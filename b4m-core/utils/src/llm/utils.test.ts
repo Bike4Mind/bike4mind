@@ -10,6 +10,7 @@ import {
   includeImagePromptSystemMessage,
   TOOL_RESULT_NOT_RECORDED,
   ATTACHMENT_DELIVERED_NOTICE,
+  ATTACHMENT_END_DELIMITER,
 } from './utils';
 import { ensureToolPairingIntegrity, stripAllToolBlocks } from '@bike4mind/llm-adapters';
 import {
@@ -1420,7 +1421,9 @@ describe('Context Management Tests', () => {
       const mockWarn = vi.fn();
       stripAllToolBlocks(messages as IMessage[], { log: vi.fn(), warn: mockWarn });
 
-      expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('Stripped 2 tool_use, 2 tool_result and 0 server tool blocks'));
+      expect(mockWarn).toHaveBeenCalledWith(
+        expect.stringContaining('Stripped 2 tool_use, 2 tool_result and 0 server tool blocks')
+      );
     });
 
     it('should handle mixed content in user messages (text + tool_result)', () => {
@@ -2341,9 +2344,9 @@ describe('Token budget allocation', () => {
       expect(labels).toContain('history-39');
       expect(labels).toContain('history-38');
 
-      // The primary allocation kept us in bounds, so the final safety net never had to fire. 6661 plus
-      // the delivered-content and anti-inference notices' own real token cost (both fixed, both counted).
-      expect(await calculateTotalTokenLength(result, { estimateOnly: false, tokenizer })).toBe(6723);
+      // The primary allocation kept us in bounds, including the delivery label, truncation notice,
+      // and closing boundary, so the final safety net never had to fire.
+      expect(await calculateTotalTokenLength(result, { estimateOnly: false, tokenizer })).toBe(6712);
       expect(mockLogger.warn).not.toHaveBeenCalledWith(expect.stringContaining('exceeds maxInputTokens'));
 
       // The squeeze is reported, and it names the file so a support engineer can see which one lost.
@@ -2368,7 +2371,9 @@ describe('Token budget allocation', () => {
 
       // Byte-identical past the delivered-content notice, not merely present: the squeeze check
       // compares estimates against estimates, so an attachment that fits can never be reported as squeezed.
-      expect(findAttachedFile(result)?.content).toBe(ATTACHMENT_DELIVERED_NOTICE + attached.content);
+      expect(findAttachedFile(result)?.content).toBe(
+        ATTACHMENT_DELIVERED_NOTICE + attached.content + ATTACHMENT_END_DELIMITER
+      );
       expect(mockLogger.warn).not.toHaveBeenCalled();
     });
 
@@ -2427,7 +2432,9 @@ describe('Token budget allocation', () => {
         tokenizer
       );
 
-      expect(findAttachedFile(result)?.content).toBe(ATTACHMENT_DELIVERED_NOTICE + attached.content);
+      expect(findAttachedFile(result)?.content).toBe(
+        ATTACHMENT_DELIVERED_NOTICE + attached.content + ATTACHMENT_END_DELIMITER
+      );
       expect(historyLabels(result)).toHaveLength(172);
       expect(mockLogger.warn).not.toHaveBeenCalled();
     });
@@ -3104,7 +3111,8 @@ describe('truncated attachments are marked', () => {
     expect(text).toContain(NOTICE);
     expect(
       text.endsWith(
-        'later content was not sent. Do not infer a total row, record, or section count, or a final row, from what is above.]'
+        'later content was not sent. Do not infer a total row, record, or section count, or a final row, from what is above.]' +
+          ATTACHMENT_END_DELIMITER
       )
     ).toBe(true);
     // The tail the marker lives in genuinely did not survive, which is exactly why the notice matters.
@@ -3137,7 +3145,10 @@ describe('truncated attachments are marked', () => {
     const delivered = result.filter(m => typeof m.content === 'string' && (m.content as string).includes('id,name'));
     expect(delivered).toHaveLength(2);
     expect(delivered.map(m => m.content)).toEqual(
-      expect.arrayContaining([ATTACHMENT_DELIVERED_NOTICE + small, ATTACHMENT_DELIVERED_NOTICE + large])
+      expect.arrayContaining([
+        ATTACHMENT_DELIVERED_NOTICE + small + ATTACHMENT_END_DELIMITER,
+        ATTACHMENT_DELIVERED_NOTICE + large + ATTACHMENT_END_DELIMITER,
+      ])
     );
     for (const m of delivered) expect(m.content as string).not.toContain(NOTICE);
   });
@@ -3169,7 +3180,8 @@ describe('truncated attachments are marked', () => {
     expect(text.split(NOTICE)).toHaveLength(2); // exactly one occurrence
     expect(
       text.endsWith(
-        'later content was not sent. Do not infer a total row, record, or section count, or a final row, from what is above.]'
+        'later content was not sent. Do not infer a total row, record, or section count, or a final row, from what is above.]' +
+          ATTACHMENT_END_DELIMITER
       )
     ).toBe(true);
     // No fragment of a notice stranded earlier in the payload.
@@ -3192,7 +3204,7 @@ describe('truncated attachments are marked', () => {
     );
 
     const file = result.find(m => typeof m.content === 'string' && (m.content as string).includes('row-data,'));
-    expect(file!.content).toBe(ATTACHMENT_DELIVERED_NOTICE + whole);
+    expect(file!.content).toBe(ATTACHMENT_DELIVERED_NOTICE + whole + ATTACHMENT_END_DELIMITER);
     expect(file!.content as string).not.toContain(NOTICE);
     expect(file!.content as string).toContain('FINAL_ROW_MARKER: apricot');
   });
@@ -3216,7 +3228,7 @@ describe('truncated attachments are marked', () => {
     );
 
     const delivered = result.find(m => typeof m.content === 'string' && (m.content as string).includes('row,value'));
-    expect(delivered!.content).toBe(ATTACHMENT_DELIVERED_NOTICE + file);
+    expect(delivered!.content).toBe(ATTACHMENT_DELIVERED_NOTICE + file + ATTACHMENT_END_DELIMITER);
     expect(delivered!.content as string).toContain('FINAL_ROW_MARKER: apricot');
     expect(delivered!.content as string).not.toContain(NOTICE);
   });
@@ -3370,7 +3382,7 @@ describe('allocation under a production-shaped system-prompt load', () => {
     const delivered = result.find(
       m => typeof m.content === 'string' && (m.content as string).includes('id,fruit,color')
     );
-    expect(delivered!.content).toBe(ATTACHMENT_DELIVERED_NOTICE + file.content);
+    expect(delivered!.content).toBe(ATTACHMENT_DELIVERED_NOTICE + file.content + ATTACHMENT_END_DELIMITER);
     expect(delivered!.content as string).toContain('FINAL_ROW_MARKER: apricot');
     expect(delivered!.content as string).not.toContain(NOTICE);
     expect(await calculateTotalTokenLength(result, { estimateOnly: false, tokenizer })).toBeLessThanOrEqual(

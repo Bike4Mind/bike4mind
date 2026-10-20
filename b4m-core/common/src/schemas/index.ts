@@ -22,6 +22,7 @@ export * from './chatMessage';
 export * from './questMasterPlan';
 export * from './settings';
 export * from './customMcpHosts';
+export * from './customMcpPolicy';
 export * from './zod';
 export * from './promptMeta';
 export * from './analytics';
