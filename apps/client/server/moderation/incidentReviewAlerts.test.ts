@@ -77,6 +77,23 @@ describe('withReviewerAlerts', () => {
     expect(unconfigured.deps.incidents.markAlerted).not.toHaveBeenCalled();
   });
 
+  it('leaves alertedAt unset when only some reviewers were reached', async () => {
+    const { deps, incidents } = setup({
+      sendEmail: vi.fn().mockResolvedValueOnce({ messageId: 'm-1' }).mockResolvedValueOnce(false),
+    });
+
+    await incidents.record(INPUT);
+
+    expect(vi.mocked(deps.sendEmail).mock.calls.map(call => call[0])).toEqual([
+      'reviewer-one@example.com',
+      'reviewer-two@example.com',
+    ]);
+    expect(deps.incidents.markAlerted).not.toHaveBeenCalled();
+    expect(deps.logger.error).toHaveBeenCalledWith(expect.stringContaining('failed to send'), {
+      incidentId: 'incident-123',
+    });
+  });
+
   it('does not alert for an incident recorded with a verdict already set', async () => {
     const { deps, incidents } = setup();
     vi.mocked(deps.incidents.record).mockResolvedValue({
