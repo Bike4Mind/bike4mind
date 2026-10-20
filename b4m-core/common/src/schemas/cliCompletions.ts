@@ -106,8 +106,43 @@ export const COMPLETION_TOOL_ERROR_CODES = [
   'all_tools_deferred',
   'deferred_tool_cache_control',
   'unknown_tool_reference',
+  'tool_changes_unsupported',
+  'invalid_tool_change',
 ] as const satisfies readonly ApiErrorCode[];
 export type CompletionToolErrorCode = (typeof COMPLETION_TOOL_ERROR_CODES)[number];
+
+export const TOOL_CHANGE_BLOCK_TYPES = ['tool_addition', 'tool_removal'] as const;
+
+/**
+ * One block of a mid-conversation tool change: a `system`-role message whose content holds only these.
+ * Strict on purpose: the provider takes a name reference to a tool already in `tools`, never an inline
+ * definition or an MCP reference.
+ */
+export const ToolChangeBlockSchema = z
+  .object({
+    type: z.enum(TOOL_CHANGE_BLOCK_TYPES),
+    tool: z.object({ type: z.literal('tool_reference'), name: z.string().min(1) }).strict(),
+  })
+  .strict();
+
+export type ToolChangeBlock = z.infer<typeof ToolChangeBlockSchema>;
+
+export const ToolChangeMessageContentSchema = z.array(ToolChangeBlockSchema).min(1);
+
+/** Whether a content block is shaped like a tool change, whether or not it is a valid one. */
+export function isToolChangeBlockType(block: unknown): boolean {
+  const type = (block as { type?: unknown } | null | undefined)?.type;
+  return typeof type === 'string' && (TOOL_CHANGE_BLOCK_TYPES as readonly string[]).includes(type);
+}
+
+/**
+ * A system message of tool change blocks. Unlike every other system message it is not hoisted into the
+ * provider's system prompt: its position between turns is the point. Shared by the request validation
+ * (services/cliCompletionsToolSearch.ts) and the Anthropic adapter, which must agree on what counts.
+ */
+export function isToolChangeMessage(message: { role: string; content?: unknown }): boolean {
+  return message.role === 'system' && Array.isArray(message.content) && message.content.some(isToolChangeBlockType);
+}
 
 /**
  * JSON Schema definition for structured output. The `schema` field is a full
@@ -137,7 +172,16 @@ export type ResponseFormat = z.infer<typeof ResponseFormatSchema>;
  */
 export const CompletionMessageSchema = z.object({
   role: z.enum(['user', 'assistant', 'system']),
-  content: z.union([z.string(), z.array(z.any())]),
+  content: z
+    .union([z.string(), z.array(z.any())])
+    .describe(
+      'A string, or an array of content blocks. A `system` message may instead hold only `tool_addition` / ' +
+        '`tool_removal` blocks (`{ type, tool: { type: "tool_reference", name } }`) to load or unload a tool named in ' +
+        '`tools` mid-conversation without invalidating the prompt cache. It must follow a user turn or an assistant turn ' +
+        'ending in a server tool result, and be the last message or precede an assistant turn. Only on models whose ' +
+        '`supports_tool_changes` is true and that are served by the direct Anthropic API; otherwise refused with ' +
+        '`errorCode: "tool_changes_unsupported"` (or `invalid_tool_change` / `unknown_tool_reference` when malformed).'
+    ),
   cache: z.boolean().optional(),
 });
 
