@@ -139,4 +139,13 @@ describe('POST /api/data-lakes/[id]/visibility', () => {
     await expect(call(req({ visibility: 'public' }), res)).rejects.toThrow(/not found/i);
     expect(h.setLakeVisibility).not.toHaveBeenCalled();
   });
+
+  it('serves the updated lake through the response boundary, dropping Mongo internals', async () => {
+    h.setLakeVisibility.mockResolvedValue({ id: 'lake-oid-1', isPublic: false, _id: 'oid', __v: 1 });
+    const { res, json } = makeRes();
+
+    await call(req({ visibility: 'private' }), res);
+
+    expect(json).toHaveBeenCalledWith({ id: 'lake-oid-1', isPublic: false });
+  });
 });
