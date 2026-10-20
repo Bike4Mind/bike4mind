@@ -87,7 +87,7 @@ import { SlashCommandSuggestions } from '@client/app/components/common/CommandSu
 import { useContentTransformDetector } from '@client/app/hooks/useContentTransformDetector';
 import { AffordableModelOffer } from '../AffordableModelOffer';
 import { useAffordableModelOffer } from '../useAffordableModelOffer';
-import { TYPICAL_ANSWER_INPUT_TOKENS } from '@client/app/utils/creditEstimate';
+import { estimateNextInputTokens } from '@client/app/utils/creditEstimate';
 
 type Props = {
   /**
@@ -180,6 +180,8 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   const model = useLLM(s => s.model);
   const max_tokens = useLLM(s => s.max_tokens);
   const thinking = useLLM(s => s.thinking);
+  const researchModeEnabled = useLLM(s => s.researchMode.enabled);
+  const agentModeEnabled = useLLM(s => s.agentMode.enabled);
   const sessionFilesOpen = useAdvancedAISettings(state => state.sessionFilesOpen);
   const setSessionFilesOpen = useAdvancedAISettings(state => state.setSessionFilesOpen);
   const [stream, setStream] = useState<boolean>(true);
@@ -574,10 +576,11 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
       >
         {affordableOffer.show && (
           <AffordableModelOffer
+            enabled={!researchModeEnabled && !agentModeEnabled && displayAgents.length === 0}
             models={accessibleModels ?? []}
             selectedModelId={model}
             credits={effectiveCredits}
-            inputTokens={contextUsage?.actualInputTokens ?? TYPICAL_ANSWER_INPUT_TOKENS}
+            inputTokens={estimateNextInputTokens(contextUsage?.actualInputTokens, chatInputValue)}
             selectedMaxTokens={max_tokens}
             thinking={thinking}
             onSelect={affordableOffer.onSelect}

@@ -30,6 +30,7 @@ describe('AffordableModelOffer', () => {
     render(
       <CssVarsProvider theme={appTheme}>
         <AffordableModelOffer
+          enabled
           models={[expensive, affordable]}
           selectedModelId={expensive.id}
           credits={preflightAnswerCredits(affordable, inputTokens, maxTokens)!}
@@ -41,6 +42,8 @@ describe('AffordableModelOffer', () => {
     );
 
     expect(screen.getByTestId('affordable-model-offer')).toHaveTextContent('will become your active model');
+    expect(screen.getByTestId('affordable-model-offer')).toHaveTextContent('may need about');
+    expect(screen.getByTestId('affordable-model-offer')).toHaveTextContent('attachments and tools');
     fireEvent.click(screen.getByTestId('affordable-model-use-btn'));
     expect(onSelect).toHaveBeenCalledWith(affordable);
   });
@@ -49,9 +52,27 @@ describe('AffordableModelOffer', () => {
     render(
       <CssVarsProvider theme={appTheme}>
         <AffordableModelOffer
+          enabled
           models={[expensive, affordable]}
           selectedModelId={expensive.id}
           credits={preflightAnswerCredits(expensive, inputTokens, maxTokens)!}
+          inputTokens={inputTokens}
+          selectedMaxTokens={maxTokens}
+          onSelect={vi.fn()}
+        />
+      </CssVarsProvider>
+    );
+    expect(screen.queryByTestId('affordable-model-offer')).toBeNull();
+  });
+
+  it('hides the switch when another mode controls the models being dispatched', () => {
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <AffordableModelOffer
+          enabled={false}
+          models={[expensive, affordable]}
+          selectedModelId={expensive.id}
+          credits={preflightAnswerCredits(affordable, inputTokens, maxTokens)!}
           inputTokens={inputTokens}
           selectedMaxTokens={maxTokens}
           onSelect={vi.fn()}
