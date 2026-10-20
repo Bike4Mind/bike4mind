@@ -182,6 +182,13 @@ describe('GET /api/v1/skills/market/{id}/claude-plugin.zip', () => {
     expect(text).not.toContain('# Exported:');
   });
 
+  it('404s a listing whose current version is no longer approved', async () => {
+    mockFindOne.mockResolvedValue(doc(listing(LISTING_A)));
+    mockFindVersion.mockResolvedValue(doc({ ...version('1'), reviewStatus: 'superseded' }));
+    const { error } = await call(zipHandler, { id: LISTING_A });
+    expect(error?.statusCode).toBe(404);
+  });
+
   it.each([
     ['a public listing', { visibility: 'public' }],
     ['an unlisted listing', { visibility: 'unlisted' }],

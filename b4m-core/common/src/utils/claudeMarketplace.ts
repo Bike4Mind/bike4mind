@@ -11,6 +11,9 @@ export const claudeNameSlug = (value: string): string =>
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
 
+/** A skill's plugin/folder name; `skill` when the name has nothing to slug (e.g. all non-ASCII). */
+export const claudeSkillNameFor = (skillName: string): string => claudeNameSlug(skillName) || 'skill';
+
 /**
  * `b4m-<org-name-slug>`. The `b4m-` prefix keeps clear of Claude Code's reserved marketplace names.
  * Renaming the org renames the marketplace, so users then have to add it again.
@@ -24,7 +27,7 @@ export function claudeMarketplaceNameFor(org: { id: string; name?: string }): st
 
 /** The listing's skill name, made unique within one feed by suffixing the tail of its id. */
 export function claudePluginNameFor(listingName: string, listingId: string, taken: Set<string>): string {
-  const base = claudeNameSlug(listingName) || 'skill';
+  const base = claudeSkillNameFor(listingName);
   const name = taken.has(base) ? `${base}-${listingId.slice(-6)}` : base;
   taken.add(name);
   return name;

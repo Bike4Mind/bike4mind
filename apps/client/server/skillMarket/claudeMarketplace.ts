@@ -3,8 +3,8 @@ import archiver from 'archiver';
 import { SkillListing, SkillListingVersion } from '@bike4mind/database';
 import {
   claudeMarketplaceNameFor,
-  claudeNameSlug,
   claudePluginNameFor,
+  claudeSkillNameFor,
   requireEnv,
   toAbsoluteUrl,
   toSkillMd,
@@ -73,7 +73,7 @@ async function approvedVersionOf(listing: ISkillListing): Promise<ISkillListingV
 }
 
 // Not the feed's (collision-suffixed) plugin name, so the zip does not depend on the other listings.
-const skillDirName = (version: ISkillListingVersion) => claudeNameSlug(version.snapshot.name) || 'skill';
+const skillDirName = (version: ISkillListingVersion) => claudeSkillNameFor(version.snapshot.name);
 
 /** The marketplace.json for one org: its approved Organization listings, oldest first. */
 export async function buildClaudeMarketplace(

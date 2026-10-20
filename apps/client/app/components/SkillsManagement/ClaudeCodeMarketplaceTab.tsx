@@ -3,7 +3,7 @@ import { Button, Stack, Typography } from '@mui/joy';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import KeyIcon from '@mui/icons-material/Key';
 import { toast } from 'sonner';
-import { ApiKeyScope, claudeMarketplaceNameFor, claudeNameSlug, toAbsoluteUrl } from '@bike4mind/common';
+import { ApiKeyScope, claudeMarketplaceNameFor, claudeSkillNameFor, toAbsoluteUrl } from '@bike4mind/common';
 import { useCreateUserApiKey } from '@client/app/hooks/data/userApiKeys';
 
 export interface ClaudeCodeMarketplaceTabProps {
@@ -87,14 +87,16 @@ const ClaudeCodeMarketplaceTab: FC<ClaudeCodeMarketplaceTabProps> = ({ org, skil
         </Stack>
         <Typography level="body-xs" textColor="text.tertiary">
           The key can only read this feed, but it is stored in plain text in your settings file.
-          {key ? ' It is shown only once; revoke it any time under API Keys.' : null}
+          {key
+            ? ' It is shown only once; revoke it any time under API Keys.'
+            : ' Each Create key mints a new key, so revoke any old marketplace keys under API Keys.'}
         </Typography>
       </Stack>
 
       <Stack spacing={1}>
         <Typography level="title-sm">2. Start claude once, then install</Typography>
         <Typography component="pre" level="body-xs" sx={{ m: 0 }} data-testid="skill-claude-code-marketplace-install">
-          /plugin install {claudeNameSlug(skillName)}@{marketplace}
+          /plugin install {claudeSkillNameFor(skillName)}@{marketplace}
         </Typography>
         <Typography level="body-xs" textColor="text.tertiary">
           Or run <code>/plugin</code> to browse every skill in the marketplace. An org admin can roll the same{' '}
