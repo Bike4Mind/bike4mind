@@ -79,6 +79,7 @@ import {
   markToolStrict,
 } from './forcedToolChoice';
 import { buildJsonSchemaInstruction } from './responseFormatHelpers';
+import { logToolRound, summarizeToolOutcomes } from './toolRoundTiming';
 import {
   createDegenerateStreamGuard,
   DEGENERATE_STREAM_STOP_REASON,
@@ -896,6 +897,10 @@ export class AnthropicBackend implements ICompletionBackend {
 
     // Tool chaining safeguard: Track and limit recursive tool calls
     const toolCallCount = options._internal?.toolCallCount ?? 0;
+    const requestStartedAt = options._internal?.requestStartedAt ?? Date.now();
+    if (options._internal?.requestStartedAt === undefined) {
+      options = { ...options, _internal: { ...options._internal, requestStartedAt } };
+    }
 
     // Multi-turn token accumulators. Each Anthropic API call (every recursive
     // tool round-trip) is billed independently, so we add each turn's usage
@@ -1385,6 +1390,11 @@ export class AnthropicBackend implements ICompletionBackend {
       // Same reasoning as degeneratedThisTurn: tool calls collected from a stream that
       // ended before message_stop may have half-written arguments and must not run.
       let streamEndedEarlyThisTurn = false;
+      // Per-round timing for logToolRound; read after the stream promise settles.
+      let roundStart = Date.now();
+      let firstChunkAt: number | null = null;
+      let modelDoneAt = roundStart;
+      let roundStopReason: string | null = null;
       // Capture per-turn token usage so the post-stream tool-recursion site
       // can carry it forward as accumulated multi-turn billable usage.
       // Populated from the message_delta event inside the streaming Promise.
@@ -1486,6 +1496,7 @@ export class AnthropicBackend implements ICompletionBackend {
                 thinkingBudget: apiParams.thinking?.type === 'enabled' ? apiParams.thinking.budget_tokens : undefined,
               });
 
+              roundStart = Date.now();
               // Wrap with retry for transient network errors (TLS abort, fetch terminated)
               const stream = await withRetry(
                 () =>
@@ -1604,6 +1615,7 @@ export class AnthropicBackend implements ICompletionBackend {
 
               try {
                 for await (const event of stream as AsyncIterable<RawMessageStreamEvent>) {
+                  firstChunkAt ??= Date.now();
                   // Reset idle timer on each event
                   eventCount++;
                   lastEventType = event.type;
@@ -1816,6 +1828,7 @@ export class AnthropicBackend implements ICompletionBackend {
                     const deltaStopReason = event.delta?.stop_reason;
                     if (deltaStopReason) {
                       stopReason = deltaStopReason;
+                      roundStopReason = deltaStopReason;
                     }
                   } else if (event.type === 'message_stop') {
                     sawMessageStop = true;
@@ -1824,6 +1837,7 @@ export class AnthropicBackend implements ICompletionBackend {
               } finally {
                 // CRITICAL: Always cleanup idle timer to prevent memory leaks
                 if (idleTimer) clearTimeout(idleTimer);
+                modelDoneAt = Date.now();
               }
 
               // Same shape as the idle-timeout check below: the guard aborted, but the
@@ -1970,6 +1984,16 @@ export class AnthropicBackend implements ICompletionBackend {
               // Check if we have tools to execute before signaling completion
               const hasToolsToExecute = func.some(f => f && f.name);
               if (!hasToolsToExecute) {
+                logToolRound(this.logger, {
+                  model,
+                  round: toolCallCount,
+                  msToFirstChunk: firstChunkAt === null ? null : firstChunkAt - roundStart,
+                  modelMs: modelDoneAt - roundStart,
+                  roundMs: Date.now() - roundStart,
+                  sinceRequestMs: Date.now() - requestStartedAt,
+                  stopReason: stopReason ?? null,
+                  tools: [],
+                });
                 // Log when model returns without using tools despite tools being available
                 // This helps diagnose "blank chat" issues with MCP tools
                 if (options.tools && options.tools.length > 0) {
@@ -2380,6 +2404,17 @@ export class AnthropicBackend implements ICompletionBackend {
               }
             }
 
+            logToolRound(this.logger, {
+              model,
+              round: toolCallCount,
+              msToFirstChunk: firstChunkAt === null ? null : firstChunkAt - roundStart,
+              modelMs: modelDoneAt - roundStart,
+              roundMs: Date.now() - roundStart,
+              sinceRequestMs: Date.now() - requestStartedAt,
+              stopReason: roundStopReason,
+              tools: summarizeToolOutcomes(outcomes),
+            });
+
             if (shouldEndTurnAfterTools(toolCallNames, options.tools, streamedRoundText)) {
               this.logger.info('[Tool Execution] Ending turn: answer already streamed, only end-of-turn tools ran', {
                 model,
@@ -2485,9 +2520,11 @@ export class AnthropicBackend implements ICompletionBackend {
         // so the slot releases immediately after. Acquire lives inside the try so an
         // abort while waiting propagates to generateResponse's outer abort handling.
         let response;
+        let roundStart = Date.now();
         let release: SlotRelease | undefined;
         try {
           release = await acquireSlot({ tenantKey: this._endUserId, signal: options.abortSignal });
+          roundStart = Date.now();
           // Wrap with retry for transient network errors (TLS abort, fetch terminated)
           response = await withRetry(
             () =>
@@ -2508,6 +2545,7 @@ export class AnthropicBackend implements ICompletionBackend {
         } finally {
           release?.();
         }
+        const modelDoneAt = Date.now();
         const streamedText: string[] = [];
 
         if ('content' in response && Array.isArray(response.content)) {
@@ -2594,6 +2632,18 @@ export class AnthropicBackend implements ICompletionBackend {
         // wrappedOnChunk doesn't clobber the accumulated total. The terminal turn
         // emits accumulated total plus this turn - same shape as the streaming path.
         const isTerminalTurn = !func.some(f => f && f.name);
+        if (isTerminalTurn) {
+          logToolRound(this.logger, {
+            model,
+            round: toolCallCount,
+            msToFirstChunk: null,
+            modelMs: modelDoneAt - roundStart,
+            roundMs: Date.now() - roundStart,
+            sinceRequestMs: Date.now() - requestStartedAt,
+            stopReason: nonStreamStopReason ?? null,
+            tools: [],
+          });
+        }
         await cb(streamedText, {
           inputTokens: isTerminalTurn ? accumInputTokens + (usage?.input_tokens || 0) : 0,
           outputTokens: isTerminalTurn ? accumOutputTokens + (usage?.output_tokens || 0) : 0,
@@ -2825,6 +2875,17 @@ export class AnthropicBackend implements ICompletionBackend {
                 );
               }
             }
+
+            logToolRound(this.logger, {
+              model,
+              round: toolCallCount,
+              msToFirstChunk: null,
+              modelMs: modelDoneAt - roundStart,
+              roundMs: Date.now() - roundStart,
+              sinceRequestMs: Date.now() - requestStartedAt,
+              stopReason: nonStreamStopReason ?? null,
+              tools: summarizeToolOutcomes(outcomesNS),
+            });
 
             if (shouldEndTurnAfterTools(toolCallNames, options.tools, streamedText.join(''))) {
               this.logger.info('[Tool Execution] Ending turn: answer already sent, only end-of-turn tools ran', {
