@@ -9102,6 +9102,124 @@ describe('ChatCompletionProcess', () => {
     });
   });
 
+  // The provider's prompt cache matches on a prefix (tools, system, messages), so anything that
+  // changes between turns in front of the history re-writes the whole conversation. These pin the
+  // two per-turn inputs the process controls here: the history count and the session-sticky tool set.
+  describe('prompt-cache stability', () => {
+    const wireTurn = () => {
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_m: any, _msgs: any, _opts: any, cb: any) => {
+          await cb(['Hi!'], { inputTokens: 100, outputTokens: 50 });
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as any);
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ] as any);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      } as any);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
+      return { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+    };
+
+    const lastComplete = () => {
+      const complete = vi.mocked(mockedGetLlmByModel.mock.results.at(-1)!.value.complete);
+      return complete.mock.calls.at(-1)!;
+    };
+
+    describe('history count', () => {
+      it.each([
+        [30, 30],
+        [80, 60],
+      ])('requested %i resolves to %i whatever the query complexity', async (requested, expected) => {
+        const resolved: number[] = [];
+        for (const queryComplexity of ['simple', 'contextual', 'complex']) {
+          const body = { ...wireTurn(), historyCount: requested, queryComplexity };
+          await service.process({ body, logger: mockLogger });
+          resolved.push(mockedFetchAndProcessPreviousMessages.mock.calls.at(-1)![1] as number);
+        }
+
+        expect(resolved).toEqual([expected, expected, expected]);
+      });
+    });
+
+    describe('auto-added tools', () => {
+      const toolNames = () =>
+        (lastComplete()[2].tools ?? []).map((t: { toolSchema: { name: string } }) => t.toolSchema.name);
+
+      afterEach(() => {
+        delete (service as any).user.isAdmin;
+        delete (service as any).user.blogIntegration;
+      });
+
+      it('persists a tool the turn triggered onto the session', async () => {
+        (service as any).user.isAdmin = true;
+        const addAutoAddedTools = vi.fn().mockResolvedValue(undefined);
+        mockDb.sessions.addAutoAddedTools = addAutoAddedTools;
+        const body = { ...wireTurn(), message: 'Turn this conversation into a blog post' };
+
+        await service.process({ body, logger: mockLogger });
+
+        expect(toolNames()).toContain('blog_draft');
+        expect(addAutoAddedTools).toHaveBeenCalledWith('session1', ['blog_draft']);
+      });
+
+      it('keeps a persisted tool on a later turn with no trigger, without rewriting it', async () => {
+        (service as any).user.isAdmin = true;
+        const addAutoAddedTools = vi.fn().mockResolvedValue(undefined);
+        mockDb.sessions.addAutoAddedTools = addAutoAddedTools;
+        mockSession.autoAddedTools = ['blog_draft'];
+        const body = { ...wireTurn(), message: 'thanks, that works' };
+
+        await service.process({ body, logger: mockLogger });
+
+        expect(toolNames()).toContain('blog_draft');
+        expect(addAutoAddedTools).not.toHaveBeenCalled();
+      });
+
+      it('lists the same set in the same order whatever order the session stored it in', async () => {
+        (service as any).user.isAdmin = true;
+        (service as any).user.blogIntegration = true;
+        const lists: string[][] = [];
+        for (const stored of [
+          ['blog_publish', 'blog_draft', 'blog_edit'],
+          ['blog_edit', 'blog_publish', 'blog_draft'],
+        ]) {
+          mockSession.autoAddedTools = stored;
+          const body = { ...wireTurn(), message: 'thanks' };
+          await service.process({ body, logger: mockLogger });
+          lists.push(toolNames().filter((name: string) => name.startsWith('blog_')));
+        }
+
+        expect(lists[0]).toEqual(['blog_draft', 'blog_edit', 'blog_publish']);
+        expect(lists[1]).toEqual(lists[0]);
+      });
+
+      it('does not offer a persisted blog tool to a user who is not an admin', async () => {
+        mockSession.autoAddedTools = ['blog_draft', 'blog_publish', 'blog_edit'];
+        const body = { ...wireTurn(), message: 'thanks' };
+
+        await service.process({ body, logger: mockLogger });
+
+        expect(toolNames().filter((name: string) => name.startsWith('blog_'))).toEqual([]);
+      });
+    });
+  });
+
   // The write site promotes the lake layers out of the `systemPrompts` residual into a bucket of
   // their own. The property that matters is conservation: the bucket is rebuilt from the layer
   // counts already computed, so the old residual still equals `systemPrompts + lakeRetrieval` -

@@ -218,6 +218,7 @@ export const createMockSessionRepository = (): MockedObject<ISessionRepository> 
     findAllByIds: vi.fn(),
     findSessionIdsByUserId: vi.fn(),
     attachAgent: vi.fn(),
+    addAutoAddedTools: vi.fn(),
     detachAgent: vi.fn(),
     getAttachedAgents: vi.fn(),
     addArtifact: vi.fn(),

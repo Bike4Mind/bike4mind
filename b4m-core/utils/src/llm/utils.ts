@@ -553,6 +553,32 @@ export async function generateSafeEmbedding(
 }
 
 /**
+ * Quests between one history-window start and the next once a session outgrows its limit. A window
+ * that slid by one quest per turn changed the head of the conversation on every request, so the
+ * provider's prompt cache (prefix-based) never matched past the system prompt. Stepping the start
+ * keeps the prefix byte-identical for STEP turns at a time.
+ */
+export const HISTORY_WINDOW_STEP = 10;
+
+/**
+ * Index (0-based, oldest first) of the first prior quest in the history window, given the number of
+ * quests before the current turn and the window `limit`. The window is quests [start, priorQuestCount):
+ * never longer than `limit`, and `start` only moves every `step` quests.
+ *
+ * `step` is capped at half the limit: at limit 10 and step 10 the window would collapse to a single
+ * quest right after each step, which is no history at all for a small-context model.
+ */
+export function resolveHistoryWindowStart(
+  priorQuestCount: number,
+  limit: number,
+  step: number = HISTORY_WINDOW_STEP
+): number {
+  if (priorQuestCount <= limit) return 0;
+  const effectiveStep = Math.min(step, Math.max(1, Math.floor(limit / 2)));
+  return Math.ceil((priorQuestCount - limit) / effectiveStep) * effectiveStep;
+}
+
+/**
  * Return the previous messages from the database, and the total number of previous messages.
  *
  * `historyCount` is a window in quests: null means the default page size, 0 or below means no
@@ -570,7 +596,9 @@ export async function fetchAndProcessPreviousMessages(
     includeReplyChoices = false,
   }: {
     db: {
-      quests: Pick<IChatHistoryItemRepository, 'getMostRecentChatHistory'>;
+      // countBySessionId is optional so a caller with a minimal repository keeps the newest-N window.
+      quests: Pick<IChatHistoryItemRepository, 'getMostRecentChatHistory'> &
+        Partial<Pick<IChatHistoryItemRepository, 'countBySessionId'>>;
     };
     /**
      * When set, keep only the newest turns whose estimated size fits this many
@@ -657,6 +685,10 @@ export async function fetchAndProcessPreviousMessages(
     } items)`
   );
 
+  // limit + 1 back means the session holds at least `limit` prior quests, the only case where the
+  // window can need aligning (see below). Read before the pop; shorter sessions skip the count query.
+  const mayExceedWindow = chatHistoryItems.length > limit;
+
   // Reverse the chat history items and remove the last item (the current prompt)
   chatHistoryItems.reverse();
 
@@ -664,6 +696,21 @@ export async function fetchAndProcessPreviousMessages(
   // unless the caller needs history to hold no part of the current turn (see excludeCurrentPrompt).
   if (chatHistoryItems.length > 1 || excludeCurrentPrompt) {
     chatHistoryItems.pop();
+  }
+
+  // Past `limit` quests the newest-N window would drop the oldest quest every turn, changing the head
+  // of the prompt each time and defeating the provider's prefix cache. Align its start to a step
+  // boundary instead (see resolveHistoryWindowStart). The aligned window is never longer than `limit`,
+  // so it lies inside the quests already fetched and costs no second fetch.
+  if (mayExceedWindow && db.quests.countBySessionId) {
+    const questCount = await db.quests.countBySessionId(session.id);
+    // The count includes the current turn's quest. Floored at what was fetched in case a concurrent
+    // write made the two reads disagree.
+    const priorQuestCount = Math.max(questCount - 1, chatHistoryItems.length);
+    const windowStart = resolveHistoryWindowStart(priorQuestCount, limit);
+    const fetchedStart = priorQuestCount - chatHistoryItems.length;
+    const dropCount = Math.min(Math.max(windowStart - fetchedStart, 0), chatHistoryItems.length - 1);
+    if (dropCount > 0) chatHistoryItems.splice(0, dropCount);
   }
 
   // Filter out messages already covered by contextSummary.
@@ -2476,6 +2523,13 @@ export async function buildAndSortMessages(
   messages: IMessage[];
   messageTruncation: MessageTruncationInfo | null;
   injectedBlocks: BuilderInjectedBlock[];
+  /**
+   * How many messages at the END of `messages` belong to the current turn (the user prompt, plus any
+   * attached-content and image messages assembled with it) rather than to history. A caller that sets
+   * a prompt-cache breakpoint on history needs it to exclude exactly these, or the breakpoint lands on
+   * content that is rebuilt every turn and never matches. Absent when no payload was built.
+   */
+  currentTurnMessageCount?: number;
 }> {
   // Negated like processMessages' budget guard so a NaN lands here rather than sailing past every
   // comparison below.
@@ -3154,6 +3208,7 @@ export async function buildAndSortMessages(
       messages: ensureToolPairingIntegrity(assemble(reducedContentMessages, processedPreviousMessages), logger),
       messageTruncation: buildDebugInfo(reducedContentMessages),
       injectedBlocks,
+      currentTurnMessageCount: userPrompt.length + imageMessages.length + reducedContentMessages.length,
     };
   }
 
@@ -3182,5 +3237,6 @@ export async function buildAndSortMessages(
     messages: ensureToolPairingIntegrity(messages, logger),
     messageTruncation: buildDebugInfo(processedContentMessages),
     injectedBlocks,
+    currentTurnMessageCount: userPrompt.length + imageMessages.length + processedContentMessages.length,
   };
 }

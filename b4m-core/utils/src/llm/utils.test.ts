@@ -11,6 +11,8 @@ import {
   TOOL_RESULT_NOT_RECORDED,
   ATTACHMENT_DELIVERED_NOTICE,
   ATTACHMENT_END_DELIMITER,
+  HISTORY_WINDOW_STEP,
+  resolveHistoryWindowStart,
 } from './utils';
 import { ensureToolPairingIntegrity, stripAllToolBlocks } from '@bike4mind/llm-adapters';
 import {
@@ -4425,5 +4427,149 @@ describe('fetchAndProcessPreviousMessages - stored reply choices', () => {
     // historyTextReply picks the FIRST non-<think> slot ('partial answer...'), which is not the
     // last slot carrying visible text ('final answer...') - so no block is attached.
     expect(messages[1]).toEqual({ role: 'assistant', content: 'partial answer before tool call' });
+  });
+});
+
+describe('history window alignment', () => {
+  const LIMIT = 30;
+  const STEP = HISTORY_WINDOW_STEP;
+
+  describe('resolveHistoryWindowStart', () => {
+    it.each([
+      ['T below the limit', 12, 0],
+      ['T = L', LIMIT, 0],
+      ['T = L + 1', LIMIT + 1, STEP],
+      ['T = L + STEP', LIMIT + STEP, STEP],
+      ['T = L + STEP + 1', LIMIT + STEP + 1, 2 * STEP],
+    ])('%s', (_label, priorQuestCount, expectedStart) => {
+      expect(resolveHistoryWindowStart(priorQuestCount, LIMIT)).toBe(expectedStart);
+    });
+
+    it('never exceeds the limit, never empties the window, and only moves on a step boundary', () => {
+      let previous = 0;
+      for (let priorQuestCount = 1; priorQuestCount <= 300; priorQuestCount++) {
+        const start = resolveHistoryWindowStart(priorQuestCount, LIMIT);
+        expect(priorQuestCount - start).toBeLessThanOrEqual(LIMIT);
+        expect(priorQuestCount - start).toBeGreaterThan(0);
+        expect(start % STEP).toBe(0);
+        expect(start).toBeGreaterThanOrEqual(previous);
+        previous = start;
+      }
+    });
+
+    it('keeps a usable window at a small limit, where a full step would leave almost none', () => {
+      // Limit 10 with step 10 would collapse to a single quest right after every step.
+      for (let t = 11; t <= 60; t++) {
+        const window = t - resolveHistoryWindowStart(t, 10);
+        expect(window).toBeGreaterThanOrEqual(6);
+        expect(window).toBeLessThanOrEqual(10);
+      }
+      expect(resolveHistoryWindowStart(7, 1)).toBe(6);
+    });
+  });
+
+  describe('fetchAndProcessPreviousMessages', () => {
+    const makeItem = (n: number) => ({
+      id: String(n).padStart(24, '0'),
+      sessionId: 'session1',
+      prompt: `prompt ${n}`,
+      reply: `reply ${n}`,
+      replies: [`reply ${n}`],
+      timestamp: new Date(n * 1000),
+      type: 'message',
+      status: 'done',
+    });
+    const makeSession = (overrides: Partial<ISessionDocument> = {}) =>
+      ({ id: 'session1', ...overrides }) as unknown as ISessionDocument;
+
+    /** A session of `priorQuestCount` earlier quests plus the in-flight one, newest first as the repo returns them. */
+    const repo = (priorQuestCount: number) => {
+      const all = Array.from({ length: priorQuestCount + 1 }, (_, i) => makeItem(i + 1));
+      return {
+        getMostRecentChatHistory: vi.fn(async (_sessionId: string, limit: number) => all.slice(-limit).reverse()),
+        countBySessionId: vi.fn(async () => all.length),
+      };
+    };
+
+    const windowFor = async (priorQuestCount: number, session = makeSession()) => {
+      const quests = repo(priorQuestCount);
+      const [, count, meta] = await fetchAndProcessPreviousMessages(session, LIMIT, { db: { quests } });
+      return { count, oldest: meta.oldestIncludedQuestId, quests };
+    };
+
+    it('keeps the newest quests, unchanged, while the session fits the limit', async () => {
+      const { count, oldest, quests } = await windowFor(12);
+
+      expect(count).toBe(12);
+      expect(oldest).toBe(makeItem(1).id);
+      expect(quests.countBySessionId).not.toHaveBeenCalled();
+    });
+
+    it('holds the window start for STEP turns, then moves it a whole step', async () => {
+      const starts = new Map<number, string | null | undefined>();
+      for (const prior of [LIMIT, LIMIT + 1, LIMIT + STEP, LIMIT + STEP + 1]) {
+        starts.set(prior, (await windowFor(prior)).oldest);
+      }
+
+      expect(starts.get(LIMIT)).toBe(makeItem(1).id);
+      // T = L + 1 drops the first STEP quests at once, and the next STEP - 1 turns reuse that start.
+      expect(starts.get(LIMIT + 1)).toBe(makeItem(STEP + 1).id);
+      expect(starts.get(LIMIT + STEP)).toBe(makeItem(STEP + 1).id);
+      expect(starts.get(LIMIT + STEP + 1)).toBe(makeItem(2 * STEP + 1).id);
+    });
+
+    it('never returns more than the limit', async () => {
+      for (const prior of [LIMIT, LIMIT + 1, LIMIT + STEP, LIMIT + STEP + 1, 95]) {
+        expect((await windowFor(prior)).count).toBeLessThanOrEqual(LIMIT);
+      }
+    });
+
+    it('costs one count query, and only once the session has reached the limit', async () => {
+      const { quests } = await windowFor(LIMIT + 3);
+
+      expect(quests.countBySessionId).toHaveBeenCalledTimes(1);
+      expect(quests.countBySessionId).toHaveBeenCalledWith('session1');
+      expect(quests.getMostRecentChatHistory).toHaveBeenCalledTimes(1);
+      expect(quests.getMostRecentChatHistory).toHaveBeenCalledWith('session1', LIMIT + 1);
+    });
+
+    it('falls back to the newest-N window when the repository has no count', async () => {
+      const { getMostRecentChatHistory } = repo(LIMIT + 3);
+
+      const [, count, meta] = await fetchAndProcessPreviousMessages(makeSession(), LIMIT, {
+        db: { quests: { getMostRecentChatHistory } },
+      });
+
+      expect(count).toBe(LIMIT);
+      expect(meta.oldestIncludedQuestId).toBe(makeItem(4).id);
+    });
+
+    describe('with a context summary', () => {
+      it('already covers the quests the window stepped past, so the filter changes nothing', async () => {
+        // The summarizer covers up to the quest before the window start (see ContextSummarizationFeature).
+        const boundary = makeItem(STEP).id;
+
+        const { count, oldest } = await windowFor(LIMIT + 1, makeSession({ contextSummaryUpToQuestId: boundary }));
+
+        expect(oldest).toBe(makeItem(STEP + 1).id);
+        expect(count).toBe(LIMIT + 1 - STEP);
+      });
+
+      it('still trims a boundary that is ahead of the window start', async () => {
+        const { oldest } = await windowFor(
+          LIMIT + 1,
+          makeSession({ contextSummaryUpToQuestId: makeItem(STEP + 5).id })
+        );
+
+        expect(oldest).toBe(makeItem(STEP + 6).id);
+      });
+
+      it('does not pull quests back into the window when the summary lags its start', async () => {
+        // The summary only reaches quest 3; quests 4..STEP are outside the window and not summarized yet.
+        const { oldest } = await windowFor(LIMIT + 1, makeSession({ contextSummaryUpToQuestId: makeItem(3).id }));
+
+        expect(oldest).toBe(makeItem(STEP + 1).id);
+      });
+    });
   });
 });
