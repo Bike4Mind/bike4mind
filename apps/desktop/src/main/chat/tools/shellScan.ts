@@ -17,6 +17,13 @@ export interface ShellCommand {
    * or an option off the safe list - so `text` no longer says what the command does.
    */
   coverable: boolean;
+  /** The command's words as written, options included: what a permission rule is matched against. */
+  words: string;
+  /**
+   * Set when the command runs code the scan cannot read (`eval`, `node -e`, `bash -c`, a script on
+   * stdin): the leading words that name that form. A permission rule covers it only by naming them.
+   */
+  opaque?: string;
 }
 
 export interface ShellScan {
@@ -297,6 +304,29 @@ function interpreterOptions(program: string, args: readonly string[]): { options
  * `echo x | sh`, and the shell builtins that read one in-process: `source <(curl https://x)`.
  */
 const STDIN_SCRIPT = /^(python[\d.]*|node|ruby|perl|php|bun|osascript|sh|bash|zsh|dash|source|\.)$/;
+
+/**
+ * The leading words that name a command's opaque form, or null when the scan can read what it
+ * runs. A wrapper (`sudo`, `timeout 5`) is looked through, so `sudo bash -c ...` is `sudo bash -c`.
+ */
+export function opaqueForm(tokens: readonly string[]): string | null {
+  let start = 0;
+  while (start < tokens.length && WRAPPERS.has(tokens[start])) {
+    start++;
+    while (start < tokens.length && /^(-|\d|[A-Za-z_][A-Za-z0-9_]*=)/.test(tokens[start])) start++;
+  }
+  const [program, ...args] = tokens.slice(start);
+  if (program === undefined) return null;
+  const head = (count: number) => tokens.slice(0, start + count).join(' ');
+  if (program === 'eval' || program === 'source' || program === '.') return head(1);
+  const inline = /^python[\d.]*$/.test(program) ? DASH_C : INLINE_SCRIPT[program];
+  if (!inline && !STDIN_SCRIPT.test(program)) return null;
+  const { options, operands } = interpreterOptions(program, args);
+  if (inline && options.some(option => inline.test(option))) {
+    return head(2 + args.findIndex(arg => inline.test(flagRun(arg, optionValueLetters(program)))));
+  }
+  return operands.length === 0 || operands[0] === '-' ? head(1) : null;
+}
 
 /** Arguments that name the command's own standard input rather than a script file. */
 const STDIN_SCRIPT_ARG = /^(\/(dev|proc\/self)\/fd\/[\d]+|\/dev\/stdin|[<>]\()/;
@@ -705,10 +735,13 @@ export async function scanShell(
       const assigns = node.namedChildren.some(child => child?.type === 'variable_assignment');
       const writes = writtenCommands.has(node.id) || hasWriteRedirect(node);
       const arithmetic = tokens.some(token => EVALUATES_ARITHMETIC.test(token));
+      const opaque = opaqueForm(tokens);
       commands.push({
         text: normalised.join(' '),
         always: `${arityPrefix(normalised).join(' ')} *`,
         coverable: !assigns && !writes && !arithmetic && droppedOnlySafeOptions(tokens),
+        words: tokens.join(' '),
+        ...(opaque ? { opaque } : {}),
       });
       const sends = outboundReason(tokens, readsStdin(node));
       if (sends) outbound.add(sends);
@@ -758,7 +791,7 @@ export async function scanShell(
         node.type === 'variable_assignments' ||
         (node.type === 'variable_assignment' && !ASSIGNMENT_OWNERS.has(node.parent?.type ?? ''))
       ) {
-        commands.push({ text: node.text, always: node.text, coverable: false });
+        commands.push({ text: node.text, always: node.text, coverable: false, words: node.text });
         contained = false;
         for (const child of node.children) if (child) await visit(child);
         return;
@@ -768,7 +801,7 @@ export async function scanShell(
       if (node.type === 'for_statement') {
         const body = node.childForFieldName('body');
         const header = body ? node.text.slice(0, body.startIndex - node.startIndex).replace(/[\s;]+$/, '') : node.text;
-        commands.push({ text: header, always: header, coverable: false });
+        commands.push({ text: header, always: header, coverable: false, words: header });
         contained = false;
         for (const child of node.children) if (child) await visit(child);
         return;
@@ -778,7 +811,7 @@ export async function scanShell(
         if (body?.type === 'command') {
           writtenCommands.add(body.id);
         } else {
-          commands.push({ text: node.text, always: node.text, coverable: false });
+          commands.push({ text: node.text, always: node.text, coverable: false, words: node.text });
         }
       }
       if (node.type === 'file_redirect') {

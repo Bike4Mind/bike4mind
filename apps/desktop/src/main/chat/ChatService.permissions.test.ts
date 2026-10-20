@@ -1,0 +1,236 @@
+import { mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { PassThrough } from 'node:stream';
+import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
+import type { ChatApprovalMode, ChatStreamEvent, ChatToolCall } from '@shared/chat';
+import type { PermissionList } from '@shared/permissions';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ChatService } from './ChatService';
+import { SessionStore } from './SessionStore';
+import { PermissionRuleSet, compileRule, parseRule, type CompiledRule } from './permissions/rules';
+import type { AccessStore } from './tools/AccessStore';
+import { ApprovalGate } from './tools/ApprovalGate';
+import { toolsForRequest } from './tools/registry';
+
+function frame(payload: unknown): string {
+  return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
+}
+
+function ruleSet(lists: Partial<Record<PermissionList, string[]>>): PermissionRuleSet {
+  const compiled: CompiledRule[] = [];
+  for (const [list, texts] of Object.entries(lists) as [PermissionList, string[]][]) {
+    for (const text of texts) {
+      const parsed = parseRule(text, { native: true });
+      if (!parsed.ok) throw new Error(parsed.reason);
+      const rule = compileRule(
+        parsed.rule,
+        list,
+        { id: 'cc-user', label: 'Claude Code user', path: '/x/settings.json' },
+        {
+          home: '/nowhere',
+          root: null,
+          cwd: null,
+        }
+      );
+      if (rule) compiled.push(rule);
+    }
+  }
+  return new PermissionRuleSet(compiled);
+}
+
+/** The approval path with standing rules: deny refuses, ask asks, allow runs, and the floors hold. */
+describe('ChatService permission rules', () => {
+  let service: ChatService;
+  let approvals: ApprovalGate;
+  let events: ChatStreamEvent[];
+  let streams: PassThrough[];
+  let root: string;
+  let rules: PermissionRuleSet;
+  let rememberAllows: ReturnType<typeof vi.fn<(rules: readonly string[]) => Promise<void>>>;
+
+  const calls = (name: string, status: ChatToolCall['status']): ChatToolCall[] =>
+    events
+      .map(event => (event.type === 'tool-start' || event.type === 'tool-end' ? event.call : null))
+      .filter((call): call is ChatToolCall => call !== null && call.name === name && call.status === status);
+
+  const awaitCall = (name: string, status: ChatToolCall['status']) =>
+    vi.waitUntil(() => calls(name, status)[0], { timeout: 5000, interval: 10 });
+
+  beforeEach(async () => {
+    root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-rules-')));
+    await writeFile(join(root, 'notes.txt'), 'hello\n', 'utf8');
+    approvals = new ApprovalGate();
+    rules = ruleSet({});
+    rememberAllows = vi.fn<(rules: readonly string[]) => Promise<void>>().mockResolvedValue(undefined);
+    events = [];
+    streams = [];
+    const post = vi.fn().mockImplementation(() => {
+      const stream = new PassThrough();
+      streams.push(stream);
+      return Promise.resolve({ data: stream, status: 200 });
+    });
+    service = new ChatService({
+      store: new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-rules-sessions-')), 'test-model'),
+      access: { list: async () => [root] } as unknown as AccessStore,
+      approvals,
+      permissions: { rulesFor: async () => rules, rememberAllows, invalidate: vi.fn() },
+      logger: { debug: vi.fn(), warn: vi.fn() },
+      getApiClient: () =>
+        ({
+          get: vi.fn().mockResolvedValue({}),
+          post: vi.fn().mockResolvedValue({ result: 'page' }),
+          getAxiosInstance: () => ({ post }),
+        }) as unknown as AuthenticatedApiClient,
+      getEnvironmentUrl: () => 'http://localhost:3000',
+      emit: event => events.push(event),
+    });
+  });
+
+  afterEach(() => {
+    service.dispose();
+    for (const stream of streams) stream.end();
+  });
+
+  async function run(mode: ChatApprovalMode, name: string, input: Record<string, unknown>): Promise<string> {
+    const created = await service.createSession();
+    await service.setApprovalMode(created.id, mode);
+    const before = streams.length;
+    await service.send(created.id, 'go');
+    await vi.waitUntil(() => streams.length === before + 1, { timeout: 5000, interval: 5 });
+    streams[before].write(frame({ type: 'tool_use', tools: [{ id: 'c1', name, arguments: JSON.stringify(input) }] }));
+    streams[before].write(frame('[DONE]'));
+    return created.id;
+  }
+
+  const settled = (name: string) =>
+    vi.waitUntil(() => calls(name, 'done')[0] ?? calls(name, 'error')[0], { timeout: 5000, interval: 10 });
+
+  it('refuses a denied command in every mode, naming the rule and its source', async () => {
+    rules = ruleSet({ deny: ['Bash(rm:*)'], allow: ['Bash(echo:*)'] });
+    await run('full', 'bash_execute', { command: 'echo hi && rm notes.txt', cwd: root });
+
+    const refused = await awaitCall('bash_execute', 'denied');
+    expect(refused.error).toContain('Bash(rm:*) in Claude Code user (/x/settings.json)');
+    expect(await readFile(join(root, 'notes.txt'), 'utf8')).toBe('hello\n');
+  });
+
+  it('refuses a denied read that no mode would have asked about', async () => {
+    rules = ruleSet({ deny: [`Read(/${root}/**)`] });
+    await run('auto', 'file_read', { path: join(root, 'notes.txt') });
+
+    const refused = await awaitCall('file_read', 'denied');
+    expect(refused.error).toContain(`Read(/${root}/**)`);
+  });
+
+  it('asks on an ask rule even in Approve for me and full access, and says why', async () => {
+    rules = ruleSet({ ask: ['Bash(git push:*)'], allow: ['Bash(git:*)'] });
+    await run('full', 'bash_execute', { command: 'git push', cwd: root });
+
+    const asked = await awaitCall('bash_execute', 'awaiting-approval');
+    expect(asked.approvalDetail).toContain('Asked because of the rule Bash(git push:*)');
+    expect(asked.approvalRules).toBeUndefined();
+  });
+
+  it('asks on an ask rule for a tool that never asks', async () => {
+    rules = ruleSet({ ask: ['WebSearch'] });
+    await run('full', 'web_search', { query: 'x' });
+
+    const asked = await awaitCall('web_search', 'awaiting-approval');
+    expect(asked.approvalDetail).toContain('Asked because of the rule WebSearch');
+  });
+
+  it('runs an allowed command unasked in Ask', async () => {
+    rules = ruleSet({ allow: ['Bash(wc:*)', 'Bash(cat:*)'] });
+    await run('ask', 'bash_execute', { command: 'wc -l notes.txt | cat', cwd: root });
+
+    await settled('bash_execute');
+    expect(calls('bash_execute', 'awaiting-approval')).toHaveLength(0);
+  });
+
+  it('asks in Ask when only part of a compound command is allowed', async () => {
+    rules = ruleSet({ allow: ['Bash(wc:*)'] });
+    await run('ask', 'bash_execute', { command: 'wc -l notes.txt && touch x', cwd: root });
+
+    await awaitCall('bash_execute', 'awaiting-approval');
+  });
+
+  it('does not let a broad prefix cover an inline script', async () => {
+    rules = ruleSet({ allow: ['Bash(node:*)'] });
+    await run('ask', 'bash_execute', { command: `node -e 'console.log(1)'`, cwd: root });
+
+    const asked = await awaitCall('bash_execute', 'awaiting-approval');
+    expect(asked.approvalRules).toBeUndefined();
+  });
+
+  it('lets a rule naming the inline form cover it', async () => {
+    rules = ruleSet({ allow: ["Bash(node -e ' *)"] });
+    await run('ask', 'bash_execute', { command: `node -e 'console.log(1)'`, cwd: root });
+
+    await settled('bash_execute');
+    expect(calls('bash_execute', 'awaiting-approval')).toHaveLength(0);
+  });
+
+  // Not a temp folder: the shell scan counts those as shared already.
+  it('asks for a folder outside the shared ones that no Read or Edit rule covers', async () => {
+    rules = ruleSet({ allow: ['Bash(ls:*)'] });
+    await run('ask', 'bash_execute', { command: 'ls /usr/share', cwd: root });
+    await awaitCall('bash_execute', 'awaiting-approval');
+  });
+
+  it('runs a command in an outside folder that a Read rule covers', async () => {
+    rules = ruleSet({ allow: ['Bash(ls:*)', 'Read(//usr/**)'] });
+    await run('ask', 'bash_execute', { command: 'ls /usr/share', cwd: root });
+    await settled('bash_execute');
+    expect(calls('bash_execute', 'awaiting-approval')).toHaveLength(0);
+  });
+
+  it('saves the derived rule when the card is answered "Always, in every session"', async () => {
+    await run('ask', 'bash_execute', { command: 'git status --short', cwd: root });
+    const asked = await awaitCall('bash_execute', 'awaiting-approval');
+    expect(asked.approvalRules).toEqual(['Bash(git status:*)']);
+
+    approvals.resolve(asked.approvalId!, { decision: 'always', everywhere: true });
+    await settled('bash_execute');
+    expect(rememberAllows).toHaveBeenCalledWith(['Bash(git status:*)']);
+  });
+
+  it('saves nothing on a plain "Always allow"', async () => {
+    await run('ask', 'bash_execute', { command: 'git status', cwd: root });
+    const asked = await awaitCall('bash_execute', 'awaiting-approval');
+    approvals.resolve(asked.approvalId!, { decision: 'always' });
+    await settled('bash_execute');
+    expect(rememberAllows).not.toHaveBeenCalled();
+  });
+
+  it('derives a domain rule for a fetch', async () => {
+    await run('ask', 'web_fetch', { url: 'https://docs.example.com/a' });
+    const asked = await awaitCall('web_fetch', 'awaiting-approval');
+    expect(asked.approvalRules).toEqual(['WebFetch(domain:docs.example.com)']);
+  });
+});
+
+describe('no model write to permission rules', () => {
+  it('offers the model no tool that names permissions or settings', () => {
+    const names = toolsForRequest({
+      roots: ['/work'],
+      media: true,
+      host: true,
+      explore: true,
+      browser: true,
+      memory: true,
+      skills: true,
+      web: true,
+      ask: true,
+      mcpServers: true,
+    }).map(tool => tool.toolSchema.name);
+    expect(names.length).toBeGreaterThan(10);
+    for (const name of names) expect(name).not.toMatch(/permission|rule|setting/i);
+  });
+
+  it('leaves the rule store out of what a tool is given', async () => {
+    const source = await readFile(join(__dirname, 'tools', 'types.ts'), 'utf8');
+    const context = source.slice(source.indexOf('export interface ToolContext'));
+    expect(context.slice(0, context.indexOf('\n}\n'))).not.toMatch(/permission/i);
+  });
+});

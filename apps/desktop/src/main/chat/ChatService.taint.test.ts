@@ -9,6 +9,23 @@ import { ChatService, type ChatServiceDeps } from './ChatService';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
+import { PermissionRuleSet, compileRule, parseRule } from './permissions/rules';
+
+function allowRules(rules: readonly string[]): PermissionRuleSet {
+  return new PermissionRuleSet(
+    rules.flatMap(text => {
+      const parsed = parseRule(text);
+      if (!parsed.ok) throw new Error(parsed.reason);
+      const compiled = compileRule(
+        parsed.rule,
+        'allow',
+        { id: 'test', label: 'Test' },
+        { home: '/nowhere', root: null, cwd: null }
+      );
+      return compiled ? [compiled] : [];
+    })
+  );
+}
 
 // A `gh` stub first on PATH, so the GitHub commands below run without the network or an account.
 const stub = vi.hoisted(() => ({ bin: '' }));
@@ -34,6 +51,7 @@ describe('ChatService untrusted content in a reply', () => {
   let streams: PassThrough[];
   let root: string;
   let fetchFails: boolean;
+  let rules: PermissionRuleSet;
   /** Mutated per test: the service holds this object, so a test can shrink a budget before it runs. */
   const turnLimits: ChatServiceDeps['turnLimits'] = {};
 
@@ -53,6 +71,7 @@ describe('ChatService untrusted content in a reply', () => {
     await chmod(join(stub.bin, 'gh'), 0o755);
     approvals = new ApprovalGate();
     fetchFails = false;
+    rules = allowRules([]);
     for (const key of Object.keys(turnLimits) as (keyof typeof turnLimits)[]) delete turnLimits[key];
     const testEvents: ChatStreamEvent[] = [];
     const testStreams: PassThrough[] = [];
@@ -68,6 +87,7 @@ describe('ChatService untrusted content in a reply', () => {
       store: new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-taint-sessions-')), 'test-model'),
       access: { list: async () => [root] } as unknown as AccessStore,
       approvals,
+      permissions: { rulesFor: async () => rules, rememberAllows: vi.fn(), invalidate: vi.fn() },
       logger: { debug: vi.fn(), warn: vi.fn() },
       getApiClient: () =>
         ({
@@ -325,6 +345,48 @@ describe('ChatService untrusted content in a reply', () => {
 
       const asked = await awaitCall('bash_execute', 'awaiting-approval');
       expect(asked.approvalDetail).toContain('(web_fetch)');
+    });
+  });
+  describe("the user's allow rules", () => {
+    const settled = (name: string) =>
+      vi.waitUntil(() => calls(name, 'done')[0] ?? calls(name, 'error')[0], { timeout: 5000, interval: 10 });
+
+    const cases: [string, string, [string, Record<string, unknown>]][] = [
+      ['Bash(gh pr create:*)', 'gh pr create', ['bash_execute', { command: 'gh pr create --fill', cwd: '' }]],
+      ['Bash(git rebase:*)', 'git rebase', ['bash_execute', { command: 'git rebase origin/main', cwd: '' }]],
+      ['WebFetch(domain:example.com)', 'a fetch', ['web_fetch', { url: 'https://example.com/other' }]],
+    ];
+
+    it.each(cases)('%s runs %s unasked in a tainted reply', async (rule, _label, [name, input]) => {
+      rules = allowRules([rule]);
+      const id = await session('auto');
+      await reply(id, [fetch, [name, name === 'bash_execute' ? { ...input, cwd: root } : input]]);
+
+      await vi.waitUntil(
+        () => calls(name, 'done').length + calls(name, 'error').length >= (name === 'web_fetch' ? 2 : 1),
+        {
+          timeout: 5000,
+          interval: 10,
+        }
+      );
+      expect(calls(name, 'awaiting-approval')).toHaveLength(0);
+    });
+
+    it.each(cases)('without %s, %s in a tainted reply still asks', async (_rule, _label, [name, input]) => {
+      const id = await session('auto');
+      await reply(id, [fetch, [name, name === 'bash_execute' ? { ...input, cwd: root } : input]]);
+
+      const asked = await awaitCall(name, 'awaiting-approval');
+      expect(asked.approvalDetail).toContain('(web_fetch)');
+    });
+
+    it('offers "Always, in every session" on a tainted card', async () => {
+      const id = await session('auto');
+      await reply(id, [fetch, ['bash_execute', { command: 'gh pr create --fill', cwd: root }]]);
+
+      const asked = await awaitCall('bash_execute', 'awaiting-approval');
+      expect(asked.approvalRules).toEqual(['Bash(gh pr create:*)']);
+      await settled('web_fetch');
     });
   });
 });

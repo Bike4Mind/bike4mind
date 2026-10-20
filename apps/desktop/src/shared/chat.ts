@@ -195,6 +195,11 @@ export interface ChatToolCall {
    */
   approvalAlwaysFull?: string;
   /**
+   * Set with `approvalId` when the call can be allowed in every session: the permission rules
+   * (Claude Code syntax) that "Always, in every session" saves. Never on an irreversible call.
+   */
+  approvalRules?: string[];
+  /**
    * Set with `approvalId` when the call can be allowed in more than one way, so the card draws
    * a split button rather than a plain "allow". The chosen option is folded into `input` before
    * the tool runs, which is what makes the settled row report what the user actually picked.
@@ -339,6 +344,11 @@ export interface ChatApprovalAnswer {
    * they are never put back on the call, in the transcript, or in anything the model reads.
    */
   secrets?: { env?: Record<string, string>; headers?: Record<string, string> };
+  /**
+   * With decision 'always': also save the card's `approvalRules` as user-level allow rules, for
+   * every later session. Main saves the rules it derived itself; this only says yes to them.
+   */
+  everywhere?: boolean;
 }
 
 /**

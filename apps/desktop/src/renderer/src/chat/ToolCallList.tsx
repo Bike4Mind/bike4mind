@@ -171,6 +171,11 @@ function AlwaysScopeLine({ call }: { call: ChatToolCall }) {
       {call.approvalAlways
         ? `"Always allow" covers ${call.approvalAlways} for the rest of this conversation.`
         : '"Always allow" applies for the rest of this conversation.'}
+      {call.approvalRules && call.approvalRules.length > 0 && (
+        <span data-testid="chat-tool-approval-rules">
+          {` "In every session" saves ${call.approvalRules.join(', ')} to Settings > Permissions.`}
+        </span>
+      )}
     </Typography>
   );
 }
@@ -285,6 +290,18 @@ function ApprovalPrompt({
                 data-testid="chat-tool-approve-always"
               >
                 Always allow
+              </Button>
+            )}
+            {!irreversible && call.approvalRules && call.approvalRules.length > 0 && (
+              <Button
+                size="sm"
+                variant="soft"
+                color="neutral"
+                title={call.approvalRules.join('\n')}
+                onClick={() => onRespond(approvalId, { decision: 'always', everywhere: true })}
+                data-testid="chat-tool-approve-everywhere"
+              >
+                Always, in every session
               </Button>
             )}
             <Button

@@ -7,11 +7,13 @@ import ToggleButtonGroup from '@mui/joy/ToggleButtonGroup';
 import Typography from '@mui/joy/Typography';
 import { useColorScheme, useTheme } from '@mui/joy/styles';
 import type { AuthState } from '@shared/auth';
+import type { PermissionsState } from '@shared/permissions';
 import { updateAttention, updateSummary } from '@shared/update';
 import { EnvironmentPicker } from '../auth/EnvironmentPicker';
 import { EntrySection, type ConfigEntry } from './ConfigEntry';
-import { CloseIcon, ContrastIcon, DownloadIcon, ServerIcon, SparkIcon } from './icons';
+import { CloseIcon, ContrastIcon, DownloadIcon, ServerIcon, ShieldIcon, SparkIcon } from './icons';
 import { columnStackSx, contentColumnSx, scrollingColumnHostSx } from './layout';
+import { PermissionsSettings, permissionsSummary, usePermissions } from './PermissionsSettings';
 import { promptSuggestionsSummary, usePromptSuggestionModel, usePromptSuggestions } from './promptSuggestions';
 import { SuggestionModelPicker } from './SuggestionModelPicker';
 import { THEME_MODES, currentThemeMode, themeModeSummary, type ResolvedThemeMode, type ThemeMode } from './themeMode';
@@ -75,6 +77,16 @@ function suggestionsEntry(enabled: boolean, toggle: () => void, model: string | 
   };
 }
 
+function permissionsEntry(state: PermissionsState | null, setState: (state: PermissionsState) => void): ConfigEntry {
+  return {
+    id: 'permissions',
+    icon: <ShieldIcon />,
+    label: 'Permissions',
+    summary: permissionsSummary(state),
+    control: <PermissionsSettings state={state} onState={setState} />,
+  };
+}
+
 /**
  * Which backend every conversation talks to.
  *
@@ -131,10 +143,12 @@ function useSettingsEntries(auth: AuthState | null): ConfigEntry[] {
   const theme = useTheme();
   const [suggestions, toggleSuggestions] = usePromptSuggestions();
   const [suggestionModel] = usePromptSuggestionModel();
+  const [permissions, setPermissions] = usePermissions();
 
   const preferences = [
     appearanceEntry(mode, setMode, theme.palette.mode),
     suggestionsEntry(suggestions, toggleSuggestions, suggestionModel),
+    permissionsEntry(permissions, setPermissions),
   ];
   return auth ? [...preferences, serverEntry(auth), updatesEntry(update)] : [...preferences, updatesEntry(update)];
 }

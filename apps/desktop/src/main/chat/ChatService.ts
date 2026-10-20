@@ -138,6 +138,8 @@ import { WEB_SEARCH_TURN_BUDGET, WebSearchLimiter } from './tools/webSearchLimit
 import { INTERRUPTED_MESSAGE, STOPPED_BEFORE_CHANGE, untilStopped } from './tools/interruptible';
 import { spendsCredits, readsUntrusted, sendsOut } from './tools/riskAssessment';
 import { MCP_TOOL_PREFIX } from './mcp/names';
+import type { PermissionScopeKey, PermissionService } from './permissions/PermissionService';
+import { describeRule, everySessionRules, permissionSubject } from './permissions/subject';
 import {
   capOutput,
   outputCapFor,
@@ -334,6 +336,11 @@ export interface ChatServiceDeps {
   modelMemory?: ModelMemory;
   /** Absent in tests that exercise tools needing no consent; a gated tool then never runs. */
   approvals?: ApprovalGate;
+  /**
+   * Standing allow, ask and deny rules - the desktop's and Claude Code's. Read here, and written
+   * only by the approval card's "Always, in every session"; no tool can reach it.
+   */
+  permissions?: Pick<PermissionService, 'rulesFor' | 'rememberAllows' | 'invalidate'>;
   /** Owns long-running commands. Absent in tests, which then have no background tools. */
   background?: BackgroundProcessRegistry;
   /** Where a running command offers itself up for moving. Absent in tests, which never move one. */
@@ -1178,6 +1185,8 @@ export class ChatService {
     const root = session?.project?.workingDirectory;
     if (!root) return this.listSkills(sessionId);
     await this.deps.skills.setTrusted(root, trusted);
+    // Trust also decides whether the project's Claude Code files may allow anything.
+    this.deps.permissions?.invalidate();
     return this.deps.skills.state(root);
   }
 
@@ -2266,6 +2275,10 @@ export class ChatService {
                 ask,
                 title: session.title,
                 directories: directoryTurn,
+                permissions: {
+                  project: session.project?.directory ?? null,
+                  workingDirectory: session.project ? (workingDirectory ?? session.project.workingDirectory) : null,
+                },
               },
               sessionId,
               replyId,
@@ -2647,6 +2660,8 @@ export class ChatService {
       title: string;
       /** Absent outside a reply's own loop, where request_directory then has no turn to track. */
       directories?: DirectoryTurn;
+      /** Which project's permission rules apply. */
+      permissions?: PermissionScopeKey;
     },
     sessionId: string,
     messageId: string,
@@ -2800,7 +2815,8 @@ export class ChatService {
           messageId,
           signal,
           looping,
-          scope.directories
+          scope.directories,
+          scope.permissions
         );
         if (gated.settled) return gated.settled;
         // The user's choice becomes part of the call, so every later reader of this row - the
@@ -3576,7 +3592,8 @@ export class ChatService {
     messageId: string,
     signal: AbortSignal,
     looping: boolean,
-    directories: DirectoryTurn = { declined: [], granted: [] }
+    directories: DirectoryTurn = { declined: [], granted: [] },
+    permissionScope: PermissionScopeKey = { project: null, workingDirectory: null }
   ): Promise<ApprovalOutcome> {
     // Interactive tools never reach the approval mode below, so no mode - "Approve for me" and
     // full access included - can answer a folder request on the user's behalf.
@@ -3591,17 +3608,25 @@ export class ChatService {
     if (tool.interactive) return this.awaitAnswer(call, sessionId, messageId, signal);
 
     const gate = this.deps.approvals;
-    if (!gate || !tool.approval) return { input: call.input };
+    if (!gate) return { input: call.input };
+    const rules = this.deps.permissions
+      ? await this.deps.permissions.rulesFor(permissionScope).catch(error => {
+          this.deps.logger.warn(`PERMISSIONS: could not load rules: ${String(error)}`);
+          return null;
+        })
+      : null;
+    if (!tool.approval && !rules?.size) return { input: call.input };
 
     // Building the prompt reads the filesystem for a write tool, and a refusal there - a path
     // outside every granted folder, a binary file - has to settle the call WITHOUT asking. A
     // denial the user is invited to click through is not a denial.
-    let prompt: ApprovalPrompt;
+    let gatedPrompt: ApprovalPrompt | undefined;
     try {
-      if (tool.needsApproval && !(await tool.needsApproval(call.input, context))) return { input: call.input };
-      prompt = await tool.approval(call.input, context);
-      // Read only by `run`, which no path below that refuses the call goes on to.
-      context.approvedKey = prompt.key;
+      if (tool.approval && (!tool.needsApproval || (await tool.needsApproval(call.input, context)))) {
+        gatedPrompt = await tool.approval(call.input, context);
+        // Read only by `run`, which no path below that refuses the call goes on to.
+        context.approvedKey = gatedPrompt.key;
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const refused: ChatToolCall = {
@@ -3614,6 +3639,28 @@ export class ChatService {
       return { settled: refused, input: call.input };
     }
 
+    // The user's standing rules come before every mode, and a deny applies to a call no tool
+    // would have asked about (a plain file read) as much as to one it would.
+    const subject = permissionSubject(call, gatedPrompt, context);
+    const verdict = rules?.size ? rules.evaluate(subject) : { decision: null };
+    if (verdict.decision === 'deny') {
+      const refused: ChatToolCall = {
+        ...call,
+        status: 'denied',
+        error: `Refused by the user's deny rule ${describeRule(verdict.rule)}. Do not try to run it again or work around it; tell the user what you wanted to do.`,
+      };
+      this.emit({ type: 'tool-start', sessionId, messageId, call });
+      this.emit({ type: 'tool-end', sessionId, messageId, call: refused });
+      return { settled: refused, input: call.input };
+    }
+    const askedByRule = verdict.decision === 'ask' ? `Asked because of the rule ${describeRule(verdict.rule)}.` : null;
+    if (!gatedPrompt && !askedByRule) return { input: call.input };
+    let prompt: ApprovalPrompt = gatedPrompt ?? {
+      detail: `${call.name} ${JSON.stringify(call.input)}`,
+      key: `rule-ask\x00${call.name}\x00${JSON.stringify(call.input)}`,
+    };
+    if (askedByRule) prompt = { ...prompt, detail: `${prompt.detail}\n\n${askedByRule}` };
+
     // A redirect option is never offered as a standing answer, so it is never looked up as one
     // either - only the options that actually run the call can have been remembered.
     const runnable = (prompt.choice?.options ?? []).filter(option => !option.redirect);
@@ -3625,12 +3672,16 @@ export class ChatService {
     // steering it, so a call that can send data out is asked whatever "always" was answered
     // before - unless the shell scan proved the command has nowhere to send it.
     const tainted = mode === 'auto' && sendsOut(call.name) && !prompt.contained ? directories.untrusted : undefined;
+    // A matching allow rule runs the call in every mode, over a tainted reply as well: the user
+    // wrote it knowing what the command does. A loop still stops, and the rule set itself keeps
+    // the floors (irreversible, opaque commands, outside folders) - see PermissionRuleSet.
+    if (verdict.decision === 'allow' && !stuck) return { input: applyOption(call.input, runnable[0]) };
     if (tainted) prompt = { ...prompt, detail: `${prompt.detail}\n\n${untrustedReason(tainted)}` };
 
     // An irreversible tool is asked every time, whatever was answered before: the standing set
     // is keyed on what a call WOULD do, and for something with no undo that is not a good
     // enough reason to skip asking. The gate refuses to record one for these either.
-    if (!prompt.irreversible && !stuck && !tainted) {
+    if (!prompt.irreversible && !stuck && !tainted && !askedByRule) {
       const standing = gate.isStanding(
         sessionId,
         prompt.key,
@@ -3655,12 +3706,14 @@ export class ChatService {
     // every granted root - is still refused rather than waved through by a loose mode. A mode
     // loose enough to skip the question takes the card's primary action, which is the one the
     // user would have been shown pre-selected.
-    if (this.autoApproves(mode, sessionId, call, prompt, stuck || !!tainted)) {
+    if (!askedByRule && this.autoApproves(mode, sessionId, call, prompt, stuck || !!tainted)) {
       return { input: applyOption(call.input, runnable[0]) };
     }
 
     const choice = prompt.choice ? { options: prompt.choice.options.map(toWireOption) } : undefined;
     const alwaysScope = prompt.always ? describeAlways(prompt.always, context.workingDirectory) : undefined;
+    // An ask rule outranks any allow, so a rule saved from its card would never apply.
+    const everywhere = this.deps.permissions && !askedByRule ? everySessionRules(subject, prompt) : [];
     const answer = await gate.request(
       sessionId,
       prompt.key,
@@ -3685,6 +3738,7 @@ export class ChatService {
                 }
               : {}),
             ...(choice ? { approvalChoice: choice } : {}),
+            ...(everywhere.length > 0 ? { approvalRules: everywhere } : {}),
           },
         });
       },
@@ -3697,6 +3751,13 @@ export class ChatService {
         ...(prompt.choice ? { rememberable: runnable.map(option => option.id) } : {}),
       }
     );
+
+    // The rules saved are the ones main derived and showed; the renderer only says yes to them.
+    if (answer.decision === 'always' && answer.everywhere && everywhere.length > 0) {
+      await this.deps.permissions?.rememberAllows(everywhere).catch(error => {
+        this.deps.logger.warn(`PERMISSIONS: could not save ${everywhere.join(', ')}: ${String(error)}`);
+      });
+    }
 
     const picked = findOption(prompt, answer.optionId);
 
