@@ -26,6 +26,15 @@ function sourceFiles(dir: string): string[] {
 }
 
 describe('image moderation incident wiring', () => {
+  // A wrong REPO_ROOT would make every root look empty, and the ban below would pass while
+  // scanning nothing.
+  it('scans the repository sources and can still see every allowed file', () => {
+    const scanned = ROOTS.flatMap(root => sourceFiles(join(REPO_ROOT, root)));
+
+    expect(scanned.length).toBeGreaterThan(4_000);
+    for (const allowed of ALLOWED) expect(existsSync(join(REPO_ROOT, allowed))).toBe(true);
+  });
+
   // The bare repository records silently; only the imageModerationIncidents wrapper alerts reviewers.
   it('records every incident through the reviewer-alerting store', () => {
     const offenders = ROOTS.flatMap(root => sourceFiles(join(REPO_ROOT, root)))
