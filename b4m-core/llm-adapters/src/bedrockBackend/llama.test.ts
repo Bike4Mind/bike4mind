@@ -88,11 +88,14 @@ describe('LlamaBedrockBackend max_gen_len', () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it('logs a warning with model, requested and clamped values when clamping', () => {
-    maxGenLen(4096);
+  it.each([
+    [4096, 2048],
+    [-5, 1],
+  ])('logs a warning when maxTokens %s is clamped to %s', (requested, clamped) => {
+    maxGenLen(requested);
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining('clamping'),
-      expect.objectContaining({ model: ChatModels.LLAMA3_INSTRUCT_70B_V1, requested: 4096, clamped: 2048 })
+      expect.objectContaining({ model: ChatModels.LLAMA3_INSTRUCT_70B_V1, requested, clamped })
     );
   });
 });

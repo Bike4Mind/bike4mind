@@ -126,8 +126,8 @@ export default class LlamaBedrockBackend extends BaseBedrockBackend {
     const stopSequences = ['Human:', '\nHuman:', '\n\nHuman:', 'Assistant:', '\nAssistant:'];
 
     const maxGenLen = Math.min(Math.max(options.maxTokens || MAX_GEN_LEN, 1), MAX_GEN_LEN);
-    if (options.maxTokens && options.maxTokens > MAX_GEN_LEN) {
-      Logger.globalInstance.warn('[LlamaBedrockBackend] maxTokens exceeds Bedrock max_gen_len, clamping', {
+    if (options.maxTokens && options.maxTokens !== maxGenLen) {
+      Logger.globalInstance.warn('[LlamaBedrockBackend] maxTokens outside Bedrock max_gen_len range, clamping', {
         model,
         requested: options.maxTokens,
         clamped: maxGenLen,

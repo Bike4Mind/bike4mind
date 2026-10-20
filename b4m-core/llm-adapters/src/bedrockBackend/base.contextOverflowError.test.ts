@@ -39,9 +39,13 @@ describe('Bedrock context overflow mapping', () => {
   });
 
   it('never logs prompt text when an invoke fails', async () => {
-    const spy = vi.spyOn(Logger.globalInstance, 'error').mockImplementation(() => {});
+    const levels = ['log', 'info', 'warn', 'error', 'debug'] as const;
+    const spies = levels.flatMap(level => [
+      vi.spyOn(Logger.globalInstance, level).mockImplementation(() => {}),
+      vi.spyOn(console, level).mockImplementation(() => {}),
+    ]);
     await run(new TestLlamaBackend(), new Error('boom'), 'TOP-SECRET-PROMPT').catch(() => {});
-    expect(JSON.stringify(spy.mock.calls)).not.toContain('TOP-SECRET-PROMPT');
+    expect(JSON.stringify(spies.map(spy => spy.mock.calls))).not.toContain('TOP-SECRET-PROMPT');
   });
 
   it('rejects oversized Llama 3 prompts before calling Bedrock', async () => {
