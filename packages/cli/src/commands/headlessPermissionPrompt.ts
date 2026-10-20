@@ -51,11 +51,17 @@ export function createHeadlessPromptFn(deps: HeadlessPromptDeps) {
         action: decision.action,
         reason: decision.reason,
         risk: risk.level,
+        // Echoed so a decision can be matched to its request when a tool question and a
+        // sandbox-escalation question for the same tool arrive back to back.
+        kind: kind ?? 'tool',
       });
     } else if (decision.action === 'deny') {
       warn(
-        `Warning: Tool "${toolName}" requires permission and was denied (${decision.reason}). ` +
-          `Grant it via --permission-policy, or --dangerously-skip-permissions to allow all tools.\n`
+        kind === 'sandbox-escalation'
+          ? `Warning: Tool "${toolName}" was denied by the OS sandbox, and retrying it outside the sandbox ` +
+              `needs approval that headless mode cannot grant. Use --dangerously-skip-permissions to allow it.\n`
+          : `Warning: Tool "${toolName}" requires permission and was denied (${decision.reason}). ` +
+              `Grant it via --permission-policy, or --dangerously-skip-permissions to allow all tools.\n`
       );
     }
 

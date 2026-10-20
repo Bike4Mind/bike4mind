@@ -39,6 +39,29 @@ describe('createHeadlessPromptFn', () => {
       'tool',
       'sandbox-escalation',
     ]);
+    // The decision echoes its request's kind, so a consumer can pair them by identity, not order.
+    expect(events.filter(event => event.type === 'permission_decision').map(event => event.kind)).toEqual([
+      'tool',
+      'sandbox-escalation',
+    ]);
+  });
+
+  it('does not point a denied escalation at --permission-policy, which cannot grant it', async () => {
+    const warnings: string[] = [];
+    const promptFn = createHeadlessPromptFn({
+      catalog: new ToolCatalog(),
+      dangerouslySkipPermissions: false,
+      permissionPolicy: ALLOW_BASH,
+      emit: null,
+      warn: message => warnings.push(message),
+    });
+
+    await expect(promptFn('bash_execute', { command: 'ls' }, undefined, 'sandbox-escalation')).resolves.toEqual({
+      action: 'deny',
+    });
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('outside the sandbox');
+    expect(warnings[0]).not.toContain('--permission-policy');
   });
 });
 

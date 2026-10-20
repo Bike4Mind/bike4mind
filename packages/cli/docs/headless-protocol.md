@@ -42,7 +42,7 @@ envelope:
 - **MINOR** bumps on a backward-compatible addition: a new optional field or a
   new event type. Consumers should ignore unknown event types and fields.
 
-Current version: **`1.1.0`** (1.1.0 added `kind` to `permission_request`).
+Current version: **`1.1.0`** (1.1.0 added `kind` to `permission_request` and `permission_decision`).
 
 ## Events (`stream-json`)
 
@@ -55,7 +55,7 @@ carry the envelope fields above.
 | `action` | `content`, `toolName`, `toolInput` | The agent invoked a tool. |
 | `observation` | `content`, `toolName` | The result returned by a tool. |
 | `permission_request` | `toolName`, `risk`, `kind` | A gated tool is about to run; permission is being decided. `risk` is `{ level: "low"\|"medium"\|"high", reasons: string[] }`. `kind` is `"tool"`, `"directory-grant"` (widening the filesystem allow-list) or `"sandbox-escalation"` (re-running a sandbox-denied command outside the sandbox); the latter two are denied unless `--dangerously-skip-permissions` is set, whatever the policy says. |
-| `permission_decision` | `toolName`, `action`, `reason`, `risk` | The decision for a gated tool. `action` is `"allow-once"` or `"deny"`; `reason` explains why; `risk` is the classified level. |
+| `permission_decision` | `toolName`, `action`, `reason`, `risk`, `kind` | The decision for a gated tool. `action` is `"allow-once"` or `"deny"`; `reason` explains why; `risk` is the classified level; `kind` repeats the request's kind, so a decision can be matched to its request when a tool question and a `sandbox-escalation` question for the same tool arrive back to back. |
 | `result` | `content`, `tokenUsage`, `iterations`, `toolCalls` | Terminal success event with the final answer. `tokenUsage` is `{ totalTokens, inputTokens, outputTokens }`. |
 | `error` | `error` | Terminal failure event with the error message. |
 
@@ -145,7 +145,7 @@ Decision precedence overall: `--dangerously-skip-permissions` >
 $ b4m -p "list the files here" --output-format stream-json --permission-policy ci-policy.json
 {"schemaVersion":"1.1.0","runId":"...","type":"thought","content":"I should list the directory."}
 {"schemaVersion":"1.1.0","runId":"...","type":"permission_request","toolName":"bash_execute","risk":{"level":"low","reasons":[]},"kind":"tool"}
-{"schemaVersion":"1.1.0","runId":"...","type":"permission_decision","toolName":"bash_execute","action":"allow-once","reason":"risk low <= maxAutoAllowRisk low","risk":"low"}
+{"schemaVersion":"1.1.0","runId":"...","type":"permission_decision","toolName":"bash_execute","action":"allow-once","reason":"risk low <= maxAutoAllowRisk low","risk":"low","kind":"tool"}
 {"schemaVersion":"1.1.0","runId":"...","type":"action","content":"","toolName":"bash_execute","toolInput":{"command":"ls"}}
 {"schemaVersion":"1.1.0","runId":"...","type":"observation","content":"...","toolName":"bash_execute"}
 {"schemaVersion":"1.1.0","runId":"...","type":"result","content":"...","tokenUsage":{"totalTokens":0,"inputTokens":0,"outputTokens":0},"iterations":1,"toolCalls":1}
