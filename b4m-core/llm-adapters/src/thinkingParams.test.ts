@@ -5,6 +5,7 @@ import {
   buildThinkingParams,
   DEFAULT_ANTHROPIC_EFFORT,
   DEFAULT_QUEST_MASTER_ANTHROPIC_EFFORT,
+  isAdaptiveThinkingByDefault,
   planReasoningEffort,
   reasonsWithinOutputBudget,
   resolveAnthropicEffort,
@@ -658,5 +659,43 @@ describe('planReasoningEffort', () => {
   it('leaves a model that cannot think alone', () => {
     const noThinking: ModelInfo = { ...baseModelInfo, id: ChatModels.CLAUDE_3_5_HAIKU_ANTHROPIC, can_think: false };
     expect(planReasoningEffort(noThinking.id, noThinking, 'high', 8192)).toEqual({ kind: 'default' });
+  });
+});
+
+describe('isAdaptiveThinkingByDefault', () => {
+  const adaptive = (id: string): ModelInfo => ({ ...baseModelInfo, id, thinkingStyle: 'adaptive' });
+  const byDefault = Object.values(ChatModels).filter(id => isAdaptiveThinkingByDefault(id, adaptive(id)));
+
+  it('covers the Sonnet 5, Fable, Opus 5 and Haiku 5.5 lines, direct and Bedrock', () => {
+    expect(byDefault).toEqual(
+      expect.arrayContaining([
+        ChatModels.CLAUDE_5_SONNET,
+        ChatModels.CLAUDE_5_5_SONNET_BEDROCK,
+        ChatModels.CLAUDE_FABLE_5,
+        ChatModels.CLAUDE_FABLE_5_1_BEDROCK,
+        ChatModels.CLAUDE_5_OPUS,
+        ChatModels.CLAUDE_5_5_OPUS_BEDROCK,
+        ChatModels.CLAUDE_5_5_HAIKU,
+      ])
+    );
+  });
+
+  it('excludes adaptive models that only think when asked, and legacy ones', () => {
+    expect(isAdaptiveThinkingByDefault(ChatModels.CLAUDE_4_7_OPUS, adaptive(ChatModels.CLAUDE_4_7_OPUS))).toBe(false);
+    expect(isAdaptiveThinkingByDefault(ChatModels.CLAUDE_4_6_SONNET, baseModelInfo)).toBe(false);
+  });
+
+  it('requires a model that can think', () => {
+    const id = ChatModels.CLAUDE_5_OPUS;
+    expect(isAdaptiveThinkingByDefault(id, { ...adaptive(id), can_think: false })).toBe(false);
+  });
+
+  it.each(byDefault)('accepts effort and plans medium as adaptive thinking on %s', id => {
+    expect(supportsAnthropicEffort(id, adaptive(id))).toBe(true);
+    expect(planReasoningEffort(id, adaptive(id), 'medium', 8192)).toEqual({
+      kind: 'adaptive',
+      thinking: { type: 'adaptive' },
+      output_config: { effort: 'medium' },
+    });
   });
 });
