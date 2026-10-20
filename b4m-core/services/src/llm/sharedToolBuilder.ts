@@ -240,6 +240,9 @@ export interface ToolBuilderCallbacks {
    * ToolContext['questId']'s own doc comment for the agent-mode caveat. */
   questId?: string;
 
+  /** See ToolContext['numberCitables']; the chat path supplies it for indexed-citation sessions. */
+  numberCitables?: ToolContext['numberCitables'];
+
   /** Called when delegate_to_agent accumulates credits; meta carries cost attribution when resolvable */
   onSubagentCredits?: (credits: number, meta?: SubagentUsageMeta) => void;
 
@@ -400,6 +403,7 @@ export function buildSharedTools(
       authOrigin,
       apiKeyId,
       questId: callbacks.questId,
+      numberCitables: callbacks.numberCitables,
       getAbortSignal,
     },
     storage,

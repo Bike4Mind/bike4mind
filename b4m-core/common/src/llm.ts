@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { DEEP_RESEARCH_MAX_DEPTH, DEEP_RESEARCH_MAX_DURATION_MIN } from './constants/llmLimits';
 import { ChatCompletionCreateInputSchema, ImageOutputFormatSchema, OpenAIImageGenerationInput } from './schemas/openai';
 import { b4mLLMTools, B4MLLMTools } from './schemas/llm';
 import { supportedVoiceGenerationVendor, voiceOutputFormatSchema } from './voiceGeneration';
@@ -255,8 +256,8 @@ export const ChatCompletionInvokeParamsSchema = z.object({
   audioConfig: AudioGenerationToolCallSchema.optional(),
   deepResearchConfig: z
     .object({
-      maxDepth: z.number().optional(),
-      duration: z.number().optional(),
+      maxDepth: z.number().int().min(1).max(DEEP_RESEARCH_MAX_DEPTH).optional(),
+      duration: z.number().positive().max(DEEP_RESEARCH_MAX_DURATION_MIN).optional(),
       // Note: searchers are passed via ToolContext and not through this API schema
       searchers: z.array(z.any()).optional(),
     })

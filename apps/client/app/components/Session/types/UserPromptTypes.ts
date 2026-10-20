@@ -97,6 +97,8 @@ export interface ReplyContainerProps {
   attachmentDelivery?: IChatHistoryItem['attachmentDelivery'];
   /** Generalized UI side-effects from tool results */
   uiSideEffects?: IChatHistoryItem['uiSideEffects'];
+  /** Session the reply belongs to; scopes its side-effect replay (see claimReplayDispatch) */
+  replySessionId?: string;
   /** Jupyter notebook execution state and content */
   jupyterNotebook?: IChatHistoryItem['jupyterNotebook'];
   /** The notebook JSON content (from generate_jupyter_notebook tool) */

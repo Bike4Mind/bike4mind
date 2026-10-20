@@ -8,6 +8,7 @@ import {
   type ModelInfo,
   type QueryComplexityType,
   type ReasoningEffort,
+  MAX_THINKING_BUDGET_TOKENS,
 } from '@bike4mind/common';
 
 /**
@@ -333,12 +334,14 @@ export function buildThinkingParams(
     };
   }
 
-  // Legacy models: explicit budget_tokens, inflate max_tokens to fit
-  const maxTokens = Math.max(currentMaxTokens, budgetTokens + THINKING_ANSWER_HEADROOM_TOKENS);
+  // Legacy models: explicit budget_tokens, inflate max_tokens to fit. The budget is clamped here as
+  // well as at the request schemas, so no path can send (and bill) a larger one.
+  const budget = Math.min(budgetTokens, MAX_THINKING_BUDGET_TOKENS);
+  const maxTokens = Math.max(currentMaxTokens, budget + THINKING_ANSWER_HEADROOM_TOKENS);
 
   return {
     thinkingConfig: {
-      thinking: { type: 'enabled', budget_tokens: budgetTokens },
+      thinking: { type: 'enabled', budget_tokens: budget },
     },
     maxTokens,
     temperature: rejectsTemperature ? 'delete' : 1,

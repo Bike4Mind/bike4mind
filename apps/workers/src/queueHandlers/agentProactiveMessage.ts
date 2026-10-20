@@ -8,7 +8,6 @@ import {
   userRepository,
   apiKeyRepository,
   adminSettingsRepository,
-  imageModerationIncidentRepository,
   usageEventRepository,
   organizationRepository,
   scopedSettingsRepository,
@@ -23,6 +22,7 @@ import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import * as agentProactiveMessagingService from '@bike4mind/services/agentProactiveMessagingService';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
 import { canAccessSession } from '@server/utils/sessionAccess';
+import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
 
 const agentProactiveMessageQueuePayload = z.object({
   sessionAgentConfigId: z.string(),
@@ -115,7 +115,7 @@ async function processAgentProactiveMessage(payload: { sessionAgentConfigId: str
           // Audit trail for images blocked by the image_generation/edit_image tools'
           // moderation gate. The gate itself is unconditional (constructed
           // inline in the tool) - this only wires the incident record, not the block.
-          imageModerationIncidents: imageModerationIncidentRepository,
+          imageModerationIncidents,
           // Record tool-internal operational llm.complete spend (blog draft, deep research,
           // file edit, notebook gen) that runs inside a proactive message.
           usageEvents: usageEventRepository,

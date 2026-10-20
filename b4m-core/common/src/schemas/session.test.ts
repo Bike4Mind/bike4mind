@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { SessionUpdateRequestSchema, SessionIdParamSchema, SessionResponseSchema } from './session';
+import {
+  CreateSessionRequestSchema,
+  SessionUpdateRequestSchema,
+  SessionIdParamSchema,
+  SessionResponseSchema,
+} from './session';
 
 describe('SessionUpdateRequestSchema', () => {
   it('accepts an empty body (every field optional - a caller can update just one thing)', () => {
@@ -142,5 +147,12 @@ describe('SessionResponseSchema', () => {
 
   it('rejects a null date rather than silently coercing it (unlike z.coerce.date(), which would accept null)', () => {
     expect(SessionResponseSchema.safeParse({ ...base, firstCreated: null }).success).toBe(false);
+  });
+});
+
+describe('CreateSessionRequestSchema maxToolCalls', () => {
+  it('rejects a tool-call ceiling past MAX_TOOL_CALLS_CEILING', () => {
+    expect(CreateSessionRequestSchema.safeParse({ name: 'n', maxToolCalls: 100_000 }).success).toBe(false);
+    expect(CreateSessionRequestSchema.safeParse({ name: 'n', maxToolCalls: 50 }).success).toBe(true);
   });
 });

@@ -49,7 +49,7 @@ const OrganizationGroups: FC<OrganizationGroupsProps> = ({ organization, canSetA
     onSuccess: () => {
       // Prefix match - this already covers ['organizations', orgId] and its 'groups' child.
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
-      toast.success('Organization admins updated');
+      toast.success('Organization managers updated');
     },
     onError: error => toast.error(getErrorMessage(error)),
   });
@@ -70,7 +70,7 @@ const OrganizationGroups: FC<OrganizationGroupsProps> = ({ organization, canSetA
   );
 };
 
-/** Appoint/remove org admins (billing owner + platform admin only). */
+/** Add/remove org managers (stored as `adminUserIds`; billing owner + platform admin only). */
 const OrgAdminsEditor: FC<{
   organization: WithId<IOrganizationDocument>;
   /** The whole org roster - resolves the CURRENT appointments to chips, eligible or not. */
@@ -108,9 +108,9 @@ const OrgAdminsEditor: FC<{
   return (
     <Card variant="outlined" sx={{ p: 2 }} data-testid="org-admins-card">
       <Stack spacing={1.5}>
-        <Typography level="title-md">Organization Admins</Typography>
+        <Typography level="title-md">Organization Managers</Typography>
         <FormControl>
-          <FormLabel>Appointed admins</FormLabel>
+          <FormLabel>Managers</FormLabel>
           <Autocomplete
             multiple
             options={options}
@@ -118,12 +118,12 @@ const OrgAdminsEditor: FC<{
             getOptionLabel={member => member.name || member.email || member.id}
             isOptionEqualToValue={(option, value) => option.id === value.id}
             onChange={(_event, value) => setSelected(value.map(member => member.id))}
-            placeholder={selectedMembers.length ? '' : 'Appoint org admins'}
+            placeholder={selectedMembers.length ? '' : 'Add managers'}
             data-testid="org-admins-input"
           />
           <FormHelperText>
-            Org admins manage groups and members without any platform-wide privilege. The billing owner is always an
-            admin.
+            Managers manage groups and members and connect GitHub and Drive sources to team data lakes. Billing, credit
+            spend reports and integration secrets stay with the billing owner.
           </FormHelperText>
         </FormControl>
         <Box>
@@ -134,7 +134,7 @@ const OrgAdminsEditor: FC<{
             disabled={!isDirty}
             data-testid="org-admins-save-btn"
           >
-            Save admins
+            Save managers
           </Button>
         </Box>
       </Stack>

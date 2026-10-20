@@ -71,6 +71,7 @@ export const RETRIEVED_CONTENT_FOOTER = [
  * forge one and the model credits a passage to a document the reader trusts more:
  *   `### `        the retrieve channel's `### <name> (ID: ...)`.
  *   `<n>. **`     the search channel's `<n>. **<name>** (ID: ..., relevance X)`.
+ *                 (An indexed-citation turn labels it `[<n>] **` instead, which the `[` entry covers.)
  * Both are matched with their trailing shape (a space, an opening `**`) rather than the bare token,
  * so an ordinary `## Heading` or numbered list in a document is left alone.
  *

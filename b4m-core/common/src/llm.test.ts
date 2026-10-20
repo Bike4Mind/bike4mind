@@ -43,3 +43,19 @@ describe('LLMApiRequestBodySchema toolMode fence', () => {
     expect(LLMApiRequestBodySchema.parse(body)).not.toHaveProperty('toolMode');
   });
 });
+
+describe('ChatCompletionInvokeParamsSchema.deepResearchConfig', () => {
+  const issuesAt = (deepResearchConfig: unknown) =>
+    (ChatCompletionInvokeParamsSchema.safeParse({ deepResearchConfig }).error?.issues ?? []).filter(
+      issue => issue.path[0] === 'deepResearchConfig'
+    );
+
+  it('rejects a depth or duration past the Deep Research ceilings', () => {
+    expect(issuesAt({ maxDepth: 1000 })).not.toHaveLength(0);
+    expect(issuesAt({ duration: 1000 })).not.toHaveLength(0);
+  });
+
+  it('accepts values within the ceilings', () => {
+    expect(issuesAt({ maxDepth: 10, duration: 10 })).toHaveLength(0);
+  });
+});

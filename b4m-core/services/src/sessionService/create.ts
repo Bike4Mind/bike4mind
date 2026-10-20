@@ -13,6 +13,7 @@ import {
   ISessionOrigin,
   ISessionRepository,
   IUserDocument,
+  MAX_TOOL_CALLS_CEILING,
 } from '@bike4mind/common';
 import { z } from 'zod';
 import { Logger } from '@bike4mind/observability';
@@ -58,7 +59,7 @@ const createSessionParametersSchema = z.object({
   retrievalVectorizedOnly: z.boolean().optional(),
   citationStyle: z.enum(['named', 'indexed']).optional(),
   temperature: z.number().optional(),
-  maxToolCalls: z.number().int().positive().optional(),
+  maxToolCalls: z.number().int().positive().max(MAX_TOOL_CALLS_CEILING).optional(),
   autoNamePlaceholder: z.string().optional(),
   tags: z.array(z.object({ name: z.string(), strength: z.number() })).optional(),
   summary: z.string().optional(),

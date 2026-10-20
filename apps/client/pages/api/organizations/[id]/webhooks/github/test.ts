@@ -17,7 +17,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { orgWebhookConfigRepository } from '@bike4mind/database/infra';
 import { decryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
 import { validateTargetUrl } from '@server/utils/ssrfProtection';
-import { verifyOrgAccess } from '@server/utils/orgAccess';
+import { verifyOrgOwner } from '@server/utils/orgAccess';
 import { Config } from '@server/utils/config';
 import { cacheRepository } from '@bike4mind/database';
 import { BadRequestError, NotFoundError, TooManyRequestsError } from '@bike4mind/utils';
@@ -61,7 +61,7 @@ const handler = baseApi().post(
       );
     }
 
-    const org = await verifyOrgAccess(user, orgId);
+    const org = await verifyOrgOwner(user, orgId);
 
     const webhookConfig = await orgWebhookConfigRepository.findByOrganizationId(orgId);
     if (!webhookConfig) {

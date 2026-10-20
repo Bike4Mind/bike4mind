@@ -23,6 +23,8 @@ import {
   PROMPT_TEXT_MAX,
   AuthOriginSchema,
   type AuthOrigin,
+  DEEP_RESEARCH_MAX_DEPTH,
+  DEEP_RESEARCH_MAX_DURATION_MIN,
 } from '@bike4mind/common';
 
 export const QuestStartBodySchema = z
@@ -82,8 +84,8 @@ export const QuestStartBodySchema = z
     audioConfig: AudioGenerationToolCallSchema.optional(),
     deepResearchConfig: z
       .object({
-        maxDepth: z.number().optional(),
-        duration: z.number().optional(),
+        maxDepth: z.number().int().min(1).max(DEEP_RESEARCH_MAX_DEPTH).optional(),
+        duration: z.number().positive().max(DEEP_RESEARCH_MAX_DURATION_MIN).optional(),
         // searchers are passed via ToolContext, not through this API schema
         searchers: z.array(z.any()).optional(),
       })

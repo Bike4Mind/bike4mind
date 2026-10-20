@@ -6,7 +6,6 @@ import {
   defineAbilitiesFor,
   fabFileChunkRepository,
   fabFileRepository,
-  imageModerationIncidentRepository,
   organizationRepository,
   questRepository,
   Session,
@@ -26,6 +25,7 @@ import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 import { createAttachmentLakeAccess } from '@server/dataLakes/attachmentLakeAccess';
 import type { IUserDocument } from '@bike4mind/common';
 import { Resource } from 'sst';
+import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
 
 let _imageEdit: ImageEditService | undefined;
 export const getImageEdit = (): ImageEditService => {
@@ -47,7 +47,7 @@ export const getImageEdit = (): ImageEditService => {
         creditTransactions: creditTransactionRepository,
         usageEvents: usageEventRepository,
         organizations: organizationRepository,
-        imageModerationIncidents: imageModerationIncidentRepository,
+        imageModerationIncidents,
       },
       imageProcessorLambdaName: Resource.ImageProcessor.name,
       imageModerationService: new RekognitionImageModerationService(Logger.globalInstance),

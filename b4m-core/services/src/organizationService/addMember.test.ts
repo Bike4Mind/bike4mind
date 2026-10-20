@@ -163,6 +163,43 @@ describe('addMember', () => {
 
       expect(mockAdapters.db.organizations.update).toHaveBeenCalled();
     });
+
+    it('admits an adminUserIds manager who still has a users[] row', async () => {
+      mockAdapters.db.users.findById.mockResolvedValue(mockUser);
+      mockAdapters.db.organizations.findById.mockResolvedValue({
+        ...cloneDeep(mockOrganization),
+        managerId: null,
+        adminUserIds: ['appointed-id'],
+        users: [{ userId: 'appointed-id', permissions: [Permission.read] }],
+      });
+
+      await addMember(
+        { id: 'appointed-id', isAdmin: false } as IUserDocument,
+        { userId: 'user-id', organizationId: 'org-id' },
+        mockAdapters
+      );
+
+      expect(mockAdapters.db.organizations.update).toHaveBeenCalled();
+    });
+
+    it('refuses an adminUserIds entry with no users[] row', async () => {
+      mockAdapters.db.users.findById.mockResolvedValue(mockUser);
+      mockAdapters.db.organizations.findById.mockResolvedValue({
+        ...cloneDeep(mockOrganization),
+        managerId: null,
+        adminUserIds: ['appointed-id'],
+        users: [],
+      });
+
+      await expect(
+        addMember(
+          { id: 'appointed-id', isAdmin: false } as IUserDocument,
+          { userId: 'user-id', organizationId: 'org-id' },
+          mockAdapters
+        )
+      ).rejects.toThrow(NotFoundError);
+      expect(mockAdapters.db.organizations.update).not.toHaveBeenCalled();
+    });
   });
 
   it('should throw UnprocessableEntityError if organization is at full capacity', async () => {

@@ -86,6 +86,42 @@ describe('applyQuestStatusChanges', () => {
       expect(citables.every(c => c.metadata?.citationIndex === undefined)).toBe(true);
     });
 
+    it('keeps the numbering when the tool citables arrive stamped at their merged positions', () => {
+      // A tool that went through ToolContext.numberCitables resends its stamped copies.
+      const quest = makeQuest({ promptMeta: { citables: [stamped('f1', 1), stamped('f2', 2)] } });
+      applyQuestStatusChanges(
+        quest,
+        { promptMeta: { citables: [stamped('f2', 2), stamped('web', 3)] } } as Partial<IChatHistoryItemDocument>,
+        'user-1'
+      );
+      const citables = quest.promptMeta?.citables ?? [];
+      expect(citables.map(c => [c.id, c.metadata?.citationIndex])).toEqual([
+        ['f1', 1],
+        ['f2', 2],
+        ['web', 3],
+      ]);
+    });
+
+    it('strips every stamp when a stamped tool citable does not match its merged position', () => {
+      const quest = makeQuest({ promptMeta: { citables: [stamped('f1', 1)] } });
+      applyQuestStatusChanges(
+        quest,
+        { promptMeta: { citables: [stamped('web', 1)] } } as Partial<IChatHistoryItemDocument>,
+        'user-1'
+      );
+      expect(quest.promptMeta?.citables?.every(c => c.metadata?.citationIndex === undefined)).toBe(true);
+    });
+
+    it('dedupes and keeps the numbering when a tool writes the first citables of the turn', () => {
+      const quest = makeQuest();
+      applyQuestStatusChanges(
+        quest,
+        { promptMeta: { citables: [stamped('web', 1), stamped('web', 1)] } } as Partial<IChatHistoryItemDocument>,
+        'user-1'
+      );
+      expect(quest.promptMeta?.citables?.map(c => [c.id, c.metadata?.citationIndex])).toEqual([['web', 1]]);
+    });
+
     it('keeps citation stamps when the merge carries no tool citables', () => {
       const quest = makeQuest({ promptMeta: { citables: [stamped('f1', 1), stamped('f2', 2)] } });
       applyQuestStatusChanges(quest, { promptMeta: { warnings: ['w'] } }, 'user-1');

@@ -7,7 +7,7 @@ import {
   type UsageOwnerType,
 } from '@bike4mind/common';
 import { ForbiddenError } from '@server/utils/errors';
-import { verifyOrgAccess } from '@server/utils/orgAccess';
+import { verifyOrgOwner } from '@server/utils/orgAccess';
 import { resolveUserNames } from '@server/utils/resolveUserNames';
 import { z } from 'zod';
 
@@ -37,7 +37,7 @@ const QuerySchema = z.object({
  * per-member attribution.
  *
  * Access: platform admins see any owner. Otherwise an Organization owner is gated
- * by verifyOrgAccess (owner/manager only); a User owner may read only their own id.
+ * by verifyOrgOwner (owner or platform admin; org managers are refused); a User owner may read only their own id.
  */
 const handler = baseApi().get(async (req, res) => {
   if (!req.user) {
@@ -47,7 +47,7 @@ const handler = baseApi().get(async (req, res) => {
   const { ownerType, ownerId, days = 30 } = QuerySchema.parse(req.query);
 
   if (ownerType === CreditHolderType.Organization) {
-    await verifyOrgAccess(req.user, ownerId);
+    await verifyOrgOwner(req.user, ownerId);
   } else if (!req.user.isAdmin && req.user.id !== ownerId) {
     throw new ForbiddenError('You can only view your own usage');
   }

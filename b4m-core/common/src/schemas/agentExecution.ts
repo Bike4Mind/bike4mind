@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { MAX_THINKING_BUDGET_TOKENS } from '../constants/llmLimits';
 
 /**
  * Public wire schemas for the agent-executor (ReAct) endpoints:
@@ -58,8 +59,7 @@ export const AgentExecutionStartRequestSchema = z.object({
   thinking: z
     .object({
       enabled: z.boolean(),
-      /** Bounded at 32000: Anthropic rejects rather than clamps an oversized budget. */
-      budget_tokens: z.number().int().positive().max(32000).optional(),
+      budget_tokens: z.number().int().positive().max(MAX_THINKING_BUDGET_TOKENS).optional(),
     })
     .optional(),
   /** Per-message file attachments (fabFile ids), materialized into the first iteration. */
