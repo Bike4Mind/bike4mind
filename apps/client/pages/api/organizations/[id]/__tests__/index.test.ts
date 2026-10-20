@@ -57,11 +57,36 @@ const update = vi.hoisted(() =>
     stripeCustomerId: 'cus_SECRET',
   }))
 );
+const credits = vi.hoisted(() => ({
+  findById: vi.fn(async () => ({ id: 'org1', name: 'Acme', userId: 'owner1', currentCredits: 100 })),
+  addCredits: vi.fn(async () => undefined),
+  subtractCredits: vi.fn(async () => undefined),
+  recordAdminAction: vi.fn(async () => null),
+  withTransaction: vi.fn(async (fn: () => Promise<unknown>) => fn()),
+}));
 vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   BadRequestError: class BadRequestError extends Error {},
+  NotFoundError: class NotFoundError extends Error {},
 }));
-vi.mock('@bike4mind/services', () => ({ organizationService: { get, update } }));
-vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: {} }));
+vi.mock('@bike4mind/services', () => ({
+  organizationService: { get, update },
+  creditService: { addCredits: credits.addCredits, subtractCredits: credits.subtractCredits },
+}));
+vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: { findById: credits.findById } }));
+vi.mock('@bike4mind/database', () => ({
+  creditLotRepository: {},
+  creditTransactionRepository: {},
+  integrationRequestRepository: {},
+  partnerSignupRuleRepository: {},
+  userRepository: {},
+  withTransaction: credits.withTransaction,
+}));
+vi.mock('@bike4mind/database/social', () => ({ groupRepository: {} }));
+vi.mock('@server/entitlements/partnerRules', () => ({ invalidatePartnerRuleCache: vi.fn() }));
+vi.mock('@server/utils/adminAudit', () => ({
+  parseAdminActionReason: (value: unknown) => String(value),
+  recordAdminActionFromRequest: credits.recordAdminAction,
+}));
 vi.mock('@server/models/Subscription', () => ({ subscriptionRepository: {} }));
 vi.mock('@client/lib/subscriptions/types', () => ({ SubscriptionOwnerType: { Organization: 'organization' } }));
 
@@ -155,5 +180,51 @@ describe('PUT /api/organizations/[id] - safe serialization', () => {
     const body = res._getJSONData();
     expect(body.billingContact).toBe('billing@acme.com');
     expect('stripeCustomerId' in body).toBe(false);
+  });
+});
+
+describe('PUT /api/organizations/[id] - admin credit edit', () => {
+  beforeEach(() => {
+    update.mockClear();
+    Object.values(credits).forEach(fn => fn.mockClear());
+  });
+
+  function putAsAdmin(body: Record<string, unknown>) {
+    const { req, res } = mocks({ id: 'admin1', isAdmin: true }, 'PUT');
+    (req as any).body = body;
+    return { req, res };
+  }
+
+  it('runs the credit edit and the profile update in one transaction', async () => {
+    const { req, res } = putAsAdmin({ name: 'renamed', currentCredits: 150, creditReason: 'goodwill grant' });
+    await mockRefs.putHandler!(req, res);
+    expect(credits.withTransaction).toHaveBeenCalledTimes(1);
+    expect(credits.addCredits).toHaveBeenCalledTimes(1);
+    expect(credits.recordAdminAction).toHaveBeenCalledTimes(1);
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  it('propagates a failing profile update out of the transaction after the credit edit', async () => {
+    update.mockRejectedValueOnce(new Error('profile write failed'));
+    const { req, res } = putAsAdmin({ name: 'renamed', currentCredits: 150, creditReason: 'goodwill grant' });
+    await expect(mockRefs.putHandler!(req, res)).rejects.toThrow('profile write failed');
+    expect(credits.addCredits).toHaveBeenCalledTimes(1);
+    expect(credits.withTransaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not open a transaction when no credit value is sent', async () => {
+    const { req, res } = putAsAdmin({ name: 'renamed' });
+    await mockRefs.putHandler!(req, res);
+    expect(credits.withTransaction).not.toHaveBeenCalled();
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a negative balance and writes nothing', async () => {
+    const { req, res } = putAsAdmin({ currentCredits: -5, creditReason: 'goodwill grant' });
+    await expect(mockRefs.putHandler!(req, res)).rejects.toMatchObject({ name: 'ZodError' });
+    expect(credits.withTransaction).not.toHaveBeenCalled();
+    expect(credits.addCredits).not.toHaveBeenCalled();
+    expect(credits.subtractCredits).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
   });
 });

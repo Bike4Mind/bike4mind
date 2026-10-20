@@ -24,7 +24,7 @@ const updateOrgBodySchema = z.object({
   name: z.string().optional(),
   description: z.string().optional(),
   billingContact: z.string().optional(),
-  currentCredits: z.coerce.number().optional(),
+  currentCredits: z.coerce.number().min(0).optional(),
   systemPrompt: z.string().max(10000).optional(),
   maxCreditsPerMember: z.number().int().positive().nullable().optional(),
   storageLimit: z.number().min(0).max(MAX_STORAGE_LIMIT_MB).nullable().optional(),
@@ -32,8 +32,8 @@ const updateOrgBodySchema = z.object({
 
 /**
  * A platform admin's edit of the org balance, applied as a ledger row plus a strict audit
- * entry in one transaction, so no admin balance change lands without either. The profile
- * update never writes currentCredits itself.
+ * entry. Must run inside the caller's transaction, so no admin balance change lands without
+ * either (or without the profile update). The profile update never writes currentCredits itself.
  */
 const applyAdminCreditEdit = async (req: Request, orgId: string, requestedBalance: number) => {
   const creditAdapters = {
@@ -41,39 +41,37 @@ const applyAdminCreditEdit = async (req: Request, orgId: string, requestedBalanc
     creditHolderMethods: organizationRepository,
   };
 
-  await withTransaction(async () => {
-    // Read the balance inside the transaction so a retry after a write conflict recomputes the delta.
-    const organization = await organizationRepository.findById(orgId);
-    if (!organization) throw new NotFoundError('Organization not found');
+  // Read the balance inside the transaction so a retry after a write conflict recomputes the delta.
+  const organization = await organizationRepository.findById(orgId);
+  if (!organization) throw new NotFoundError('Organization not found');
 
-    const previousBalance = organization.currentCredits ?? 0;
-    const credits = requestedBalance - previousBalance;
-    if (credits === 0) return;
+  const previousBalance = organization.currentCredits ?? 0;
+  const credits = requestedBalance - previousBalance;
+  if (credits === 0) return;
 
-    const reason = parseAdminActionReason((req.body as { creditReason?: unknown } | undefined)?.creditReason);
-    const metadata = { adminUserId: req.user!.id, reason, previousBalance, source: 'admin_org_edit' };
-    const ledgerEntry = {
-      ownerId: organization.id,
-      ownerType: CreditHolderType.Organization,
-      credits: Math.abs(credits),
-      reason: 'admin_adjustment',
-      description: reason,
-      metadata,
-    } as const;
+  const reason = parseAdminActionReason((req.body as { creditReason?: unknown } | undefined)?.creditReason);
+  const metadata = { adminUserId: req.user!.id, reason, previousBalance, source: 'admin_org_edit' };
+  const ledgerEntry = {
+    ownerId: organization.id,
+    ownerType: CreditHolderType.Organization,
+    credits: Math.abs(credits),
+    reason: 'admin_adjustment',
+    description: reason,
+    metadata,
+  } as const;
 
-    if (credits > 0) {
-      await creditService.addCredits({ ...ledgerEntry, type: 'generic_add' }, creditAdapters);
-    } else {
-      await creditService.subtractCredits({ ...ledgerEntry, type: 'generic_deduct' }, creditAdapters);
-    }
-    await recordAdminActionFromRequest(req, {
-      action: 'org.credits.adjusted',
-      target: { kind: 'organization', id: organization.id, displayName: organization.name },
-      summary: `${credits > 0 ? 'granted' : 'deducted'} ${Math.abs(credits)} credits`,
-      reason,
-      changes: [{ field: 'currentCredits', before: previousBalance, after: requestedBalance }],
-      details: { credits, ownerId: organization.userId },
-    });
+  if (credits > 0) {
+    await creditService.addCredits({ ...ledgerEntry, type: 'generic_add' }, creditAdapters);
+  } else {
+    await creditService.subtractCredits({ ...ledgerEntry, type: 'generic_deduct' }, creditAdapters);
+  }
+  await recordAdminActionFromRequest(req, {
+    action: 'org.credits.adjusted',
+    target: { kind: 'organization', id: organization.id, displayName: organization.name },
+    summary: `${credits > 0 ? 'granted' : 'deducted'} ${Math.abs(credits)} credits`,
+    reason,
+    changes: [{ field: 'currentCredits', before: previousBalance, after: requestedBalance }],
+    details: { credits, ownerId: organization.userId },
   });
 };
 
@@ -106,19 +104,24 @@ const handler = baseApi()
 
       const { currentCredits, ...profile } = updateOrgBodySchema.parse(req.body);
       // Non-admins cannot move credits here; their value is ignored, as before.
-      if (req.user!.isAdmin && currentCredits !== undefined) {
-        await applyAdminCreditEdit(req, orgId, currentCredits);
-      }
+      const updateProfile = () =>
+        organizationService.update(
+          req.user!,
+          { ...profile, id: orgId },
+          {
+            db: {
+              organizations: organizationRepository,
+            },
+          }
+        );
 
-      const updatedOrganization = await organizationService.update(
-        req.user!,
-        { ...profile, id: orgId },
-        {
-          db: {
-            organizations: organizationRepository,
-          },
-        }
-      );
+      const updatedOrganization =
+        req.user!.isAdmin && currentCredits !== undefined
+          ? await withTransaction(async () => {
+              await applyAdminCreditEdit(req, orgId, currentCredits);
+              return updateProfile();
+            })
+          : await updateProfile();
 
       return res.json(toSafeOrganization(updatedOrganization, { userId: req.user!.id, isAdmin: req.user!.isAdmin }));
     })
