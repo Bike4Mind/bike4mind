@@ -777,7 +777,16 @@ export interface ChatModelOption {
    * absent flag here only means the model was not in a list that had loaded.
    */
   supportsReasoningEffort?: boolean;
+  /**
+   * A local Ollama model that can think. Its server takes no effort, only thinking on or off,
+   * so the effort picker becomes that switch, stored as `default` (on) and
+   * THINKING_OFF_SETTING (off).
+   */
+  thinkingToggle?: boolean;
 }
+
+/** The setting a `thinkingToggle` model's "Off" is stored as; any other setting thinks. */
+export const THINKING_OFF_SETTING = 'minimal' satisfies ReasoningEffortSetting;
 
 /**
  * How hard a model that reasons thinks before answering.
@@ -967,7 +976,8 @@ interface ChatSessionMeta {
    * effort it was held at rather than whatever the last conversation was set to.
    *
    * Only a model in the catalog's reasoning set is actually sent one - see
-   * `ChatModelOption.supportsReasoningEffort`. On any other model this is stored and inert.
+   * `ChatModelOption.supportsReasoningEffort`. For a model with `thinkingToggle`, `minimal`
+   * instead turns thinking off and every other setting turns it on. Otherwise this is inert.
    */
   reasoningEffort: ReasoningEffortSetting;
   /**

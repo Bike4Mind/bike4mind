@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   parseReasoningEffortSetting,
   reasoningEffortFor,
+  requestsThinking,
   storedReasoningEffortSetting,
   supportsReasoningEffort,
 } from './reasoningEffort';
@@ -60,5 +61,24 @@ describe('supportsReasoningEffort', () => {
     expect(supportsReasoningEffort(ChatModels.CLAUDE_5_OPUS)).toBe(true);
     expect(supportsReasoningEffort(ChatModels.CLAUDE_4_5_SONNET)).toBe(false);
     expect(supportsReasoningEffort('something-this-server-invented')).toBe(false);
+  });
+});
+
+describe('requestsThinking', () => {
+  const local = { thinkingToggle: true };
+
+  it('turns thinking off only for a local thinking model switched Off', () => {
+    expect(requestsThinking('minimal', local)).toBe(false);
+  });
+
+  it('thinks on every other setting of that model, including none stored', () => {
+    for (const setting of ['default', 'low', 'medium', 'high', undefined] as const) {
+      expect(requestsThinking(setting, local)).toBe(true);
+    }
+  });
+
+  it('thinks on a model without the switch, or one the catalog does not know', () => {
+    expect(requestsThinking('minimal', {})).toBe(true);
+    expect(requestsThinking('minimal', undefined)).toBe(true);
   });
 });

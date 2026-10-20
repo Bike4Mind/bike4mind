@@ -809,11 +809,16 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     symbol: 'registerTelemetryCleanup',
     fingerprint: 'da6450a4a59ea6ac4f91f4b6adc5e7c54586164f920952bb76654f03b4b0e228',
   }),
-  wired('schedule:infra/cron.ts:voiceHoldSweep', '4e408da223818724615eb2702ada0a50c9f6f4a6c370d20135345dcacd417c4e', {
-    source: 'apps/workers/src/selfhost/voiceHoldSweep.ts',
-    symbol: 'registerVoiceHoldSweep',
-    fingerprint: '736ef108898650ecdd41332d5ae49e3c3be864687111b57dd122e431a0b54b5b',
-  }),
+  wired(
+    'schedule:infra/cron.ts:voiceHoldSweep',
+    '638f3795ab583a8037345326fa68d2833507030dfefd8c8184bb9cef43a41e64',
+    {
+      source: 'apps/workers/src/selfhost/voiceHoldSweep.ts',
+      symbol: 'registerVoiceHoldSweep',
+      fingerprint: '736ef108898650ecdd41332d5ae49e3c3be864687111b57dd122e431a0b54b5b',
+    },
+    ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
+  ),
   gap(
     'schedule:infra/cron.ts:weeklyUserActivityReport',
     '119895e5bd3a38cf80ebe8ac0da18d7cb2d5ef4ef14e2c6ffa4c22f991f24603'
