@@ -1,5 +1,6 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
-import { CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS } from '@bike4mind/common';
+import { CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS, type IMessage } from '@bike4mind/common';
+import type { ChatRequest } from 'ollama';
 import { OllamaBackend } from './ollamaBackend';
 import type { ICompletionOptionTools } from './backend';
 import { MAX_RECORDED_TOOL_RESULT_CHARS, TOOL_RESULT_TRUNCATION_NOTICE } from './recordToolResult';
@@ -10,7 +11,7 @@ const silentLogger = { debug() {}, info() {}, warn() {}, error() {} } as any;
 // responses in order (one per model round / recursion).
 function makeBackend(chatResponses: unknown[]) {
   const backend = new OllamaBackend('http://localhost:11434', silentLogger);
-  const chat = vi.fn();
+  const chat = vi.fn<(request: ChatRequest) => Promise<unknown>>();
   chatResponses.forEach(r => chat.mockResolvedValueOnce(r));
   (backend as any)._api = { chat };
   return { backend, chat };
@@ -476,21 +477,49 @@ describe('OllamaBackend.buildMessages image handling', () => {
 describe('OllamaBackend.buildMessages replayed tool calls', () => {
   const answer = [{ message: { content: 'ok', tool_calls: [] }, prompt_eval_count: 3, eval_count: 2 }];
 
-  async function sentMessages(history: unknown[]) {
+  async function sentMessages(history: IMessage[]) {
     const { backend, chat } = makeBackend(answer);
     await backend.complete(
       'qwen3:8b',
-      history as any,
-      { stream: false, executeTools: false, tools: [mathTool(async () => '4')] } as any,
+      history,
+      { stream: false, executeTools: false, tools: [mathTool(async () => '4')] },
       async () => {}
     );
-    return (chat.mock.calls[0][0] as { messages: Array<Record<string, any>> }).messages;
+    const request = chat.mock.calls[0]?.[0];
+    if (!request?.messages) throw new Error('No messages were sent to Ollama');
+    return request.messages;
   }
 
-  const replayedCall = (call: Record<string, unknown>) => [
-    { role: 'user', content: 'What is 2+2?' },
-    { role: 'assistant', content: '', tool_calls: [{ id: 'call_1', type: 'function', function: call }] },
-    { role: 'tool', tool_call_id: 'call_1', content: '4' },
+  const replayedCall = (call: { name: string; arguments?: unknown }): IMessage[] => {
+    const assistantMessage = {
+      role: 'assistant' as const,
+      content: '',
+      tool_calls: [{ id: 'call_1', type: 'function', function: call }],
+    };
+    const toolMessage = { role: 'tool' as const, tool_call_id: 'call_1', content: '4' };
+    return [{ role: 'user', content: 'What is 2+2?' }, assistantMessage, toolMessage];
+  };
+
+  const stringArgumentCases: Array<{
+    label: string;
+    arguments: string;
+    expected: Record<string, unknown>;
+  }> = [
+    { label: 'object JSON', arguments: '{"expression":"2+2"}', expected: { expression: '2+2' } },
+    { label: 'padded object JSON', arguments: ' \n {"expression":"2+2"} ', expected: { expression: '2+2' } },
+    {
+      label: 'nested object JSON',
+      arguments: '{"nested":{"items":[1,false,null]}}',
+      expected: { nested: { items: [1, false, null] } },
+    },
+    { label: 'malformed JSON', arguments: '{"expression":', expected: { _raw: '{"expression":' } },
+    { label: 'array JSON', arguments: '[1,2]', expected: { _raw: '[1,2]' } },
+    { label: 'null JSON', arguments: 'null', expected: { _raw: 'null' } },
+    { label: 'boolean JSON', arguments: 'false', expected: { _raw: 'false' } },
+    { label: 'number JSON', arguments: '0', expected: { _raw: '0' } },
+    { label: 'string JSON', arguments: '"value"', expected: { _raw: '"value"' } },
+    { label: 'empty string', arguments: '', expected: {} },
+    { label: 'whitespace', arguments: ' \n\t ', expected: {} },
   ];
 
   it('sends tool_use history to Ollama with object arguments', async () => {
@@ -510,27 +539,40 @@ describe('OllamaBackend.buildMessages replayed tool calls', () => {
     expect(messages.find(m => m.role === 'tool')?.content).toBe('4');
   });
 
-  it('parses string arguments on OpenAI-shaped tool_calls', async () => {
-    const messages = await sentMessages(
-      replayedCall({ name: 'math_evaluate', arguments: JSON.stringify({ expression: '2+2' }) })
-    );
-    expect(messages[1].tool_calls[0].function.arguments).toEqual({ expression: '2+2' });
+  it.each(stringArgumentCases)('normalizes $label in replayed tool_calls', async testCase => {
+    const messages = await sentMessages(replayedCall({ name: 'math_evaluate', arguments: testCase.arguments }));
+    expect(messages[1].tool_calls?.[0].function.arguments).toEqual(testCase.expected);
   });
 
   it('keeps arguments that are already an object', async () => {
     const messages = await sentMessages(replayedCall({ name: 'math_evaluate', arguments: { expression: '1' } }));
-    expect(messages[1].tool_calls[0].function.arguments).toEqual({ expression: '1' });
+    expect(messages[1].tool_calls?.[0].function.arguments).toEqual({ expression: '1' });
   });
 
-  it('wraps unparseable or non-object arguments under _raw and maps empty ones to {}', async () => {
-    const malformed = await sentMessages(replayedCall({ name: 'math_evaluate', arguments: '{"expression":' }));
-    expect(malformed[1].tool_calls[0].function.arguments).toEqual({ _raw: '{"expression":' });
+  it.each([
+    { label: 'undefined', arguments: undefined },
+    { label: 'null', arguments: null },
+  ])('maps $label arguments to an empty object', async testCase => {
+    const messages = await sentMessages(replayedCall({ name: 'math_evaluate', arguments: testCase.arguments }));
+    expect(messages[1].tool_calls?.[0].function.arguments).toEqual({});
+  });
 
-    const array = await sentMessages(replayedCall({ name: 'math_evaluate', arguments: '[1,2]' }));
-    expect(array[1].tool_calls[0].function.arguments).toEqual({ _raw: '[1,2]' });
+  it('maps an omitted arguments field to an empty object', async () => {
+    const messages = await sentMessages(replayedCall({ name: 'math_evaluate' }));
+    expect(messages[1].tool_calls?.[0].function.arguments).toEqual({});
+  });
 
-    const empty = await sentMessages(replayedCall({ name: 'math_evaluate', arguments: '' }));
-    expect(empty[1].tool_calls[0].function.arguments).toEqual({});
+  it.each(stringArgumentCases)('normalizes $label through pushToolMessages', async testCase => {
+    const { backend } = makeBackend(answer);
+    const history: IMessage[] = [{ role: 'user', content: 'What is 2+2?' }];
+    backend.pushToolMessages(history, { id: 'call_1', name: 'math_evaluate', parameters: testCase.arguments }, '4');
+
+    const messages = await sentMessages(history);
+    expect(messages[1].tool_calls?.[0].function).toEqual({
+      name: 'math_evaluate',
+      arguments: testCase.expected,
+    });
+    expect(messages[2]).toEqual({ role: 'tool', tool_name: 'math_evaluate', content: '4' });
   });
 });
 
