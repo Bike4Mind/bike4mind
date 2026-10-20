@@ -3,7 +3,7 @@ import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useUser } from '@client/app/contexts/UserContext';
 import { CREDITS_BALANCE_KEY, fetchCreditsBalance } from '@client/app/hooks/data/credits';
-import { useCreditSyncSignal } from '@client/app/hooks/useEffectiveCredits';
+import { useCreditSyncSignal } from '@client/app/hooks/useCreditSyncSignal';
 import { useStreamingState } from '@client/app/hooks/useStreamingState';
 
 /**

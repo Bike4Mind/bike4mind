@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { useEffect } from 'react';
 import { renderHook, act } from '@testing-library/react';
-import { POST_STREAM_HOLD_MAX_MS, useCreditSyncSignal, useEffectiveCredits } from '../useEffectiveCredits';
+import { POST_STREAM_HOLD_MAX_MS, useEffectiveCredits } from '../useEffectiveCredits';
+import { useCreditSyncSignal } from '../useCreditSyncSignal';
 import { useStreamingState } from '../useStreamingState';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 

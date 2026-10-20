@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { create } from 'zustand';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { useUser } from '@client/app/contexts/UserContext';
+import { useCreditSyncSignal } from '@client/app/hooks/useCreditSyncSignal';
 import { useStreamingState } from '@client/app/hooks/useStreamingState';
 
 interface UseEffectiveCreditsOptions {
@@ -13,15 +13,6 @@ interface UseEffectiveCreditsOptions {
    */
   live?: boolean;
 }
-
-/**
- * Bumped by `CreditBalanceSyncListener` when the last post-turn balance pull finishes, whether
- * or not the balance changed, so a held display can release once the live value is confirmed.
- */
-export const useCreditSyncSignal = create<{ syncCount: number; markSynced: () => void }>(set => ({
-  syncCount: 0,
-  markSynced: () => set(state => ({ syncCount: state.syncCount + 1 })),
-}));
 
 /**
  * Backstop for the post-turn hold when no sync ever lands (listener unmounted, request lost).

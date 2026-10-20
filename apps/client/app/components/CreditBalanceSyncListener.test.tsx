@@ -12,7 +12,8 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
 import { api } from '@client/app/contexts/ApiContext';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useUser } from '@client/app/contexts/UserContext';
-import { POST_STREAM_HOLD_MAX_MS, useCreditSyncSignal } from '@client/app/hooks/useEffectiveCredits';
+import { useCreditSyncSignal } from '@client/app/hooks/useCreditSyncSignal';
+import { POST_STREAM_HOLD_MAX_MS } from '@client/app/hooks/useEffectiveCredits';
 import { useStreamingState } from '@client/app/hooks/useStreamingState';
 import CreditBalanceSyncListener, { BALANCE_SYNC_DELAYS_MS } from './CreditBalanceSyncListener';
 
