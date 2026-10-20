@@ -1,5 +1,11 @@
 # @bike4mind/client-auth
 
+## 0.2.1
+
+### Patch Changes
+
+- [#5139](https://github.com/Bike4Mind/bike4mind/pull/5139) [`f43c31e`](https://github.com/Bike4Mind/bike4mind/commit/f43c31e5001a396f02d17121b2d4654e50cc980c) Thanks [@poysama](https://github.com/poysama)! - note npm trusted publishing in client-auth and sdk READMEs
+
 ## 0.2.0
 
 ### Minor Changes

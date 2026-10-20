@@ -24,6 +24,23 @@ describe('recommendTools — image_generation', () => {
   });
 });
 
+describe('recommendTools - decide', () => {
+  const recommends = (prompt: string) => recommendTools(prompt).some(r => r.tool === 'decide');
+
+  it('fires on an explicit ask', () => {
+    expect(recommends('use the decide tool for this ticket')).toBe(true);
+    expect(recommends('classify this feedback with a probability for each label')).toBe(true);
+    expect(recommends('score this from 1 to 5')).toBe(true);
+    expect(recommends('make a decision with probabilities for each option')).toBe(true);
+  });
+
+  it('does not fire on a generic question, which is a conversation rather than a decision call', () => {
+    expect(recommends('should I reply to this customer?')).toBe(false);
+    expect(recommends('what is the weather today')).toBe(false);
+    expect(recommends('help me decide between these two options')).toBe(false);
+  });
+});
+
 describe('mergeTools', () => {
   it('unions recommendations with manually pinned tools and dedupes', () => {
     const merged = mergeTools([{ tool: 'image_generation', reason: 'Image Gen' }], ['web_search']);

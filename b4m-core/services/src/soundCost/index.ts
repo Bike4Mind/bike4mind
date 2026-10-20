@@ -33,9 +33,10 @@ export function computeSoundUsdCost(vendor: SoundGenerationVendor, input: SoundC
 
 /**
  * Estimates the credit cost of a sound-effects generation: provider USD cost
- * converted to internal credits (deterministic round-up, min 1). `usdCost` and
- * `billedSeconds` are carried through for usage-event analytics (COGS + units);
- * billing uses `requiredCredits`. `billedSeconds` is the duration the cost was
+ * converted to internal credits (deterministic round-up, min 1). `requiredCredits`
+ * is the reservation/gate figure only: the final charge settles `usdCost` with
+ * usdToCreditsStochastic. `usdCost` and `billedSeconds` also feed usage-event
+ * analytics (COGS + units). `billedSeconds` is the duration the cost was
  * actually computed on - the request value, or the vendor auto-duration default.
  */
 export function estimateSoundCredits(

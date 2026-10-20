@@ -137,11 +137,6 @@ describe('OrganizationMembers roster controls', () => {
     expectControls({ invite: true, revoke: true });
   });
 
-  it('gives a manager without an admin row Revoke but not Add or Cancel Invite', () => {
-    renderMembers(buildOrg({ managerId: 'viewer' }));
-    expectControls({ invite: false, revoke: true });
-  });
-
   it('gives a manager (adminUserIds) with a users[] row every control', () => {
     renderMembers(
       buildOrg({
@@ -196,17 +191,6 @@ describe('OrganizationMembers roster controls', () => {
     expectControls({ invite: false, revoke: true });
   });
 
-  it('does not treat an empty managerId as matching an empty viewer id', () => {
-    mocks.viewer = { id: '', isAdmin: false };
-    renderMembers(buildOrg({ managerId: '' }));
-    expectControls({ invite: false, revoke: false });
-  });
-
-  it('does not grant Revoke on a null managerId', () => {
-    renderMembers(buildOrg({ managerId: null } as unknown as Partial<IOrganizationDocument>));
-    expectControls({ invite: false, revoke: false });
-  });
-
   // The admin panel (admin/OrganizationsTab.tsx) renders this same component for a platform admin.
   it('gives a platform admin who is not a member every control', () => {
     mocks.viewer = { id: 'viewer', isAdmin: true };
@@ -225,13 +209,6 @@ describe('OrganizationMembers roster controls', () => {
     renderMembers(buildOrg({ users: [shareUpdateRow('viewer')] as IOrganizationDocument['users'] }));
     expect(screen.queryByTestId('organization-members-add-no-seats-btn')).toBeNull();
     expect(screen.queryByTestId('organization-members-seats-card')).toBeNull();
-  });
-
-  it('shows the seat card, but no Add Member button, to a manager without an admin row', () => {
-    mocks.seats = { maxSeats: 1, currentSeats: 1, availableSeats: 0 };
-    renderMembers(buildOrg({ managerId: 'viewer' }));
-    expect(screen.getByTestId('organization-members-seats-card')).toBeTruthy();
-    expect(screen.queryByTestId('organization-members-add-no-seats-btn')).toBeNull();
   });
 
   it('shows the no-seats Add Member button to the owner', () => {

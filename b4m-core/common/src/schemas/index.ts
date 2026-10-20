@@ -21,6 +21,7 @@ export * from './group';
 export * from './chatMessage';
 export * from './mcpServer';
 export * from './questMasterPlan';
+export * from './dataLakeResponse';
 export * from './settings';
 export * from './customMcpHosts';
 export * from './customMcpPolicy';

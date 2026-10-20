@@ -118,7 +118,6 @@ function makeSubscriber(userId: string, idSuffix: string = userId) {
 
 const mockOrg = {
   userId: 'org-owner',
-  managerId: 'org-manager',
   users: [{ userId: 'user-a' }, { userId: 'user-b' }, { userId: 'user-c' }],
 };
 

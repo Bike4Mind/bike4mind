@@ -4,6 +4,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mockCreateUser = vi.fn();
 const mockSendOTC = vi.fn();
 const mockStoreNonce = vi.fn();
+const mockEmitSignupFunnelEvents = vi.fn();
+const mockRecordSyntheticIdentity = vi.fn();
 
 vi.mock('@bike4mind/services', () => ({
   userService: {
@@ -49,6 +51,10 @@ vi.mock('@bike4mind/server-utils/utils/mailer/emailHelpers', () => ({
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { JWT_SECRET: 'test-secret' },
 }));
+vi.mock('@server/analytics/funnel', () => ({
+  emitSignupFunnelEvents: (...args: unknown[]) => mockEmitSignupFunnelEvents(...args),
+  recordSyntheticIdentity: (...args: unknown[]) => mockRecordSyntheticIdentity(...args),
+}));
 
 vi.mock('jsonwebtoken', () => ({ default: { sign: () => 'signed-token' } }));
 
@@ -73,10 +79,11 @@ describe('admin/create-user', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockSendOTC.mockResolvedValue({ nonce: null });
+    mockRecordSyntheticIdentity.mockResolvedValue(false);
   });
 
   it('stores password: null + hasUsablePassword: false for a passwordless shell account', async () => {
-    mockCreateUser.mockResolvedValue({ id: 'u1', email: 'shell@example.com', username: 'shell' });
+    mockCreateUser.mockResolvedValue({ id: 'u1', email: 'shell@example.com', username: 'shell', currentCredits: 0 });
 
     await runHandler(makeReq({ username: 'shell', email: 'shell@example.com', name: 'Shell User' }), makeRes());
 
@@ -85,6 +92,25 @@ describe('admin/create-user', () => {
         record: expect.objectContaining({ password: null, hasUsablePassword: false }),
       }),
       expect.any(Object)
+    );
+    expect(mockEmitSignupFunnelEvents).toHaveBeenCalledWith({
+      user: expect.objectContaining({ id: 'u1', isSynthetic: false }),
+      method: 'admin',
+      emailVerified: false,
+      creditsGranted: 0,
+    });
+  });
+
+  it('passes a synthetic classification into the signup emitter', async () => {
+    const user = { id: 'u-synthetic', email: 'seed@test.example', username: 'persona-seed', currentCredits: 50 };
+    mockCreateUser.mockResolvedValue(user);
+    mockRecordSyntheticIdentity.mockResolvedValue(true);
+
+    await runHandler(makeReq({ username: 'persona-seed', email: 'seed@test.example', name: 'Seed' }), makeRes());
+
+    expect(mockRecordSyntheticIdentity).toHaveBeenCalledWith(user);
+    expect(mockEmitSignupFunnelEvents).toHaveBeenCalledWith(
+      expect.objectContaining({ user: expect.objectContaining({ id: 'u-synthetic', isSynthetic: true }) })
     );
   });
 

@@ -16,6 +16,7 @@ import { EmailEvents } from '@server/utils/eventBus';
 import { getLogoUrl, buildEmailLogoImg, escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
+import { emitSignupFunnelEvents, recordSyntheticIdentity } from '@server/analytics/funnel';
 
 const userImportSchema = z.object({
   email: z.email('Invalid email format'),
@@ -85,6 +86,14 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
               },
             }
           );
+
+          const isSynthetic = await recordSyntheticIdentity(newUser);
+          await emitSignupFunnelEvents({
+            user: { id: newUser.id, isSynthetic },
+            method: 'admin',
+            emailVerified: newUser.emailVerified === true,
+            creditsGranted: newUser.currentCredits ?? validatedData.startingCredits ?? 0,
+          });
 
           // Apply storage limit if provided (createUser hardcodes storageLimit: 1000, so we override after)
           if (validatedData.startingStorage !== undefined) {

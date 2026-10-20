@@ -78,7 +78,7 @@ The user has cycled into plan mode (Shift+Tab). Plan mode restricts WRITING, not
 - \`get_file_structure\` — AST overview of a file
 - \`agent_delegate\` — delegate to read-only subagents (e.g. 'explore', 'plan')
 - \`ask_user_question\` — ask the user clarifying questions
-- \`current_datetime\`, \`math_evaluate\`, \`web_search\`, \`web_fetch\` — also fine
+- \`current_datetime\`, \`math_evaluate\`, \`web_search\`, \`web_fetch\`, \`decide\` - also fine
 
 **Tools blocked in plan mode:**
 - \`bash_execute\`, \`edit_local_file\`, \`create_file\`, \`delete_file\` — and any other tool that mutates state.

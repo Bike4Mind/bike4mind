@@ -3,11 +3,12 @@ import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import { dataLakeRepository, dataLakeAccessGrantRepository, fallbackLakeSettingsRepository } from '@bike4mind/database';
-import { UpdateFallbackLakeSettingsRequestInput } from '@bike4mind/common';
+import { UpdateFallbackLakeSettingsRequestInput, dataLakeResponseSchema } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
+import { respond } from '@server/utils/respond';
 import { isSessionActivatablePromptId } from '@bike4mind/server-utils/utils/sessionActivatablePrompts';
 
 /**
@@ -46,7 +47,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
       logger: req.logger,
     });
 
-    return res.json(updated);
+    return respond(res, dataLakeResponseSchema, updated);
   });
 
 export const config = {

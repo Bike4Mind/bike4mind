@@ -45,7 +45,7 @@ export function wrapToolWithPermission(tool: ICompletionOptionTools, deps: WrapT
       const args = input as ToolArgs | undefined;
       const descriptor = permissionManager.catalog.resolve(toolName);
 
-      const sandbox = prepareSandbox(toolName, args, deps.sandboxOrchestrator, allowedDirectories);
+      const sandbox = prepareSandbox(descriptor, args, deps.sandboxOrchestrator, allowedDirectories);
       if (sandbox.kind === 'blocked') return sandbox.message;
       const isSandboxed = sandbox.kind === 'sandboxed';
       const effectiveArgs = isSandboxed ? sandbox.args : args;
@@ -55,9 +55,8 @@ export function wrapToolWithPermission(tool: ICompletionOptionTools, deps: WrapT
       // early-return path (plan-mode block, permission deny) that skips executeAndRecord. The
       // success-path returns MUST `await` executeAndRecord() - a bare `return <promise>` inside
       // try/finally runs the finally synchronously at the return, rmSync'ing this profile before
-      // the spawned sandbox-exec ever opens it (every sandboxed command would then fail). Only
-      // paths THIS wrapper set - a model-supplied `_sandboxCleanup` on the raw (unsandboxed)
-      // args must never reach rmSync(recursive, force).
+      // the spawned sandbox-exec ever opens it (every sandboxed command would then fail). The
+      // paths come only from the prepareSandbox result, never from the call's args.
       const sandboxCleanupPaths = isSandboxed ? sandbox.cleanupPaths : undefined;
 
       const run = () =>
@@ -70,6 +69,7 @@ export function wrapToolWithPermission(tool: ICompletionOptionTools, deps: WrapT
           originalFn,
           apiClient: deps.apiClient,
           showPermissionPrompt,
+          permissionManager,
           agentContext: deps.agentContext,
           configStore: deps.configStore,
           sandboxOrchestrator: deps.sandboxOrchestrator,

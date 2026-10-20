@@ -66,9 +66,19 @@
     },
     // migrations/index.test.ts statically imports the same premium.generated.ts stub - same
     // cross-package edge as the typecheck overrides above, for the same reason.
+    // checkSnapshotPublishPackages.test.ts reads .github/workflows/snapshot-publish.yaml and every
+    // workspace manifest under the diff roots, which sit outside the package: without them as
+    // inputs, an edit to one replays a cached pass for the very test meant to catch that drift.
     "@bike4mind/scripts#test": {
       "dependsOn": ["^build", "@bike4mind/client#codegen"],
-      "inputs": ["$TURBO_DEFAULT$", "../server-utils/**", "!../server-utils/node_modules/**"]
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "../server-utils/**",
+        "!../server-utils/node_modules/**",
+        "$TURBO_ROOT$/.github/workflows/snapshot-publish.yaml",
+        "$TURBO_ROOT$/b4m-core/*/package.json",
+        "$TURBO_ROOT$/packages/*/package.json"
+      ]
     },
     // electron-vite writes three bundles (main, preload, renderer) to out/, not dist/, and
     // its config plus the split tsconfigs sit outside the generic task's "src/**" inputs.

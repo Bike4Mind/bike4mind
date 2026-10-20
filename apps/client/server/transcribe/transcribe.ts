@@ -18,7 +18,7 @@ import {
 import { speechToTextService, creditService } from '@bike4mind/services';
 import { Resource } from 'sst';
 import { type ILogger } from '@bike4mind/observability';
-import { CreditHolderType } from '@bike4mind/common';
+import { CreditHolderType, usdToCreditsStochastic } from '@bike4mind/common';
 import { userRepository, creditTransactionRepository, usageEventRepository } from '@bike4mind/database';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -193,29 +193,30 @@ interface DeductArgs {
 }
 
 async function deductTranscriptionCredits({ userId, backend, contentLength, logger }: DeductArgs): Promise<void> {
-  const { durationMinutes, costUsd, credits } = estimateTranscriptionCost(
-    contentLength,
-    transcriptionUsdPerMinute(backend)
-  );
-  if (credits <= 0) return;
+  // The estimate's round-up credits only gate the call; the debit is the unbiased draw on its USD (may be 0).
+  const { durationMinutes, costUsd } = estimateTranscriptionCost(contentLength, transcriptionUsdPerMinute(backend));
+  const credits = usdToCreditsStochastic(costUsd);
 
   const sessionId = `transcribe-${userId}-${Date.now()}`;
 
   try {
-    await creditService.subtractCredits(
-      {
-        type: 'speech_to_text_usage',
-        ownerId: userId,
-        ownerType: CreditHolderType.User,
-        credits,
-        model: backend,
-        sessionId,
-      },
-      {
-        db: { creditTransactions: creditTransactionRepository },
-        creditHolderMethods: userRepository,
-      }
-    );
+    // A zero draw writes no ledger row; the usage event below still records the call.
+    if (credits > 0) {
+      await creditService.subtractCredits(
+        {
+          type: 'speech_to_text_usage',
+          ownerId: userId,
+          ownerType: CreditHolderType.User,
+          credits,
+          model: backend,
+          sessionId,
+        },
+        {
+          db: { creditTransactions: creditTransactionRepository },
+          creditHolderMethods: userRepository,
+        }
+      );
+    }
 
     // Dual-write usage event: analytics only, never billing.
     usageEventRepository

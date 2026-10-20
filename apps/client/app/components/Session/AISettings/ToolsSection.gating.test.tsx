@@ -547,3 +547,34 @@ describe('MISSING_KEY_TOOLTIPS lock-step wording', () => {
     }
   });
 });
+
+describe('ToolsSection Decisions picker', () => {
+  it('lets a caller pin decide with automatic offers disabled', () => {
+    mocks.state.skipAutoOffers = true;
+    mocks.toolAvailability.value = { decide: true };
+    const { getByTestId } = render(<ToolsSection />, { wrapper: Wrapper });
+
+    fireEvent.click(getByTestId('tool-toggle-decide'));
+
+    expect(mocks.useLLM.setState).toHaveBeenCalledWith({ tools: ['decide'] });
+  });
+
+  it('keeps the saved preference but refuses a toggle when no decision model is callable', () => {
+    mocks.state.tools = ['decide'];
+    mocks.toolAvailability.value = { decide: false };
+    const setTools = vi.fn();
+    const { container, getByTestId } = render(<ToolsSection setTools={setTools} />, { wrapper: Wrapper });
+
+    expect(gated(container, 'tool-item-decide')).toBeTruthy();
+    expect(getByTestId('tool-toggle-decide').getAttribute('aria-checked')).toBe('false');
+    fireEvent.click(getByTestId('tool-toggle-decide'));
+    expect(setTools).not.toHaveBeenCalled();
+    expect(mocks.state.tools).toEqual(['decide']);
+  });
+
+  it('hides decide when the session denies it', () => {
+    const { queryByTestId } = render(<ToolsSection disabledTools={['decide']} />, { wrapper: Wrapper });
+
+    expect(queryByTestId('tool-row-decide')).toBeNull();
+  });
+});

@@ -9,7 +9,15 @@
 /**
  * Tools available for server-side execution
  */
-export type ServerToolName = 'weather_info' | 'web_search' | 'web_fetch';
+export type ServerToolName = 'weather_info' | 'web_search' | 'web_fetch' | 'decide';
+
+/**
+ * Implementations the host supplies for server tools whose code lives in the app tier (the
+ * decision runner needs its credit hold, which b4m-core cannot import). Absent, that tool fails
+ * with a clear error instead of running un-billed.
+ */
+export type ServerToolExecutor = (request: ToolExecutionRequest) => Promise<string>;
+export type ServerToolExecutors = Partial<Record<'decide', ServerToolExecutor>>;
 
 /**
  * Error categories for analytics and monitoring

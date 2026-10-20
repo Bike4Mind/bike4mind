@@ -188,8 +188,7 @@ async function lapseOwnGrants(
  * for the org's billing owner, so `resolveEffectiveOwnerIds` stops resolving to someone who left.
  *
  * The billing owner (`organization.userId`) is the successor because it is the only always-present,
- * unique, deterministic answer: `managerId` is nullable and `adminUserIds` may be empty and carries
- * no meaningful order.
+ * unique, deterministic answer: `adminUserIds` may be empty and carries no meaningful order.
  *
  * THIS DOES CONFER ONE NEW CAPABILITY, and it is deliberate. For the manage rung and for read it
  * does not - `canManageLake`'s org rung already admitted the billing owner on every lake scoped to

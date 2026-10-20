@@ -95,6 +95,7 @@ import {
   settleReplyInFlight,
 } from '@client/app/utils/uiSideEffectDispatcher';
 import { getReplyTruncationState, repairTruncatedArtifact } from '@client/app/utils/replyTruncation';
+import { GitHubProjectActionTarget } from './GitHubProjectActionTarget';
 
 import SearchResultCards from './SearchResultCards';
 import { SEARCH_RESULT_CARDS_LANGUAGE } from './parseSearchResultCards';
@@ -911,6 +912,7 @@ const PendingActionButtonsContent: FC<PendingActionButtonsProps> = ({ pendingAct
       <Typography level="body-sm" sx={{ mb: 1.5, fontWeight: 'md' }}>
         Ready to execute: {toolDisplayName}
       </Typography>
+      <GitHubProjectActionTarget tool={pendingAction.tool} params={pendingAction.params} />
       <Stack direction="row" spacing={1}>
         <Button
           size="sm"

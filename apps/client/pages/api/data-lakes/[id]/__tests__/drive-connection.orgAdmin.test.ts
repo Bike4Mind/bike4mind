@@ -79,7 +79,12 @@ const CONNECTION = { id: 'conn1', organizationId: ORG, driveFolderId: 'Folder123
 describe('/api/data-lakes/[id]/drive-connection - appointed org admin', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    h.orgFindById.mockResolvedValue({ id: ORG, userId: OWNER, managerId: MANAGER, adminUserIds: [APPOINTED_ADMIN] });
+    h.orgFindById.mockResolvedValue({
+      id: ORG,
+      userId: OWNER,
+      adminUserIds: [APPOINTED_ADMIN, MANAGER],
+      users: [{ userId: MANAGER, permissions: ['read'] }],
+    });
     h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: ORG, datalakeTag: 'datalake:lake1' });
     h.connFindByDataLakeIdAny.mockResolvedValue(CONNECTION);
   });

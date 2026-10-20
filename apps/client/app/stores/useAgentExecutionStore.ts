@@ -216,7 +216,7 @@ interface AgentExecutionState {
   appendTextDelta: (executionId: string, iteration: number, delta: string) => void;
   recordCredits: (executionId: string, credits: number) => void;
   markCompleted: (executionId: string, answer: string | undefined, totalCreditsUsed: number) => void;
-  markFailed: (executionId: string, reason: string, message?: string) => void;
+  markFailed: (executionId: string, reason: string | undefined, message?: string) => void;
   markAborted: (executionId: string) => void;
   /** Optimistic: flag an execution as aborting the moment the user clicks Stop. */
   markAborting: (executionId: string) => void;

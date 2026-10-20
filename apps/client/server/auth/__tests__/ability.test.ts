@@ -38,7 +38,7 @@ vi.mock('@server/models/Subscription', () => ({
 }));
 
 import defineAbilitiesFor from '../ability';
-import { Prompt, FabFile, FeedbackModel } from '@bike4mind/database';
+import { Prompt, FabFile, FeedbackModel, Organization } from '@bike4mind/database';
 import { accessibleBy } from '@casl/mongoose';
 
 const makeUser = (overrides: Partial<IUserDocument> = {}): IUserDocument =>
@@ -260,5 +260,32 @@ describe('defineAbilitiesFor - user-shared document access', () => {
       { userId: 'u1', permissions: ['read', 'update'] },
     ]);
     expect(ability.can('update', doc)).toBe(true);
+  });
+});
+
+describe('defineAbilitiesFor - org manager rule', () => {
+  const org = (fields: { adminUserIds: string[]; users: Array<{ userId: string; permissions: string[] }> }) =>
+    Object.assign(new Organization(), { userId: 'owner', groups: [], ...fields });
+
+  it('lets a manager with a roster row read and update the org', () => {
+    const ability = defineAbilitiesFor(makeUser());
+    const doc = org({ adminUserIds: ['u1'], users: [{ userId: 'u1', permissions: ['read'] }] });
+    expect(ability.can('read', doc)).toBe(true);
+    expect(ability.can('update', doc)).toBe(true);
+    expect(ability.can('addUser', doc)).toBe(true);
+  });
+
+  it('denies a bare adminUserIds entry with no roster row', () => {
+    const ability = defineAbilitiesFor(makeUser());
+    const doc = org({ adminUserIds: ['u1'], users: [] });
+    expect(ability.can('update', doc)).toBe(false);
+    expect(ability.can('addUser', doc)).toBe(false);
+  });
+
+  it('requires both the roster row and the adminUserIds entry in the accessibleBy query', () => {
+    const ability = defineAbilitiesFor(makeUser());
+    const query = JSON.stringify(accessibleBy(ability, 'update').ofType(Organization));
+    expect(query).toContain('"adminUserIds":"u1"');
+    expect(query).toContain('"users":{"$elemMatch":{"userId":"u1"}}');
   });
 });

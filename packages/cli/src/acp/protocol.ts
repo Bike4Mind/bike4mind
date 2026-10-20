@@ -131,10 +131,13 @@ export const PERMISSION_OPTION_ALLOW_ONCE = 'allow-once';
 export const PERMISSION_OPTION_ALLOW_ALWAYS = 'allow-always';
 export const PERMISSION_OPTION_REJECT = 'deny';
 
-export function buildPermissionOptions(): schema.PermissionOption[] {
+export function buildPermissionOptions(options: { allowAlways?: boolean } = {}): schema.PermissionOption[] {
+  const { allowAlways = true } = options;
   return [
     { optionId: PERMISSION_OPTION_ALLOW_ONCE, name: 'Allow once', kind: 'allow_once' },
-    { optionId: PERMISSION_OPTION_ALLOW_ALWAYS, name: 'Always allow', kind: 'allow_always' },
+    ...(allowAlways
+      ? [{ optionId: PERMISSION_OPTION_ALLOW_ALWAYS, name: 'Always allow', kind: 'allow_always' as const }]
+      : []),
     { optionId: PERMISSION_OPTION_REJECT, name: 'Reject', kind: 'reject_once' },
   ];
 }

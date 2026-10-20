@@ -30,7 +30,13 @@ import ShieldIcon from '@mui/icons-material/Shield';
 import { useNavigate } from '@tanstack/react-router';
 import type { ISkill, SkillListingVisibility } from '@bike4mind/common';
 import { getErrorMessage } from '@client/app/utils/error';
-import { useMarketMe, usePublishSkill, useRescanVersion, type SubmitResult } from '@client/app/hooks/data/skillMarket';
+import {
+  useMarketMe,
+  usePublishSkill,
+  useRescanVersion,
+  useSuggestListingTags,
+  type SubmitResult,
+} from '@client/app/hooks/data/skillMarket';
 import ScanResult from './ScanResult';
 
 const TAG_PATTERN = /^[a-z0-9][a-z0-9-]{0,23}$/;
@@ -79,11 +85,15 @@ const PublishDialog: FC<PublishDialogProps> = ({ onClose, skill, ownSkills = [] 
   const [skillId, setSkillId] = useState(skill?.id ?? '');
   const [visibility, setVisibility] = useState<SkillListingVisibility>('public');
   const [organizationId, setOrganizationId] = useState('');
-  const [tags, setTags] = useState<string[]>([]);
+  const [editedTags, setEditedTags] = useState<string[] | null>(null);
   const [tagDraft, setTagDraft] = useState('');
   const [tagError, setTagError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<SubmitResult | null>(null);
+  const suggest = useSuggestListingTags(skillId, !result);
+  // The current skill's suggestions stand in for the tags until the author edits them.
+  const tagsTouched = editedTags !== null;
+  const tags = editedTags ?? suggest.data ?? [];
 
   const orgs = me?.organizations ?? [];
   const canSubmit =
@@ -94,7 +104,7 @@ const PublishDialog: FC<PublishDialogProps> = ({ onClose, skill, ownSkills = [] 
     if (!tag) return;
     if (!TAG_PATTERN.test(tag)) return setTagError('Use 1-24 lowercase letters, digits or hyphens');
     if (tags.length >= MAX_TAGS) return setTagError(`Up to ${MAX_TAGS} tags`);
-    if (!tags.includes(tag)) setTags([...tags, tag]);
+    if (!tags.includes(tag)) setEditedTags([...tags, tag]);
     setTagDraft('');
     setTagError(null);
   };
@@ -104,7 +114,7 @@ const PublishDialog: FC<PublishDialogProps> = ({ onClose, skill, ownSkills = [] 
       e.preventDefault();
       addTag();
     } else if (e.key === 'Backspace' && !tagDraft && tags.length) {
-      setTags(tags.slice(0, -1));
+      setEditedTags(tags.slice(0, -1));
     }
   };
 
@@ -284,7 +294,13 @@ const PublishDialog: FC<PublishDialogProps> = ({ onClose, skill, ownSkills = [] 
                             key={t}
                             size="sm"
                             variant="soft"
-                            endDecorator={<ChipDelete onDelete={() => setTags(tags.filter(x => x !== t))} />}
+                            data-testid={`market-publish-tag-${t}`}
+                            endDecorator={
+                              <ChipDelete
+                                onDelete={() => setEditedTags(tags.filter(x => x !== t))}
+                                data-testid={`market-publish-tag-delete-${t}`}
+                              />
+                            }
                           >
                             #{t}
                           </Chip>
@@ -294,7 +310,11 @@ const PublishDialog: FC<PublishDialogProps> = ({ onClose, skill, ownSkills = [] 
                   }
                   slotProps={{ input: { 'data-testid': 'market-publish-tag-input' } }}
                 />
-                <FormHelperText>{tagError ?? 'Tags help people find your skill. Up to 5.'}</FormHelperText>
+                {!tagError && suggest.isFetching && !tagsTouched ? (
+                  <FormHelperText data-testid="market-publish-tags-suggesting">Suggesting tags...</FormHelperText>
+                ) : (
+                  <FormHelperText>{tagError ?? 'Tags help people find your skill. Up to 5.'}</FormHelperText>
+                )}
               </FormControl>
 
               <Alert variant="soft" color="neutral" startDecorator={<ShieldIcon />}>
