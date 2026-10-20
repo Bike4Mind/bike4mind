@@ -250,6 +250,13 @@ describe('SkillUploadDialog', () => {
     expect($('skill-publish-result')).not.toBeNull();
   });
 
+  it('warns when a new version would rename the listing', () => {
+    render(<SkillUploadDialog preview={preview()} listing={{ id: 'l1', name: 'tester-guide' }} onClose={() => {}} />);
+    expect($('skill-upload-name-mismatch')).toBeNull();
+    type('skill-upload-name', 'other-skill');
+    expect($('skill-upload-name-mismatch')?.textContent).toContain('This file is /other-skill, not /tester-guide');
+  });
+
   it('says the account skill was updated when only the version submission failed', async () => {
     market.submitVersion.mockResolvedValueOnce({
       ok: false,

@@ -181,7 +181,7 @@ function SkillsSettings({
   onOpenSkillMarket?: (listing?: SkillMarketListingRef) => void;
 }) {
   const { skills, refresh } = useSkills(sessionId);
-  const upload = useSkillUpload(() => void refresh());
+  const upload = useSkillUpload(() => void refresh(), sessionId);
   const uploadRow = (skill: SkillSummary) =>
     void upload.start(() => window.b4m.skillMarket.readLocalSkill({ sessionId, name: skill.name }));
   const [imports, setImports] = useState<ReadonlyMap<string, SkillMarketImport>>(new Map());

@@ -316,7 +316,27 @@ describe('SkillMarket', () => {
         ok: true,
         fields: { name: 'one', body: 'Just a body' },
       });
-      expect(open.mock.calls[0][0].properties).toEqual(['openFile', 'openDirectory']);
+      expect(open.mock.calls[0][0].properties).toEqual(
+        process.platform === 'darwin' ? ['openFile', 'openDirectory'] : ['openFile']
+      );
+    });
+
+    it('asks for files only off macOS, where openDirectory would hide them', async () => {
+      const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+      const open = vi.fn().mockResolvedValue({ canceled: true, filePaths: [] });
+      try {
+        for (const [os, properties] of [
+          ['darwin', ['openFile', 'openDirectory']],
+          ['win32', ['openFile']],
+          ['linux', ['openFile']],
+        ] as const) {
+          Object.defineProperty(process, 'platform', { value: os });
+          await market.pickUploadSource(open);
+          expect(open.mock.calls.at(-1)![0].properties).toEqual(properties);
+        }
+      } finally {
+        Object.defineProperty(process, 'platform', platform);
+      }
     });
 
     it('creates a skill from an explicit field list, so allowedTools is never sent', async () => {
@@ -365,6 +385,14 @@ describe('SkillMarket', () => {
       });
     });
 
+    it("keeps the server's message when the skill to update is gone", async () => {
+      get.mockRejectedValueOnce(httpError(404, { error: 'Skill not found' }));
+      expect(await market.saveSkill({ fields: FIELDS, mode: 'update', targetSkillId: 'gone' })).toEqual({
+        ok: false,
+        error: 'Skill not found',
+      });
+    });
+
     it('updates the chosen own skill with a PUT, refuses an imported one, and offers its open listing', async () => {
       get.mockResolvedValueOnce({ data: { id: 's7', userId: 'me', importedFrom: { listingId: 'l' } } });
       expect(await market.saveSkill({ fields: FIELDS, mode: 'update', targetSkillId: 's7' })).toMatchObject({
@@ -375,11 +403,16 @@ describe('SkillMarket', () => {
       get
         .mockResolvedValueOnce({ data: { id: 's8', userId: 'me' } })
         .mockResolvedValueOnce(mineBody([{ id: 'l3', name: 'tester-guide', sourceSkillId: 's8', status: 'approved' }]));
-      expect(await market.saveSkill({ fields: FIELDS, mode: 'update', targetSkillId: 's8' })).toMatchObject({
+      localSkill.mockResolvedValueOnce({ source: 'project', filePath: '/repo/.claude/skills/tester-guide/SKILL.md' });
+      expect(
+        await market.saveSkill({ fields: FIELDS, mode: 'update', targetSkillId: 's8', sessionId: 'sess' })
+      ).toMatchObject({
         ok: true,
         skill: { id: 's8' },
         listing: { id: 'l3' },
+        shadowedByLocal: true,
       });
+      expect(localSkill).toHaveBeenCalledWith('sess', 'tester-guide');
       expect(put).toHaveBeenCalledWith(
         '/api/skills/s8',
         expect.objectContaining({ name: 'tester-guide', body: 'Do it.' })

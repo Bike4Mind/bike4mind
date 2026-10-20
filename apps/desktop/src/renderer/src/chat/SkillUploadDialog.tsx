@@ -280,12 +280,15 @@ type Step =
 export function SkillUploadDialog({
   preview,
   listing,
+  sessionId,
   onClose,
   onSaved,
 }: {
   preview: Preview;
   /** Submit as a new version of this listing instead of saving a new skill. */
   listing?: { id: string; name: string };
+  /** The chat session, so a project skill's local copy counts when saying what takes precedence. */
+  sessionId?: string | null;
   onClose: () => void;
   /** An account skill was written, so lists showing account skills should reload. */
   onSaved?: () => void;
@@ -340,6 +343,7 @@ export function SkillUploadDialog({
       fields: { ...fields, name, description: fields.description.trim() },
       mode,
       ...(target ? { targetSkillId: target } : {}),
+      ...(sessionId ? { sessionId } : {}),
     });
     if (!saved.ok) {
       if (saved.code === 'name_taken' && saved.existing) setStep({ kind: 'conflict', existing: saved.existing, then });
@@ -580,6 +584,12 @@ export function SkillUploadDialog({
           />
           {errors.name && <FormHelperText>{errors.name}</FormHelperText>}
         </FormControl>
+        {listing && fields.name.trim() !== listing.name && (
+          <Alert color="warning" variant="soft" data-testid="skill-upload-name-mismatch">
+            This file is /{fields.name.trim()}, not /{listing.name}. Submitting renames the listing&apos;s skill; check
+            you picked the right file.
+          </Alert>
+        )}
         <FormControl required error={!!errors.description}>
           <FormLabel>Description</FormLabel>
           <Input
@@ -719,7 +729,7 @@ export function SkillUploadDialog({
  * Open the upload dialog from a read (a Customize row or the native picker). A failed read
  * surfaces as `error`; a cancelled pick does nothing.
  */
-export function useSkillUpload(onSaved?: () => void) {
+export function useSkillUpload(onSaved?: () => void, sessionId?: string | null) {
   const [open, setOpen] = useState<{ preview: Preview; listing?: { id: string; name: string } } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -731,7 +741,13 @@ export function useSkillUpload(onSaved?: () => void) {
   };
 
   const dialog = open ? (
-    <SkillUploadDialog preview={open.preview} listing={open.listing} onClose={() => setOpen(null)} onSaved={onSaved} />
+    <SkillUploadDialog
+      preview={open.preview}
+      listing={open.listing}
+      sessionId={sessionId}
+      onClose={() => setOpen(null)}
+      onSaved={onSaved}
+    />
   ) : null;
   return { start, error, dialog };
 }

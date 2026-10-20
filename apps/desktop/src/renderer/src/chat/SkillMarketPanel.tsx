@@ -102,7 +102,9 @@ export function SkillMarketPanel({
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<SkillMarketListingRef | null>(initial ?? null);
   const [tab, setTab] = useState<'browse' | 'mine'>('browse');
-  const upload = useSkillUpload();
+  // Bumped after an upload saves, so an open My listings reloads.
+  const [mineKey, setMineKey] = useState(0);
+  const upload = useSkillUpload(() => setMineKey(key => key + 1));
 
   // Only the latest request lands, so a slow page for old filters cannot overwrite the new ones.
   const latest = useRef(0);
@@ -184,7 +186,7 @@ export function SkillMarketPanel({
           )}
           {upload.dialog}
           {tab === 'mine' ? (
-            <SkillListingsMine />
+            <SkillListingsMine key={mineKey} />
           ) : selected ? (
             <SkillListingDetail listingRef={selected} onBack={() => setSelected(null)} />
           ) : (

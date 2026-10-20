@@ -177,6 +177,8 @@ export interface SkillSaveRequest {
   mode: 'create' | 'update';
   /** The existing own skill to overwrite, after the user chose "Update existing". */
   targetSkillId?: string;
+  /** Resolves this session's project skills too when checking whether a local copy shadows the save. */
+  sessionId?: string | null;
 }
 
 export type SkillSaveResult =

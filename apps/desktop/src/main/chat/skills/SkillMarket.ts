@@ -201,7 +201,8 @@ export class SkillMarket {
     const picked = await open({
       title: 'Upload a skill',
       buttonLabel: 'Upload',
-      properties: ['openFile', 'openDirectory'],
+      // Elsewhere openFile + openDirectory is a folder-only dialog, so a SKILL.md is picked as a file.
+      properties: process.platform === 'darwin' ? ['openFile', 'openDirectory'] : ['openFile'],
       filters: [{ name: 'Skill', extensions: ['md'] }],
     }).catch(() => ({ canceled: true, filePaths: [] }));
     if (picked.canceled || !picked.filePaths[0]) return { ok: false, error: '', canceled: true };
@@ -221,7 +222,7 @@ export class SkillMarket {
     let id: string;
     if (request.mode === 'update') {
       if (typeof request.targetSkillId !== 'string') return { ok: false, error: 'No skill to update.' };
-      const read = await this.get(`/api/skills/${encodeURIComponent(request.targetSkillId)}`);
+      const read = await this.get(`/api/skills/${encodeURIComponent(request.targetSkillId)}`, undefined, true);
       if ('error' in read) return { ok: false, error: read.error };
       const target = asRecord(read.data);
       if (target?.userId !== userId) return { ok: false, error: 'You can only update your own skills.' };
@@ -249,7 +250,8 @@ export class SkillMarket {
     }
 
     this.deps.catalog.invalidateAccount();
-    const winner = await this.deps.catalog.get(null, fields.name).catch(() => undefined);
+    const sessionId = typeof request.sessionId === 'string' ? request.sessionId : null;
+    const winner = await this.deps.localSkill(sessionId, fields.name).catch(() => undefined);
     const shadowedByLocal = !!winner && winner.source !== 'remote';
     const listing =
       request.mode === 'update'
@@ -434,14 +436,18 @@ export class SkillMarket {
     };
   }
 
-  private async get(url: string, params?: Record<string, string>): Promise<{ data: unknown } | { error: string }> {
+  private async get(
+    url: string,
+    params?: Record<string, string>,
+    write = false
+  ): Promise<{ data: unknown } | { error: string }> {
     const api = this.deps.getApiClient();
     if (!api) return { error: SIGNED_OUT };
     try {
       const response = await api.getAxiosInstance().get(url, params ? { params } : undefined);
       return { data: response.data };
     } catch (err) {
-      const error = describe(err);
+      const error = describe(err, { write });
       this.deps.logger.debug(`SKILL MARKET: GET ${url} failed: ${error}`);
       return { error };
     }
