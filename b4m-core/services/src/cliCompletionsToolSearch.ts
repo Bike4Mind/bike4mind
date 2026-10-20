@@ -65,11 +65,11 @@ function scanMessages(messages: IMessage[]): { referencedTools: unknown[]; echoe
   return { referencedTools, echoesToolSearchBlocks };
 }
 
-/** Server tool results (tool_search_tool_result, ...) end an assistant turn the provider accepts a change after. */
-function endsInServerToolResult(message: IMessage): boolean {
+/** An assistant turn ending in a tool search result is one the provider accepts a change after; other server results are refused until verified. */
+function endsInToolSearchResult(message: IMessage): boolean {
   if (message.role !== 'assistant' || !Array.isArray(message.content)) return false;
   const last = (message.content as ScannedBlock[])[message.content.length - 1];
-  return typeof last?.type === 'string' && last.type !== 'tool_result' && last.type.endsWith('_tool_result');
+  return last?.type === 'tool_search_tool_result';
 }
 
 /**
@@ -79,7 +79,7 @@ function endsInServerToolResult(message: IMessage): boolean {
  */
 function validateToolChanges(
   messages: IMessage[],
-  declared: ReadonlySet<string>,
+  customTools: CompletionCustomTool[],
   model: CompletionsToolCapabilityModel | undefined
 ): void {
   const misplaced = messages.find(
@@ -94,6 +94,9 @@ function validateToolChanges(
 
   const changes = messages.filter(isToolChangeMessage);
   if (changes.length === 0) return;
+
+  const declared = new Set(customTools.map(tool => tool.toolSchema.name));
+  const mcpTools = new Set(customTools.filter(tool => tool._isMcpTool).map(tool => tool.toolSchema.name));
 
   if (!model || !completionsSupportsToolChanges(model)) {
     throw toolSearchError(
@@ -114,15 +117,21 @@ function validateToolChanges(
     }
     const previous = wire[index - 1];
     const next = wire[index + 1];
-    const followsTurn = previous !== undefined && (previous.role === 'user' || endsInServerToolResult(previous));
+    const followsTurn = previous !== undefined && (previous.role === 'user' || endsInToolSearchResult(previous));
     const precedesTurn = next === undefined || next.role === 'assistant';
     if (!followsTurn || !precedesTurn) {
       throw toolSearchError(
-        'A tool change message must follow a user message or an assistant message ending in a server tool result, and be the last message or be followed by an assistant message.',
+        'A tool change message must follow a user message or an assistant message ending in a tool search result, and be the last message or be followed by an assistant message.',
         'invalid_tool_change'
       );
     }
     for (const { tool } of parsed.data) {
+      if (mcpTools.has(tool.name)) {
+        throw toolSearchError(
+          `A tool change cannot name '${tool.name}', an MCP tool; only tools defined in tools can be added or removed.`,
+          'invalid_tool_change'
+        );
+      }
       if (declared.has(tool.name)) continue;
       throw toolSearchError(`A tool change names '${tool.name}', which is not in tools.`, 'unknown_tool_reference');
     }
@@ -164,7 +173,7 @@ export function prepareWireTools(
     } else customTools.push(tool);
   }
 
-  validateToolChanges(messages, new Set(customTools.map(tool => tool.toolSchema.name)), model);
+  validateToolChanges(messages, customTools, model);
 
   const { referencedTools, echoesToolSearchBlocks } = scanMessages(messages);
   const native = model !== undefined && completionsSupportsToolSearch(model);
