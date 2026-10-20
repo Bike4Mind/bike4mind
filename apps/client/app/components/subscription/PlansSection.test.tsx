@@ -65,11 +65,8 @@ vi.mock('@client/app/components/organizations/CreateTeamModal', () => ({
   useCreateTeamModal: (selector: (state: { open: () => void }) => unknown) => selector({ open: vi.fn() }),
 }));
 
-vi.mock('@client/app/hooks/useAnswerCostReference', () => ({
-  useAnswerCostReference: () => ({
-    premium: { modelName: 'Claude Sonnet 5.5', creditsPerAnswer: 54 },
-    budget: { modelName: 'GPT-5.4 Mini', creditsPerAnswer: 15 },
-  }),
+vi.mock('@client/app/hooks/useSelectedModelAnswerCost', () => ({
+  useSelectedModelAnswerCost: () => ({ modelName: 'Claude Sonnet 5.5', creditsPerAnswer: 54 }),
 }));
 
 vi.mock('react-i18next', () => ({
@@ -228,7 +225,7 @@ describe('PlansSection - Team tab', () => {
     ).toBeInTheDocument();
     expect(screen.getByText('subscription_modal.credits_per_month:2,000')).toBeInTheDocument();
     expect(screen.getByTestId('plan-card-answers-estimate')).toHaveTextContent(
-      /^Estimate: about 37 to 130 answers, depending on the model/
+      /^Estimate: about 37 answers on Claude Sonnet 5\.5\./
     );
   });
 });
@@ -263,11 +260,11 @@ describe('PlansSection', () => {
     expect(screen.getByText(/subscription_modal.credits_rollover/)).toBeInTheDocument();
   });
 
-  it('estimates how far the Professional credits go as a range across models', () => {
+  it('estimates how far the Professional credits go on the selected model', () => {
     renderSection();
 
     expect(screen.getByTestId('plan-card-answers-estimate')).toHaveTextContent(
-      /^Estimate: about 920 to 3,300 answers, depending on the model \(Claude Sonnet 5\.5 to GPT-5\.4 Mini\)/
+      /^Estimate: about 920 answers on Claude Sonnet 5\.5\./
     );
   });
 
