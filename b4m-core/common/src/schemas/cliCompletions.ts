@@ -178,7 +178,7 @@ export const CompletionMessageSchema = z.object({
       'A string, or an array of content blocks. A `system` message may instead hold only `tool_addition` / ' +
         '`tool_removal` blocks (`{ type, tool: { type: "tool_reference", name } }`) to load or unload a tool named in ' +
         '`tools` mid-conversation without invalidating the prompt cache. It must follow a user turn or an assistant turn ' +
-        'ending in a server tool result, and be the last message or precede an assistant turn. Only on models whose ' +
+        'ending in a tool search result, and be the last message or precede an assistant turn. Only on models whose ' +
         '`supports_tool_changes` is true and that are served by the direct Anthropic API; otherwise refused with ' +
         '`errorCode: "tool_changes_unsupported"` (or `invalid_tool_change` / `unknown_tool_reference` when malformed).'
     ),
