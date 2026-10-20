@@ -98,4 +98,12 @@ describe('LlamaBedrockBackend max_gen_len', () => {
       expect.objectContaining({ model: ChatModels.LLAMA3_INSTRUCT_70B_V1, requested, clamped })
     );
   });
+
+  it('warns once when the same request payload is rebuilt', () => {
+    const backend = new LlamaBedrockBackend();
+    const options = { maxTokens: 4096 };
+    backend.getPayload(ChatModels.LLAMA3_INSTRUCT_70B_V1, [{ role: 'user', content: 'hi' }], options);
+    backend.getPayload(ChatModels.LLAMA3_INSTRUCT_70B_V1, [{ role: 'user', content: 'hi' }], options);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
 });

@@ -7,6 +7,9 @@ import { BaseBedrockBackend } from './base';
 // See docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-meta.html
 const MAX_GEN_LEN = 2048;
 
+// The base preflight rebuilds the payload on every prune pass with the same options object; warn once per request.
+const clampWarned = new WeakSet<Partial<ICompletionOptions>>();
+
 export default class LlamaBedrockBackend extends BaseBedrockBackend {
   /** Reports done only on response.stop_reason on the terminal chunk, so a missing terminal event means a truncated stream. */
   protected override get signalsStreamTermination(): boolean {
@@ -126,7 +129,8 @@ export default class LlamaBedrockBackend extends BaseBedrockBackend {
     const stopSequences = ['Human:', '\nHuman:', '\n\nHuman:', 'Assistant:', '\nAssistant:'];
 
     const maxGenLen = Math.min(Math.max(options.maxTokens || MAX_GEN_LEN, 1), MAX_GEN_LEN);
-    if (options.maxTokens && options.maxTokens !== maxGenLen) {
+    if (options.maxTokens && options.maxTokens !== maxGenLen && !clampWarned.has(options)) {
+      clampWarned.add(options);
       Logger.globalInstance.warn('[LlamaBedrockBackend] maxTokens outside Bedrock max_gen_len range, clamping', {
         model,
         requested: options.maxTokens,
