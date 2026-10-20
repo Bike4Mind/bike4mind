@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/fab-pipeline",
-  "version": "2.1.6",
+  "version": "2.1.7",
   "publishConfig": {
     "access": "restricted"
   },

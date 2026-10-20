@@ -1,5 +1,18 @@
 # @bike4mind/scripts
 
+## 0.1.94
+
+### Patch Changes
+
+- Updated dependencies [[`174eeda`](https://github.com/Bike4Mind/bike4mind/commit/174eedabbbcafefe4282268d902efdc6ad12e125)]:
+  - @bike4mind/common@17.1.0
+  - @bike4mind/services@19.1.0
+  - @bike4mind/db-core@0.8.7
+  - @bike4mind/fab-pipeline@2.1.7
+  - @bike4mind/llm-adapters@1.4.1
+  - @bike4mind/utils@8.1.2
+  - @bike4mind/database@0.4.18
+
 ## 0.1.93
 
 ### Patch Changes
