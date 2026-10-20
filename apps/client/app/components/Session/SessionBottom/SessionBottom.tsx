@@ -17,7 +17,7 @@ import {
 } from '@client/app/contexts/SessionsContext';
 import { useEffectiveCredits } from '@client/app/hooks/useEffectiveCredits';
 import { useNotebookContextFiles } from '@client/app/hooks/useNotebookContextFiles';
-import type { AttachScopeMode } from '@bike4mind/common';
+import type { AttachScopeMode, ModelInfo } from '@bike4mind/common';
 import { useEmbeddingMismatchStatus } from '@client/app/hooks/useEmbeddingMismatchStatus';
 
 import HighlanderFocus from '@client/app/components/HighlanderFocus';
@@ -84,6 +84,9 @@ import ResearchModeIndicator from '@client/app/components/Session/AISettings/Res
 import { pickerAttachedAgents } from './resolveDispatchAgent';
 import { SlashCommandSuggestions } from '@client/app/components/common/CommandSuggestions';
 import { useContentTransformDetector } from '@client/app/hooks/useContentTransformDetector';
+import { AffordableModelOffer } from '../AffordableModelOffer';
+import { buildSessionModelPatch } from '@client/app/utils/aiSettingsUtils';
+import { updateSessionToServer } from '@client/app/utils/sessionsAPICalls';
 
 type Props = {
   /**
@@ -134,6 +137,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   );
   const [rephraseGlow, setRephraseGlow] = useState(false);
   const [showSlashSuggestions, setShowSlashSuggestions] = useState(false);
+  const [dismissedAffordableModel, setDismissedAffordableModel] = useState<string | null>(null);
   const currentUserId = useUser(state => state.currentUser?.id);
   // Keyed by user so a dismissal never applies to whoever signs in next on this browser.
   const [lowCreditsDismissedFor, setLowCreditsDismissedFor] = useState<string | null>(null);
@@ -199,6 +203,17 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   // the current input box against the budget.
   const contextUsage = useSessionContextUsage(currentSessionId);
   const modelName = useMemo(() => modelInfo?.find(m => m.id === model)?.name ?? model, [modelInfo, model]);
+  const selectAffordableModel = useCallback(
+    (affordableModel: ModelInfo) => {
+      useLLM.setState(buildSessionModelPatch(affordableModel));
+      if (currentSessionId) {
+        void updateSessionToServer({ id: currentSessionId, lastUsedModel: affordableModel.id }).catch(error =>
+          console.error('Failed to persist affordable model selection:', error)
+        );
+      }
+    },
+    [currentSessionId]
+  );
   const attachmentFit = useAttachmentFitWarning(
     model,
     // Notebook-context files ride EVERY turn on this session, so they spend the budget too.
@@ -560,6 +575,15 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
         ref={notesRef}
         sx={[aboveBoxSx, { display: 'flex', flexDirection: 'column', gap: '8px', '&:not(:empty)': { mb: '8px' } }]}
       >
+        {enforceCredits && modelInfo && dismissedAffordableModel !== model && (
+          <AffordableModelOffer
+            models={accessibleModels ?? []}
+            selectedModelId={model}
+            credits={effectiveCredits}
+            onSelect={selectAffordableModel}
+            onDismiss={() => setDismissedAffordableModel(model)}
+          />
+        )}
         <LowCreditsWarning
           show={creditUi.lowCreditsNotice}
           currentCredits={effectiveCredits}

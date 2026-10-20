@@ -30,6 +30,7 @@ export const APP_PROMPT_TOKENS = Math.ceil(
 export const TYPICAL_PROMPT_TOKENS = 1_000;
 export const TYPICAL_ANSWER_INPUT_TOKENS = APP_PROMPT_TOKENS + TYPICAL_PROMPT_TOKENS;
 export const TYPICAL_ANSWER_OUTPUT_TOKENS = 1_000;
+export const PREFLIGHT_ANSWER_OUTPUT_TOKENS = 4_096;
 
 // The costly end of the range: mid-tier (Sonnet-class) models, most preferred first.
 export const PREMIUM_REFERENCE_MODEL_IDS: readonly string[] = [
@@ -66,6 +67,54 @@ export function typicalAnswerCredits(model: ModelInfo): number | null {
       TYPICAL_ANSWER_OUTPUT_TOKENS * multiplier * rates.output) /
     1_000_000;
   return credits > 0 ? credits : null;
+}
+
+/** Approximate credits the chat admission hold needs for a typical prompt on `model`. */
+export function preflightAnswerCredits(model: ModelInfo): number | null {
+  if (model.freeToRun) return 0;
+  const rates = getTextModelCreditsPer1M(model);
+  if (!rates) return null;
+  const multiplier = tokenEstimateMultiplier(model.id);
+  return Math.max(
+    1,
+    Math.ceil(
+      (TYPICAL_ANSWER_INPUT_TOKENS * multiplier * rates.input +
+        PREFLIGHT_ANSWER_OUTPUT_TOKENS * multiplier * rates.output) /
+        1_000_000
+    )
+  );
+}
+
+export interface AffordableModelOffer {
+  current: ModelAnswerCost;
+  affordable: ModelInfo;
+  affordableCredits: number;
+}
+
+/** Cheapest accessible text model that this balance can admit when the selected model cannot. */
+export function findAffordableModelOffer(
+  models: readonly ModelInfo[],
+  selectedModelId: string,
+  credits: number
+): AffordableModelOffer | null {
+  const selected = models.find(model => model.id === selectedModelId);
+  if (!selected || selected.type !== 'text') return null;
+  const selectedCredits = preflightAnswerCredits(selected);
+  if (selectedCredits === null || selectedCredits <= credits) return null;
+
+  const affordable = models
+    .filter(model => model.type === 'text' && model.id !== selectedModelId && !model.disabled)
+    .map(model => ({ model, credits: preflightAnswerCredits(model) }))
+    .filter((candidate): candidate is { model: ModelInfo; credits: number } => candidate.credits !== null)
+    .filter(candidate => candidate.credits <= credits && candidate.credits < selectedCredits)
+    .sort((a, b) => a.credits - b.credits)[0];
+
+  if (!affordable) return null;
+  return {
+    current: { modelName: selected.name, creditsPerAnswer: selectedCredits },
+    affordable: affordable.model,
+    affordableCredits: affordable.credits,
+  };
 }
 
 function pickModelAnswerCost(models: readonly ModelInfo[], ids: readonly string[]): ModelAnswerCost | null {

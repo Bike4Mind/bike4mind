@@ -5,18 +5,39 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
 const { state } = vi.hoisted(() => ({
-  state: { enforceCredits: true, credits: 9982.6, payerNote: null as string | null },
+  state: { enforceCredits: true, credits: 9982.6, payerNote: null as string | null, model: 'model-a' },
 }));
 
-// The real modal pulls react-query and the account chain; a stub that reveals its open state
-// is enough to assert the chip opens it.
-vi.mock('../subscription/CreditsModal', () => ({
-  default: ({ open }: { open: boolean }) => (open ? <div data-testid="credits-modal-open" /> : null),
+vi.mock('../subscription/CreditsExplanationModal', () => ({
+  default: ({ open }: { open: boolean }) => (open ? <div data-testid="credits-explanation-open" /> : null),
 }));
 vi.mock('@client/app/hooks/useEffectiveCredits', () => ({ useEffectiveCredits: () => state.credits }));
 vi.mock('./CreditPayerNote', () => ({ useCreditPayerNote: () => state.payerNote }));
 vi.mock('@client/app/hooks/data/settings', () => ({
   useGetSettingsValue: (key: string) => (key === 'enforceCredits' ? state.enforceCredits : undefined),
+}));
+vi.mock('@client/app/contexts/LLMContext', () => ({
+  useLLM: (selector: (value: { model: string }) => unknown) => selector({ model: state.model }),
+}));
+vi.mock('@client/app/hooks/data/useModelInfo', () => ({
+  useModelInfo: () => ({
+    data: [
+      {
+        id: 'model-a',
+        name: 'Model A',
+        type: 'text',
+        backend: 'openai',
+        pricing: { 1000000: { input: 0.000001, output: 0.000004 } },
+      },
+      {
+        id: 'model-b',
+        name: 'Model B',
+        type: 'text',
+        backend: 'openai',
+        pricing: { 1000000: { input: 0.000002, output: 0.000008 } },
+      },
+    ],
+  }),
 }));
 
 import CreditBalanceChip from './CreditButton';
@@ -34,24 +55,37 @@ describe('CreditBalanceChip', () => {
     state.enforceCredits = true;
     state.credits = 9982.6;
     state.payerNote = null;
+    state.model = 'model-a';
   });
 
-  it('shows a labeled balance that opens the credits modal', () => {
+  it('shows answers as the primary unit and opens the explanation instead of Billing', () => {
     renderChip();
     const chip = screen.getByTestId('credit-balance-chip');
-    expect(chip).toHaveTextContent('9,982 credits');
+    expect(chip).toHaveTextContent(/answers/);
     expect(within(chip).getByTestId('credit-icon')).toBeInTheDocument();
-    expect(screen.queryByTestId('credits-modal-open')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('credits-explanation-open')).not.toBeInTheDocument();
     fireEvent.click(chip);
-    expect(screen.getByTestId('credits-modal-open')).toBeInTheDocument();
+    expect(screen.getByTestId('credits-explanation-open')).toBeInTheDocument();
   });
 
-  it('shows the full balance, with the same number in the accessible name', () => {
+  it('keeps credits secondary in the accessible explanation', () => {
     state.credits = 124_560;
     renderChip();
     const chip = screen.getByTestId('credit-balance-chip');
-    expect(chip).toHaveTextContent('124,560 credits');
-    expect(chip).toHaveAttribute('aria-label', '124,560 credits. Open credits');
+    expect(chip).not.toHaveTextContent('credits');
+    expect(chip).toHaveAccessibleName(/124,560 credits.*Learn about credits/);
+  });
+
+  it('recomputes answers left when the selected model changes', () => {
+    const { rerender } = renderChip();
+    const first = screen.getByTestId('credit-balance-chip').textContent;
+    state.model = 'model-b';
+    rerender(
+      <CssVarsProvider theme={appTheme}>
+        <CreditBalanceChip />
+      </CssVarsProvider>
+    );
+    expect(screen.getByTestId('credit-balance-chip').textContent).not.toBe(first);
   });
 
   it('renders nothing while credits are not enforced', () => {
@@ -65,7 +99,7 @@ describe('CreditBalanceChip', () => {
     renderChip();
     const chip = screen.getByTestId('credit-balance-chip');
     expect(within(chip).getByTestId('credit-payer-mark')).toBeInTheDocument();
-    expect(chip).toHaveAttribute('aria-label', "9,982 credits. Paid from your balance, not the owner's. Open credits");
+    expect(chip).toHaveAccessibleName(/Paid from your balance, not the owner's.*Learn about credits/);
     fireEvent.mouseOver(chip);
     expect(await screen.findByRole('tooltip')).toHaveTextContent(/^Paid from your balance, not the owner's/);
   });
