@@ -3,6 +3,7 @@ import type { MembershipArm } from '../../constants/lakeMembershipHealth';
 import { IBaseRepository, type IMongoDocument } from '.';
 import { IShareableStaticMethods, type IShareableDocument } from './ShareableDocumentTypes';
 import type { StorageUsageGroup } from '../../storageBreakdown';
+import type { OrganizationStorageUploaderGroup } from '../../organizationStorage';
 
 // Define a type for the MIME types
 export type MimeType =
@@ -473,7 +474,7 @@ export interface IFabFile {
   /**
    * Compare-only watermark for charging `currentStorageSize`: an S3 event is charged only if its
    * time is newer. Advanced by compare-and-set, so an upload is charged once whether the ObjectCreated
-   * handler or a notebook import charges it (apps/client/server/s3/storageCharge.ts). Imported rows
+   * handler or a notebook import charges it (packages/server-utils/src/s3/storageCharge.ts). Imported rows
    * store the import's stamp time, not the upload time, so do not read it as one. Absent on rows that
    * predate it or were never charged - whether a row counts as charged is `isStorageCharged`
    * (common/src/storageCharge.ts), which also covers the pre-stamp legacy rows.
@@ -1163,6 +1164,15 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * `maxTimeMS` bounds the aggregate for users with very large file counts.
    */
   summarizeChargedStorageByUserId(userId: string, options?: { maxTimeMS?: number }): Promise<StorageUsageGroup[]>;
+
+  /**
+   * The rows `sumFileSizeByOrganizationId` sums, grouped by uploader (`userId`), largest first and
+   * capped at `limit` groups. `maxTimeMS` bounds the aggregate for orgs with very large file counts.
+   */
+  summarizeChargedStorageByOrganizationId(
+    organizationId: string,
+    options: { limit: number; maxTimeMS?: number }
+  ): Promise<OrganizationStorageUploaderGroup[]>;
 
   /**
    * The live row's stored charge fields (see isStorageCharged in storageCharge.ts). Null when gone.

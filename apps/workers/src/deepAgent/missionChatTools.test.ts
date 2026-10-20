@@ -15,7 +15,7 @@ vi.mock('@server/deepAgent/missions', () => ({
   formatMissionStatusReport: vi.fn(),
   listMissionsForAgent: vi.fn(),
 }));
-vi.mock('@server/deepAgent/store', () => ({ MongoDeepAgentStore: class {} }));
+vi.mock('@bike4mind/server-utils/deepAgent/store', () => ({ MongoDeepAgentStore: class {} }));
 vi.mock('@server/deepAgent/firstWake', () => ({ runMissionFirstWake: m.runMissionFirstWake }));
 vi.mock('@server/deepAgent/wakeMetering', () => ({ assertOwnerCanFundWake: m.assertOwnerCanAfford }));
 

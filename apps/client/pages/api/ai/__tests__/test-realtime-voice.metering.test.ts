@@ -11,12 +11,13 @@ import { computeTtsUsd, usdToCredits } from '@bike4mind/common';
 const m = vi.hoisted(() => ({
   enforce: true,
   balance: 1000,
-  subtract: vi.fn(),
+  deduct: vi.fn(),
   create: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({ baseApi: () => ({ post: (h: unknown) => h }) }));
-vi.mock('@bike4mind/database', () => ({
+vi.mock('@bike4mind/database', async () => ({
+  ...(await import('@server/__tests__/pendingCreditHoldFake')).pendingCreditHoldFake,
   adminSettingsRepository: {},
   apiKeyRepository: {},
   usageEventRepository: { record: async () => undefined },
@@ -31,7 +32,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 }));
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveApiKey: async () => 'sk-test' },
-  creditService: { subtractCredits: m.subtract },
+  creditService: { deductCreditsWithOrgSupport: m.deduct },
   organizationService: {},
   latchUsage: () => undefined,
 }));
@@ -61,7 +62,7 @@ beforeEach(() => {
   m.enforce = true;
   m.balance = 1000;
   m.create.mockResolvedValue({ arrayBuffer: async () => new ArrayBuffer(8) });
-  m.subtract.mockResolvedValue(undefined);
+  m.deduct.mockResolvedValue(undefined);
 });
 
 describe('POST /api/ai/test-realtime-voice metering', () => {
@@ -79,11 +80,12 @@ describe('POST /api/ai/test-realtime-voice metering', () => {
     const res = await call();
 
     expect(res._getStatusCode()).toBe(200);
-    expect(m.subtract).toHaveBeenCalledOnce();
-    expect(m.subtract).toHaveBeenCalledWith(
+    expect(m.deduct).toHaveBeenCalledOnce();
+    expect(m.deduct).toHaveBeenCalledWith(
       expect.objectContaining({
         type: 'text_to_speech_usage',
-        ownerId: 'u1',
+        user: expect.objectContaining({ id: 'u1' }),
+        organization: null,
         model: 'tts-1-hd',
         credits: usdToCredits(computeTtsUsd('openai', 'tts-1-hd', TEXT.length)),
       }),
@@ -99,6 +101,6 @@ describe('POST /api/ai/test-realtime-voice metering', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(m.create).toHaveBeenCalledOnce();
-    expect(m.subtract).not.toHaveBeenCalled();
+    expect(m.deduct).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { baseApi } from '@server/middlewares/baseApi';
-import { getAgentDetail } from '@server/deepAgent/consoleReads';
+import { getAgentDetail } from '@bike4mind/server-utils/deepAgent/consoleReads';
 
 /**
  * GET /api/deep-agent/agents/[agentId] - full charter + handoff + recent

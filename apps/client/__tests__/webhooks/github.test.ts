@@ -9,7 +9,7 @@ import {
   getRawBody,
   PayloadTooLargeError,
 } from '@server/integrations/github/webhookUtils';
-import { isValidGitHubEventType, SUPPORTED_GITHUB_EVENTS } from '@server/integrations/github/types';
+import { isValidGitHubEventType, SUPPORTED_GITHUB_EVENTS } from '@bike4mind/server-utils/integrations/github/types';
 
 // Mock dependencies
 vi.mock('@bike4mind/observability', () => ({

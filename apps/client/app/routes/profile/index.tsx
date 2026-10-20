@@ -16,6 +16,8 @@ import ShareIcon from '@mui/icons-material/Share';
 import dynamic from 'next/dynamic';
 import React, { useEffect, useRef } from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
+import { AdminTab } from '@client/app/components/admin/adminSidebarConfig';
+import { adminTabToSlug } from '@client/app/components/admin/adminTabSlugs';
 import { useTranslation } from 'react-i18next';
 import { useSessions } from '@client/app/contexts/SessionsContext';
 import CommunityTabContent from '@client/app/components/ProfileModal/CommunityTabContent';
@@ -132,7 +134,7 @@ const ProfilePage = () => {
   useEffect(() => {
     if (!rawTab) return;
     if (rawTab === 'admin-settings') {
-      navigate({ to: '/admin', replace: true });
+      navigate({ to: '/admin', search: { tab: adminTabToSlug(AdminTab.AdminSettings) }, replace: true });
       return;
     }
     // Credit Usage was promoted to its own top-level tab: redirect the legacy

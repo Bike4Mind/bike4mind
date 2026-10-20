@@ -8,7 +8,7 @@ import { sendToQueue } from '@server/utils/sqs';
 import { Resource } from 'sst';
 import { collectDataForDate } from '@server/services/whatsNewDataCollector';
 import { Logger } from '@bike4mind/observability';
-import type { WhatsNewGenerationPayload } from '@server/whatsNew/whatsNewGeneration.types';
+import type { WhatsNewGenerationPayload } from '@bike4mind/server-utils/whatsNew/whatsNewGeneration.types';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 import { ApiKeyScope, WHATS_NEW_DEFAULT_REPOSITORY, WHATS_NEW_DEFAULT_TARGET_BRANCH } from '@bike4mind/common';
 

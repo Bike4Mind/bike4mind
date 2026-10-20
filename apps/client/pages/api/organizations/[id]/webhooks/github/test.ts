@@ -15,7 +15,7 @@ import crypto from 'crypto';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { orgWebhookConfigRepository } from '@bike4mind/database/infra';
-import { decryptSecret } from '@server/security/secretEncryption';
+import { decryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
 import { validateTargetUrl } from '@server/utils/ssrfProtection';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
 import { Config } from '@server/utils/config';

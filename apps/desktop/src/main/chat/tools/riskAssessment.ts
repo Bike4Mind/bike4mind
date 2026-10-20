@@ -32,6 +32,7 @@ export function spendsCredits(toolName: string): boolean {
 /**
  * Tools whose result is someone else's text - a web page, an MCP server, a skill, or another
  * session's transcript, which may have read any of those - that can carry injected instructions.
+ * A skill the user installed or a trusted project's opts out per call; see skillTool's `run`.
  *
  * A shell command's output is NOT here, even though `curl` prints what a page said: a script
  * file or a decoded payload slips past any check on the text, so a command is judged on what it
@@ -53,7 +54,7 @@ export function readsUntrusted(toolName: string): boolean {
 /**
  * Tools that can carry data off this computer, or into a session that has not read the untrusted
  * content. A reply that has read such content asks before each of these, whatever "always" was
- * answered before.
+ * answered before - except a shell command the scan proved contained (ApprovalPrompt.contained).
  */
 const SENDS_OUT: ReadonlySet<string> = new Set([
   'bash_execute',

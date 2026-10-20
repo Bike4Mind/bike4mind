@@ -12,11 +12,11 @@ import {
   type WakeDeps,
 } from '@bike4mind/agents';
 import { LlmWakeSteps } from './llmSteps';
-import { MongoDeepAgentStore } from './store';
+import { MongoDeepAgentStore } from '@bike4mind/server-utils/deepAgent/store';
 import { loadLinkedAgentContext } from './missions';
 import { bridgeWakeToSession } from './missionSessionBridge';
 import { createDeepAgentToolMaterializer } from './toolMaterializer';
-import { DEFAULT_WAKE_MODEL_ID, resolveDeepAgentBackend } from './resolveBackend';
+import { DEFAULT_WAKE_MODEL_ID, resolveDeepAgentBackend } from '@bike4mind/server-utils/deepAgent/resolveBackend';
 import {
   isInsufficientCredits,
   MISSION_MODEL_REFUSED_BLOCKER,

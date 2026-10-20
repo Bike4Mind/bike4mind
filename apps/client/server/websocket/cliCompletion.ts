@@ -1,3 +1,4 @@
+import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
 import {
   CliCompletionRequestAction,
   buildCompletionStreamEvent,
@@ -153,6 +154,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     // Cast: Zod parses message content as unknown[], but executeCompletion expects typed arrays
     await executeCompletion({
       getEntitlements: getUserEntitlements,
+      creditHolds: createCompletionCreditHolds(logger),
       userId,
       model,
       messages: messages as IMessage[],

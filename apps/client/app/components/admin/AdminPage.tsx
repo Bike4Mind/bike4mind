@@ -29,7 +29,7 @@ import {
 import { useGetWaitingSubscribersCount } from '@client/app/hooks/data/subscribers';
 import { useRouter, useSearch } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
-import { lazy, useEffect, useRef, useState, type ReactNode } from 'react';
+import { lazy, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { api } from '@client/app/contexts/ApiContext';
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
@@ -69,6 +69,8 @@ import ApiReferenceTab from './ApiReferenceTab';
 import ApiCookbookTab from './ApiCookbookTab';
 import { AdminTab, SIDEBAR_SECTIONS, type SidebarGate, type SidebarItem } from './adminSidebarConfig';
 import { adminTabFromSlug } from './adminTabSlugs';
+import { canRenderAdminTab } from './adminTabRenderability';
+import { useAdminTabUrlSync } from './useAdminTabUrlSync';
 import { useAdminModal } from './useAdminModal';
 import { useAdminSidebarSections } from './useAdminSidebarSections';
 
@@ -78,6 +80,7 @@ const AdminLiveOpsTriageMultiConfigTab = dynamic(() => import('./AdminLiveOpsTri
   ssr: false,
 });
 const WebhookAuditLogsTab = dynamic(() => import('./WebhookAuditLogs'), { ssr: false });
+const AuditLogTab = dynamic(() => import('./AuditLog'), { ssr: false });
 
 const MigrateUsersTab = dynamic(() => import('./MigrateUsersTab'), { ssr: false });
 const AgentOpsTab = dynamic(() => import('./AgentOpsTab'), { ssr: false });
@@ -305,17 +308,32 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
   const { currentUser } = useUser();
   const { tab: requestedTabSlug } = useSearch({ strict: false }) as { tab?: string };
 
-  // A `?tab=` deep link chooses the opening tab. Keyed on the slug, NOT on activeTab, so this is
-  // an entry point rather than a mirror: activeTab is also driven by the sidebar and by the chat
-  // model picker's "manage models" shortcut (see useAdminModal), and re-asserting the URL's value
-  // on every change would fight both. Leaving the param in place is deliberate - the link stays
-  // shareable and survives a reload.
-  useEffect(() => {
-    const requestedTab = adminTabFromSlug(requestedTabSlug);
-    if (requestedTab !== undefined) {
-      setActiveTab(requestedTab);
-    }
-  }, [requestedTabSlug, setActiveTab]);
+  // LiveOps Triage tab visibility - show everywhere except fork production environments
+  const { data: liveopsEnvData, isError: isLiveOpsEnvError } = useQuery({
+    queryKey: ['liveops-triage', 'env'],
+    queryFn: async () => {
+      const { data } = await api.get<{ stage: string; isForkProduction: boolean; showTab: boolean }>(
+        '/api/admin/liveops-triage-env'
+      );
+      return data;
+    },
+    enabled: currentUser?.isAdmin,
+    staleTime: 1000 * 60 * 60, // Cache for 1 hour - environment doesn't change
+  });
+  const showLiveOpsTriageTab = liveopsEnvData?.showTab ?? false;
+
+  // Selecting a tab this screen cannot draw would leave the content pane blank, so the URL sync
+  // treats it as unknown and corrects the store instead.
+  const isAdminTabRenderable = useCallback(
+    (tab: AdminTab) =>
+      canRenderAdminTab(tab, {
+        enableUserMigration,
+        liveOpsTriage: isLiveOpsEnvError ? false : liveopsEnvData?.showTab,
+      }),
+    [enableUserMigration, liveopsEnvData, isLiveOpsEnvError]
+  );
+
+  useAdminTabUrlSync(activeTab, setActiveTab, isAdminTabRenderable);
 
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
 
@@ -363,20 +381,6 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
 
   // Global keyboard shortcut: Press '?' to toggle Help Center
   useHelpKeyboardShortcut();
-
-  // LiveOps Triage tab visibility - show everywhere except fork production environments
-  const { data: liveopsEnvData } = useQuery({
-    queryKey: ['liveops-triage', 'env'],
-    queryFn: async () => {
-      const { data } = await api.get<{ stage: string; isForkProduction: boolean; showTab: boolean }>(
-        '/api/admin/liveops-triage-env'
-      );
-      return data;
-    },
-    enabled: currentUser?.isAdmin,
-    staleTime: 1000 * 60 * 60, // Cache for 1 hour - environment doesn't change
-  });
-  const showLiveOpsTriageTab = liveopsEnvData?.showTab ?? false;
 
   // Get waiting subscribers count for badge
   const waitingSubscribers = useGetWaitingSubscribersCount({ enabled: currentUser?.isAdmin });
@@ -607,6 +611,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
               <TabPanel value={AdminTab.WebhookAuditLogs}>
                 {activeTab === AdminTab.WebhookAuditLogs && <WebhookAuditLogsTab />}
               </TabPanel>
+              <TabPanel value={AdminTab.AuditLog}>{activeTab === AdminTab.AuditLog && <AuditLogTab />}</TabPanel>
               <TabPanel value={AdminTab.GitHubConnection}>
                 {activeTab === AdminTab.GitHubConnection && <GitHubConnectionTab />}
               </TabPanel>

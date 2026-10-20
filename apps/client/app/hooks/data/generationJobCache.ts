@@ -42,6 +42,8 @@ export type GenerationJobCache<TJob, TUpdate> = {
    * a `running` snapshot replacing `succeeded`, which no later frame or poll corrects while the socket stays open.
    */
   reconcileFetched: (queryClient: QueryClient, job: TJob) => TJob;
+  /** The page a list query's own fetch should store: each row reconciled as `reconcileFetched` does, then seeded. */
+  reconcileFetchedPage: (queryClient: QueryClient, page: GenerationJobPage<TJob>) => GenerationJobPage<TJob>;
   /** Applies a websocket frame. Returns whether the job was cached anywhere. */
   patch: (queryClient: QueryClient, update: TUpdate) => boolean;
 };
@@ -104,9 +106,27 @@ export function createGenerationJobCache<TJob extends CacheableJob, TUpdate exte
     );
   };
 
+  const findListed = (queryClient: QueryClient, id: string): TJob | undefined =>
+    queryClient
+      .getQueryData<GenerationJobList<TJob>>(keys.list)
+      ?.pages.flatMap(page => page.data)
+      .find(cached => cached.id === id);
+
+  // A frame patches the list row even when the job has no detail entry, so the newest cached copy may be either one.
   const reconcileFetched = (queryClient: QueryClient, job: TJob): TJob => {
-    const cached = queryClient.getQueryData<TJob>(keys.detail(job.id));
+    const cached = [queryClient.getQueryData<TJob>(keys.detail(job.id)), findListed(queryClient, job.id)].reduce<
+      TJob | undefined
+    >(
+      (newest, candidate) => (candidate && shouldReplaceGenerationJob(newest, candidate) ? candidate : newest),
+      undefined
+    );
     return cached && !shouldReplaceGenerationJob(cached, job) ? cached : job;
+  };
+
+  const reconcileFetchedPage = (queryClient: QueryClient, page: GenerationJobPage<TJob>): GenerationJobPage<TJob> => {
+    const data = page.data.map(job => reconcileFetched(queryClient, job));
+    data.forEach(job => seed(queryClient, job));
+    return { ...page, data };
   };
 
   const patch = (queryClient: QueryClient, update: TUpdate): boolean => {
@@ -122,5 +142,5 @@ export function createGenerationJobCache<TJob extends CacheableJob, TUpdate exte
     return found;
   };
 
-  return { seed, prepend, upsert, reconcileFetched, patch };
+  return { seed, prepend, upsert, reconcileFetched, reconcileFetchedPage, patch };
 }

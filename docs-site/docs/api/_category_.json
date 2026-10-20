@@ -1,0 +1,8 @@
+{
+  "label": "API",
+  "position": 5,
+  "link": {
+    "type": "generated-index",
+    "description": "Complete API documentation for the Bike4Mind platform, including endpoints, authentication, and integration examples."
+  }
+}

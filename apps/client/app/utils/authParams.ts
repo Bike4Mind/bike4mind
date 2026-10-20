@@ -10,7 +10,7 @@
  * - Provide better security for OAuth token transport
  *
  * The refresh token is NOT carried here any more: SSO callbacks set it as an HttpOnly cookie
- * (server/auth/refreshCookie.ts), so the long-lived credential never touches a URL at all.
+ * (packages/server-utils/src/auth/refreshCookie.ts), so the long-lived credential never touches a URL at all.
  */
 
 export interface AuthParams {

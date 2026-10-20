@@ -5,6 +5,7 @@ import {
   Chip,
   CircularProgress,
   IconButton,
+  Link,
   Option,
   Select,
   Sheet,
@@ -13,11 +14,22 @@ import {
   Typography,
 } from '@mui/joy';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import { useNavigate } from '@tanstack/react-router';
+import { adminAuditLogPath } from '@bike4mind/common';
 import SharedPaginationControls from '@client/app/components/admin/Subscriptions/components/PaginationControls';
 import { formatCredits, numberCell } from '../utils/format';
 import { useCreditAdjustmentsLog } from '../hooks/useCreditAdjustmentsLog';
 
 const DAY_OPTIONS = [7, 30, 90, 365] as const;
+
+/** Opens the Audit Log tab with the credits filter; the URL selects the tab, which the Audit Log page reads. */
+const useOpenCreditsAuditLog = () => {
+  const navigate = useNavigate();
+  return () => {
+    const search = Object.fromEntries(new URL(adminAuditLogPath({ category: 'credits' }), 'http://local').searchParams);
+    navigate({ to: '/admin', search: search as never });
+  };
+};
 
 const formatWhen = (iso: string) =>
   new Date(iso).toLocaleString(undefined, {
@@ -38,6 +50,7 @@ export const CreditAdjustmentsLog: React.FC = () => {
   const [days, setDays] = useState<number | 'all'>(90);
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(25);
+  const openAuditLog = useOpenCreditsAuditLog();
 
   const { data, isLoading, isFetching, error, refetch } = useCreditAdjustmentsLog({
     page,
@@ -50,6 +63,9 @@ export const CreditAdjustmentsLog: React.FC = () => {
   return (
     <Box sx={{ p: { xs: 1, sm: 2 } }} data-testid="credit-adjustments-log">
       <Stack direction="row" justifyContent="flex-end" alignItems="center" spacing={1} sx={{ mb: 1 }}>
+        <Link component="button" level="body-sm" onClick={openAuditLog} data-testid="credit-adjustments-audit-log-link">
+          View in Audit Log
+        </Link>
         <Select<number | 'all'>
           size="sm"
           value={days}

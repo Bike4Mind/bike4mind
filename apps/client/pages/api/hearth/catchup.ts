@@ -4,7 +4,7 @@ import { ApiKeyScope, NotFoundError, UnauthorizedError } from '@bike4mind/common
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
-import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { requireUser } from '@server/middlewares/requireUser';
 import {
   toWireHearthEvent,

@@ -5,7 +5,7 @@ import { BadRequestError, ensureAdmin } from '@server/utils/errors';
 import { organizationRepository, userRepository, withTransaction } from '@bike4mind/database';
 import { groupRepository } from '@bike4mind/database/social';
 import { organizationService } from '@bike4mind/services';
-import { AdminOrgAuditEvents, logAuditEvent } from '@server/utils/auditLog';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { z } from 'zod';
 
 /**
@@ -44,16 +44,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).put(
     // Audit AFTER commit: "who changed which org's group types" is a question legal will ask
     // once a type reaches confidential data. Best-effort - a logging failure must not fail the
     // already-committed change.
-    await logAuditEvent(
-      {
-        userId: req.user!.id,
-        action: AdminOrgAuditEvents.ORG_GROUP_TYPES_UPDATED,
-        ip: req.ip,
-        userAgent: req.headers['user-agent'] || 'unknown',
-        metadata: { organizationId, ...result },
-      },
-      req.logger
-    );
+    await recordAdminActionFromRequest(req, {
+      action: 'org.group_types.updated',
+      target: { kind: 'organization', id: organizationId, displayName: organizationId },
+      summary: 'updated allowed group types',
+      details: { ...result },
+    });
 
     res.status(200).json(result);
   })

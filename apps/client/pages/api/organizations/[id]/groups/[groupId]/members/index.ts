@@ -5,7 +5,7 @@ import { organizationRepository } from '@bike4mind/database/infra';
 import { groupRepository } from '@bike4mind/database/social';
 import { userRepository } from '@bike4mind/database/auth';
 import { organizationService } from '@bike4mind/services';
-import { AdminOrgAuditEvents, logAuditEvent } from '@server/utils/auditLog';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { z } from 'zod';
 
 /**
@@ -31,16 +31,13 @@ const handler = baseApi().post(
     );
 
     // "Who put user X in the confidential group" - best-effort, never fails the write.
-    await logAuditEvent(
-      {
-        userId: req.user!.id,
-        action: AdminOrgAuditEvents.ORG_GROUP_MEMBER_ASSIGNED,
-        ip: req.ip,
-        userAgent: req.headers['user-agent'] || 'unknown',
-        metadata: { organizationId, groupId, targetUserId: userId },
-      },
-      req.logger
-    );
+    await recordAdminActionFromRequest(req, {
+      action: 'org.group_member.assigned',
+      actorScope: 'organization',
+      target: { kind: 'organization', id: organizationId, displayName: organizationId },
+      summary: 'assigned a user to a group',
+      details: { groupId, targetUserId: userId },
+    });
 
     res.status(200).json({ success: true });
   })

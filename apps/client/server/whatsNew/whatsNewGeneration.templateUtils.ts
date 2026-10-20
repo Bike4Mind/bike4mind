@@ -1,5 +1,5 @@
 import Handlebars from 'handlebars';
-import { validateTemplate } from './whatsNewGeneration.templateConstants';
+import { validateTemplate } from '@bike4mind/server-utils/whatsNew/whatsNewGeneration.templateConstants';
 
 // Re-export constants and validation functions for backwards compatibility
 export {
@@ -10,7 +10,7 @@ export {
   hasOutputFormatInstruction,
   validateTemplate,
   getDefaultTemplateString,
-} from './whatsNewGeneration.templateConstants';
+} from '@bike4mind/server-utils/whatsNew/whatsNewGeneration.templateConstants';
 
 /**
  * Escapes and sanitizes template variable content to prevent injection

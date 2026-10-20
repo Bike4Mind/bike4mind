@@ -9,7 +9,7 @@ import {
   getDeliveryAttempt,
   isFinalDeliveryAttempt,
 } from '@server/utils/sqsDelivery';
-import { GenerationCallbackMessageSchema } from '@server/generationCallback/messages';
+import { GenerationCallbackMessageSchema } from '@bike4mind/server-utils/generationCallback/messages';
 import { toQuestPollBody } from '@server/utils/questPollBody';
 import { assertUrlAllowed, SsrfError } from '@server/utils/ssrfProtection';
 import { buildSignedWebhookHeaders, RetryableError, WEBHOOK_HTTP_TIMEOUT_MS } from '@workers/webhooks/signedWebhook';

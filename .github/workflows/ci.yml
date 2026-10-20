@@ -34,9 +34,8 @@ jobs:
   # merge-base diff on pull_request, push range on push) and emit three
   # orthogonal signals: `deployable` (run the build/test legs), `published-changed`
   # (gates `published-dts` below) and `docs-changed`
-  # (gates `help-docs` below - the Docusaurus build verification was removed
-  # because this repo carries only docs-site markdown, not the site
-  # scaffolding, but the help guards still have to run on a docs-only change).
+  # (gates `help-docs` and `verify-docs-build` below, so the help guards and
+  # the Docusaurus build still run on a docs-only change).
   # Cheap, always runs, so the required checks always have a status to
   # report. Logic + the default exclude list live in the local composite
   # action. Fails open on all three.
@@ -1042,12 +1041,14 @@ jobs:
       - name: Check published declarations
         run: node scripts/check-published-dts.mjs
 
-  # verify-docs-build removed: the Docusaurus scaffolding (docs-site/package.json,
-  # lockfile, config) is not tracked in this repo, so the build can never succeed
-  # here and was failing the required CI Complete check on every docs-touching PR.
-  # Markdown content is still validated by the help-content tests, which the
-  # `help-docs` job above runs on every docs-touching change. Restore the job
-  # (and .github/workflows/_verify-docs-build.yml) when the scaffolding lands.
+  verify-docs-build:
+    name: Verify Docs Build
+    needs: changes
+    if: needs.changes.outputs.docs-changed == 'true'
+    uses: ./.github/workflows/_verify-docs-build.yml
+    permissions:
+      contents: read
+      pull-requests: write
 
   # ============================================================
   # CI gate aggregation. The branch rulesets (main-protection + prod-protection)
@@ -1056,7 +1057,7 @@ jobs:
   # job re-exposes one stable check that turns red if any CI leg failed.
   #
   # Red when ANY CI leg (changes/core-build/typecheck/lint/test/cli-e2e/help-docs/
-  # published-dts)
+  # verify-docs-build/published-dts)
   # genuinely FAILED. Green when everything succeeded OR was legitimately
   # skipped (a non-deployable change skips core-build..cli-e2e, and a skipped
   # required check counts as passing). This surfaces typecheck/lint/cli-e2e
@@ -1073,7 +1074,7 @@ jobs:
   # ============================================================
   ci-complete:
     name: CI Complete
-    needs: [changes, core-build, typecheck, lint, openapi, test, cli-e2e, help-docs, published-dts]
+    needs: [changes, core-build, typecheck, lint, openapi, test, cli-e2e, help-docs, verify-docs-build, published-dts]
     if: ${{ !cancelled() }}
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     steps:
@@ -1087,12 +1088,13 @@ jobs:
           TEST: ${{ needs.test.result }}
           CLI_E2E: ${{ needs.cli-e2e.result }}
           HELP_DOCS: ${{ needs.help-docs.result }}
+          VERIFY_DOCS: ${{ needs.verify-docs-build.result }}
           PUBLISHED_DTS: ${{ needs.published-dts.result }}
         run: |
-          echo "results: changes=$CHANGES core-build=$CORE_BUILD typecheck=$TYPECHECK lint=$LINT openapi=$OPENAPI test=$TEST cli-e2e=$CLI_E2E help-docs=$HELP_DOCS published-dts=$PUBLISHED_DTS"
+          echo "results: changes=$CHANGES core-build=$CORE_BUILD typecheck=$TYPECHECK lint=$LINT openapi=$OPENAPI test=$TEST cli-e2e=$CLI_E2E help-docs=$HELP_DOCS verify-docs-build=$VERIFY_DOCS published-dts=$PUBLISHED_DTS"
           # A CI leg that genuinely failed flips the check red. Skipped
           # (non-deployable change) is treated as passing.
-          for r in "$CHANGES" "$CORE_BUILD" "$TYPECHECK" "$LINT" "$OPENAPI" "$TEST" "$CLI_E2E" "$HELP_DOCS" "$PUBLISHED_DTS"; do
+          for r in "$CHANGES" "$CORE_BUILD" "$TYPECHECK" "$LINT" "$OPENAPI" "$TEST" "$CLI_E2E" "$HELP_DOCS" "$VERIFY_DOCS" "$PUBLISHED_DTS"; do
             if [ "$r" = "failure" ]; then
               echo "::error::A CI gate failed; failing the required check."
               exit 1

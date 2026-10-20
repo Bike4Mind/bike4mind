@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { baseApi } from '@server/middlewares/baseApi';
-import { listAgentsForOwner } from '@server/deepAgent/consoleReads';
+import { listAgentsForOwner } from '@bike4mind/server-utils/deepAgent/consoleReads';
 
 /**
  * GET /api/deep-agent/agents - the caller's deep-agent roster (newest activity

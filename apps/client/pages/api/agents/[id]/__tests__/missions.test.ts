@@ -43,7 +43,7 @@ const enrollMissionForAgent = vi.hoisted(() => vi.fn());
 const listMissionsForAgent = vi.hoisted(() => vi.fn());
 const discardEnrolledMission = vi.hoisted(() => vi.fn());
 vi.mock('@server/deepAgent/missions', () => ({ enrollMissionForAgent, listMissionsForAgent, discardEnrolledMission }));
-vi.mock('@server/deepAgent/store', () => ({ MongoDeepAgentStore: class MongoDeepAgentStore {} }));
+vi.mock('@bike4mind/server-utils/deepAgent/store', () => ({ MongoDeepAgentStore: class MongoDeepAgentStore {} }));
 const runMissionFirstWake = vi.hoisted(() => vi.fn());
 vi.mock('@server/deepAgent/firstWake', () => ({ runMissionFirstWake }));
 

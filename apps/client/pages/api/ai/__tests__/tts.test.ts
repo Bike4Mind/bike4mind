@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { CreditHolderType } from '@bike4mind/common';
 import { createMocks } from 'node-mocks-http';
 
 const { mocks, InsufficientCreditsPreflightError, TtsProviderNotConfiguredError, UnprocessableEntityError } =
@@ -18,6 +19,8 @@ const { mocks, InsufficientCreditsPreflightError, TtsProviderNotConfiguredError,
         saveGeneratedAssetToFiles: vi.fn(),
         upload: vi.fn(),
         getSignedUrl: vi.fn(),
+        orgFindById: vi.fn(),
+        orgFindAccessibleById: vi.fn(),
       },
     };
   });
@@ -61,6 +64,17 @@ vi.mock('@server/utils/synthesizeTts', () => ({
     return status === 401 || status === 403;
   },
 }));
+vi.mock('@bike4mind/database', () => ({
+  organizationRepository: {
+    findById: (...a: unknown[]) => mocks.orgFindById(...a),
+    shareable: { findAccessibleById: (...a: unknown[]) => mocks.orgFindAccessibleById(...a) },
+  },
+}));
+// Real membership predicate: the resolver's roster re-check is what these tests exercise.
+vi.mock('@bike4mind/services', async () => {
+  const services = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
+  return { organizationService: { isCurrentOrgMember: services.organizationService.isCurrentOrgMember } };
+});
 vi.mock('@server/utils/deductTtsCredits', () => ({
   deductTtsCredits: (...a: unknown[]) => mocks.deductTtsCredits(...a),
 }));
@@ -86,9 +100,14 @@ vi.mock('@server/utils/storage', () => ({
 import { GENERATED_AUDIO_TOO_LARGE_MESSAGE } from '@server/utils/generatedAudioDelivery';
 import handler from '../tts';
 
-const run = (body: Record<string, unknown>, user: { id?: string } | undefined = { id: 'u1' }) => {
+const run = (
+  body: Record<string, unknown>,
+  user: { id?: string; organizationId?: string | null; isAdmin?: boolean } | undefined = { id: 'u1' },
+  apiKeyInfo?: unknown
+) => {
   const { req, res } = createMocks({ method: 'POST', body });
   (req as Record<string, unknown>).user = user;
+  if (apiKeyInfo) (req as Record<string, unknown>).apiKeyInfo = apiKeyInfo;
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   (req as Record<string, unknown>).logger = logger;
   return {
@@ -123,6 +142,14 @@ beforeEach(() => {
     fileName: 'speech-1.mp3',
     fileUrl: 'https://s3/get',
   });
+  // Billing fixtures: every named org exists and every caller belongs to the one they name.
+  mocks.orgFindById.mockImplementation(async (id: string) => ({
+    id,
+    currentCredits: 1000,
+    userDetails: [],
+    users: [{ userId: 'u1' }],
+  }));
+  mocks.orgFindAccessibleById.mockImplementation(async (_user: unknown, id: string) => ({ id }));
   okSynthesis();
 });
 
@@ -174,6 +201,8 @@ describe('POST /api/ai/tts', () => {
       userId: 'u1',
       estimatedCredits: 50,
       featureLabel: 'text-to-speech',
+      // Omitted keeps this endpoint's historical personal default.
+      billingOrganizationId: null,
     });
   });
 
@@ -187,6 +216,83 @@ describe('POST /api/ai/tts', () => {
     const { promise } = run({ text: 'hello', model: 'tts-1-hd' });
     await promise;
     expect(mocks.estimateTtsCreditCost).toHaveBeenCalledWith('openai', 'tts-1-hd', 5);
+  });
+
+  describe('billing account', () => {
+    it('bills the organization the switcher selected', async () => {
+      const { res, promise } = run({ text: 'hi', organization_id: 'teamOrg' });
+      await promise;
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(mocks.assertPreflightCredits).toHaveBeenCalledWith(
+        expect.objectContaining({ billingOrganizationId: 'teamOrg' })
+      );
+      expect(mocks.deductTtsCredits).toHaveBeenCalledWith(
+        expect.objectContaining({ billingOrganizationId: 'teamOrg' })
+      );
+    });
+
+    it('bills personal credits when the switcher is on Personal, even for an org member', async () => {
+      // Explicit null = personal; the home-org seat must not override the switcher.
+      const { res, promise } = run({ text: 'hi', organization_id: null }, { id: 'u1', organizationId: 'homeOrg' });
+      await promise;
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(mocks.orgFindAccessibleById).not.toHaveBeenCalled();
+      expect(mocks.deductTtsCredits).toHaveBeenCalledWith(expect.objectContaining({ billingOrganizationId: null }));
+    });
+
+    it('refuses (403) an organization the caller does not belong to, before synthesis', async () => {
+      mocks.orgFindAccessibleById.mockResolvedValue(null);
+
+      const { promise } = run({ text: 'hi', organization_id: 'otherOrg' });
+      await expect(promise).rejects.toMatchObject({ statusCode: 403 });
+      expect(mocks.synthesizeTts).not.toHaveBeenCalled();
+      expect(mocks.deductTtsCredits).not.toHaveBeenCalled();
+    });
+
+    // An org-billed key's target is stamped on the key; before this fix Speech charged the user.
+    it('bills an org-billed API key to its own organization when the body names none', async () => {
+      const { res, promise } = run(
+        { text: 'hi' },
+        { id: 'u1' },
+        { billingOwnerType: CreditHolderType.Organization, organizationId: 'keyOrg' }
+      );
+      await promise;
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(mocks.assertPreflightCredits).toHaveBeenCalledWith(
+        expect.objectContaining({ billingOrganizationId: 'keyOrg' })
+      );
+      expect(mocks.deductTtsCredits).toHaveBeenCalledWith(expect.objectContaining({ billingOrganizationId: 'keyOrg' }));
+    });
+
+    it('refuses (403) an org-billed API key that names another organization', async () => {
+      const { promise } = run(
+        { text: 'hi', organization_id: 'otherOrg' },
+        { id: 'u1' },
+        { billingOwnerType: CreditHolderType.Organization, organizationId: 'keyOrg' }
+      );
+      await expect(promise).rejects.toMatchObject({
+        statusCode: 403,
+        additionalInfo: { errorCode: 'billing_organization_mismatch' },
+      });
+      expect(mocks.synthesizeTts).not.toHaveBeenCalled();
+    });
+
+    it('bills a user-billed key to the user even when the user has an org seat', async () => {
+      const { res, promise } = run(
+        { text: 'hi' },
+        { id: 'u1', organizationId: 'homeOrg' },
+        { billingOwnerType: CreditHolderType.User }
+      );
+      await promise;
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(mocks.deductTtsCredits).toHaveBeenCalledWith(
+        expect.objectContaining({ billingOrganizationId: undefined })
+      );
+    });
   });
 
   describe('audio over the response limit', () => {

@@ -1,0 +1,10 @@
+{
+  "label": "Development",
+  "position": 2,
+  "link": {
+    "type": "generated-index",
+    "title": "Agent Development",
+    "description": "Development guides, roadmaps, and best practices for building AI agents.",
+    "slug": "/agents/development"
+  }
+}

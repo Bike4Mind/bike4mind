@@ -1,9 +1,9 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
-import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeRepository, isGitHubLakeSyncClaimLive, orgGitHubLakeConnectionRepository } from '@bike4mind/database';
-import { isLakeIngestable } from '@bike4mind/common';
-import { verifyOrgAccess } from '@server/utils/orgAccess';
+import { isLakeIngestable, isSameLakeConnectionOwner, lakeConnectionOwnerOf } from '@bike4mind/common';
+import { authorizeLakeConnectorAccess } from '@server/dataLakes/authorizeLakeConnectorAccess';
 import { BadRequestError, ConflictError, InternalServerError, NotFoundError } from '@server/utils/errors';
 import { sendToQueue } from '@server/utils/sqs';
 import { Request } from 'express';
@@ -16,16 +16,16 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
   .post(async (req: Request, res) => {
     const { id } = req.query as { id: string };
     const lake = await dataLakeRepository.findById(id);
-    if (!lake?.organizationId) {
+    if (!lake) {
       throw new NotFoundError('Data lake not found');
     }
-    await verifyOrgAccess(req.user, lake.organizationId);
+    const owner = await authorizeLakeConnectorAccess(req.user, lake);
     if (!isLakeIngestable(lake.status)) {
       throw new BadRequestError(`Cannot sync a data lake in '${lake.status}' status`);
     }
-    // findByDataLakeIdAny is global; the org comparison is defence in depth behind verifyOrgAccess.
+    // findByDataLakeIdAny is global; the owner comparison is defence in depth behind the gate above.
     const conn = await orgGitHubLakeConnectionRepository.findByDataLakeIdAny(lake.id);
-    if (!conn || conn.organizationId !== lake.organizationId) {
+    if (!conn || !isSameLakeConnectionOwner(lakeConnectionOwnerOf(conn), owner)) {
       throw new NotFoundError('GitHub connection not found');
     }
     if (conn.enabled === false) {

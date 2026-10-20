@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// Runs the REAL org gate (orgAccess + authorizeLakeDriveAccess) against a mocked org repository, so an
+// Runs the REAL org gate (orgAccess + authorizeLakeConnectorAccess) against a mocked org repository, so an
 // appointed org admin's read-vs-write standing is proven through the route rather than asserted on a
 // mocked gate. drive-connection.test.ts covers the handler logic with the gate stubbed.
 const ORG = '650000000000000000000abc';
@@ -29,12 +29,12 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: { findById: h.orgFindById } }));
 vi.mock('@server/utils/resolveActiveOrg', () => ({ resolveActiveOrg: vi.fn() }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('@server/utils/dlqRegistry', () => ({ getSourceQueueUrl: () => 'https://sqs.example.com/purge' }));
-vi.mock('@server/integrations/google/drive/drivePollSchedule', () => ({
+vi.mock('@bike4mind/server-utils/integrations/google/drive/drivePollSchedule', () => ({
   DRIVE_LAKE_POLL_INTERVAL_MS: 6 * 60 * 60 * 1000,
   isDriveLakePollScheduled: async () => false,
 }));

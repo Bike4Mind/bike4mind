@@ -14,7 +14,7 @@ import { subscriptionRepository } from '@server/models/Subscription';
 import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
 import { verifyOrgOwner } from '@server/utils/orgAccess';
 import { attachOrgStripeCustomer } from '@server/integrations/stripe/attachOrgStripeCustomer';
-import { assertSeatsWithinPlan, getTeamPlanSettings } from '@server/services/teamPlanSettings';
+import { assertSeatsWithinPlan, getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
 import { checkoutAcquisitionMetadata } from '@server/analytics/acquisition';
 
 const handler = baseApi()

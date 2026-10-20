@@ -18,7 +18,7 @@ import {
   formatSemanticFingerprintComment as sharedFormatSemanticFingerprintComment,
   extractFingerprintFromBody as sharedExtractFingerprintFromBody,
   extractSemanticFingerprintFromBody as sharedExtractSemanticFingerprintFromBody,
-} from './issueFingerprint';
+} from '@bike4mind/server-utils/services/issueFingerprint';
 
 /** Telemetry fingerprint prefix for issue body comments */
 const TELEMETRY_PREFIX = 'telemetry';

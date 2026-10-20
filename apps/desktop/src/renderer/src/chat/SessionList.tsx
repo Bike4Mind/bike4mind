@@ -518,13 +518,18 @@ function ProjectHeader({
   );
 }
 
-/** A user section's header: its name, and a menu to rename or delete it that shows on hover like a row's. */
+/**
+ * A user section's header: its name, then a "+" for a new session in it and a menu to start one,
+ * rename or delete it, both showing on hover like a row's.
+ */
 function CustomSectionHeader({
   section,
+  onCreateSession,
   onRename,
   onDelete,
 }: {
   section: SidebarSection;
+  onCreateSession: (section: SidebarSection) => void;
   onRename: (section: SidebarSection) => void;
   onDelete: (section: SidebarSection) => void;
 }) {
@@ -549,7 +554,20 @@ function CustomSectionHeader({
       >
         {section.name}
       </Typography>
-      <Box sx={{ opacity: 'var(--section-actions-opacity)', transition: 'opacity 120ms' }}>
+      <Stack
+        direction="row"
+        sx={{ alignItems: 'center', opacity: 'var(--section-actions-opacity)', transition: 'opacity 120ms' }}
+      >
+        <IconButton
+          size="sm"
+          variant="plain"
+          color="neutral"
+          aria-label={`New session in section ${section.name}`}
+          onClick={() => onCreateSession(section)}
+          data-testid="sidebar-section-new-btn"
+        >
+          <PlusIcon />
+        </IconButton>
         <Dropdown open={menuOpen} onOpenChange={(_event, open) => setMenuOpen(open)}>
           <MenuButton
             slots={{ root: IconButton }}
@@ -566,6 +584,9 @@ function CustomSectionHeader({
             <MoreIcon />
           </MenuButton>
           <Menu size="sm" placement="bottom-end">
+            <MenuItem onClick={() => onCreateSession(section)} data-testid="sidebar-section-new-session-btn">
+              New session
+            </MenuItem>
             <MenuItem onClick={() => onRename(section)} data-testid="sidebar-section-rename-btn">
               Rename
             </MenuItem>
@@ -575,7 +596,7 @@ function CustomSectionHeader({
             </MenuItem>
           </Menu>
         </Dropdown>
-      </Box>
+      </Stack>
     </Stack>
   );
 }
@@ -612,6 +633,7 @@ export function SessionList({
   onCreate,
   onOpenArtifacts,
   onCreateInProject,
+  onCreateInSection,
   onDelete,
   onTogglePin,
   onToggleArchived,
@@ -640,6 +662,8 @@ export function SessionList({
   onCreate: () => void;
   onOpenArtifacts: () => void;
   onCreateInProject: (directory: string) => void;
+  /** New session that starts inside the user section with this id. */
+  onCreateInSection: (sectionId: string) => void;
   onDelete: (sessionId: string) => void;
   onTogglePin: (session: ChatSessionSummary) => void;
   onToggleArchived: (session: ChatSessionSummary) => void;
@@ -670,7 +694,8 @@ export function SessionList({
 
   const [archivedOpen, setArchivedOpen] = useState(false);
 
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  // `section` is set when the right-click landed in a user section, which then offers a new session in it.
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; section?: SidebarSection } | null>(null);
   const [draggedSession, setDraggedSession] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
   const dragFrame = useRef(0);
@@ -850,6 +875,7 @@ export function SessionList({
     >
       <CustomSectionHeader
         section={group.section}
+        onCreateSession={section => onCreateInSection(section.id)}
         onRename={section => setNameRequest({ kind: 'rename', sectionId: section.id, currentName: section.name })}
         onDelete={section => sectionActions.remove(section.id)}
       />
@@ -1022,9 +1048,12 @@ export function SessionList({
           }),
         }}
         onContextMenu={event => {
-          if (event.target instanceof Element && event.target.closest(OWN_CONTEXT_TARGETS)) return;
+          const clicked = event.target instanceof Element ? event.target : null;
+          if (clicked?.closest(OWN_CONTEXT_TARGETS)) return;
           event.preventDefault();
-          setContextMenu({ x: event.clientX, y: event.clientY });
+          const sectionId = clicked?.closest('[data-section-id]')?.getAttribute('data-section-id');
+          const section = userSections.sections.find(entry => entry.id === sectionId);
+          setContextMenu({ x: event.clientX, y: event.clientY, section });
         }}
         onDragOver={dragOverList}
         onDrop={dropOnList}
@@ -1127,6 +1156,14 @@ export function SessionList({
           }}
         />
         <Menu size="sm" placement="bottom-start" data-testid="sidebar-context-menu">
+          {contextMenu?.section && (
+            <MenuItem
+              onClick={() => contextMenu.section && onCreateInSection(contextMenu.section.id)}
+              data-testid="sidebar-context-new-in-section-btn"
+            >
+              New session in {contextMenu.section.name}
+            </MenuItem>
+          )}
           <MenuItem onClick={onCreate} data-testid="sidebar-context-new-session-btn">
             New session
           </MenuItem>

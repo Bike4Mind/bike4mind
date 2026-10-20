@@ -24,7 +24,7 @@ User data must follow a positional CSV format. There is no header row -- the sys
 ### Example CSV
 
 ```
-johnsmith@gmail.com,John,Smith,100,100
+johnsmith@example.com,John,Smith,100,100
 janedoe@example.com,Jane,Doe,500,200
 user@company.com,,,250,50
 ```

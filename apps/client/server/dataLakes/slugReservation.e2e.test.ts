@@ -5,7 +5,7 @@ import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { DataLakeModel, dataLakeAccessGrantRepository, dataLakeRepository } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
-import { lakeConfigAuditDb } from './lakeConfigAuditDb';
+import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 
 /**
  * The claim the mocked unit suites cannot pin: against real repositories and indexes, a deleted

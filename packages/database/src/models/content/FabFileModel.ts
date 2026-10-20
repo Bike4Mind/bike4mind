@@ -28,6 +28,7 @@ import {
   type FabFileChargeState,
   LAKE_INGEST_SOURCE_TYPES,
   type StorageUsageGroup,
+  type OrganizationStorageUploaderGroup,
   UNCATEGORIZED_TAG_SUFFIX,
   chargedBytes,
   type CitableFabFileFields,
@@ -785,7 +786,7 @@ const METADATA_ONLY_PROJECTION = { content: 0, chunks: 0, vector: 0, presignedUr
  * dropped upstream of the withhold that exists to name it.
  *
  * Reachable, not theoretical: `findCitableFieldsByIds` backs `createReachableSourcesResolver`
- * (apps/client/server/memory/lakeSourceReachability.ts), which passes a session-derived filter, and
+ * (packages/server-utils/src/memory/lakeSourceReachability.ts), which passes a session-derived filter, and
  * `retrievalVectorizedOnly` is settable per session through the session-create schema. No in-tree
  * path sets it by default, which is the only reason this is latent rather than live - do not read
  * that as a guarantee.
@@ -1322,6 +1323,32 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       },
     ]);
     if (options.maxTimeMS) aggregate.option({ maxTimeMS: options.maxTimeMS });
+    return aggregate.exec();
+  }
+
+  /**
+   * sumFileSizeByOrganizationId's rows, grouped by uploader. Bounded by the partial
+   * `{ organizationId, deletedAt }` index; the group count is at most the org's uploader count.
+   */
+  async summarizeChargedStorageByOrganizationId(
+    organizationId: string,
+    { limit, maxTimeMS }: { limit: number; maxTimeMS?: number }
+  ): Promise<OrganizationStorageUploaderGroup[]> {
+    const aggregate = this.fabFileModel.aggregate<OrganizationStorageUploaderGroup>([
+      // Restates the partial index's filter so the planner can use it; a bare equality match scans.
+      {
+        $match: {
+          organizationId: { $eq: organizationId, $type: 'string' },
+          deletedAt: null,
+          ...STORAGE_CHARGED_FILTER,
+        },
+      },
+      { $group: { _id: '$userId', bytes: { $sum: { $ifNull: ['$fileSize', 0] } }, fileCount: { $sum: 1 } } },
+      { $sort: { bytes: -1, _id: 1 } },
+      { $limit: limit },
+      { $project: { _id: 0, userId: { $toString: '$_id' }, bytes: 1, fileCount: 1 } },
+    ]);
+    if (maxTimeMS) aggregate.option({ maxTimeMS });
     return aggregate.exec();
   }
 
@@ -3905,7 +3932,7 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     // "never failed" sorts ahead of any attempted row without a backfill.
     moderationAttempts: { type: Number, required: false },
     moderationLastAttemptAt: { type: Date, required: false },
-    // See IFabFile.storageChargedAt and server/s3/storageCharge.ts.
+    // See IFabFile.storageChargedAt and packages/server-utils/src/s3/storageCharge.ts.
     storageChargedAt: { type: Date, required: false },
     error: { type: String, required: false },
     presignedUrl: { type: String },

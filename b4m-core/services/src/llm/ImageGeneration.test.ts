@@ -3,6 +3,7 @@ import { ImageGenerationService } from './ImageGeneration';
 import type { SaveGeneratedAssetFn } from './saveGeneratedImage';
 import { SUMMARIZATION_CONFIG } from './ChatCompletionFeatures';
 import {
+  CreditHolderType,
   ImageModels,
   MAX_REFERENCE_IMAGES,
   ModelBackend,
@@ -778,12 +779,14 @@ describe('ImageGenerationService.process (usage event on a charged generation)',
       recentMessages = [],
       fabFileIds,
       useRealCreditValidator = false,
+      organizationId,
     }: {
       model?: ImageModels;
       n?: number;
       recentMessages?: unknown[];
       fabFileIds?: string[];
       useRealCreditValidator?: boolean;
+      organizationId?: string | null;
     } = {}
   ) => {
     const quest = { id: 'quest1', sessionId: 'session1', status: undefined as string | undefined } as any;
@@ -796,7 +799,7 @@ describe('ImageGenerationService.process (usage event on a charged generation)',
           getMostRecentChatHistory: vi.fn(async () => recentMessages),
         },
         users: { findById: vi.fn(async () => ({ id: 'user1', currentCredits: 1_000_000 })) },
-        organizations: { findById: vi.fn(async () => null) },
+        organizations: { findById: vi.fn(async (id: string) => ({ id })) },
         fabFiles: {
           findAccessibleInIds: vi.fn(async () => (fabFileIds?.includes(primaryImage.id) ? [primaryImage] : [])),
         },
@@ -825,6 +828,7 @@ describe('ImageGenerationService.process (usage event on a charged generation)',
         model,
         ...(n === undefined ? {} : { n }),
         fabFileIds,
+        ...(organizationId === undefined ? {} : { organizationId }),
       } as any,
       logger: silentLogger,
     });
@@ -907,6 +911,28 @@ describe('ImageGenerationService.process (usage event on a charged generation)',
     expect(mockKontextTransform).toHaveBeenCalledTimes(1);
 
     expect(record).toHaveBeenCalledWith(expect.objectContaining({ model: ImageModels.FLUX_KONTEXT_PRO, units: 1 }));
+  });
+
+  it('charges the personal account (no organization) when organizationId is null, the organization otherwise', async () => {
+    const record = vi.fn(async () => undefined);
+
+    await runCharged(record, { organizationId: null });
+    expect(deductCreditsWithOrgSupport).toHaveBeenLastCalledWith(
+      expect.objectContaining({ type: 'image_generation_usage', organization: null, credits: 40 }),
+      expect.anything()
+    );
+    expect(record).toHaveBeenLastCalledWith(
+      expect.objectContaining({ ownerId: 'user1', ownerType: CreditHolderType.User })
+    );
+
+    await runCharged(record, { organizationId: 'org1' });
+    expect(deductCreditsWithOrgSupport).toHaveBeenLastCalledWith(
+      expect.objectContaining({ type: 'image_generation_usage', organization: { id: 'org1' } }),
+      expect.anything()
+    );
+    expect(record).toHaveBeenLastCalledWith(
+      expect.objectContaining({ ownerId: 'org1', ownerType: CreditHolderType.Organization })
+    );
   });
 
   it('still completes the generation when the usage-event write fails', async () => {

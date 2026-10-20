@@ -943,12 +943,13 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
     extra?: Pick<LakeSettleFields, 'lastUpdatedByUserId'>
   ): Promise<IDataLakeDocument | null>;
   /**
-   * The caller's still-unbound connector-first lake in that org (draft, `pendingConnector` set, name
+   * The caller's still-unbound connector-first lake in that org, or among their personal lakes when
+   * `organizationId` is undefined (draft, `pendingConnector` set, name
    * still exactly `placeholder`), so a retried connect reuses it instead of inserting another.
    */
   findPendingPlaceholderLake(
     userId: string,
-    organizationId: string,
+    organizationId: string | undefined,
     connector: DataLakePendingConnector,
     placeholder: string
   ): Promise<IDataLakeDocument | null>;

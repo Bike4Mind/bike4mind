@@ -102,7 +102,7 @@ export async function reserveCompletionCredits(
     requiredCredits: usdToCredits(usd),
     enforceCredits: await isCreditsEnforced(),
     featureLabel,
-    organizationId,
+    billingOrganizationId: organizationId,
   });
 }
 

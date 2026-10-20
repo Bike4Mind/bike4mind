@@ -4,7 +4,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { ForbiddenError } from '@server/utils/errors';
 import { buildHighlightsPrompt } from '@server/whatsNew/whatsNewHighlights.prompt';
-import type { ModalForHighlights } from '@server/whatsNew/whatsNewHighlights.types';
+import type { ModalForHighlights } from '@bike4mind/server-utils/whatsNew/whatsNewHighlights.types';
 import { z } from 'zod';
 
 const PREVIEW_RATE_LIMIT = 20;

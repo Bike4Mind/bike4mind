@@ -12,7 +12,7 @@ import {
   withDriveReconnectOnAuthError,
 } from '@server/integrations/google/drive/driveClient';
 import { estimateFolder } from '@server/integrations/google/drive/driveContent';
-import { MAX_INGEST_CANDIDATES } from '@server/integrations/google/drive/driveIngestLimits';
+import { MAX_INGEST_CANDIDATES } from '@bike4mind/server-utils/integrations/google/drive/driveIngestLimits';
 
 // Well under the 60s server Lambda and CloudFront origin timeouts: one in-flight page plus
 // withDriveRetry's ~7s of backoff can still land after the deadline.

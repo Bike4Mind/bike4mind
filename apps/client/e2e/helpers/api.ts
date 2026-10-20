@@ -250,7 +250,7 @@ export async function apiLoginViaOtc(
 /**
  * Pull the refresh token out of a Set-Cookie response header. Playwright joins multiple
  * Set-Cookie headers with newlines, so scan line by line. Mirrors REFRESH_COOKIE_NAME in
- * apps/client/server/auth/refreshCookie.ts - keep in sync.
+ * packages/server-utils/src/auth/refreshCookie.ts - keep in sync.
  */
 export function refreshTokenFromSetCookie(setCookieHeader: string | undefined): string | null {
   if (!setCookieHeader) return null;

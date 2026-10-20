@@ -35,6 +35,7 @@ import { resolveRecommendedModelIds } from '@client/app/utils/recommendedModels'
 import { dedupeModelsForPicker, splitModelsByRoute } from '@client/app/utils/pickerModelDedupe';
 import { useAdminModal } from '@client/app/components/admin/useAdminModal';
 import { AdminTab } from '@client/app/components/admin/adminSidebarConfig';
+import { adminTabToSlug } from '@client/app/components/admin/adminTabSlugs';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { useAccessibleModels } from '@client/app/hooks/useAccessibleModels';
 import FilterAltIcon from '@mui/icons-material/FilterAlt';
@@ -936,13 +937,13 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
     [onSelectionComplete, setModel]
   );
 
-  // The admin page owns its active tab in a store rather than a route param, so the
-  // tab is set before navigating. The picker lives in a modal that would otherwise
-  // stay mounted over the admin page, hence the close callback.
+  // The tab is set in the store and named in the URL: the admin page mirrors one into the
+  // other, and a bare /admin would strip ?tab= if the page is already mounted. The picker
+  // lives in a modal that would otherwise stay mounted over the admin page, hence the close callback.
   const handleManageModels = useCallback(() => {
     setAdminTab(AdminTab.LLMDashboard);
     onSelectionComplete?.();
-    navigate({ to: '/admin' });
+    navigate({ to: '/admin', search: { tab: adminTabToSlug(AdminTab.LLMDashboard) } });
   }, [navigate, onSelectionComplete, setAdminTab]);
 
   // Scroll the currently-selected model card into view on first paint so the

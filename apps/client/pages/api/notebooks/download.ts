@@ -3,7 +3,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { NotebookDownloadRequestSchema } from '../../../types/api';
 import { getFilesStorage } from '@server/utils/storage';
-import { stampGear } from '@server/services/gears/stampGear';
+import { stampGear } from '@bike4mind/server-utils/services/gears/stampGear';
 import { notebookCurationService } from '@bike4mind/services';
 import { buildContentDisposition } from '@bike4mind/utils/contentDisposition';
 import { z } from 'zod';

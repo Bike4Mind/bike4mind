@@ -24,7 +24,7 @@ vi.mock('@bike4mind/database', () => ({
 
 import { PushHandler } from '@workers/integrations/github/handlers/PushHandler';
 import { GitHubSlackNotifier } from '@bike4mind/slack';
-import type { GitHubPushPayload } from '@server/integrations/github/types';
+import type { GitHubPushPayload } from '@bike4mind/server-utils/integrations/github/types';
 
 function createPushPayload(): GitHubPushPayload {
   return {

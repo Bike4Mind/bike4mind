@@ -210,7 +210,7 @@ Edit file content using natural language instructions. Describe the changes you 
 
 ### Schedule Optimization
 
-Run optimization solvers on scheduling problems to find optimal or near-optimal schedules using a range of optimization solvers. See OptiHashi for the full optimization dashboard.
+Run optimization solvers on scheduling problems to find optimal or near-optimal schedules using a range of optimization solvers.
 
 ### Problem Formulation
 

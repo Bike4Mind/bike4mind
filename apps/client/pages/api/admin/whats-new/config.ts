@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError, BadRequestError } from '@server/utils/errors';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { logAuditEvent, AdminConfigAuditEvents } from '@server/utils/auditLog';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { AdminSettings } from '@bike4mind/database';
 import { ApiKeyScope, WhatsNewSyncConfigSchema, type WhatsNewSyncConfig } from '@bike4mind/common';
 import { getWhatsNewEnvInfo } from '@server/utils/whatsNewEnv';
@@ -157,23 +157,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       );
 
       // Log audit event with enhanced tracking for URL changes
-      await logAuditEvent(
-        {
-          userId: req.user!.id,
-          action: AdminConfigAuditEvents.WHATS_NEW_CONFIG_UPDATED,
-          ip: req.ip,
-          userAgent: req.headers['user-agent'] || 'unknown',
-          metadata: {
-            oldConfig,
-            newConfig,
-            changes: {
-              autoSyncEnabled: oldConfig.autoSyncEnabled !== newConfig.autoSyncEnabled,
-              distributionUrlOverride: oldConfig.distributionUrlOverride !== newConfig.distributionUrlOverride,
-            },
-          },
-        },
-        req.logger
-      );
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.whats_new.updated',
+        target: { kind: 'settings', id: 'whats-new-sync-config', displayName: "What's New sync configuration" },
+        summary: 'updated the sync configuration',
+        changes: [{ field: 'syncConfig', before: oldConfig, after: newConfig }],
+      });
 
       req.logger?.info("What's New sync config updated", { oldConfig, newConfig });
 

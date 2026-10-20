@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { matchCommands, parseCommandInvocation } from './commands';
+import { addDirPath, matchCommands, parseCommandInvocation } from './commands';
 import {
   attachShortcut,
   COMPOSER_BUTTON_LABELS,
@@ -189,7 +189,7 @@ describe('composerPlaceholder', () => {
 describe('the `/` menu', () => {
   it('opens on a slash typed into an empty composer', () => {
     expect(skillQuery('/')).toBe('');
-    expect(matchCommands('', 'code').map(command => command.name)).toEqual(['clear', 'compact', 'pr']);
+    expect(matchCommands('', 'code').map(command => command.name)).toEqual(['clear', 'compact', 'pr', 'add-dir']);
   });
 
   // A slash mid-sentence is punctuation, and a path is a path. Either opening a menu would mean
@@ -200,7 +200,7 @@ describe('the `/` menu', () => {
   });
 
   it('offers /pr only in a Code session, and treats it as text elsewhere', () => {
-    expect(matchCommands('', 'chat').map(command => command.name)).toEqual(['clear', 'compact']);
+    expect(matchCommands('', 'chat').map(command => command.name)).toEqual(['clear', 'compact', 'add-dir']);
     expect(composerSubmitAction('/pr https://github.com/example-org/widgets/pull/611', 'chat')).toEqual({
       kind: 'send',
     });
@@ -214,6 +214,7 @@ describe('the `/` menu', () => {
     expect(matchCommands('com', 'code').map(command => command.name)).toEqual(['compact']);
     expect(matchCommands('cle', 'code').map(command => command.name)).toEqual(['clear']);
     expect(matchCommands('zz', 'code')).toEqual([]);
+    expect(matchCommands('add', 'chat').map(command => command.name)).toEqual(['add-dir']);
   });
 
   it('runs the highlighted row on Enter and on Tab, and walks it with the arrows', () => {
@@ -288,5 +289,39 @@ describe('the attach shortcut', () => {
   it('names the chord the way each platform does', () => {
     expect(attachShortcut(true)).toEqual({ label: '\u2318U', aria: 'Meta+U' });
     expect(attachShortcut(false)).toEqual({ label: 'Ctrl+U', aria: 'Control+U' });
+  });
+});
+
+describe('/add-dir', () => {
+  it.each(['code', 'chat'] as const)('is offered in a %s session, with its optional argument hint', mode => {
+    const command = matchCommands('add', mode)[0];
+    expect(command?.name).toBe('add-dir');
+    expect(command?.argumentHint).toBe('[path]');
+    // Picking it from the menu runs it bare, which opens the picker.
+    expect(command?.requiresArgument).toBeUndefined();
+  });
+
+  it('carries a path with spaces whole, and runs bare with none', () => {
+    expect(parseCommandInvocation('/add-dir ~/My Projects/notes', 'code')).toMatchObject({
+      command: { name: 'add-dir' },
+      args: '~/My Projects/notes',
+    });
+    expect(parseCommandInvocation('/ADD-DIR', 'chat')).toMatchObject({ command: { name: 'add-dir' }, args: '' });
+  });
+
+  it('reads the path out of the argument, or nothing for the picker', () => {
+    expect(addDirPath('')).toBeUndefined();
+    expect(addDirPath('   ')).toBeUndefined();
+    expect(addDirPath('../shared')).toBe('../shared');
+    expect(addDirPath('"/Users/me/My Folder"')).toBe('/Users/me/My Folder');
+    expect(addDirPath("'~/notes'")).toBe('~/notes');
+    expect(addDirPath('""')).toBeUndefined();
+    // Only a matching pair is a quote; a lone one is part of the name.
+    expect(addDirPath('"half')).toBe('"half');
+  });
+
+  it('is not a path starting with /add-dir', () => {
+    expect(parseCommandInvocation('/add-dirs', 'code')).toBeNull();
+    expect(composerSubmitAction('/add-dir/x', 'code')).toEqual({ kind: 'send' });
   });
 });

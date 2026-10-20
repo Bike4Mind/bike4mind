@@ -13,6 +13,8 @@ import {
   acceptsConnectorContent,
   isGitHubDisconnectStalled,
   isLakeIngestable,
+  isSameLakeConnectionOwner,
+  lakeConnectionOwnerOf,
   requireEnv,
   type GitHubLakeInstallationChoice,
   type GitHubLakeInstallationPolicyViolation,
@@ -21,13 +23,14 @@ import {
   type IDataLakeDocument,
   type IOrgGitHubLakeConnectionDocument,
   type IOrgGitHubLakeConnectionResponse,
+  type LakeConnectionOwner,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { dataLakeService } from '@bike4mind/services';
-import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { createStateToken, verifyStateToken, type BaseStatePayload } from '@server/auth/jwtStateStore';
 import { issueStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
-import { verifyOrgAccess } from '@server/utils/orgAccess';
+import { authorizeLakeConnectorAccess } from '@server/dataLakes/authorizeLakeConnectorAccess';
 import {
   assertLakeConnectorFree,
   withConnectionId,
@@ -153,7 +156,7 @@ export function requireGitHubLakeAppConfig(config: GitHubLakeAppConfig | null): 
 }
 
 /**
- * The org lake a user may bind a repository to right now, or a thrown HTTP error saying why not.
+ * The lake (org or personal) a user may bind a repository to right now, or a thrown HTTP error saying why not.
  * Runs at every step of the connect (start, authorize return, picker, completion): the flow can take
  * minutes, during which the lake can be archived, re-originated, or connected by someone else.
  *
@@ -169,12 +172,9 @@ export async function resolveConnectableLake(
   if (!lake) {
     throw new NotFoundError('Data lake not found');
   }
-  if (!lake.organizationId) {
-    throw new BadRequestError('Connecting a GitHub repository requires an organization-scoped data lake');
-  }
-  // Org owner/manager (or platform admin) only, matching the Drive connect. Ahead of every other
-  // check so a non-member cannot probe the lake's status, origin or connections.
-  await verifyOrgAccess(user, lake.organizationId);
+  // Org owner/manager (or platform admin), or a personal lake's creator - the Drive connect's gate. Ahead
+  // of every other check so anyone else cannot probe the lake's status, origin or connections.
+  const owner = await authorizeLakeConnectorAccess(user, lake);
 
   if (!isLakeIngestable(lake.status)) {
     throw new BadRequestError(`Cannot connect a GitHub repository to a data lake in '${lake.status}' status`);
@@ -188,7 +188,7 @@ export async function resolveConnectableLake(
     );
   }
   await assertLakeConnectorFree(lake.id, { includeClaim: true });
-  return { lakeId: lake.id, organizationId: lake.organizationId, curated };
+  return { lakeId: lake.id, owner, curated };
 }
 
 /**
@@ -320,7 +320,7 @@ export async function listGitHubLakeRepositoryChoices(params: {
 }): Promise<GitHubLakeRepositoryChoicesResponse> {
   const { config, user } = params;
   const nonceHash = requireGitHubLakeFlowNonce(params.nonceHash);
-  const { lakeId, organizationId } = await resolveConnectableLake(user, params.dataLakeId);
+  const { lakeId, owner } = await resolveConnectableLake(user, params.dataLakeId);
   const userToken = await readGitHubLakeUserToken(nonceHash, user, lakeId);
 
   const installations = await withGitHubLakeUserToken(config, nonceHash, () => listUserInstallations(userToken));
@@ -328,7 +328,7 @@ export async function listGitHubLakeRepositoryChoices(params: {
   const installUrl = buildGitHubLakeInstallUrl(config, nonceHash, stateParams);
   const choices = await Promise.all(
     installations.map(installation =>
-      toInstallationChoice(config, nonceHash, userToken, installation, organizationId, {
+      toInstallationChoice(config, nonceHash, userToken, installation, owner, {
         // Without an account id there is nothing to target; the plain install page still lets the
         // user pick the account there.
         addRepositoriesUrl:
@@ -346,7 +346,7 @@ async function toInstallationChoice(
   nonceHash: string,
   userToken: string,
   installation: GitHubLakeUserInstallation,
-  organizationId: string,
+  owner: LakeConnectionOwner,
   links: { addRepositoriesUrl: string }
 ): Promise<GitHubLakeInstallationChoice> {
   const { id, accountLogin, accountType, settingsUrl } = installation;
@@ -368,7 +368,7 @@ async function toInstallationChoice(
     (await withGitHubLakeUserToken(config, nonceHash, () => listInstallerVisibleRepositories(userToken, id))) ?? [];
   const boundTo = await resolveRepositoryBindings(
     repositories.map(repo => repo.id),
-    organizationId
+    owner
   );
   return {
     id,
@@ -385,25 +385,25 @@ async function toInstallationChoice(
 }
 
 /**
- * The lake each already-bound repository feeds, named only when that lake is in the caller's org:
- * the binding is global (a repository feeds one lake platform-wide), its lake's name is not.
+ * The lake each already-bound repository feeds, named only when that lake has the same owner as the
+ * caller's lake (same org, or same user for a personal one): the binding is global (a repository feeds
+ * one lake platform-wide), its lake's name is not.
  */
 async function resolveRepositoryBindings(
   repositoryIds: number[],
-  organizationId: string
+  owner: LakeConnectionOwner
 ): Promise<Map<number, NonNullable<GitHubLakeRepositoryChoice['boundTo']>>> {
   const bindings = await orgGitHubLakeConnectionRepository.findByRepositoryIds(repositoryIds);
-  const sameOrgLakeIds = [
-    ...new Set(bindings.filter(b => b.organizationId === organizationId).map(b => b.targetDataLakeId)),
-  ];
-  const lakes = await Promise.all(sameOrgLakeIds.map(lakeId => dataLakeRepository.findById(lakeId)));
+  const isSameOwner = (binding: IOrgGitHubLakeConnectionDocument) =>
+    isSameLakeConnectionOwner(lakeConnectionOwnerOf(binding), owner);
+  const sameOwnerLakeIds = [...new Set(bindings.filter(isSameOwner).map(b => b.targetDataLakeId))];
+  const lakes = await Promise.all(sameOwnerLakeIds.map(lakeId => dataLakeRepository.findById(lakeId)));
   const lakeNames = new Map(lakes.flatMap(lake => (lake ? [[lake.id, lake.name] as const] : [])));
   return new Map(
     bindings.map(binding => [
       binding.repositoryId,
       {
-        dataLakeName:
-          binding.organizationId === organizationId ? (lakeNames.get(binding.targetDataLakeId) ?? null) : null,
+        dataLakeName: isSameOwner(binding) ? (lakeNames.get(binding.targetDataLakeId) ?? null) : null,
       },
     ])
   );
@@ -426,7 +426,7 @@ export async function completeGitHubLakeConnection(params: {
 }): Promise<IOrgGitHubLakeConnectionDocument> {
   const { config, user, installationId, repositoryId, logger } = params;
   const nonceHash = requireGitHubLakeFlowNonce(params.nonceHash);
-  const { lakeId, organizationId } = await resolveConnectableLake(user, params.dataLakeId);
+  const { lakeId, owner } = await resolveConnectableLake(user, params.dataLakeId);
   const userToken = await readGitHubLakeUserToken(nonceHash, user, lakeId);
 
   const visibleRepositories = await withGitHubLakeUserToken(config, nonceHash, () =>
@@ -448,7 +448,7 @@ export async function completeGitHubLakeConnection(params: {
     connection = await withLakeConnectorClaim(lakeId, 'github', claimedId =>
       orgGitHubLakeConnectionRepository.create(
         withConnectionId(claimedId, {
-          organizationId,
+          ...(owner.kind === 'organization' && { organizationId: owner.organizationId }),
           targetDataLakeId: lakeId,
           installationId,
           accountLogin: installation.accountLogin,
@@ -577,10 +577,10 @@ export async function releaseGitHubLakeConnection(
   const bindings = await orgGitHubLakeConnectionRepository.findByInstallationId(connection.installationId);
   if (!bindings.some(binding => binding.id !== connection.id)) {
     await deleteInstallation(requireGitHubLakeAppConfig(config), connection.installationId);
-    await orgGitHubLakeConnectionRepository.release(connection.id, connection.organizationId);
+    await orgGitHubLakeConnectionRepository.release(connection.id, lakeConnectionOwnerOf(connection));
     return { installationRetained: false };
   }
-  await orgGitHubLakeConnectionRepository.release(connection.id, connection.organizationId);
+  await orgGitHubLakeConnectionRepository.release(connection.id, lakeConnectionOwnerOf(connection));
   // Concurrent releases of an installation's last bindings (the revoke queue's installation.deleted
   // fan-out) each see the other and skip the uninstall, so recount after our own delete: the last one
   // out still uninstalls.
@@ -645,7 +645,10 @@ export async function requestGitHubLakeDisconnect(
     return { queued: false };
   }
   // Paired with claimForSync's `enabled` guard: a live sync would keep minting files past the purge.
-  const marked = await orgGitHubLakeConnectionRepository.markDisconnecting(connection.id, connection.organizationId);
+  const marked = await orgGitHubLakeConnectionRepository.markDisconnecting(
+    connection.id,
+    lakeConnectionOwnerOf(connection)
+  );
   if (!marked) {
     // A concurrent DELETE stamped first; its message is the one purge chain.
     const current = await orgGitHubLakeConnectionRepository.findById(connection.id);
@@ -663,7 +666,7 @@ export async function requestGitHubLakeDisconnect(
       try {
         await orgGitHubLakeConnectionRepository.cancelDisconnect(
           connection.id,
-          connection.organizationId,
+          lakeConnectionOwnerOf(connection),
           marked.stamp,
           marked.previousEnabled
         );
@@ -688,13 +691,13 @@ async function disableAndPurgeSlice(
   // Paired with claimForSync's `enabled` guard: a live sync would keep minting files past the purge.
   const disabled = await orgGitHubLakeConnectionRepository.disableIfNoLiveSyncClaim(
     connection.id,
-    connection.organizationId
+    lakeConnectionOwnerOf(connection)
   );
   if (!disabled) {
     throw new ConflictError('A sync is in progress for this repository. Try disconnecting again once it finishes.');
   }
   // Keeps a user-requested disconnect from reading as stalled while it progresses; no-op for a revoke.
-  await orgGitHubLakeConnectionRepository.touchDisconnect(connection.id);
+  await orgGitHubLakeConnectionRepository.touchDisconnect(connection.id, lakeConnectionOwnerOf(connection));
   const purged = await purgeConnectionIngestedFiles(
     lake,
     limit =>

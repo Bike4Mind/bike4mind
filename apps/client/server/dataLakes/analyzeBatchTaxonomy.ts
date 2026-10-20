@@ -22,7 +22,10 @@ import {
   type TaxonomyStatus,
 } from '@bike4mind/common';
 import { sendToClient } from '@server/websocket/utils';
-import { runTaxonomyInference, sampleFabFilesForTaxonomy } from '@server/dataLakes/runTaxonomyInference';
+import {
+  runTaxonomyInference,
+  sampleFabFilesForTaxonomy,
+} from '@bike4mind/server-utils/dataLakes/runTaxonomyInference';
 import {
   createCompletionMeter,
   createRequestCompletionMeter,

@@ -41,6 +41,8 @@ const UPLOAD_PATTERN = new RegExp(`${UPLOAD_CALL.source}|PutObjectCommand|putObj
 const NOT_A_REWRITE = new Set([
   'b4m-core/services/src/fabFileService/create.ts',
   'b4m-core/services/src/fabFileService/createByUrl.ts',
+  // Stages an admin audit-log CSV under exports/ (no FabFile row); nothing to invalidate.
+  'apps/client/server/utils/adminAuditExportStorage.ts',
   // Only uploads while the row is still `pending` (a first write); the S3 event charges it.
   'apps/client/pages/api/files/[id]/upload.ts',
   // Each creates a NEW row (or presigns the first write for one); the S3 event charges it.

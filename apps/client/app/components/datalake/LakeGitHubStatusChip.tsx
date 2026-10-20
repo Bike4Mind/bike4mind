@@ -7,13 +7,23 @@ import { describeGitHubConnection } from '@client/app/hooks/data/githubConnectio
 
 /**
  * LakeDriveStatusChip's GitHub twin: the read-only "a repository feeds this lake" marker on the
- * surfaces a user reaches to inspect or remove a lake. Same contract - a personal lake is not read,
- * and it renders nothing with no connection, mid-read, on a failed read, or while
+ * surfaces a user reaches to inspect or remove a lake. Same contract - someone else's personal lake is
+ * not read, and it renders nothing with no connection, mid-read, on a failed read, or while
  * EnableDataLakeGitHub is off. Absence is not a guarantee that no connection exists.
  */
-export default function LakeGitHubStatusChip({ lakeId, organizationId }: { lakeId: string; organizationId?: string }) {
+export default function LakeGitHubStatusChip({
+  lakeId,
+  organizationId,
+  isCreator,
+}: {
+  lakeId: string;
+  /** The lake's org scope; absent for a personal lake. */
+  organizationId?: string;
+  /** Whether the caller created the lake - the only one who can read a personal lake's connection. */
+  isCreator: boolean;
+}) {
   const { isAdminFeatureEnabled } = useFeatureEnabled();
-  const gitHubEnabled = !!organizationId && isAdminFeatureEnabled('EnableDataLakeGitHub');
+  const gitHubEnabled = (!!organizationId || isCreator) && isAdminFeatureEnabled('EnableDataLakeGitHub');
   const { data: connection } = useLakeGitHubConnection(lakeId, gitHubEnabled);
   useMinuteTick(gitHubEnabled && !!connection);
   if (!gitHubEnabled || !connection) return null;

@@ -1,7 +1,10 @@
 import { MUSIC_MODEL_IDS } from '@bike4mind/common';
 import { createMusicJob, type CreateMusicJobDeps } from '@bike4mind/services/musicJobs';
 import type { MusicToolConfig } from '@bike4mind/services/llm/tools';
-import { listUsableMusicModels, type MusicModelAvailabilityDeps } from './listUsableMusicModels';
+import {
+  listUsableMusicModels,
+  type MusicModelAvailabilityDeps,
+} from '@bike4mind/server-utils/musicGenerations/listUsableMusicModels';
 
 type BuildMusicToolConfigDeps = {
   availability: MusicModelAvailabilityDeps;
@@ -24,5 +27,6 @@ export async function buildMusicToolConfig(
   return {
     usableModels,
     createJob: input => createMusicJob(input, deps.createDeps),
+    findJob: jobId => deps.createDeps.repository.findById(jobId),
   };
 }

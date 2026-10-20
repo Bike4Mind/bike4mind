@@ -13,7 +13,8 @@ const m = vi.hoisted(() => ({
   enforceCredits: true,
 }));
 
-vi.mock('@bike4mind/database', () => ({
+vi.mock('@bike4mind/database', async () => ({
+  ...(await import('@server/__tests__/pendingCreditHoldFake')).pendingCreditHoldFake,
   adminSettingsRepository: { findOne: m.findBySettingName },
   creditTransactionRepository: {},
   organizationRepository: { findById: m.orgFindById, incrementCredits: m.orgIncrement },

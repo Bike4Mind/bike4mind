@@ -78,9 +78,11 @@ vi.mock('@server/utils/auditLog', () => ({
 vi.mock('@server/dataLakes/resolveAuditPrincipal', () => ({ resolveAuditPrincipal: vi.fn(() => ({})) }));
 vi.mock('@server/memory/deepAgentMemoryStore', () => ({ createDeepAgentMemoryStore: vi.fn(() => ({})) }));
 vi.mock('@server/memory/personaAgentMemoryStore', () => ({ createPersonaAgentMemoryStore: vi.fn(() => ({})) }));
-vi.mock('@server/memory/userMementoMemoryStore', () => ({ createUserMementoMemoryStore: vi.fn(() => ({})) }));
+vi.mock('@bike4mind/server-utils/memory/userMementoMemoryStore', () => ({
+  createUserMementoMemoryStore: vi.fn(() => ({})),
+}));
 vi.mock('@bike4mind/server-utils/memory/factCipher', () => ({ createKeyProvider: vi.fn(() => ({})) }));
-vi.mock('@server/memory/ledgerMemoryStore', () => ({
+vi.mock('@bike4mind/server-utils/memory/ledgerMemoryStore', () => ({
   createLedgerMemoryStore: vi.fn(() => ({ readProfile: vi.fn() })),
   purgeUserMemory: h.purgeUserMemory,
   shredBelief: h.shredBelief,

@@ -12,7 +12,7 @@ import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
 import { claimPendingAction } from '@server/utils/pendingActionExecutor';
 import { loadFabFileAttachment, resolvePendingActionTarget } from '@server/utils/pendingActionTarget';
 import { downloadAttachmentUrl } from '@server/utils/downloadAttachmentUrl';
-import { getSelectedRepositoriesForMcp } from '@server/integrations/github/github-repo-helper';
+import { getSelectedRepositoriesForMcp } from '@bike4mind/server-utils/integrations/github/github-repo-helper';
 import { JIRA_UPLOAD_ATTACHMENT, CONFLUENCE_UPLOAD_ATTACHMENT } from '@bike4mind/mcp/atlassian/constants';
 
 // Token expiration time (15 minutes) - must match ChatCompletionProcess.ts

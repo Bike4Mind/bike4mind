@@ -1,10 +1,10 @@
 import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CustomCommand } from '@bike4mind/cli/skills';
 import { skillTool } from './skillTool';
-import type { SkillContext, ToolContext } from './types';
+import type { SkillContext, ToolContext, ToolReporter } from './types';
 
 function command(name: string, body: string, extra: Partial<CustomCommand> = {}): CustomCommand {
   return {
@@ -21,9 +21,27 @@ function command(name: string, body: string, extra: Partial<CustomCommand> = {})
  * The context the tool is handed is already filtered - see SkillContext - so what is proven here
  * is what the tool does with a list, not how the list is chosen. SkillCatalog.test.ts owns that.
  */
-function contextFor(available: readonly CustomCommand[], roots: readonly string[] = []): ToolContext {
+function contextFor(
+  available: readonly CustomCommand[],
+  roots: readonly string[] = [],
+  report?: ToolReporter
+): ToolContext {
   const skills: SkillContext = { available: () => Promise.resolve(available) };
-  return { roots, signal: new AbortController().signal, skills };
+  return { roots, signal: new AbortController().signal, skills, ...(report ? { report } : {}) };
+}
+
+function reporter(): ToolReporter {
+  return {
+    progress: vi.fn(),
+    media: vi.fn(),
+    notice: vi.fn(),
+    label: vi.fn(),
+    diff: vi.fn(),
+    detail: vi.fn(),
+    image: vi.fn(),
+    moved: vi.fn(),
+    ownContent: vi.fn(),
+  };
 }
 
 describe('the skill tool', () => {
@@ -80,6 +98,38 @@ describe('the skill tool', () => {
 
   it('requires a name', async () => {
     await expect(skillTool.run({}, contextFor([command('ship', 'x')]))).rejects.toThrow(/"skill" argument/);
+  });
+});
+
+describe('the skill tool and where the skill came from', () => {
+  it("vouches for a skill in the user's own folder", async () => {
+    const report = reporter();
+    await skillTool.run(
+      { skill: 'ship' },
+      contextFor([command('ship', 'Ship it.', { source: 'global' })], [], report)
+    );
+
+    expect(report.ownContent).toHaveBeenCalledTimes(1);
+  });
+
+  it('vouches for a skill from a project the user trusted', async () => {
+    const report = reporter();
+    await skillTool.run(
+      { skill: 'ship' },
+      contextFor([command('ship', 'Ship it.', { source: 'project' })], [], report)
+    );
+
+    expect(report.ownContent).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not vouch for an account skill, which may be someone else's", async () => {
+    const report = reporter();
+    await skillTool.run(
+      { skill: 'ship' },
+      contextFor([command('ship', 'Ship it.', { source: 'remote' })], [], report)
+    );
+
+    expect(report.ownContent).not.toHaveBeenCalled();
   });
 });
 

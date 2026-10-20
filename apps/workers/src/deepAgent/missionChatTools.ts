@@ -9,7 +9,7 @@ import {
   listMissionsForAgent,
 } from '@server/deepAgent/missions';
 import { canCreateMissions } from '@server/deepAgent/missionAccess';
-import { MongoDeepAgentStore } from '@server/deepAgent/store';
+import { MongoDeepAgentStore } from '@bike4mind/server-utils/deepAgent/store';
 import { runMissionFirstWake } from '@server/deepAgent/firstWake';
 import { assertOwnerCanFundWake } from '@server/deepAgent/wakeMetering';
 

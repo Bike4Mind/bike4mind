@@ -1,3 +1,4 @@
+import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
 import express, { type Request, type Response, type Express } from 'express';
 import {
   buildMetaEvent,
@@ -637,6 +638,7 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       try {
         await executeCompletion({
           getEntitlements: getUserEntitlements,
+          creditHolds: createCompletionCreditHolds(logger),
           userId: actorUserId,
           model: hydrated.model,
           messages,

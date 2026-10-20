@@ -24,7 +24,7 @@ import {
   orgGitHubLakeConnectionRepository,
   orgGoogleDriveConnectionRepository,
 } from '@bike4mind/database';
-import { driveConnectionOwnerOf } from '@bike4mind/common';
+import { lakeConnectionOwnerOf } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { releaseDriveConnection } from '@server/integrations/google/drive/common';
 import { releaseGitHubLakeConnection } from '@server/integrations/github/dataLake/githubLakeConnection';
@@ -96,7 +96,7 @@ async function reapDrive(deadline: number): Promise<ConnectorReapResult> {
     orphans,
     async connection => {
       // false means no row matched: a concurrent purge or ingest already retired it, which is the goal.
-      await releaseDriveConnection(connection.id, driveConnectionOwnerOf(connection));
+      await releaseDriveConnection(connection.id, lakeConnectionOwnerOf(connection));
     },
     deadline
   );

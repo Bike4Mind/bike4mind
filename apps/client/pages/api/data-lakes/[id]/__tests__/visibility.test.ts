@@ -20,7 +20,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
     assertLakeAccessById: h.assertLakeAccessById,
@@ -40,6 +40,7 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {},
   dataLakeAccessGrantRepository: { listByLake: vi.fn().mockResolvedValue([]) },
   orgGoogleDriveConnectionRepository: { findByDataLakeIdAny: vi.fn().mockResolvedValue(null) },
+  orgGitHubLakeConnectionRepository: { findByDataLakeIdAny: vi.fn().mockResolvedValue(null) },
   // The config-audit repos this route wires (see lakeConfigAuditDb). Stubbed rather than omitted
   // because the mock replaces the whole module: a missing export is an import-time failure, not a
   // silent undefined.
@@ -95,6 +96,8 @@ describe('POST /api/data-lakes/[id]/visibility', () => {
           adminSettings: expect.anything(),
           // The bound-Drive guard on a scope move reads this; unwired, every move would throw.
           orgGoogleDriveConnections: expect.anything(),
+          // Same guard for a bound GitHub repository.
+          orgGitHubLakeConnections: expect.anything(),
         }),
       })
     );

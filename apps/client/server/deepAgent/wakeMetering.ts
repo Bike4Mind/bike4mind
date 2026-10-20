@@ -12,7 +12,7 @@ import {
   createCompletionMeter,
   isCreditsEnforced,
 } from '@server/billing/meterPlatformCompletion';
-import { buildSystemApiKeyTable, DEFAULT_WAKE_MODEL_ID } from './resolveBackend';
+import { buildSystemApiKeyTable, DEFAULT_WAKE_MODEL_ID } from '@bike4mind/server-utils/deepAgent/resolveBackend';
 
 // No resume path exists: pauseMission clears the interval and nothing restores it after a top-up.
 export const MISSION_NEEDS_CREDITS_BLOCKER =

@@ -37,7 +37,8 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
-vi.mock('@bike4mind/database', () => ({
+vi.mock('@bike4mind/database', async () => ({
+  ...(await import('@server/__tests__/pendingCreditHoldFake')).pendingCreditHoldFake,
   FabFile: {
     findById: () => ({
       where: async () => ({
@@ -50,7 +51,6 @@ vi.mock('@bike4mind/database', () => ({
     }),
     findOne: () => ({ lean: async () => null }),
   },
-  withTransaction: (fn: () => unknown) => fn(),
   adminSettingsRepository: {},
   usageEventRepository: { record: m.record },
   creditTransactionRepository: {},

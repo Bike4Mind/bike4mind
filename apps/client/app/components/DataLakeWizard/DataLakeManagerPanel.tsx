@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Box } from '@mui/joy';
+import { toast } from 'sonner';
 import { TREE_SCROLL_SX } from '@client/app/components/datalake/treeChrome';
 import {
   useActiveDataLakeBatches,
@@ -54,6 +55,8 @@ export default function DataLakeManagerPanel() {
   const managerTab = useDataLakeWizardStore(s => s.managerTab);
   const openManager = useDataLakeWizardStore(s => s.openManager);
   const managerLakeId = useDataLakeWizardStore(s => s.managerLakeId);
+  const gitHubConnectFailure = useDataLakeWizardStore(s => s.gitHubConnectFailure);
+  const setGitHubConnectFailure = useDataLakeWizardStore(s => s.setGitHubConnectFailure);
   const { isFeatureEnabled } = useAdminSettingsCache();
 
   // The lakes list projection carries no per-lake file counts. Size a lake by MEMBERSHIP, not
@@ -94,6 +97,15 @@ export default function DataLakeManagerPanel() {
   // deleted), this goes null and the panel falls back to the root view on its own. The stale
   // path/file are unreachable behind the null and reset on the next lake click.
   const activeLake = useMemo(() => dataLakes?.find(l => l.id === lakeId) ?? null, [dataLakes, lakeId]);
+
+  // FinishSourceConnectBanner shows a failed GitHub connect's reason, but only inside the lake's own
+  // panel; a lake gone from the list (archived, deleted, access lost mid-connect) never mounts one.
+  useEffect(() => {
+    if (!gitHubConnectFailure || isLoading) return;
+    if (dataLakes?.some(l => l.id === gitHubConnectFailure.lakeId)) return;
+    toast.error(gitHubConnectFailure.message);
+    setGitHubConnectFailure(null);
+  }, [gitHubConnectFailure, dataLakes, isLoading, setGitHubConnectFailure]);
 
   // Derive the lake being edited from the LIVE list (by id) rather than a snapshot, so a
   // visibility mutation's cache refresh flows into the settings modal instead of leaving the

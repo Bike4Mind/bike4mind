@@ -22,7 +22,7 @@ const {
   mockRecordCircuitBreakerRejection: vi.fn(),
 }));
 
-vi.mock('@server/services/integrationCircuitBreaker', () => ({
+vi.mock('@bike4mind/server-utils/services/integrationCircuitBreaker', () => ({
   isMcpServerAvailable: mockIsMcpServerAvailable,
 }));
 

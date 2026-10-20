@@ -16,7 +16,10 @@ import type {
   UpdateProjectRequest,
 } from '@shared/chat';
 import { normalizeSessionTitle } from '@shared/chat';
+import type { CreatedSession } from '@shared/ipc';
+import type { SidebarSectionsState } from '@shared/sidebarSections';
 import { appendArrived, OPTIMISTIC_ID_PREFIX } from './arrivedMessage';
+import { addDirPath } from './commands';
 import { describeReturn } from './queuedMessages';
 import { applyLiveEvent, coalesceLiveEvents, startReply, type LiveReplyEvent } from '@shared/liveReply';
 import { applyReplyDone } from './replyDone';
@@ -31,9 +34,9 @@ export interface SessionsController {
   sessions: ChatSessionSummary[];
   loading: boolean;
   reload: () => Promise<void>;
-  create: () => Promise<string>;
+  create: (placement?: SessionPlacement) => Promise<string>;
   /** Start a Code session. Resolves null when main refused; `codeError` then says why. */
-  createCode: (request: CreateCodeSessionRequest) => Promise<string | null>;
+  createCode: (request: CreateCodeSessionRequest, placement?: SessionPlacement) => Promise<string | null>;
   /** Set while a Code session is being created - resolving a worktree can take a moment. */
   creatingCode: boolean;
   codeError: string | null;
@@ -47,6 +50,15 @@ export interface SessionsController {
   clearRenameError: () => void;
   /** Apply a summary main just returned, so the sidebar reorders without a full reload. */
   apply: (summary: ChatSessionSummary) => void;
+}
+
+/** A user sidebar section to start a session in; see CreateSessionRequest. */
+export interface SessionPlacement {
+  sectionId: string;
+  /** Gets main's section state in the same update that adds the row, so it is drawn in place. */
+  placed: (sections: SidebarSectionsState) => void;
+  /** Main could not save the placement; the row still exists and starts in the default groups. */
+  failed: () => void;
 }
 
 export function useSessions(): SessionsController {
@@ -76,27 +88,43 @@ export function useSessions(): SessionsController {
     });
   }, []);
 
-  const create = useCallback(async () => {
-    const created = await window.b4m.chat.createSession();
-    setSessions(current => [created, ...current]);
-    return created.id;
+  // The section state and the new row are set in one synchronous block, so React renders them
+  // together and the row never shows in the default groups on its way into its section.
+  const list = useCallback((created: CreatedSession, placement: SessionPlacement | undefined) => {
+    if (created.sidebarSections) placement?.placed(created.sidebarSections);
+    else if (created.placementFailed) placement?.failed();
+    setSessions(current => [created.session, ...current]);
   }, []);
 
-  const createCode = useCallback(async (request: CreateCodeSessionRequest) => {
-    setCreatingCode(true);
-    setCodeError(null);
-    try {
-      const result = await window.b4m.chat.createCodeSession(request);
-      if (!result.ok) {
-        setCodeError(result.error);
-        return null;
+  const create = useCallback(
+    async (placement?: SessionPlacement) => {
+      const created = await window.b4m.chat.createSession(placement && { sectionId: placement.sectionId });
+      list(created, placement);
+      return created.session.id;
+    },
+    [list]
+  );
+
+  const createCode = useCallback(
+    async (request: CreateCodeSessionRequest, placement?: SessionPlacement) => {
+      setCreatingCode(true);
+      setCodeError(null);
+      try {
+        const result = await window.b4m.chat.createCodeSession(
+          placement ? { ...request, sectionId: placement.sectionId } : request
+        );
+        if (!result.ok) {
+          setCodeError(result.error);
+          return null;
+        }
+        list(result, placement);
+        return result.session.id;
+      } finally {
+        setCreatingCode(false);
       }
-      setSessions(current => [result.session, ...current]);
-      return result.session.id;
-    } finally {
-      setCreatingCode(false);
-    }
-  }, []);
+    },
+    [list]
+  );
 
   const remove = useCallback(async (sessionId: string) => {
     await window.b4m.chat.deleteSession(sessionId);
@@ -747,8 +775,47 @@ export function useConversation(
     const result = await window.b4m.chat.continueReply(sessionId);
     if (!result.ok) setSendError(result.error);
   }, [sessionId]);
+
+  // A summary main just wrote, folded into both the open conversation and the sidebar row.
+  const applySummary = useCallback(
+    (updated: ChatSessionSummary) => {
+      setSession(current =>
+        current ? { ...current, project: updated.project, grantedDirectories: updated.grantedDirectories } : current
+      );
+      onSummaryChanged(updated);
+    },
+    [onSummaryChanged]
+  );
+
   /**
-   * Run `/clear` or `/compact`.
+   * The chip's picker when `path` is absent, `/add-dir <path>` when present. Both go through the
+   * one main-side share, so neither can grant what the other would refuse. A refusal lands in
+   * `sendError`; `confirm` adds a line for an addition the user typed, since a typed command has
+   * no button whose result they are already looking at.
+   */
+  const shareDirectory = useCallback(
+    async (path: string | undefined, confirm: boolean) => {
+      if (!sessionId) return;
+      const result = await window.b4m.chat.addContextDirectory(sessionId, path);
+      if (result.status === 'cancelled') return;
+      if (result.status === 'refused') {
+        setSendError(result.error);
+        return;
+      }
+      if (result.status === 'already') {
+        setNotice(`${result.path} is already shared with this conversation.`);
+        return;
+      }
+      applySummary(result.session);
+      if (confirm || result.warning) {
+        setNotice([`Shared ${result.path} with this conversation.`, result.warning].filter(Boolean).join(' '));
+      }
+    },
+    [sessionId, applySummary]
+  );
+
+  /**
+   * Run `/clear`, `/compact`, `/pr` or `/add-dir`.
    *
    * Main owns both outcomes. The streaming check that refuses a compaction is made THERE for the
    * reason queueing is: a turn that ends between a renderer-side check and the IPC call would
@@ -773,6 +840,10 @@ export function useConversation(
         if (!bound.ok) setSendError(bound.error);
         return;
       }
+      if (name === 'add-dir') {
+        await shareDirectory(addDirPath(args), true);
+        return;
+      }
       setCommandProgress(name === 'compact' ? 'Summarising this conversation...' : null);
       try {
         const result =
@@ -789,7 +860,7 @@ export function useConversation(
         setCommandProgress(null);
       }
     },
-    [sessionId]
+    [sessionId, shareDirectory]
   );
 
   const cancelQueued = useCallback(
@@ -860,17 +931,6 @@ export function useConversation(
   }, []);
 
   const dismissNotice = useCallback(() => setNotice(null), []);
-
-  // A summary main just wrote, folded into both the open conversation and the sidebar row.
-  const applySummary = useCallback(
-    (updated: ChatSessionSummary) => {
-      setSession(current =>
-        current ? { ...current, project: updated.project, grantedDirectories: updated.grantedDirectories } : current
-      );
-      onSummaryChanged(updated);
-    },
-    [onSummaryChanged]
-  );
 
   /** Resolves true when the session really moved, so a caller can report what happened after. */
   const changeProject = useCallback(
@@ -950,14 +1010,11 @@ export function useConversation(
   );
 
   const addContextDirectory = useCallback(async () => {
-    if (!sessionId) return;
     setProjectError(null);
-    const updated = await window.b4m.chat.addContextDirectory(sessionId);
-    // Null is a dismissed picker, which is not an error: the button is disabled until the
-    // session has a project, so the other way main returns null is not reachable from here.
-    if (!updated) return;
-    applySummary(updated);
-  }, [sessionId, applySummary]);
+    setSendError(null);
+    setNotice(null);
+    await shareDirectory(undefined, false);
+  }, [shareDirectory]);
 
   const removeContextDirectory = useCallback(
     async (directory: string) => {

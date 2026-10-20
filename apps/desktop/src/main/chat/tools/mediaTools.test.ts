@@ -72,6 +72,7 @@ async function harness(options: { imageModels?: string[]; remoteSessionId?: stri
         notice: notice => notices.push(notice),
         label: () => undefined,
         moved: () => undefined,
+        ownContent: () => undefined,
         diff: () => undefined,
         detail: () => undefined,
         image: () => undefined,

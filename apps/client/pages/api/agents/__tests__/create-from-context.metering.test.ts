@@ -27,7 +27,8 @@ vi.mock('@client/server/middlewares/baseApi', () => ({
     },
   }),
 }));
-vi.mock('@bike4mind/database', () => ({
+vi.mock('@bike4mind/database', async () => ({
+  ...(await import('@server/__tests__/pendingCreditHoldFake')).pendingCreditHoldFake,
   sessionRepository: { findById: vi.fn().mockResolvedValue({ id: 'sess-1', userId: 'user-1', knowledgeIds: [] }) },
   questRepository: { findAllBySessionId: vi.fn().mockResolvedValue([{ prompt: 'hello', fabFileIds: [] }]) },
   agentOpsSettingsRepository: { getSettings: vi.fn().mockResolvedValue(null) },
@@ -40,7 +41,6 @@ vi.mock('@bike4mind/database', () => ({
   creditTransactionRepository: {},
   organizationRepository: {},
   userRepository: {},
-  withTransaction: vi.fn(),
 }));
 vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
