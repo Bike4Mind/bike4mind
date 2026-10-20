@@ -103,6 +103,8 @@ const hasMarker = (content: string | Block[]): boolean => Array.isArray(content)
 
 interface Turn {
   request: Request;
+  /** Turns the token budget pushed out of the window (0 when the count window alone decided it). */
+  excluded: number;
   /** Index of the last message carrying a cache breakpoint: the history anchor. */
   anchor: number;
   toolNames: string[];
@@ -114,10 +116,11 @@ interface SessionState {
   persistedTools: string[];
 }
 
-async function runTurn(priorQuestCount: number, state: SessionState): Promise<Turn> {
+async function runTurn(priorQuestCount: number, state: SessionState, verbatimTokenBudget?: number): Promise<Turn> {
   const session = { id: 'session1' } as unknown as ISessionDocument;
   const [history, , meta] = await fetchAndProcessPreviousMessages(session, LIMIT, {
     db: { quests: repository(priorQuestCount) },
+    verbatimTokenBudget,
   });
   const windowStart = Number(meta.oldestIncludedQuestId);
 
@@ -191,18 +194,38 @@ async function runTurn(priorQuestCount: number, state: SessionState): Promise<Tu
 
   const sent = request!;
   const anchor = sent.messages.map(m => hasMarker(m.content)).lastIndexOf(true);
-  return { request: sent, anchor, toolNames, windowStart };
+  return { request: sent, anchor, toolNames, windowStart, excluded: meta.excludedOlderQuestCount ?? 0 };
 }
 
 /** The request's prefix up to and including a message index, as the cache would hash it. */
 const prefixThrough = (request: Request, messageIndex: number) =>
   canonical(normalizeContent(request), messageIndex + 1);
 
-async function runSession(): Promise<Turn[]> {
+async function runSession(verbatimTokenBudget?: number): Promise<Turn[]> {
   const state: SessionState = { persistedTools: [] };
   const turns: Turn[] = [];
-  for (let prior = FIRST_TURN; prior <= LAST_TURN; prior++) turns.push(await runTurn(prior, state));
+  for (let prior = FIRST_TURN; prior <= LAST_TURN; prior++)
+    turns.push(await runTurn(prior, state, verbatimTokenBudget));
   return turns;
+}
+
+/** Turns at which the next request failed to reuse the previous one's prefix, keyed to the turn that breaks it. */
+function turnsThatBustThePrefix(turns: Turn[]): number[] {
+  const busted: number[] = [];
+  for (let i = 0; i + 1 < turns.length; i++) {
+    const [current, next] = [turns[i], turns[i + 1]];
+    const reused = prefixThrough(next.request, current.anchor) === prefixThrough(current.request, current.anchor);
+    const windowStepped = next.windowStart !== current.windowStart;
+    const toolsGrew = next.toolNames.length > current.toolNames.length;
+    if (windowStepped || toolsGrew) {
+      // Control: the exceptions really do change the prefix, so the identity checks below are not vacuous.
+      expect(reused, `turn ${FIRST_TURN + i + 1} should not reuse the prefix`).toBe(false);
+      busted.push(FIRST_TURN + i + 1);
+    } else {
+      expect(reused, `turn ${FIRST_TURN + i + 1} should reuse the prefix`).toBe(true);
+    }
+  }
+  return busted;
 }
 
 describe('prompt-cache prefix stability across turns of a long session', () => {
@@ -218,23 +241,28 @@ describe('prompt-cache prefix stability across turns of a long session', () => {
   it("reuses turn N's prefix, up to its history breakpoint, in turn N+1 - except where the window steps or a tool first appears", async () => {
     const turns = await runSession();
 
-    const busted: number[] = [];
-    for (let i = 0; i + 1 < turns.length; i++) {
-      const [current, next] = [turns[i], turns[i + 1]];
-      const reused = prefixThrough(next.request, current.anchor) === prefixThrough(current.request, current.anchor);
-      const windowStepped = next.windowStart !== current.windowStart;
-      const toolsGrew = next.toolNames.length > current.toolNames.length;
-      if (windowStepped || toolsGrew) {
-        // Control: the exceptions really do change the prefix, so the identity checks below are not vacuous.
-        expect(reused, `turn ${FIRST_TURN + i + 1} should not reuse the prefix`).toBe(false);
-        busted.push(FIRST_TURN + i + 1);
-      } else {
-        expect(reused, `turn ${FIRST_TURN + i + 1} should reuse the prefix`).toBe(true);
-      }
-    }
-
     // The two window steps (T = 61 and 71) and the turn the blog tool first appears.
-    expect(busted).toEqual([61, TOOL_TURN, 71]);
+    expect(turnsThatBustThePrefix(turns)).toEqual([61, TOOL_TURN, 71]);
+  });
+
+  // Production passes a verbatim token budget on every turn, sized from that turn's message and tool
+  // list - so once the budget binds, it, not the quest count, picks the window start, and a trim that
+  // did not round would slide it every turn. The long sessions the window exists for are exactly the
+  // ones where it binds.
+  describe('with a token budget that binds', () => {
+    const BUDGET = 300;
+
+    it('starts every window on the same step grid as the count window, and busts the prefix only there', async () => {
+      const turns = await runSession(BUDGET);
+
+      // Guard: the budget really binds, so some of these starts come from the trim, not the count window.
+      expect(turns.filter(turn => turn.excluded > 0).length).toBeGreaterThan(0);
+      for (const turn of turns) expect((turn.windowStart - 1) % HISTORY_WINDOW_STEP).toBe(0);
+
+      // Only the window step and the turn the blog tool first appears - a budget that moved the start
+      // on its own would show up here as a bust on almost every turn.
+      expect(turnsThatBustThePrefix(turns)).toEqual([TOOL_TURN, 74]);
+    });
   });
 
   it('keeps the blog tool on every turn after the one that triggered it', async () => {
