@@ -27,11 +27,11 @@ Each member can spend up to **10,000 credits per month** in this example. Member
 
 The sample member has a **5,000-credit individual limit**, overriding the **10,000-credit Team default**. A pending invite has no usage yet and holds a seat until accepted or cancelled. If the app shows **Not tracked**, there is no usage record for that member; it does not mean zero usage.
 
-The owner, appointed Team admins and platform admins can use **Set limit** or **Change limit** on the default card, or **Set monthly limit** in a member's menu. With no effective limit, a member can spend from the shared pool without a monthly cap. The shared pool still needs enough credits to pay for usage.
+The owner, Team managers and platform admins can use **Set limit** or **Change limit** on the default card, or **Set monthly limit** in a member's menu. With no effective limit, a member can spend from the shared pool without a monthly cap. The shared pool still needs enough credits to pay for usage.
 
 ## Usage by member
 
-The Team owner can open **Usage > Usage** to review credits over time and breakdowns including **By member** and **By model**. Platform admins also have access. A Team manager or appointed Team admin does not gain Usage access from that role alone.
+The Team owner can open **Usage > Usage** to review credits over time and breakdowns including **By member** and **By model**. Platform admins also have access. Being a Team manager does not grant Usage access.
 
 For an example reporting window, the **By member** breakdown contains:
 
@@ -48,14 +48,14 @@ The **Ledger** subtab shows credit transactions, and **Storage** shows the Team 
 
 | Control | Access |
 | --- | --- |
-| Invite members or cancel pending invites | Team owner, appointed Team admins with membership access, and platform admins |
-| Set default or individual monthly limits | Team owner, appointed Team admins and platform admins |
-| Remove ordinary members | Team owner, appointed Team admins, Team manager and platform admins |
-| Remove an appointed Team admin or Team manager | Team owner and platform admins |
+| Invite members or cancel pending invites | Team owner, Team managers and platform admins |
+| Set default or individual monthly limits | Team owner, Team managers and platform admins |
+| Remove members other than Team managers | Team owner, Team managers and platform admins |
+| Remove a Team manager | Team owner and platform admins |
 | View the Usage tab | Team owner and platform admins |
 | Billing tab, seat changes and Billing Portal | Team owner |
 
-An appointed Team admin is distinct from a Bike4Mind platform admin. The role label on a member does not by itself determine roster-management access. See [Teams](./organizations-teams.md) for the full membership and billing workflow.
+A Team manager is not a Bike4Mind platform admin. The **Admin** role label on a member does not make them a Team manager. See [Teams](./organizations-teams.md) for the full membership and billing workflow.
 
 ## Audit and security scope
 

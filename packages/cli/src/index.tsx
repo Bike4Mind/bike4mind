@@ -45,7 +45,7 @@ import { ImageStore } from './storage/ImageStore.js';
 import { CustomCommandStore } from './storage/CustomCommandStore.js';
 import { RemoteSkillSource } from './storage/RemoteSkillSource.js';
 import { ReActAgent, createToolSearchTool } from '@bike4mind/agents';
-import { ToolCatalog } from './tools/gateway/index.js';
+import { ToolCatalog, type PermissionPromptKind } from './tools/gateway/index.js';
 import { buildSystemPrompt } from './core/prompts';
 import { getPlanModeFilePath } from './utils/planMode.js';
 import {
@@ -212,6 +212,7 @@ interface PermissionPromptState {
   args: unknown;
   preview?: string;
   canBeTrusted: boolean;
+  kind?: PermissionPromptKind;
   resolve: (response: { action: PermissionResponse }) => void;
 }
 
@@ -783,14 +784,14 @@ function CliApp() {
 
       // Create permission prompt function (queue-based for concurrent agent support)
       let permissionPromptCounter = 0;
-      const promptFn = (toolName: string, args: unknown, preview?: string) => {
+      const promptFn = (toolName: string, args: unknown, preview?: string, kind?: PermissionPromptKind) => {
         return new Promise<{ action: PermissionResponse }>(resolve => {
           // Process-hook (host action_required signal): an interactive permission
           // prompt is now blocking - fire Notification/permission_prompt (writes sentinel).
           void getProcessHooks()?.fireNotificationPermissionPrompt(toolName);
           const canBeTrusted = permissionManager.canBeTrusted(toolName);
           const id = `perm-${++permissionPromptCounter}`;
-          const prompt = { id, toolName, args, preview, canBeTrusted, resolve };
+          const prompt = { id, toolName, args, preview, canBeTrusted, kind, resolve };
           setState(prev => ({
             ...prev,
             permissionManager,

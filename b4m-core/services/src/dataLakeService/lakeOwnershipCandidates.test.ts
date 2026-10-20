@@ -24,7 +24,6 @@ const ownerGrant = (principalId: string): IDataLakeAccessGrantDocument =>
 const org = (
   over: {
     userId?: string;
-    managerId?: string;
     adminUserIds?: string[];
     users?: { userId: string }[];
   } = {}
@@ -91,17 +90,13 @@ describe('listOrgOwnershipCandidateIds', () => {
 });
 
 describe('isOrgAdminOf - the arm-for-arm mirror of administeredOrgIds', () => {
-  it('admits the billing owner, the team manager and an appointed admin; nobody else', () => {
-    // The accept-time owner-rung re-check leans on this predicate, and the `managerId` arm is the one
-    // `isOrgOwnershipCandidate` lacks - so all three arms are pinned here rather than inferred.
+  it('admits the billing owner and an appointed admin; nobody else', () => {
     const o = org({
       userId: 'billingOwner',
-      managerId: 'manager',
       adminUserIds: ['appointed'],
       users: [{ userId: 'member' }],
     });
     expect(isOrgAdminOf(o, 'billingOwner')).toBe(true);
-    expect(isOrgAdminOf(o, 'manager')).toBe(true);
     expect(isOrgAdminOf(o, 'appointed')).toBe(true);
     expect(isOrgAdminOf(o, 'member')).toBe(false);
     expect(isOrgAdminOf(o, '')).toBe(false);

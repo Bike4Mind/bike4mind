@@ -1,4 +1,5 @@
-import { ModelName, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
+import { ModelName } from '@bike4mind/common';
+import { isAwaitingEmailVerification } from './onboarding';
 
 interface ValidateChatInputParams {
   inputText: string;
@@ -48,9 +49,7 @@ export function validateChatInput({
   } else if (effectiveCredits <= 0 && enforceCredits) {
     // An open-signup user whose free credits are deferred until email verification gets a clear
     // "unlock" prompt instead of a dead-end "Out of Credits!" - they've never had credits to spend.
-    const awaitingVerification =
-      currentUser.emailVerified === false && (currentUser.tags ?? []).includes(PENDING_FREE_CREDITS_TAG);
-    return awaitingVerification
+    return isAwaitingEmailVerification(currentUser)
       ? 'Verify your email to unlock your free credits — check your inbox for the verification link.'
       : 'Out of Credits!';
   }

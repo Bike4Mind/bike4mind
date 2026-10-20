@@ -1,5 +1,6 @@
 import type { ToolCatalog } from '../tools/gateway/toolCatalog.js';
 import type { ToolCategory } from '../tools/gateway/toolDescriptor.js';
+import { sandboxedCommandArg } from '../tools/gateway/toolPolicy.js';
 import type { SandboxMode } from '../sandbox/types.js';
 
 /**
@@ -21,6 +22,7 @@ export class PermissionManager {
   private deniedTools: Set<string> = new Set();
   private _sandboxMode: SandboxMode = 'disabled';
   private _sandboxActive = false;
+  private sandboxEscalationApprovals: Set<string> = new Set();
 
   constructor(
     readonly catalog: ToolCatalog,
@@ -55,7 +57,7 @@ export class PermissionManager {
    *
    * @param toolName - The tool being checked
    * @param options.isSandboxed - If true, the command will run inside the OS-level sandbox.
-   *   In auto-allow mode, sandboxed bash_execute commands skip the permission prompt
+   *   In auto-allow mode, sandboxed commands (a core tool whose descriptor declares `sandbox`) skip the permission prompt
    *   because the sandbox provides the security boundary.
    */
   needsPermission(toolName: string, options?: { isSandboxed?: boolean }): boolean {
@@ -71,10 +73,14 @@ export class PermissionManager {
       return false;
     }
 
-    // Sandbox auto-allow: sandboxed bash_execute commands skip permission
+    // Sandbox auto-allow: sandboxed commands skip permission
     // The OS-level sandbox provides the security boundary instead of user prompts
     // Must run before session trust check so sandbox enforcement is never bypassed
-    if (options?.isSandboxed && toolName === 'bash_execute' && this.isSandboxAutoAllow()) {
+    if (
+      options?.isSandboxed &&
+      sandboxedCommandArg(this.catalog.resolve(toolName)) !== undefined &&
+      this.isSandboxAutoAllow()
+    ) {
       return false;
     }
 
@@ -184,11 +190,21 @@ export class PermissionManager {
     return this.sessionTrustedTools.has(toolName);
   }
 
+  /** Remember a session-scoped approval to run one command outside the sandbox. Never persisted. */
+  approveSandboxEscalation(key: string): void {
+    this.sandboxEscalationApprovals.add(key);
+  }
+
+  isSandboxEscalationApproved(key: string): boolean {
+    return this.sandboxEscalationApprovals.has(key);
+  }
+
   /**
    * Clear all session-scoped trust (called on exit or session reset)
    */
   clearSessionTrust(): void {
     this.sessionTrustedTools.clear();
+    this.sandboxEscalationApprovals.clear();
   }
 
   /**

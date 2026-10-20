@@ -72,6 +72,8 @@ import handler from '../[id]';
 const PROMPT = 'Always begin your reply with the token LAKEPROMPT-OK.';
 const publishedLake = {
   id: 'lake1',
+  _id: 'oid-lake1',
+  __v: 2,
   slug: 'lake1',
   name: 'Published Lake',
   fileTagPrefix: 'lk:',
@@ -119,6 +121,9 @@ describe('GET /api/data-lakes/[id] - editor-only redaction is wired into the han
     await run(get(), res);
 
     expect(json.mock.calls[0][0].systemPrompt).toBe(PROMPT);
+    // The raw document also carries Mongo's own keys; the boundary must drop them.
+    expect('_id' in json.mock.calls[0][0]).toBe(false);
+    expect('__v' in json.mock.calls[0][0]).toBe(false);
   });
 
   it('returns systemPrompt to an admin who does not own the lake', async () => {
@@ -145,6 +150,8 @@ describe('GET /api/data-lakes/[id] - live stats for a registry lake', () => {
   // A real registry id, so the handler's own isFallbackLake (not a stub) selects the branch.
   const registryLake = {
     ...DATA_LAKES[0],
+    _id: 'oid-registry',
+    __v: 0,
     createdByUserId: '',
     status: 'active',
   };
@@ -153,7 +160,9 @@ describe('GET /api/data-lakes/[id] - live stats for a registry lake', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.assertLakeAccess.mockResolvedValue(registryLake);
-    h.toAccessContext.mockResolvedValue({ userId: 'reader', isAdmin: false, userTags: [] });
+    // An EDITOR actor, so redactLakeForActor hands back the raw lake and the `_id` assertions below
+    // actually exercise the response boundary rather than the reader projection.
+    h.toAccessContext.mockResolvedValue({ userId: 'admin-reader', isAdmin: true, userTags: [] });
   });
 
   it('merges live fileCount/totalSizeBytes onto a registry lake', async () => {
@@ -165,6 +174,7 @@ describe('GET /api/data-lakes/[id] - live stats for a registry lake', () => {
     const body = json.mock.calls[0][0];
     expect(body.fileCount).toBe(86);
     expect(body.totalSizeBytes).toBe(4096);
+    expect('_id' in body).toBe(false);
     // Scoped through the registry arm - an owned scope here would drop the prefix and report 0.
     expect(h.computeDataLakeStats).toHaveBeenCalledWith({
       kind: 'registry',

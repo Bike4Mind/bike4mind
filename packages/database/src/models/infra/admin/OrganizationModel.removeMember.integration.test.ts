@@ -24,14 +24,13 @@ const member = (userId: string) => ({ userId, permissions: [Permission.read] });
 const details = (id: string) => ({ id, email: `${id}@example.com`, name: id, usedCredits: 0 });
 
 describe('OrganizationModel.removeMember', () => {
-  it('drops the member from every list, vacates managerId and leaves other members alone', async () => {
+  it('drops the member from every list and leaves other members alone', async () => {
     const created = await Organization.create({
       name: 'Org',
       userId: 'owner',
       users: [member('leaver'), member('stayer')],
       userDetails: [details('leaver'), details('stayer')],
       adminUserIds: ['leaver', 'stayer'],
-      managerId: 'leaver',
     });
 
     await organizationRepository.removeMember(created.id, 'leaver');
@@ -40,20 +39,6 @@ describe('OrganizationModel.removeMember', () => {
     expect(after!.users.map(u => u.userId)).toEqual(['stayer']);
     expect(after!.userDetails!.map(d => d.id)).toEqual(['stayer']);
     expect(after!.adminUserIds).toEqual(['stayer']);
-    expect(after!.managerId).toBeNull();
-  });
-
-  it('keeps a managerId held by someone else', async () => {
-    const created = await Organization.create({
-      name: 'Org',
-      userId: 'owner',
-      users: [member('leaver')],
-      managerId: 'stayer',
-    });
-
-    await organizationRepository.removeMember(created.id, 'leaver');
-
-    expect((await Organization.findById(created.id).lean())!.managerId).toBe('stayer');
   });
 
   it('succeeds on an org whose lists are stored as null', async () => {

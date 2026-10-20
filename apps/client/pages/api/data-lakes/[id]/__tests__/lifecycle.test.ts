@@ -376,6 +376,29 @@ describe('POST /api/data-lakes/[id]/lifecycle - retrievalIndex wiring (archive/d
     );
   });
 
+  it.each([
+    ['archive', 'archiveDataLake', { id: 'lake1', status: 'archived' }],
+    ['unarchive', 'unarchiveDataLake', { restoredCount: 2, skippedDuplicates: 1 }],
+    ['restore', 'restoreDeletedDataLake', { restoredCount: 3, skippedDuplicates: 0 }],
+    ['delete', 'deleteDataLake', { id: 'lake1', status: 'deleted' }],
+    ['promote', 'promoteDataLake', { id: 'lake1', status: 'active' }],
+    ['demote', 'demoteDataLake', { id: 'lake1', status: 'draft' }],
+  ])(
+    '%s returns its result through the response schema, stripping undeclared keys',
+    async (action, serviceName, body) => {
+      h[serviceName as 'archiveDataLake'].mockResolvedValue({
+        ...body,
+        _id: 'raw-object-id',
+        __v: 1,
+        notInSchema: 'x',
+      });
+      const { res, json } = makeRes();
+      await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action }), res);
+
+      expect(json).toHaveBeenCalledWith(body);
+    }
+  );
+
   it('archive passes retrievalIndex: undefined when self-host OpenSearch is off', async () => {
     h.selfHostOpenSearchEnabled.mockReturnValue(false);
     const { res } = makeRes();

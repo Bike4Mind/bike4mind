@@ -19,10 +19,6 @@ describe('orgManagerNames', () => {
     expect(orgManagerNames({ ...base, adminUserIds: ['m1', 'gone'] })).toEqual(['Manager One']);
   });
 
-  it('lists the legacy managerId even without a users[] row, by id when it has no details', () => {
-    expect(orgManagerNames({ ...base, adminUserIds: [], managerId: 'legacy' })).toEqual(['legacy']);
-  });
-
   it('never lists the owner or ordinary members', () => {
     expect(orgManagerNames({ ...base, adminUserIds: ['owner'] })).toEqual([]);
   });

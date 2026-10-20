@@ -25,16 +25,25 @@ export async function logAuthAudit(
     metadata?: Record<string, unknown>;
   }
 ): Promise<void> {
+  const actorIp = getClientIp(req) || 'unknown';
+  const userAgent = (req.headers['user-agent'] as string) || 'unknown';
+  const metadata =
+    params.event === 'session_reuse_revoked' ? withIssuedIpComparison(params.metadata, actorIp) : params.metadata;
+  if (params.event === 'session_reuse_revoked') {
+    // One self-contained line, so the alarm can be triaged from the Lambda log without a database
+    // lookup. The audit row below carries the same fields.
+    console.warn('[auth] session_reuse_revoked', { userId: params.userId, actorIp, userAgent, ...metadata });
+  }
   try {
     await userAuthAuditLogRepository.createLog({
       userId: params.userId,
       event: params.event,
       strategy: params.strategy,
       actorUserId: params.actorUserId,
-      actorIp: getClientIp(req) || 'unknown',
-      userAgent: (req.headers['user-agent'] as string) || 'unknown',
+      actorIp,
+      userAgent,
       requestId: req.requestId,
-      metadata: params.metadata,
+      metadata,
     });
   } catch (err) {
     console.debug(`Failed to write UserAuthAuditLog (${params.event}):`, err);
@@ -42,4 +51,19 @@ export async function logAuthAudit(
   // Fire-and-forget: metric emission must never block or fail the auth hot path.
   if (params.event === 'session_reuse_revoked') void recordSessionReuseRevoked();
   else if (params.event === 'session_recovered') void recordSessionRecovered();
+}
+
+/**
+ * Adds whether the reusing request came from the IP the session was issued to (`issuedIp`, set by
+ * rotateSession). A match is the usual benign shape: a second client on the same network holding a
+ * stale cookie. A mismatch is not proof of theft either - a session lives for weeks and IPs change -
+ * but it is where triage should start.
+ */
+function withIssuedIpComparison(
+  metadata: Record<string, unknown> | undefined,
+  actorIp: string
+): Record<string, unknown> | undefined {
+  const issuedIp = metadata?.issuedIp;
+  if (typeof issuedIp !== 'string' || actorIp === 'unknown') return metadata;
+  return { ...metadata, requestIpMatchesIssuedIp: issuedIp === actorIp };
 }
