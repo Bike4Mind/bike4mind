@@ -274,6 +274,7 @@ describe('startAgentExecution', () => {
 
       expect(result).toMatchObject({ ok: true });
       expect(mockCreateExecution.mock.calls[0][0].organizationId).toBe(KEY_ORG);
+      expect(dispatchedPayload()).toMatchObject({ organizationId: KEY_ORG });
     });
 
     it('refuses another org with billing_organization_mismatch and creates nothing', async () => {
@@ -285,6 +286,16 @@ describe('startAgentExecution', () => {
       expect(result).toMatchObject({ ok: false, reason: 'billing_organization_mismatch' });
       expect(mockCreateExecution).not.toHaveBeenCalled();
       expect(mockSend).not.toHaveBeenCalled();
+    });
+
+    it('refuses an empty organization_id with billing_organization_mismatch', async () => {
+      const result = await startAgentExecution(
+        input({ userId: 'holder', apiKeyInfo: orgKey, organizationId: '' }),
+        logger
+      );
+
+      expect(result).toMatchObject({ ok: false, reason: 'billing_organization_mismatch' });
+      expect(mockCreateExecution).not.toHaveBeenCalled();
     });
 
     it('refuses with billing_key_stale when the holder has left the org', async () => {
@@ -310,6 +321,7 @@ describe('startAgentExecution', () => {
 
       expect(result).toMatchObject({ ok: true });
       expect(mockCreateExecution.mock.calls[0][0].organizationId).toBe(KEY_ORG);
+      expect(dispatchedPayload()).toMatchObject({ organizationId: KEY_ORG });
     });
 
     it('leaves a user-billed key on the named-org membership rules', async () => {
@@ -327,6 +339,17 @@ describe('startAgentExecution', () => {
 
     it('bills a session caller with no organization personally', async () => {
       const result = await startAgentExecution(input({ userId: 'session-caller', apiKeyInfo: undefined }), logger);
+
+      expect(result).toMatchObject({ ok: true });
+      expect(mockCreateExecution.mock.calls[0][0].organizationId).toBeUndefined();
+      expect(mockOrgFindById).not.toHaveBeenCalled();
+    });
+
+    it('treats an empty organization_id from a session caller as personal', async () => {
+      const result = await startAgentExecution(
+        input({ userId: 'session-caller', apiKeyInfo: undefined, organizationId: '' }),
+        logger
+      );
 
       expect(result).toMatchObject({ ok: true });
       expect(mockCreateExecution.mock.calls[0][0].organizationId).toBeUndefined();

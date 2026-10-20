@@ -96,4 +96,18 @@ describe('describeMusicGenerationError billing context', () => {
   it('lets a rate limit win over the billing message', () => {
     expect(describeMusicGenerationError(axiosError(429, {}), FALLBACK, org)).toBe(GENERATION_RATE_LIMITED_MESSAGE);
   });
+
+  it('reports full storage rather than the account message when an organization account is billed', () => {
+    const storage = {
+      errorCode: 'storage_limit_exceeded',
+      used_bytes: 10,
+      limit_bytes: 10,
+      requested_bytes: 1,
+      owner: 'user',
+    };
+
+    expect(describeMusicGenerationError(axiosError(403, storage), FALLBACK, org)).toBe(
+      'Your file storage is full. Free up space in Files, then try again.'
+    );
+  });
 });

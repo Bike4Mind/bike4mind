@@ -479,6 +479,7 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
     it.each([
       ['another org', FOREIGN_ORG],
       ['personal credits (null)', null],
+      ['an empty organization id', ''],
     ])('refuses a body naming %s with a 403 billing_organization_mismatch', async (_label, organizationId) => {
       const { req, res } = fire({ body: { organizationId } });
       await handler(req, res);
@@ -490,6 +491,15 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
 
     it('refuses with a 400 when the key holder has left the org', async () => {
       mockOrgFindById.mockResolvedValue({ id: KEY_ORG, userId: 'owner', users: [] });
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(400);
+      expect(mockInvoke).not.toHaveBeenCalled();
+      expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+    });
+
+    it('refuses with a 400 when the key organization no longer exists', async () => {
+      mockOrgFindById.mockResolvedValue(null);
       const { req, res } = fire();
       await handler(req, res);
       expect(res._getStatusCode()).toBe(400);

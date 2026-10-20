@@ -182,6 +182,7 @@ describe('useCancelMusicGeneration', () => {
   beforeEach(() => {
     h.post.mockReset();
     h.toastError.mockReset();
+    h.selectedAccount = null;
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   });
 
