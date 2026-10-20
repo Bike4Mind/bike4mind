@@ -15,11 +15,18 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const ALARMS_SOURCE = readFileSync(path.join(REPO_ROOT, 'infra/alarms.ts'), 'utf8');
 const EMITTER_SOURCE = readFileSync(path.join(REPO_ROOT, 'apps/workers/src/cron/voiceHoldSweep.ts'), 'utf8');
 
-/** Each alarm's SST id and the VOICE_METRICS key it must watch. */
+/** Each alarm's SST id, the VOICE_METRICS key it must watch, and its M-of-N rule. */
 const ALARMS = [
-  { id: 'voiceStaleHoldsSettled', metric: 'HoldSweepSettled' },
-  { id: 'voiceHoldSweepFailures', metric: 'HoldSweepFailed' },
+  { id: 'voiceStaleHoldsSettled', metric: 'HoldSweepSettled', evaluationPeriods: 1, datapointsToAlarm: undefined },
+  { id: 'voiceHoldSweepFailures', metric: 'HoldSweepFailed', evaluationPeriods: 3, datapointsToAlarm: 2 },
 ] as const;
+
+function expectAnyNonZeroSumMissingIsOk(alarm: string | undefined) {
+  expect(alarm).toMatch(/comparisonOperator: 'GreaterThanThreshold'/);
+  expect(alarm).toMatch(/statistic: 'Sum'/);
+  expect(alarm).toMatch(/threshold: 0,/);
+  expect(alarm).toMatch(/treatMissingData: 'notBreaching'/);
+}
 
 function alarmBlock(id: string): string | undefined {
   return ALARMS_SOURCE.match(
@@ -37,7 +44,7 @@ describe('stale voice hold sweep alarms', () => {
     }
   });
 
-  for (const { id, metric } of ALARMS) {
+  for (const { id, metric, evaluationPeriods, datapointsToAlarm } of ALARMS) {
     describe(id, () => {
       const alarm = alarmBlock(id);
 
@@ -55,6 +62,16 @@ describe('stale voice hold sweep alarms', () => {
       it('pages the DLQ alarm topic', () => {
         expect(alarm).toMatch(/alarmActions: \[dlqAlarmTopic\.arn\]/);
       });
+
+      it('alarms on any non-zero sum, stays OK when no run reports, and keeps its M-of-N rule', () => {
+        expectAnyNonZeroSumMissingIsOk(alarm);
+        expect(alarm).toMatch(new RegExp(`evaluationPeriods: ${evaluationPeriods},`));
+        if (datapointsToAlarm === undefined) {
+          expect(alarm).not.toMatch(/datapointsToAlarm/);
+        } else {
+          expect(alarm).toMatch(new RegExp(`datapointsToAlarm: ${datapointsToAlarm},`));
+        }
+      });
     });
   }
 
@@ -70,6 +87,12 @@ describe('stale voice hold sweep alarms', () => {
       expect(alarm).toMatch(/metricName: 'Errors'/);
       expect(alarm).toMatch(/FunctionName: voiceHoldSweepCron\.nodes\.function\.name/);
       expect(alarm).toMatch(/alarmActions: \[dlqAlarmTopic\.arn\]/);
+    });
+
+    it('alarms on errors in 2 of 3 runs and stays OK when the function is idle', () => {
+      expectAnyNonZeroSumMissingIsOk(alarm);
+      expect(alarm).toMatch(/evaluationPeriods: 3,/);
+      expect(alarm).toMatch(/datapointsToAlarm: 2,/);
     });
   });
 });
