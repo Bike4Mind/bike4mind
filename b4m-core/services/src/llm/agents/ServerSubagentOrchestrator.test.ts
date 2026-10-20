@@ -316,6 +316,43 @@ describe('ServerSubagentOrchestrator', () => {
       expect(tracker.onFailure).not.toHaveBeenCalled();
     }, 30_000);
 
+    it.each([0, undefined])(
+      'reports totalCredits as undefined when the dispatched child persisted %s',
+      async persistedCredits => {
+        const tracker = makeTracker({
+          onStart: vi.fn().mockResolvedValue('child-zero-id'),
+          pollChildStatus: vi.fn().mockResolvedValue({
+            status: 'completed',
+            result: { answer: 'Done', iterations: 1, totalCredits: persistedCredits },
+          } satisfies ChildExecutionStatus),
+        });
+
+        const orchestrator = new ServerSubagentOrchestrator({
+          userId: 'u1',
+          llm: makeLlm(),
+          logger: makeLogger(),
+          parentTools: [],
+          tracker,
+          getRemainingTimeMs: () => 2 * 60 * 1000,
+        });
+
+        const result = await runWithFakeTimers(
+          orchestrator.delegateToAgent({
+            task: 't',
+            agentDef: makeAgentDef(),
+            thoroughness: 'medium',
+          }),
+          { advanceByMs: POLL_TICK_MS }
+        );
+
+        expect(result.finalAnswer).toBe('Done');
+        // A persisted 0 is indistinguishable from "not reported", so it must not reach
+        // delegateToAgent's onCredits gate (which would write an all-zero usage event).
+        expect(result.completionInfo.totalCredits).toBeUndefined();
+      },
+      30_000
+    );
+
     it('sets handoffSignal and returns placeholder when parent deadline is reached', async () => {
       // Parent has 60s remaining; thoroughness budget is 3min. Will dispatch.
       // After dispatch, polling will see status=running while parent's remaining

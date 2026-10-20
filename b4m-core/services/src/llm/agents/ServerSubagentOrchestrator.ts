@@ -1061,7 +1061,13 @@ export class ServerSubagentOrchestrator {
         totalOutputTokens: 0,
         iterations: result?.iterations ?? 0,
         toolCalls: 0,
-        totalCredits: result?.totalCredits,
+        // The dispatched child persists a coerced 0 when it reports nothing, so 0 here is
+        // indistinguishable from "not reported". Forward only a positive value to keep
+        // zero-credit usage events out of analytics.
+        totalCredits:
+          typeof result?.totalCredits === 'number' && Number.isFinite(result.totalCredits) && result.totalCredits > 0
+            ? result.totalCredits
+            : undefined,
         reachedMaxIterations: false,
       },
     };
