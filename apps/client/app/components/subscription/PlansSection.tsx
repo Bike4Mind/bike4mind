@@ -22,7 +22,7 @@ import PlanCard from './PlanCard';
 import { isPopularPlan } from './isPopularPlan';
 import { useTeamCreditsPerSeat, useTeamSeatLimits } from '@client/app/hooks/data/teamPlanSettings';
 import { visuallyHidden } from '@client/app/utils/a11yStyles';
-import { useAnswerCostReference } from '@client/app/hooks/useAnswerCostReference';
+import { useSelectedModelAnswerCost } from '@client/app/hooks/useSelectedModelAnswerCost';
 import { formatAnswersEstimate } from '@client/app/utils/creditEstimate';
 
 // Bullets, credits and copy come from the shared plan table so this section and the server-side plan
@@ -96,7 +96,7 @@ export const PlansSection = () => {
   // Multiplied in integer cents, then converted once, so a whole-dollar total stays an integer ("$70").
   const teamPlanMinimumPrice = teamSeatPrice === undefined ? undefined : (teamSeatPrice * teamMinSeats) / 100;
   const teamPlanCredits = teamMinSeats * teamCreditsPerSeat;
-  const answerCostReference = useAnswerCostReference();
+  const answerCost = useSelectedModelAnswerCost();
 
   const subscriptionPlans: SubscriptionPlanDetail[] = useMemo(
     () => [
@@ -221,7 +221,7 @@ export const PlansSection = () => {
                 key={plan.priceId}
                 name={plan.name}
                 credits={plan.credits}
-                answersEstimate={formatAnswersEstimate(plan.credits, answerCostReference)}
+                answersEstimate={formatAnswersEstimate(plan.credits, answerCost)}
                 description={plan.description}
                 price={centsToDollars(priceMap?.[plan.priceId])}
                 interval={plan.interval}
@@ -254,7 +254,7 @@ export const PlansSection = () => {
           description="Collaborative AI workspace with shared resources and advanced project management."
           price={teamPlanMinimumPrice}
           credits={teamPlanCredits}
-          answersEstimate={formatAnswersEstimate(teamPlanCredits, answerCostReference)}
+          answersEstimate={formatAnswersEstimate(teamPlanCredits, answerCost)}
           interval="month"
           isFeatured
           features={[
