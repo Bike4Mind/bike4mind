@@ -108,7 +108,7 @@ export async function performDeepResearch(
 }> {
   // Clamped here as well as at the request schemas: the config also arrives from stored research tasks.
   const maxDepth = Math.min(Math.max(Math.floor(config.maxDepth || 7), 1), DEEP_RESEARCH_MAX_DEPTH);
-  const duration = Math.min(Math.max(config.duration || 4.5, 1), DEEP_RESEARCH_MAX_DURATION_MIN);
+  const duration = Math.min(config.duration || 4.5, DEEP_RESEARCH_MAX_DURATION_MIN);
   const startTime = Date.now();
   const timeLimit = duration * 60 * 1000; // Convert minutes to milliseconds
   let topic = params.topic;
