@@ -76,9 +76,11 @@ export class ChatPage extends BasePage {
       // `.nth(countBeforeSend)` waits forever on an index that can never mount. Anchor on
       // `.last()` (as waitForImageResponse does, for a different reason) and use the newest
       // reply's pre-send text as the baseline that proves what we read back is new.
-      const previousResponse = await this.newestResponseText();
-
       await this.typeAndWaitForSendReady(text);
+      // Captured after typing, immediately before Enter: from here until the stop button shows,
+      // the text-only completion path is live, so a prior reply that gains chrome while the turn
+      // is still being prepared must already be in the baseline.
+      const previousResponse = await this.newestResponseText();
       await this.page.keyboard.press('Enter');
 
       // Waits for the first container to mount in a fresh chat; in a resumed chat the prior
@@ -212,9 +214,10 @@ export class ChatPage extends BasePage {
     // Baseline the newest reply before sending: when the stop button flashes by unseen,
     // waitForStreamingComplete accepts any reply that differs from this, so without it
     // a prior chat's leftover reply (navigateToNewChat does not await DOM clearing) could be
-    // mistaken for this turn's response.
-    const previousResponse = await this.newestResponseText();
+    // mistaken for this turn's response. Taken after typing so text the previous reply gains
+    // during preparation is part of the baseline, not read as this turn's reply.
     await this.typeAndWaitForSendReady(text);
+    const previousResponse = await this.newestResponseText();
     await this.page.keyboard.press('Enter');
     await this.waitForStreamingComplete(timeout, previousResponse);
   }
