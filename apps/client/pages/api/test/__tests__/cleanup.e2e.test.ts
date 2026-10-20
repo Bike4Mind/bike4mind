@@ -183,6 +183,7 @@ describe('DELETE /api/test/cleanup (real DB)', () => {
     expect(await Favorite.collection.countDocuments({ userId: uid })).toBe(0);
     expect(await Artifact.collection.countDocuments({ userId: uid })).toBe(0);
     expect(await Skill.collection.countDocuments({ userId: uid })).toBe(0);
+    expect((body.cleaned as Record<string, number>).skills).toBe(1);
     expect(await mongoose.models.Activity.collection.countDocuments({ ownerType: 'User', ownerId: uid })).toBe(0);
   });
 
