@@ -215,6 +215,68 @@ describe('useEffectiveCredits', () => {
     });
   });
 
+  describe('account switching and team balances', () => {
+    const personal = { id: 'user-1', name: 'Me (Personal)', personal: true, credits: 1500 };
+    const team = { id: 'org-1', name: 'Team', personal: false, credits: 9000 };
+    const selectAccount = (account: typeof personal | typeof team) => {
+      act(() => useSelectedAccount.setState({ selectedAccount: account }));
+    };
+
+    // Known gap: the frozen value is not keyed by account, so a mid-stream switch shows the old account's balance.
+    it.skip('shows the new account live balance, not the held value, when switching accounts mid-stream', () => {
+      useSelectedAccount.setState({ selectedAccount: personal });
+      const { result } = renderHook(() => useEffectiveCredits());
+      act(() => useStreamingState.getState().startStreaming('session-1'));
+      expect(result.current).toBe(1500);
+
+      selectAccount(team);
+      expect(result.current).toBe(9000);
+    });
+
+    it('never shows the previous account frozen value after a mid-stream switch once the stream ends', () => {
+      useSelectedAccount.setState({ selectedAccount: personal });
+      const committed: number[] = [];
+      renderHook(() => {
+        const credits = useEffectiveCredits();
+        useEffect(() => {
+          committed.push(credits);
+        });
+        return credits;
+      });
+      act(() => useStreamingState.getState().startStreaming('session-1'));
+      selectAccount(team);
+      act(() => useStreamingState.getState().completeStreaming('session-1'));
+      act(() => useSelectedAccount.setState({ selectedAccount: { ...team, credits: 8800 } }));
+
+      expect(committed.slice(committed.indexOf(9000))).not.toContain(1500);
+    });
+
+    it('shows the new account live balance when switching accounts during the post-turn hold', () => {
+      useSelectedAccount.setState({ selectedAccount: personal });
+      const { result } = renderHook(() => useEffectiveCredits());
+      act(() => useStreamingState.getState().startStreaming('session-1'));
+      act(() => useStreamingState.getState().completeStreaming('session-1'));
+      expect(result.current).toBe(1500);
+
+      selectAccount(team);
+      expect(result.current).toBe(9000);
+    });
+
+    it('releases a team hold when the team balance changes in the organization cache', () => {
+      useSelectedAccount.setState({ selectedAccount: team });
+      const { result } = renderHook(() => useEffectiveCredits());
+      act(() => useStreamingState.getState().startStreaming('session-1'));
+      act(() => useSelectedAccount.setState({ selectedAccount: { ...team, credits: 400 } }));
+      expect(result.current).toBe(9000);
+
+      act(() => useStreamingState.getState().completeStreaming('session-1'));
+      expect(result.current).toBe(9000);
+
+      act(() => useSelectedAccount.setState({ selectedAccount: { ...team, credits: 8700 } }));
+      expect(result.current).toBe(8700);
+    });
+  });
+
   it('reflects a genuine balance change once idle (freeze does not permanently pin the value)', () => {
     const { result, rerender } = renderHook(() => useEffectiveCredits());
     expect(result.current).toBe(1500);

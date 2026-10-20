@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider, QueryObserver } from '@tanstack/react-query';
-import { act, render } from '@testing-library/react';
+import { act, render, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IUserDocument } from '@bike4mind/common';
 
@@ -13,7 +13,7 @@ import { api } from '@client/app/contexts/ApiContext';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useCreditSyncSignal } from '@client/app/hooks/useCreditSyncSignal';
-import { POST_STREAM_HOLD_MAX_MS } from '@client/app/hooks/useEffectiveCredits';
+import { POST_STREAM_HOLD_MAX_MS, useEffectiveCredits } from '@client/app/hooks/useEffectiveCredits';
 import { useStreamingState } from '@client/app/hooks/useStreamingState';
 import CreditBalanceSyncListener, { BALANCE_SYNC_DELAYS_MS } from './CreditBalanceSyncListener';
 
@@ -93,6 +93,41 @@ describe('CreditBalanceSyncListener', () => {
 
     expect(useUser.getState().currentUser?.currentCredits).toBe(10_000);
     expect(useCreditSyncSignal.getState().syncCount).toBe(before + 1);
+  });
+
+  it('holds the displayed balance until the last pull signals sync, then releases it', async () => {
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    renderListener();
+    const { result } = renderHook(() => useEffectiveCredits(), { wrapper });
+    expect(result.current).toBe(10_000);
+
+    act(() => {
+      useStreamingState.getState().startStreaming('session-a', 'q-1');
+    });
+    // Reservation dip lands mid-turn and the settled balance equals it, so only the sync can release.
+    act(() => {
+      useUser.getState().setCurrentUser({ id: 'u1', currentCredits: 227 } as IUserDocument);
+    });
+    h.balance = 227;
+    expect(result.current).toBe(10_000);
+    act(() => {
+      useStreamingState.getState().completeStreaming('session-a');
+    });
+    expect(result.current).toBe(10_000);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(BALANCE_SYNC_DELAYS_MS[0]);
+    });
+    expect(api.get).toHaveBeenCalledTimes(1);
+    expect(result.current).toBe(10_000);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(BALANCE_SYNC_DELAYS_MS[1] - BALANCE_SYNC_DELAYS_MS[0]);
+    });
+    expect(api.get).toHaveBeenCalledTimes(2);
+    expect(result.current).toBe(227);
   });
 
   it('keeps the display hold backstop longer than the last scheduled pull', () => {
