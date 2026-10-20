@@ -173,7 +173,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'notification:infra/queues.ts:fabFileBucket.uploadComplete',
-    'e86b2e48c667f617cc1722d157f8e456c57cf82ca7ce543b1dbbe02cacb537db'
+    '00c285e858f18b475acbfe6548243c3a0e40101c4724768c9d486e2671adc420'
   ),
   broker(
     'queue:infra/dlqAlarms.ts:DlqAlarmHandlerDlq',
