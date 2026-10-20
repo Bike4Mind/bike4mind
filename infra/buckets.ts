@@ -129,6 +129,21 @@ const fabFileBucketLifecycle = new aws.s3.BucketLifecycleConfigurationV2('fabFil
         noncurrentDays: 1,
       },
     },
+    {
+      // Without this, on a stage with ENABLE_BUCKET_VERSIONING every delete or overwrite under files/
+      // (file delete, version trim, sweep:orphaned-storage) keeps its bytes forever as a noncurrent
+      // version. 30 days is the rollback window for an overwritten or deleted object. A no-op on an
+      // unversioned bucket; the prefixed rules above still apply their shorter noncurrent expiry.
+      id: 'expire-noncurrent-versions',
+      status: 'Enabled',
+      filter: {},
+      noncurrentVersionExpiration: {
+        noncurrentDays: 30,
+      },
+      expiration: {
+        expiredObjectDeleteMarker: true,
+      },
+    },
   ],
 });
 

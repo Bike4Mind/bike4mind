@@ -1,7 +1,7 @@
 import { questMasterPlanRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { sendToQueue } from '@server/utils/sqs';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { isValidObjectId } from '@server/utils/objectId';

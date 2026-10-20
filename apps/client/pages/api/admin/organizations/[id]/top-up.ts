@@ -11,7 +11,7 @@ import { ApiKeyScope, CreditHolderType } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sendToClient } from '@server/websocket/utils';
-import { AdminOrgAuditEvents, logAuditEvent } from '@server/utils/auditLog';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { z } from 'zod';
 import { Resource } from 'sst';
 
@@ -76,20 +76,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
           }
         );
 
-        await logAuditEvent(
-          {
-            userId: organization.userId,
-            action: AdminOrgAuditEvents.ORG_TOPPED_UP,
-            adminUserId: req.user!.id,
-            adminUsername: req.user!.username,
-            reason,
-            metadata: {
-              organizationId: organization.id,
-              credits,
-            },
-          },
-          req.logger
-        );
+        await recordAdminActionFromRequest(req, {
+          action: 'org.credits.topped_up',
+          target: { kind: 'organization', id: organization.id, displayName: organization.name },
+          summary: `topped up ${credits} credits`,
+          reason,
+          details: { credits, ownerId: organization.userId },
+        });
       });
     } catch (err: unknown) {
       if (typeof err === 'object' && err !== null && 'code' in err && (err as { code: unknown }).code === 11000) {

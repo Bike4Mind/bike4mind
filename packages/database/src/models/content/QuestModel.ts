@@ -1176,6 +1176,20 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
   }
 
   /**
+   * `update`, but only while the stored quest is still unfinished; null when it already reached a
+   * terminal status. The streaming pipeline saves its in-memory 'running' copy mid-turn, and an
+   * `_id`-only write would put 'running' back over a user Stop before the cancellation watcher saw it.
+   */
+  async updateIfUnfinished(data: Partial<IChatHistoryItemDocument> & { id: string }) {
+    const { id, ...updateData } = data;
+    if (!id) throw new Error('id is required');
+    return this._plainUpdate(
+      { _id: convertId(id), status: { $nin: TERMINAL_QUEST_STATUSES } },
+      updateData as Record<string, unknown>
+    );
+  }
+
+  /**
    * Write a terminal patch to a quest only while it is still unfinished, and
    * report whether a document actually matched.
    *

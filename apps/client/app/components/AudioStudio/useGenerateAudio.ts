@@ -9,7 +9,9 @@ import {
   type TtsBase64Response,
 } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
+import { invalidateGenerationCreditBalances } from '@client/app/hooks/data/generationCreditBalances';
 import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
+import { switcherBillingTarget } from '@client/app/hooks/data/generationBillingTarget';
 import { getErrorMessage } from '@client/app/utils/error';
 import { toPlayableAudio } from '@client/app/utils/generatedAudio';
 import { useAudioGenSettings, type AudioGenMode } from '@client/app/stores/useAudioGenSettings';
@@ -153,6 +155,8 @@ export function useGenerateAudio(mode: AudioGenMode) {
                   format,
                   languageCode: ttsProvider === 'elevenlabs' && languageCode ? languageCode : undefined,
                   encoding: 'base64',
+                  // The account the switcher shows, read at submit: null is personal, an id is that team.
+                  ...switcherBillingTarget(),
                 },
               }
             : {
@@ -162,6 +166,7 @@ export function useGenerateAudio(mode: AudioGenMode) {
                   durationSeconds: durationSeconds ?? undefined,
                   promptInfluence,
                   encoding: 'base64',
+                  ...switcherBillingTarget(),
                 },
               };
 
@@ -222,10 +227,11 @@ export function useGenerateAudio(mode: AudioGenMode) {
           toast.error(parsed.message);
         }
       } finally {
+        void invalidateGenerationCreditBalances(queryClient);
         setIsGenerating(false);
       }
     },
-    [mode, notifySaveOutcome, releaseObjectUrl]
+    [mode, notifySaveOutcome, queryClient, releaseObjectUrl]
   );
 
   return { generate, isGenerating, result };

@@ -5,8 +5,8 @@ import { randomUUID } from 'crypto';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import { Logger } from '@bike4mind/observability';
 import { securityFindingRunRepository } from '@bike4mind/database';
-import { getCooldownStatus } from '@server/security/cooldown';
-import { logAuditEvent, AdminConfigAuditEvents } from '@server/utils/auditLog';
+import { getCooldownStatus } from '@bike4mind/server-utils/security/cooldown';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { ApiKeyScope } from '@bike4mind/common';
 
 const logger = new Logger({ metadata: { service: 'run-attack-simulation' } });
@@ -57,19 +57,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     })
   );
 
-  await logAuditEvent(
-    {
-      userId: req.user?.id ?? 'unknown',
-      action: AdminConfigAuditEvents.SECURITY_SCAN_SCHEDULE_TRIGGERED,
-      metadata: {
-        scanType: 'attack-simulation',
-        stage,
-        runId,
-        trigger: 'manual',
-      },
-    },
-    req.logger
-  );
+  await recordAdminActionFromRequest(req, {
+    action: 'security.attack_simulation.run',
+    target: { kind: 'system', id: 'attack-simulation', displayName: 'Attack simulation' },
+    summary: 'started a manual attack simulation run',
+    details: { stage, runId, trigger: 'manual' },
+  });
 
   logger.info('run-attack-simulation: invoked', { runId, stage, userId: req.user?.id });
 

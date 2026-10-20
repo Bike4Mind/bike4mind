@@ -1,5 +1,5 @@
 import { setToolFinishObserver } from '@bike4mind/services/llm/toolFinishObserver';
-import { stampGear, type StampedGearKey } from './stampGear';
+import { stampGear, type StampedGearKey } from '@bike4mind/server-utils/services/gears/stampGear';
 
 /**
  * Gears - registers the host's tool-finish observer on the shared tool pipeline

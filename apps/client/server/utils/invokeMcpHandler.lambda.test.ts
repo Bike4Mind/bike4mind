@@ -31,7 +31,7 @@ vi.mock('@aws-sdk/client-lambda', () => ({
   },
 }));
 
-vi.mock('@server/services/integrationCircuitBreaker', () => ({
+vi.mock('@bike4mind/server-utils/services/integrationCircuitBreaker', () => ({
   isMcpServerAvailable: mockIsMcpServerAvailable,
 }));
 

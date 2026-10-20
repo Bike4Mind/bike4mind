@@ -605,7 +605,7 @@ export function LakeInfoPanel({
           {/* Attached-source markers: this panel is where a user comes to inspect or delete a lake,
               and it previously gave no sign a Drive folder was feeding it (#1645). */}
           <LakeDriveStatusChip lakeId={lake.id} organizationId={lake.organizationId} isCreator={lake.isCreator} />
-          <LakeGitHubStatusChip lakeId={lake.id} organizationId={lake.organizationId} />
+          <LakeGitHubStatusChip lakeId={lake.id} organizationId={lake.organizationId} isCreator={lake.isCreator} />
           {lake.origin === 'connector-fed' && (
             <LakeSyncStatus lakeId={lake.id} organizationId={lake.organizationId} isCreator={lake.isCreator} />
           )}

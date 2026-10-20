@@ -38,7 +38,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/featureFlag', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
   requireFeatureEnabled: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 vi.mock('@server/dataLakes/dataLakeScopes', () => ({
@@ -48,7 +48,7 @@ vi.mock('@server/dataLakes/dataLakeScopes', () => ({
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: mockToAccessContext }));
 vi.mock('@server/dataLakes/resolveLakeListRetrievalScope', () => ({ resolveLakeListRetrievalScope: vi.fn() }));
 vi.mock('@server/utils/resolveActiveOrg', () => ({ resolveActiveOrg: vi.fn() }));
-vi.mock('@server/dataLakes/lakeConfigAuditDb', () => ({ lakeConfigAuditDb: {} }));
+vi.mock('@bike4mind/server-utils/dataLakes/lakeConfigAuditDb', () => ({ lakeConfigAuditDb: {} }));
 vi.mock('@server/dataLakes/lakeConfigAuditPrincipal', () => ({ lakeConfigAuditPrincipal: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {

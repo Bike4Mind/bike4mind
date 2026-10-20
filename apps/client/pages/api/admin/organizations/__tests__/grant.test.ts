@@ -34,13 +34,22 @@ vi.mock('@bike4mind/services', () => ({
   creditService: { addCredits: vi.fn() },
 }));
 
+let inTransaction = false;
+let insideTransactionAtAudit: boolean | undefined;
 const mockUserFindByEmail = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   creditLotRepository: {},
   creditTransactionRepository: {},
   organizationRepository: {},
   userRepository: { findByEmail: (...a: unknown[]) => mockUserFindByEmail(...a) },
-  withTransaction: (fn: (session: unknown) => Promise<unknown>) => fn(undefined),
+  withTransaction: async (fn: (session: unknown) => Promise<unknown>) => {
+    inTransaction = true;
+    try {
+      return await fn(undefined);
+    } finally {
+      inTransaction = false;
+    }
+  },
 }));
 
 const mockSubCreate = vi.fn();
@@ -48,17 +57,20 @@ vi.mock('@server/models/Subscription', () => ({
   subscriptionRepository: { create: (...a: unknown[]) => mockSubCreate(...a) },
 }));
 
-// Admin-configurable team-plan knobs, pinned to their defaults (see server/services/teamPlanSettings).
-vi.mock('@server/services/teamPlanSettings', () => ({
+// Admin-configurable team-plan knobs, pinned to their defaults (see packages/server-utils/src/services/teamPlanSettings).
+vi.mock('@bike4mind/server-utils/services/teamPlanSettings', () => ({
   getTeamPlanSettings: vi.fn(async () => ({ minSeats: 4, maxSeats: 100, creditsPerSeat: 50000 })),
 }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn() }));
-vi.mock('@server/utils/auditLog', () => ({
-  AdminOrgAuditEvents: { ORG_GRANTED: 'org_granted' },
-  logAuditEvent: vi.fn(),
+vi.mock('@server/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: vi.fn(async () => {
+    insideTransactionAtAudit = inTransaction;
+    return null;
+  }),
 }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoint' } } }));
 
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import handler from '../grant';
 
 const BODY = { name: 'Acme Corp', ownerEmail: 'owner@example.com', seats: 5, initialCredits: 1000, reason: 'sales' };
@@ -102,5 +114,20 @@ describe('POST /api/admin/organizations/grant', () => {
     expect(mockOrgCreate).toHaveBeenCalled();
     expect(mockSubCreate).toHaveBeenCalled();
     expect(res._getJSONData()).toMatchObject({ organizationId: 'org-1', name: 'Acme Corp' });
+  });
+
+  it('records org.credits.granted against the new organization', async () => {
+    const { run } = call({});
+    await run();
+    expect(recordAdminActionFromRequest).toHaveBeenCalledTimes(1);
+    expect(insideTransactionAtAudit).toBe(true);
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'org.credits.granted',
+        target: expect.objectContaining({ kind: 'organization', id: 'org-1', displayName: 'Acme Corp' }),
+        reason: 'sales',
+      })
+    );
   });
 });

@@ -245,7 +245,7 @@ export class NotebookImportService {
 
   /** Bytes admitted so far in THIS import. `currentStorageSize` on the user document is a snapshot
    * read once - the caller charges imported bytes only once every file is admitted
-   * (apps/client/server/s3/storageCharge.ts) - so several files that each pass against that stale
+   * (packages/server-utils/src/s3/storageCharge.ts) - so several files that each pass against that stale
    * value can overshoot the quota together. Same reason as the accumulator in
    * b4m-core/slack/src/CommandHandler.ts. */
   private admittedBytes = 0;

@@ -6,18 +6,21 @@ import DriveConnectAction from '@client/app/components/DataLakeWizard/steps/Driv
 import { DRIVE_PERSONAL_OWNER_ONLY_REASON } from '@client/app/components/DataLakeWizard/steps/DriveConnectUnavailableButton';
 import GitHubConnectAction from '@client/app/components/DataLakeWizard/steps/GitHubConnectAction';
 import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
-import { canConnectLakeDrive } from '@client/app/components/datalake/lakeVisibility';
+import { canConnectLakeConnector } from '@client/app/components/datalake/lakeVisibility';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
-import { GITHUB_LAKE_ADMIN_FLAG, GITHUB_ORG_ONLY_REASON } from '@client/app/components/datalake/lakeSourceShared';
+import {
+  GITHUB_LAKE_ADMIN_FLAG,
+  GITHUB_PERSONAL_OWNER_ONLY_REASON,
+} from '@client/app/components/datalake/lakeSourceShared';
 
-export { GITHUB_ORG_ONLY_REASON } from '@client/app/components/datalake/lakeSourceShared';
+export { GITHUB_PERSONAL_OWNER_ONLY_REASON } from '@client/app/components/datalake/lakeSourceShared';
 
 /** Must stay in sync with the server's LakeConnectorKind (server/dataLakes/assertLakeConnectorFree.ts). */
 export type LakeSourceKind = 'googleDrive' | 'github';
 
 export const LAKE_MANAGER_ONLY_REASON = `Only people who can manage this ${DATA_LAKE} can connect a source to it.`;
 
-/** The lake fields availability is decided from. Absent fields fail closed, as in canConnectLakeDrive. */
+/** The lake fields availability is decided from. Absent fields fail closed, as in canConnectLakeConnector. */
 export type LakeSourceLake = {
   organizationId?: string | null;
   canManage?: boolean;
@@ -32,6 +35,8 @@ export type LakeSourcePanelLake = LakeSourceLake & { id: string; status?: DataLa
 /** What every source's Panel receives; a panel that starts a chat takes `onChatStarted`. */
 export type LakeSourcePanelProps = {
   lake: LakeSourcePanelLake;
+  /** Lets a surface own lake-scoped session creation instead of using the default notebook flow. */
+  startChatForLake?: (dataLakeId: string) => Promise<void>;
   /** Lets a surface embedding the panel handle a started chat itself instead of navigating away. */
   onChatStarted?: (session: ISessionDocument) => void | Promise<void>;
 };
@@ -62,7 +67,7 @@ const googleDrive: LakeSource = {
   hint: 'Sync a Drive folder into this lake',
   Icon: CloudIcon,
   unavailableReason: lake => {
-    if (canConnectLakeDrive(lake)) return undefined;
+    if (canConnectLakeConnector(lake)) return undefined;
     return lake.organizationId ? LAKE_MANAGER_ONLY_REASON : DRIVE_PERSONAL_OWNER_ONLY_REASON;
   },
   Panel: DriveConnectAction,
@@ -75,8 +80,8 @@ const github: LakeSource = {
   Icon: GitHubIcon,
   adminFlag: GITHUB_LAKE_ADMIN_FLAG,
   unavailableReason: lake => {
-    if (!lake.organizationId) return GITHUB_ORG_ONLY_REASON;
-    return lake.canManage ? undefined : LAKE_MANAGER_ONLY_REASON;
+    if (canConnectLakeConnector(lake)) return undefined;
+    return lake.organizationId ? LAKE_MANAGER_ONLY_REASON : GITHUB_PERSONAL_OWNER_ONLY_REASON;
   },
   Panel: GitHubConnectAction,
 };

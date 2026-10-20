@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import crypto from 'crypto';
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { encryptSecret, generateEncryptionKey } from '@server/security/secretEncryption';
+import { encryptSecret, generateEncryptionKey } from '@bike4mind/server-utils/security/secretEncryption';
 
 /**
  * Handler-level regression test for the SRE webhook decrypt path.

@@ -1,4 +1,10 @@
-import { MUSIC_MODEL_CATALOG, type MusicGenerationRequest, type MusicModelId } from '@bike4mind/common';
+import {
+  MUSIC_MODEL_CATALOG,
+  TERMINAL_GENERATION_JOB_STATES,
+  type IGenerationJobDocument,
+  type MusicGenerationRequest,
+  type MusicModelId,
+} from '@bike4mind/common';
 import type { CreateMusicJobInput, CreateMusicJobResult } from '../../../../musicJobs/types';
 import type { ToolContext, ToolDefinition } from '../../base/types';
 import {
@@ -16,6 +22,10 @@ type TrackLimitRefusal = { ok: false; status: 403; code: 'track_limit_reached'; 
 export type MusicToolConfig = {
   usableModels: readonly MusicModelId[];
   createJob: (input: CreateMusicJobInput) => Promise<CreateMusicJobResult | TrackLimitRefusal>;
+  /** Reads a job back so a fast provider block can reach the model in-turn; without it a block only shows on the card. */
+  findJob?: (jobId: string) => Promise<IGenerationJobDocument | null>;
+  /** Called when the tool discards an unbilled blocked job in favour of a rephrase, so a per-run cap returns its slot. */
+  releaseDiscardedJob?: (jobId: string) => Promise<void>;
 };
 
 type PopulatedMusicToolConfig = MusicToolConfig & { usableModels: readonly [MusicModelId, ...MusicModelId[]] };
@@ -79,6 +89,40 @@ export const ARTIST_REFERENCE_REFUSAL =
   'Music generation failed (artist_reference): the prompt appears to name a real artist or band. ' +
   'Rewrite it describing genre, mood, instruments, tempo and era instead of names, and call music_generation again.';
 
+export const PROVIDER_BLOCK_REFUSAL =
+  'Music generation failed (content_blocked): the provider refused the prompt, most likely because it names or ' +
+  'imitates a real artist, band or song. Rewrite it describing genre, mood, instruments, tempo and era instead, ' +
+  'and call music_generation again.';
+
+// The job runs after this call returns, but providers refuse a prompt within a few seconds, before rendering.
+// Waiting this long catches most blocks in-turn; it delays every successful call by the same amount.
+const EARLY_BLOCK_POLL_INTERVAL_MS = 1_000;
+const EARLY_BLOCK_POLLS = 6;
+
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+/** The job once terminal, or null when it is still running after the wait, vanished, or the turn was stopped. */
+const awaitEarlyTerminal = async (
+  findJob: NonNullable<MusicToolConfig['findJob']>,
+  jobId: string,
+  signal: AbortSignal | undefined
+): Promise<IGenerationJobDocument | null> => {
+  for (let poll = 0; poll < EARLY_BLOCK_POLLS; poll++) {
+    await sleep(EARLY_BLOCK_POLL_INTERVAL_MS);
+    if (signal?.aborted) return null;
+    const job = await findJob(jobId);
+    if (!job) return null;
+    if (TERMINAL_GENERATION_JOB_STATES.includes(job.state)) return job;
+  }
+  return null;
+};
+
+// A billed block keeps its chat card so the charge stays visible; an unbilled one needs no card.
+const isUnbilledPromptBlock = (job: IGenerationJobDocument): boolean =>
+  job.state === 'blocked' &&
+  job.error?.code === 'content_blocked' &&
+  !(job.kind === 'music' && job.payload.billedBlock === true);
+
 export const namesArtistReference = (prompt: string): boolean =>
   Array.from(prompt.matchAll(STYLE_PHRASE)).some(match => {
     const run = prompt.slice(match.index + match[0].length).match(CAPITALIZED_RUN)?.[0];
@@ -89,6 +133,24 @@ export const namesArtistReference = (prompt: string): boolean =>
       return key.length > 1 && !STYLE_WORDS.has(key);
     });
   });
+
+// The wait is best effort: a failed read must not lose the card of a job that was already created and billed.
+const awaitEarlyOutcome = async (
+  findJob: NonNullable<MusicToolConfig['findJob']>,
+  job: IGenerationJobDocument,
+  context: Pick<ToolContext, 'logger' | 'getAbortSignal'>
+): Promise<IGenerationJobDocument | null> => {
+  if (TERMINAL_GENERATION_JOB_STATES.includes(job.state)) return job;
+  try {
+    return await awaitEarlyTerminal(findJob, job.id, context.getAbortSignal?.());
+  } catch (error) {
+    context.logger.warn('[music_generation] could not read the job back; reporting it as started', {
+      jobId: job.id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+};
 
 // Defaults (length, instrumental) are left to createMusicJob, which resolves them per model.
 const toRequest = (args: MusicToolArgs): MusicGenerationRequest => ({
@@ -105,14 +167,19 @@ export const musicGenerationTool: ToolDefinition = {
   implementation: (context: Omit<ToolContext, 'config'>, config: unknown) => {
     if (!isMusicToolConfig(config)) return buildUnavailableTool('music_generation', 'Music generation');
     const { schema, description } = buildMusicToolSchema(config.usableModels);
-    // The guard is a heuristic, so it refuses once per built tool instance: a false positive such as
-    // "inspired by Example Soloist" costs one rephrase instead of looping until the tool-call cap with no song.
-    let artistRefusalSent = false;
+    // One rephrase per built tool instance, shared by the artist guard and an early provider block: the guard is a
+    // heuristic, so a false positive such as "inspired by Example Soloist" costs one rephrase instead of looping
+    // until the tool-call cap with no song, and a rephrased prompt that is blocked again falls through to the card.
+    let rephraseRequested = false;
+    // Jobs discarded for a rephrase never got a card; an identical retry must show it, or the block stays invisible.
+    // The set covers retries within one tool instance. An unbilled block is carded on any dead replay, because a
+    // rebuilt tool instance starts with an empty set. Duplicate cards are deduped downstream.
+    const discardedJobIds = new Set<string>();
     return {
       toolFn: async (parameters?: unknown) => {
         const args = schema.parse(parameters);
-        if (!artistRefusalSent && namesArtistReference(args.prompt)) {
-          artistRefusalSent = true;
+        if (!rephraseRequested && namesArtistReference(args.prompt)) {
+          rephraseRequested = true;
           return ARTIST_REFERENCE_REFUSAL;
         }
         const request = toRequest(args);
@@ -127,9 +194,28 @@ export const musicGenerationTool: ToolDefinition = {
         if (!result.ok) return `Music generation failed (${result.code}): ${result.message}`;
         if (isReplayOfDeadJob(result.created, result.job.state)) {
           const reason = result.job.error?.code ?? result.job.state;
+          if (discardedJobIds.delete(result.job.id) || isUnbilledPromptBlock(result.job)) {
+            await context.statusUpdate({ generationJobs: [{ id: result.job.id, kind: 'music' }] });
+          }
           return `Music generation failed (${reason}): an identical request already ended without a song.`;
         }
+        let outcome: IGenerationJobDocument | null = null;
+        if (result.created && !rephraseRequested && config.findJob) {
+          // Claimed before the wait so parallel calls in one turn cannot each be offered the rephrase.
+          rephraseRequested = true;
+          outcome = await awaitEarlyOutcome(config.findJob, result.job, context);
+          if (outcome && isUnbilledPromptBlock(outcome)) {
+            discardedJobIds.add(result.job.id);
+            await config.releaseDiscardedJob?.(result.job.id);
+            return PROVIDER_BLOCK_REFUSAL;
+          }
+          rephraseRequested = false;
+        }
         await context.statusUpdate({ generationJobs: [{ id: result.job.id, kind: 'music' }] });
+        if (outcome && outcome.state !== 'succeeded') {
+          const reason = outcome.error?.code ?? outcome.state;
+          return `Music generation failed (${reason}): the job ended without a song; its card shows the outcome.`;
+        }
         return JSON.stringify({
           jobId: result.job.id,
           estimatedSeconds: MUSIC_MODEL_CATALOG[args.model].typicalRenderSeconds,

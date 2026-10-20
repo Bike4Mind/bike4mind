@@ -24,7 +24,7 @@ import {
 } from '@bike4mind/database';
 import { WebhookDeliveryStatus } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import { decryptSecret } from '@server/security/secretEncryption';
+import { decryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
 import { validateTargetUrl } from '@server/utils/ssrfProtection';
 import { Config } from '@server/utils/config';
 import {

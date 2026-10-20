@@ -18,7 +18,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   }),
 }));
 
-vi.mock('@server/security/securityDashboardScoring', () => ({
+vi.mock('@bike4mind/server-utils/security/securityDashboardScoring', () => ({
   computeStatusScoreAndSummary: vi.fn().mockReturnValue({
     status: 'fail',
     score: 60,

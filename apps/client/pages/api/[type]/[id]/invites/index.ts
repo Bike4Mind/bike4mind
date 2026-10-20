@@ -22,9 +22,22 @@ import { resolveInviteType } from '@server/utils/inviteRouteType';
 import { z } from 'zod';
 import { sharingService } from '@bike4mind/services';
 import { logEvent } from '@server/utils/analyticsLog';
-import { AdminOrgAuditEvents, logAuditEvent } from '@server/utils/auditLog';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { ProjectEvents } from '@bike4mind/common';
 import { getInviteTypeName, sendInviteNotificationEmails } from '@server/utils/mailer/inviteNotificationEmail';
+
+// Audit-only lookup: a failure here must not fail an invite that is already committed.
+const lookUpGroupOrganizationId = async (
+  req: { logger?: { error: (message: string, meta?: Record<string, unknown>) => void } },
+  groupId: string
+): Promise<string | undefined> => {
+  try {
+    return (await Group.findById(groupId))?.organizationId;
+  } catch (error) {
+    req.logger?.error('[ADMIN_AUDIT_GROUP_LOOKUP_FAILED]', { groupId, error });
+    return undefined;
+  }
+};
 
 interface IParams {
   type?: string;
@@ -134,22 +147,23 @@ const handler = baseApi()
       );
 
       // Group invites carry a membership grant, so they get the same audit trail as the members
-      // route's ORG_GROUP_MEMBER_ASSIGNED. Best-effort, never fails the write.
+      // route's org.group_member.assigned entry. Best-effort, never fails the write.
       if (inviteType === InviteType.Group) {
-        await logAuditEvent(
-          {
-            userId: req.user.id,
-            action: AdminOrgAuditEvents.ORG_GROUP_INVITE_CREATED,
-            ip: req.ip,
-            userAgent: req.headers['user-agent'] || 'unknown',
-            metadata: {
-              groupId: id,
-              inviteId: created.id,
-              recipientCount: created.recipients?.pending?.length ?? 0,
-            },
+        const organizationId = await lookUpGroupOrganizationId(req, id);
+        await recordAdminActionFromRequest(req, {
+          action: 'org.invite.created',
+          actorScope: 'organization',
+          // Without a known organization the entry is kept, keyed by the group, rather than dropped.
+          target: organizationId
+            ? { kind: 'organization', id: organizationId, displayName: organizationId }
+            : { kind: 'system', id, displayName: 'Group' },
+          summary: 'created a group invite',
+          details: {
+            groupId: id,
+            inviteId: created.id,
+            recipientCount: created.recipients?.pending?.length ?? 0,
           },
-          req.logger
-        );
+        });
       }
 
       // If this is a project invite, also log ADD_MEMBER event

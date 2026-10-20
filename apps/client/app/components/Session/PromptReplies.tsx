@@ -1886,7 +1886,12 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
 
           After the expand control, which belongs to the reply body it truncates, and before
           artifacts, so a tall chart cannot separate a source from the marker that cites it. */}
-      {promptMeta?.citables && promptMeta.citables.length > 0 && <CitableSources citables={promptMeta.citables} />}
+      {promptMeta?.citables && promptMeta.citables.length > 0 && (
+        // The reply only once done, so chips do not reshuffle under the reader as citations stream in.
+        // processedContent, not cleanReply: an artifact body the reader never sees must not count as
+        // citing a source. Not displayContent either, which is cut to the collapsed view.
+        <CitableSources citables={promptMeta.citables} reply={completed ? processedContent : undefined} />
+      )}
 
       {/* Artifacts sit between the reply and the footer. This Stack owns ALL of their
           spacing - 24px above, 8px below, 16px between cards - so individual artifact

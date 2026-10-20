@@ -22,7 +22,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@bike4mind/database', () => ({
   // The config-audit repos the code under test now wires (see lakeConfigAuditDb). Stubbed
   // rather than omitted because this mock REPLACES the whole module: a missing export is an

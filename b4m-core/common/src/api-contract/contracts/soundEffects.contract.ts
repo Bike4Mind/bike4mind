@@ -3,7 +3,15 @@ import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 // Specific files, not the barrel (`../../schemas`) - see the note in tools.contract.ts
 // (the barrel drags in @bike4mind/hearth, unbuilt in the CI openapi job).
 import { soundEffectsRequestSchema } from '../../soundGeneration';
-import { ApiErrorSchema, InsufficientCreditsErrorSchema } from '../../schemas/chat';
+import {
+  ApiErrorSchema,
+  BillingOrganizationForbiddenErrorSchema,
+  InsufficientCreditsErrorSchema,
+} from '../../schemas/chat';
+import {
+  BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION,
+  BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION,
+} from '../../schemas/billingOrganization';
 import { generatedAudioResponseSchema, generatedAudioTooLargeSchema } from '../../generatedAudio';
 import { GENERATED_AUDIO_CONTENT_TYPES, GENERATED_AUDIO_DESCRIPTION, generatedAudioResponses } from './audioResponses';
 
@@ -22,6 +30,8 @@ export const generateSoundEffectContract = defineEndpoint({
     'Generates a short sound effect from a text description. Omitting `durationSeconds` lets the ' +
     'provider pick the length (and bills at its default); `promptInfluence` trades prompt fidelity (1) ' +
     'against variation (0). Credits are reserved before generation and refunded if it fails. ' +
+    '`organization_id` picks the payer: an organization you belong to, or null for your personal ' +
+    'credits; omitted bills your home organization (or personal credits if you have none). ' +
     GENERATED_AUDIO_DESCRIPTION,
   tags: ['Audio'],
   auth: 'apiKeyOrJwt',
@@ -39,7 +49,20 @@ export const generateSoundEffectContract = defineEndpoint({
       binaryContentTypes: GENERATED_AUDIO_CONTENT_TYPES,
       tooLargeSchema: generatedAudioTooLargeSchema,
     }),
-    400: { description: 'The billing user or organization could not be resolved.', schema: ApiErrorSchema },
+    400: {
+      description: `The billing user or organization could not be resolved. ${BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION}`,
+      schema: ApiErrorSchema,
+    },
+    403: {
+      description:
+        'The API key lacks the `ai:generate` scope (`required_scopes` names it), or ' +
+        `${BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION}`,
+      schema: BillingOrganizationForbiddenErrorSchema,
+    },
+    404: {
+      description: 'A nonexistent `organization_id`, for an admin caller; for anyone else it is `403`.',
+      schema: ApiErrorSchema,
+    },
     422: {
       description:
         'Request body failed validation (including a `format` whose codec the provider cannot produce), or ' +

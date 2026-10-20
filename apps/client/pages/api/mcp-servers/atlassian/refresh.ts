@@ -2,7 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
 import { userRepository, mcpServerRepository } from '@bike4mind/database';
 import { McpServerName } from '@bike4mind/common';
-import { getAtlassianOAuthConfig } from '@server/integrations/jira/atlassianConfig';
+import { getAtlassianOAuthConfig } from '@bike4mind/server-utils/integrations/jira/atlassianConfig';
 import { encryptToken, decryptToken, encryptEnvVariables } from '@server/security/tokenEncryption';
 
 interface TokenResponse {

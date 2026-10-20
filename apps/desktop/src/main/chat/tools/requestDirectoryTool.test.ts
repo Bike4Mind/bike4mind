@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, realpath, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { broadPathWarning, inspectDirectoryRequest, requestDirectory } from './requestDirectoryTool';
+import { broadPathWarning, inspectDirectory, inspectDirectoryRequest, requestDirectory } from './requestDirectoryTool';
 
 describe('inspectDirectoryRequest', () => {
   let base: string;
@@ -24,6 +24,17 @@ describe('inspectDirectoryRequest', () => {
 
   it('asks for an existing folder, expanding ~', async () => {
     await expect(inspect('~/notes')).resolves.toEqual({ kind: 'ask', path: wanted, reason: 'Edit the skill file.' });
+  });
+
+  /** The same checks back `/add-dir`, which has a path but no reason to give. */
+  it('inspects a bare path the same way, resolving a relative one against the working directory', async () => {
+    const context = { roots: [], declined: [], home, workingDirectory: join(home, 'project') };
+    await expect(inspectDirectory('~/notes', context)).resolves.toEqual({ kind: 'ask', path: wanted });
+    await expect(inspectDirectory('../notes', context)).resolves.toEqual({ kind: 'ask', path: wanted });
+    await expect(inspectDirectory('../notes', { ...context, roots: [home] })).resolves.toEqual({
+      kind: 'inside',
+      path: wanted,
+    });
   });
 
   it('refuses the filesystem root outright', async () => {

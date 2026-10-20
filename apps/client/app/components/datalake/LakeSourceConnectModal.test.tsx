@@ -5,12 +5,12 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
 const h = vi.hoisted(() => ({
-  panelProps: [] as { lake: unknown; onChatStarted?: unknown }[],
+  panelProps: [] as { lake: unknown; startChatForLake?: unknown; onChatStarted?: unknown }[],
 }));
 
 // The panel is a registry entry, so mock the GitHub one to read back the props the modal hands it.
 vi.mock('@client/app/components/DataLakeWizard/steps/GitHubConnectAction', () => ({
-  default: (props: { lake: unknown; onChatStarted?: unknown }) => {
+  default: (props: { lake: unknown; startChatForLake?: unknown; onChatStarted?: unknown }) => {
     h.panelProps.push(props);
     return <div data-testid="github-connect-action" />;
   },
@@ -28,18 +28,25 @@ beforeEach(() => {
 });
 
 describe('LakeSourceConnectModal', () => {
+  it('forwards caller-owned lake chat creation to the source panel', () => {
+    const startChatForLake = vi.fn();
+    wrap(<LakeSourceConnectModal lake={LAKE} kind="github" onClose={vi.fn()} startChatForLake={startChatForLake} />);
+
+    expect(h.panelProps).toEqual([{ lake: LAKE, startChatForLake, onChatStarted: undefined }]);
+  });
+
   it('forwards a caller-supplied chat completion to the source panel', () => {
     const onChatStarted = vi.fn();
     wrap(<LakeSourceConnectModal lake={LAKE} kind="github" onClose={vi.fn()} onChatStarted={onChatStarted} />);
 
     expect(screen.getByTestId('github-connect-action')).toBeInTheDocument();
-    expect(h.panelProps).toEqual([{ lake: LAKE, onChatStarted }]);
+    expect(h.panelProps).toEqual([{ lake: LAKE, startChatForLake: undefined, onChatStarted }]);
   });
 
   it('still renders the panel when the caller supplies no completion', () => {
     wrap(<LakeSourceConnectModal lake={LAKE} kind="github" onClose={vi.fn()} />);
 
     expect(screen.getByTestId('github-connect-action')).toBeInTheDocument();
-    expect(h.panelProps).toEqual([{ lake: LAKE, onChatStarted: undefined }]);
+    expect(h.panelProps).toEqual([{ lake: LAKE, startChatForLake: undefined, onChatStarted: undefined }]);
   });
 });

@@ -4,7 +4,7 @@
  * (FabFileRepository.sumFileSizeByUserId) matches `STORAGE_CHARGED_FILTER`.
  * Must stay in sync: `isStorageCharged` and `STORAGE_CHARGED_FILTER` encode the same rule.
  *
- * Charged = stamped by a charge (apps/client/server/s3/storageCharge.ts; a notebook import can stamp
+ * Charged = stamped by a charge (packages/server-utils/src/s3/storageCharge.ts; a notebook import can stamp
  * a still-`pending` row), or a legacy `complete` row from before the stamping release. That legacy
  * arm is the HOSTED prod history: there the ObjectCreated handler charged every upload it marked
  * `complete`. A self-host install's webhook marked rows `complete` without charging them, so its

@@ -2,6 +2,9 @@ import {
   BATCH_NON_TERMINAL_STATUSES,
   isGitHubLakeFailureStatus,
   isLakeIngestable,
+  isSameLakeConnectionOwner,
+  lakeConnectionOwnerForLake,
+  lakeConnectionOwnerOf,
   settingsMap,
   type GitHubLakeReleaseStatus,
   type IUserDocument,
@@ -16,7 +19,7 @@ import {
 } from '@bike4mind/database';
 import { getSettingByName } from '@bike4mind/utils';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
-import { isSettingEnabled } from '@server/middlewares/featureFlag';
+import { isSettingEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { sendToQueue } from '@server/utils/sqs';
 import {
   getBranchHeadSha,
@@ -225,6 +228,15 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       });
       await settle(resumeBatchId);
       await releaseUnchanged();
+      return;
+    }
+    // The connect door (authorizeLakeConnectorAccess) only binds a connection to a lake of the same owner -
+    // the lake's org, or for a personal lake its creator. Re-checked here because the slice's admin-actor
+    // membership writes are justified by exactly that, and a mismatched row must not ride it.
+    if (!isSameLakeConnectionOwner(lakeConnectionOwnerOf(connection), lakeConnectionOwnerForLake(lake))) {
+      logger.warn('[githubLakeIngest] connection owner does not match the target lake; dropping', { connectionId: id });
+      await settle(resumeBatchId);
+      await release('This GitHub connection no longer matches its data lake owner. Reconnect the repository.', 'error');
       return;
     }
     // Same cast as driveLakeIngest: the hydrated document carries every IUserDocument field.

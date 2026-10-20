@@ -57,7 +57,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/featureFlag', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
   requireFeatureEnabled:
     (flag: string): Middleware =>
     (_req, res, next) =>
@@ -168,13 +168,67 @@ describe('POST /api/data-lakes/github-connect', () => {
     expect(setCookies().some(c => c.includes('github-lake-connect=') && !c.includes('Max-Age=0'))).toBe(true);
   });
 
-  it.each([
-    ['a personal (missing) organizationId', {}],
-    ['an empty organizationId', { organizationId: '  ' }],
-  ])('refuses %s with a 400 before creating anything', async (_label, body) => {
+  it('refuses an empty organizationId with a 400 before creating anything', async () => {
     const { res } = makeRes();
-    await expect(run(makeReq(body), res)).rejects.toMatchObject({ statusCode: 400 });
+    await expect(run(makeReq({ organizationId: '  ' }), res)).rejects.toMatchObject({
+      statusCode: 400,
+      message: expect.stringMatching(/non-empty string/),
+    });
     expect(await counts()).toEqual({ lakes: 0, grants: 0, audits: 0 });
+    expect(h.verifyOrgAccess).not.toHaveBeenCalled();
+  });
+
+  describe('personal lake (organizationId omitted)', () => {
+    it('creates a draft connector-fed lake with no organization, owned by the caller, and skips the org gate', async () => {
+      const { res, json } = makeRes();
+      await run(makeReq({}), res);
+
+      const dataLakeId = lakeIdOf(json);
+      const lake = await DataLakeModel.findById(dataLakeId).lean();
+      expect(lake).toMatchObject({
+        name: GITHUB_LAKE_PLACEHOLDER_NAME,
+        origin: 'connector-fed',
+        pendingConnector: 'github',
+        status: 'draft',
+        createdByUserId: 'user-gh-connect',
+      });
+      expect(lake?.organizationId).toBeFalsy();
+      expect(await DataLakeAccessGrantModel.countDocuments({ dataLakeId, role: 'owner' })).toBe(1);
+      expect(h.verifyOrgAccess).not.toHaveBeenCalled();
+    });
+
+    it("reuses the caller's unbound personal placeholder lake on a retried connect", async () => {
+      const first = makeRes();
+      await run(makeReq({}), first.res);
+      const second = makeRes();
+      await run(makeReq({}), second.res);
+
+      expect(lakeIdOf(second.json)).toBe(lakeIdOf(first.json));
+      expect(await counts()).toEqual({ lakes: 1, grants: 1, audits: 1 });
+    });
+
+    it('does not reuse an org placeholder lake, nor an org connect a personal one', async () => {
+      const org = makeRes();
+      await run(makeReq({ organizationId: ORG }), org.res);
+      const personal = makeRes();
+      await run(makeReq({}), personal.res);
+      const orgAgain = makeRes();
+      await run(makeReq({ organizationId: ORG }), orgAgain.res);
+
+      expect(lakeIdOf(personal.json)).not.toBe(lakeIdOf(org.json));
+      expect(lakeIdOf(orgAgain.json)).toBe(lakeIdOf(org.json));
+      expect(await DataLakeModel.countDocuments({})).toBe(2);
+    });
+
+    it("does not reuse another user's personal placeholder lake", async () => {
+      const first = makeRes();
+      await run(makeReq({}, 'user-a'), first.res);
+      const second = makeRes();
+      await run(makeReq({}, 'user-b'), second.res);
+
+      expect(lakeIdOf(second.json)).not.toBe(lakeIdOf(first.json));
+      expect(await DataLakeModel.countDocuments({})).toBe(2);
+    });
   });
 
   it('refuses an API-key caller with a 403 before creating anything', async () => {

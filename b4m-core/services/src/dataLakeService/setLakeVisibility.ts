@@ -1,8 +1,12 @@
 import {
   ConflictError,
+  isSameLakeConnectionOwner,
+  lakeConnectionOwnerForLake,
+  lakeConnectionOwnerOf,
   type IDataLakeAccessGrantRepository,
   type IDataLakeDocument,
   type IDataLakeRepository,
+  type IOrgGitHubLakeConnectionRepository,
   type IOrgGoogleDriveConnectionRepository,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError, normalizeId } from '@bike4mind/utils';
@@ -29,9 +33,10 @@ interface SetLakeVisibilityAdapters extends LakeConfigAuditAdapters {
     lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
     dataLakes: Pick<IDataLakeRepository, 'findById' | 'update' | 'find'>;
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
-    // Required for the same reason as the event repo: a scope move that skipped the bound-Drive
-    // check would strand the connection silently (see the guard in setLakeVisibility).
+    // Required for the same reason as the event repo: a scope move that skipped the bound-connector
+    // check would strand the connection silently (see the guards in setLakeVisibility).
     orgGoogleDriveConnections: Pick<IOrgGoogleDriveConnectionRepository, 'findByDataLakeIdAny'>;
+    orgGitHubLakeConnections: Pick<IOrgGitHubLakeConnectionRepository, 'findByDataLakeIdAny'>;
   };
 }
 
@@ -132,13 +137,25 @@ export const setLakeVisibility = async (
   // introduce a collision; flipping isPublic within the same org scope cannot. Guard the move
   // and surface a clear error instead of a raw E11000. (Same scope shape as createDataLake.)
   if (currentOrg !== targetOrg) {
-    // A Drive connection's owner is derived from its lake's scope (driveConnectionOwnerForLake), so
-    // moving the lake between personal and an org - or between orgs - leaves a bound row whose owner
-    // no longer matches: every manage door 404s, ingest drops each run, and the folder stays claimed.
-    // Any state counts (findByDataLakeIdAny): a disabled row still holds the folder claim.
-    if (await db.orgGoogleDriveConnections.findByDataLakeIdAny(existing.id)) {
+    // A Drive or GitHub connection's owner is derived from its lake's scope (lakeConnectionOwnerForLake),
+    // so moving the lake between personal and an org - or between orgs - leaves a bound row whose owner
+    // no longer matches: every manage door 404s, ingest drops each run, and the folder or repository
+    // stays claimed. Any state counts (findByDataLakeIdAny): a disabled row still holds the claim. A move
+    // that lands the lake back on the row's own owner is allowed, so an already-stranded row can recover.
+    const targetOwner = lakeConnectionOwnerForLake({
+      organizationId: targetOrg,
+      createdByUserId: existing.createdByUserId,
+    });
+    const strandsConnection = (row: { organizationId?: string | null; connectedBy: string } | null) =>
+      !!row && !isSameLakeConnectionOwner(lakeConnectionOwnerOf(row), targetOwner);
+    if (strandsConnection(await db.orgGoogleDriveConnections.findByDataLakeIdAny(existing.id))) {
       throw new ConflictError(
         "Disconnect this data lake's Google Drive folder before changing whether it belongs to an organization, then reconnect it afterwards."
+      );
+    }
+    if (strandsConnection(await db.orgGitHubLakeConnections.findByDataLakeIdAny(existing.id))) {
+      throw new ConflictError(
+        "Disconnect this data lake's GitHub repository before changing whether it belongs to an organization, then reconnect it afterwards."
       );
     }
 

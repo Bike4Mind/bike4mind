@@ -30,13 +30,22 @@ vi.mock('@bike4mind/services', () => ({
   creditService: { addCredits: (...a: unknown[]) => mockAddCredits(...a) },
 }));
 
+let inTransaction = false;
+let insideTransactionAtAudit: boolean | undefined;
 const mockUserFindById = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   creditLotRepository: {},
   creditTransactionRepository: {},
   organizationRepository: {},
   userRepository: { findById: (...a: unknown[]) => mockUserFindById(...a) },
-  withTransaction: (fn: (session: unknown) => Promise<unknown>) => fn(undefined),
+  withTransaction: async (fn: (session: unknown) => Promise<unknown>) => {
+    inTransaction = true;
+    try {
+      return await fn(undefined);
+    } finally {
+      inTransaction = false;
+    }
+  },
 }));
 
 const mockSubCreate = vi.fn();
@@ -49,17 +58,21 @@ vi.mock('@server/models/Subscription', () => ({
   },
 }));
 
-vi.mock('@server/services/teamPlanSettings', () => ({
+vi.mock('@bike4mind/server-utils/services/teamPlanSettings', () => ({
   getTeamPlanSettings: vi.fn(async () => ({ minSeats: 3, maxSeats: 8, creditsPerSeat: 1000 })),
 }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn() }));
-vi.mock('@server/utils/auditLog', () => ({
-  AdminOrgAuditEvents: { ORG_GRANTED: 'org_granted' },
-  logAuditEvent: vi.fn(),
+vi.mock('@server/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: vi.fn(async () => {
+    insideTransactionAtAudit = inTransaction;
+    return null;
+  }),
 }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoint' } } }));
 
 import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { sendToClient } from '@server/websocket/utils';
 import handler from '../grant-subscription';
 
 function call(seats: number) {
@@ -87,6 +100,29 @@ describe('POST /api/admin/users/[userId]/grant-subscription - team seat bounds',
     expect(mockOrgCreate).toHaveBeenCalled();
     expect(mockAddCredits).toHaveBeenCalledWith(expect.objectContaining({ credits: 5 * 1000 }), expect.anything());
     expect(res._getJSONData()).toMatchObject({ seats: 5, credits: 5 * 1000 });
+  });
+
+  it('records user.subscription.granted against the user for a team grant, inside the transaction', async () => {
+    const { run } = call(5);
+    await run();
+    expect(insideTransactionAtAudit).toBe(true);
+    expect(recordAdminActionFromRequest).toHaveBeenCalledTimes(1);
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'user.subscription.granted',
+        target: expect.objectContaining({ kind: 'user', id: 'user-1' }),
+        organizationId: 'org-1',
+      })
+    );
+  });
+
+  it('fails the request without notifying when the strict audit write fails', async () => {
+    vi.mocked(recordAdminActionFromRequest).mockRejectedValueOnce(new Error('audit down'));
+    const { run } = call(5);
+
+    await expect(run()).rejects.toThrow('audit down');
+    expect(sendToClient).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -139,6 +175,28 @@ describe('POST /api/admin/users/[userId]/grant-subscription - individual', () =>
       expect.anything()
     );
     expect(res._getJSONData()).toMatchObject({ success: true, credits: plan.credits * 2 });
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'user.subscription.granted',
+        target: expect.objectContaining({ kind: 'user', id: 'user-1' }),
+      })
+    );
+  });
+
+  it('records the audit inside the grant transaction', async () => {
+    const { run } = callIndividual(plan.priceId);
+    await run();
+    expect(insideTransactionAtAudit).toBe(true);
+    expect(recordAdminActionFromRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails the request without notifying when the strict audit write fails', async () => {
+    vi.mocked(recordAdminActionFromRequest).mockRejectedValueOnce(new Error('audit down'));
+    const { run } = callIndividual(plan.priceId);
+
+    await expect(run()).rejects.toThrow('audit down');
+    expect(sendToClient).not.toHaveBeenCalled();
   });
 
   it('rejects when the user already has an active subscription for the plan', async () => {

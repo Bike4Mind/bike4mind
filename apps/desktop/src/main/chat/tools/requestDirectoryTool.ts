@@ -41,7 +41,14 @@ export type DirectoryInspection =
   | { kind: 'refused'; message: string }
   /** Already inside a root; nothing to ask. */
   | { kind: 'inside'; path: string }
-  | { kind: 'ask'; path: string; reason: string; warning?: string };
+  | (DirectoryShare & { reason: string });
+
+/** A folder that may be shared once the user says so, by its real path. */
+export interface DirectoryShare {
+  kind: 'ask';
+  path: string;
+  warning?: string;
+}
 
 export interface DirectoryInspectionContext {
   roots: readonly string[];
@@ -59,9 +66,6 @@ export interface DirectoryInspectionContext {
  * The path shown and granted is the REAL one. A model asking for `~/notes` that is a symlink to
  * `/etc` must put `/etc` in front of the user, because that is what a grant would open; showing
  * the spelling it asked for would have the user approve a name rather than a folder.
- *
- * Existence and kind share one refusal on purpose: the model is outside every root here, and the
- * wording must not tell it "exists but is a file" apart from "does not exist".
  */
 export async function inspectDirectoryRequest(
   input: Record<string, unknown>,
@@ -79,7 +83,22 @@ export async function inspectDirectoryRequest(
   if (reason.length > MAX_REASON_CHARS) {
     return { kind: 'refused', message: `Keep "reason" to ${MAX_REASON_CHARS} characters or fewer.` };
   }
+  const inspection = await inspectDirectory(requested, context);
+  return inspection.kind === 'ask' ? { ...inspection, reason } : inspection;
+}
 
+/**
+ * The checks every way into a folder share makes - the model's card, the chip's picker and
+ * `/add-dir` - so none of them can grant what another would refuse. `~` expands, a relative path
+ * resolves against the working directory, and the answer carries the real path.
+ *
+ * Existence and kind share one refusal on purpose: a model is outside every root here, and the
+ * wording must not tell it "exists but is a file" apart from "does not exist".
+ */
+export async function inspectDirectory(
+  requested: string,
+  context: DirectoryInspectionContext
+): Promise<{ kind: 'refused'; message: string } | { kind: 'inside'; path: string } | DirectoryShare> {
   const home = context.home ?? homedir();
   const expanded = requested === '~' ? home : requested.startsWith('~/') ? join(home, requested.slice(2)) : requested;
   if (!isAbsolute(expanded) && !context.workingDirectory) {
@@ -97,7 +116,7 @@ export async function inspectDirectoryRequest(
   if (parse(real).root === real) {
     return {
       kind: 'refused',
-      message: 'The filesystem root cannot be shared. Ask for the specific folder you need.',
+      message: 'The filesystem root cannot be shared. Share the specific folder that is needed.',
     };
   }
   if ((context.protectedPaths ?? []).some(entry => isWithin(resolve(entry), real))) {
@@ -119,7 +138,7 @@ export async function inspectDirectoryRequest(
   const realHome = await realpath(home).catch(() => resolve(home));
   const temporary = await Promise.all([tmpdir(), '/tmp'].map(entry => realpath(entry).catch(() => resolve(entry))));
   const warning = broadPathWarning(real, realHome, temporary);
-  return { kind: 'ask', path: real, reason, ...(warning ? { warning } : {}) };
+  return { kind: 'ask', path: real, ...(warning ? { warning } : {}) };
 }
 
 /**

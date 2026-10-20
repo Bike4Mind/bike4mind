@@ -14,7 +14,6 @@ import { createLakeOrigin } from '@client/app/components/datalake/createLakeSour
 import {
   GITHUB_LAKE_ADMIN_FLAG,
   GITHUB_ORG_MANAGER_ONLY_REASON,
-  GITHUB_ORG_ONLY_REASON,
   orgIdOfAccount,
 } from '@client/app/components/datalake/lakeSourceShared';
 
@@ -30,8 +29,6 @@ export type { CreateLakeSourceKind } from '@client/app/components/datalake/creat
  * lake yet and must resolve from the account scope the lake will be born into. Upload has no entry
  * there at all, since appending files needs no source declaration.
  */
-export const GITHUB_CREATE_ORG_ONLY_REASON = GITHUB_ORG_ONLY_REASON;
-export const GITHUB_CREATE_SWITCH_ACCOUNT_REASON = `${GITHUB_CREATE_ORG_ONLY_REASON} Switch to your team account (the profile card at the bottom left), then create it from there.`;
 export const GITHUB_CREATE_ORG_MANAGER_ONLY_REASON = GITHUB_ORG_MANAGER_ONLY_REASON;
 
 /** The account scope a create lands in, which is what decides a source's availability. */
@@ -44,8 +41,6 @@ export type CreateLakeScope = {
    * Meaningless (and false) without an `organizationId`.
    */
   isOrgOwnerOrManager: boolean;
-  /** Whether the caller belongs to any organization, i.e. whether switching accounts can help. */
-  hasOrganizations?: boolean;
 };
 
 export type CreateLakeSource = {
@@ -93,12 +88,10 @@ const github: CreateLakeSource = {
   Icon: GitHubIcon,
   origin: createLakeOrigin('github'),
   adminFlag: GITHUB_LAKE_ADMIN_FLAG,
-  unavailableReason: scope => {
-    if (!scope.organizationId) {
-      return scope.hasOrganizations ? GITHUB_CREATE_SWITCH_ACCOUNT_REASON : GITHUB_CREATE_ORG_ONLY_REASON;
-    }
-    return scope.isOrgOwnerOrManager ? undefined : GITHUB_CREATE_ORG_MANAGER_ONLY_REASON;
-  },
+  // A personal create is always allowed: github-connect makes the caller the new lake's creator, the one
+  // person its connect gate admits. An org create needs an owner/manager, as the server checks.
+  unavailableReason: scope =>
+    !scope.organizationId || scope.isOrgOwnerOrManager ? undefined : GITHUB_CREATE_ORG_MANAGER_ONLY_REASON,
 };
 
 /** Every source a new lake can be fed by, in display order. */
@@ -138,7 +131,6 @@ export function useCreateLakeScope(): CreateLakeScope {
   return {
     organizationId,
     isOrgOwnerOrManager: hasOrgUpdateAccess(currentUser, org),
-    hasOrganizations: !!organizations?.length,
   };
 }
 

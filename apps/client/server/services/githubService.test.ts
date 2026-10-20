@@ -82,7 +82,7 @@ vi.mock('@server/utils/config', () => ({
 }));
 
 // Mock secret encryption
-vi.mock('@server/security/secretEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({
   encryptSecret: mockEncryptSecret,
   isEncrypted: mockIsEncrypted,
 }));

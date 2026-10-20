@@ -82,9 +82,15 @@ describe('LakeSyncStatus', () => {
     expect(screen.getByTestId('datalake-last-synced-lake1').textContent).toBe('Last synced 5 minutes ago');
   });
 
-  it('does not read GitHub for a personal lake', () => {
+  it('reads GitHub for the creator of a personal lake', () => {
     h.gitHub.current = { lastSyncedAt: when };
     wrap(<LakeSyncStatus lakeId="lake1" isCreator />);
+    expect(screen.getByTestId('datalake-last-synced-lake1').textContent).toBe('Last synced 5 minutes ago');
+  });
+
+  it('does not read GitHub for someone else personal lake', () => {
+    h.gitHub.current = { lastSyncedAt: when };
+    wrap(<LakeSyncStatus lakeId="lake1" isCreator={false} />);
     expect(screen.queryByTestId('datalake-last-synced-lake1')).toBeNull();
   });
 

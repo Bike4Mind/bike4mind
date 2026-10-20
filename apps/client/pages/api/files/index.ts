@@ -13,7 +13,7 @@ import { accessibleBy } from '@casl/mongoose';
 import { logEvent } from '@server/utils/analyticsLog';
 import { unpublishUserArtifactsBySource } from '@server/services/publish/purgeUserPublishedArtifacts';
 import { baseApi } from '@server/middlewares/baseApi';
-import { adjustOwnerStorageInSession } from '@server/s3/storageCharge';
+import { adjustOwnerStorageInSession } from '@bike4mind/server-utils/s3/storageCharge';
 import { getFilesStorage } from '@server/utils/storage';
 import { getGeneratedCopyStore } from '@server/files/generatedCopyStore';
 import { assertFilesReadScope, assertFilesWriteScope, FILES_READ_OR_WRITE_SCOPES } from '@server/files/fileScopes';

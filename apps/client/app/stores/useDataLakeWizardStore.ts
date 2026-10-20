@@ -23,6 +23,11 @@ export type WizardStep = 'source' | 'preview' | 'config' | 'upload';
 /** The two tabs of the Data Lakes management panel: own lakes vs. the public discover catalog. */
 export type ManagerTab = 'mine' | 'discover';
 
+export interface GitHubConnectFailure {
+  lakeId: string;
+  message: string;
+}
+
 /**
  * Which of the two optional steps/behaviors the user opted into on the source step.
  * `preview` splices a step into the wizard; `taxonomy` no longer does - it opts the
@@ -176,8 +181,8 @@ export interface WizardTargetLake {
   requiredUserTag?: string;
   requiredEntitlement?: string;
   /**
-   * The lake's org scope, `null` for a personal lake. Carried so the wizard can gate the Drive
-   * connect control the way `SelectedLakeHeader` does (canConnectLakeDrive): an org lake needs a
+   * The lake's org scope, `null` for a personal lake. Carried so the wizard can gate the Drive and
+   * GitHub connect controls the way `SelectedLakeHeader` does (canConnectLakeConnector): an org lake needs a
    * manager, a personal lake its creator, so offering it otherwise is a button that can only ever fail.
    *
    * REQUIRED-and-nullable rather than optional, matching `isCreator` on ManageableDataLakeConfig and
@@ -314,6 +319,11 @@ interface DataLakeWizardStore {
    * callback page; read by GitHubRepositoryPickerModal, mounted once in DataLakeManagerPanel.
    */
   gitHubRepoPickerLakeId: string | null;
+  /**
+   * Why a lake's GitHub connect just failed or was cancelled at the callback page, shown on that lake
+   * by FinishSourceConnectBanner with a way to restart. In memory only: a reload drops it.
+   */
+  gitHubConnectFailure: GitHubConnectFailure | null;
 
   // Navigation
   openWizard: () => void;
@@ -323,6 +333,7 @@ interface DataLakeWizardStore {
   closeManager: () => void;
   openGitHubRepoPicker: (lakeId: string) => void;
   closeGitHubRepoPicker: () => void;
+  setGitHubConnectFailure: (failure: GitHubConnectFailure | null) => void;
   setStep: (step: WizardStep) => void;
 
   // Source step
@@ -380,6 +391,7 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
   managerTab: 'mine',
   managerLakeId: null,
   gitHubRepoPickerLakeId: null,
+  gitHubConnectFailure: null,
 
   // ── Navigation ──────────────────────────────────────────────────────────
 
@@ -392,10 +404,12 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
     set({ isManagerOpen: true, managerTab: tab, managerLakeId: lakeId }),
   // The picker is mounted inside the manager, so closing the manager closes it too; left set, it
   // would pop back up on the next, unrelated manager open.
-  closeManager: () => set({ isManagerOpen: false, managerLakeId: null, gitHubRepoPickerLakeId: null }),
+  closeManager: () =>
+    set({ isManagerOpen: false, managerLakeId: null, gitHubRepoPickerLakeId: null, gitHubConnectFailure: null }),
 
   openGitHubRepoPicker: lakeId => set({ gitHubRepoPickerLakeId: lakeId }),
   closeGitHubRepoPicker: () => set({ gitHubRepoPickerLakeId: null }),
+  setGitHubConnectFailure: failure => set({ gitHubConnectFailure: failure }),
 
   // Append mode: upload into an existing lake. Preseeds config from the lake so
   // the (locked) Config step shows the right values. The source question is never asked here - the

@@ -180,6 +180,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   sumFileSizeByUserId: vi.fn(),
   sumFileSizeByOrganizationId: vi.fn(),
   summarizeChargedStorageByUserId: vi.fn(),
+  summarizeChargedStorageByOrganizationId: vi.fn(),
   commitContentRewrite: vi.fn(),
   findChargeState: vi.fn(),
 });

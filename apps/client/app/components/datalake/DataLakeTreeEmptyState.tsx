@@ -7,6 +7,7 @@ import { useDataLakeSurface } from '@client/app/components/datalake/surfaceToken
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useLakeGitHubConnection } from '@client/app/hooks/data/githubLake';
 import type { LakeSourceKind, LakeSourcePanelLake } from '@client/app/components/datalake/lakeSources';
+import { canConnectLakeConnector } from '@client/app/components/datalake/lakeVisibility';
 import ConnectSourceMenu from './ConnectSourceMenu';
 import LakeSourceConnectModal from './LakeSourceConnectModal';
 import type { DataLakeEmptyVariant } from './resolveEmptyVariant';
@@ -31,6 +32,8 @@ interface DataLakeTreeEmptyStateProps {
   onAddFiles?: () => void;
   /** The scoped lake, which decides the sources it can take. Offered only with `onAddFiles`. */
   sourceLake?: LakeSourcePanelLake;
+  /** Lets the embedding surface own lake-scoped session creation from a source panel. */
+  startChatForLake?: (dataLakeId: string) => Promise<void>;
 }
 
 /**
@@ -54,16 +57,17 @@ export default function DataLakeTreeEmptyState({
   onRetryLakes,
   onAddFiles,
   sourceLake,
+  startChatForLake,
 }: DataLakeTreeEmptyStateProps) {
   const { copy } = useDataLakeSurface();
   const [connectingKind, setConnectingKind] = useState<LakeSourceKind | null>(null);
   const { isAdminFeatureEnabled } = useFeatureEnabled();
   // Same gate as the lake's GitHub source (lakeSources.ts): the connection read 403s with the flag
-  // off and refuses a caller who cannot manage an org lake. Shares the source card's poll.
+  // off and refuses a caller who cannot connect to the lake. Shares the source card's poll.
   const watchGitHub =
     variant === 'lake-empty' &&
-    !!sourceLake?.organizationId &&
-    !!sourceLake.canManage &&
+    !!sourceLake &&
+    canConnectLakeConnector(sourceLake) &&
     isAdminFeatureEnabled('EnableDataLakeGitHub');
   const { data: gitHubConnection } = useLakeGitHubConnection(sourceLake?.id, watchGitHub);
 
@@ -143,7 +147,12 @@ export default function DataLakeTreeEmptyState({
       {variant === 'lake-empty' && onAddFiles && sourceLake && (
         <>
           <ConnectSourceMenu lake={sourceLake} onConnect={connectSource} />
-          <LakeSourceConnectModal lake={sourceLake} kind={connectingKind} onClose={() => setConnectingKind(null)} />
+          <LakeSourceConnectModal
+            lake={sourceLake}
+            kind={connectingKind}
+            onClose={() => setConnectingKind(null)}
+            startChatForLake={startChatForLake}
+          />
         </>
       )}
     </Box>

@@ -102,6 +102,16 @@ export const GenerateImageIvokeParamsSchema = OpenAIImageGenerationInput.extend(
 });
 export type GenerateImageIvokeParams = z.infer<typeof GenerateImageIvokeParamsSchema>;
 
+/**
+ * snake_case alias of `organizationId` on the public image request bodies. The route maps it
+ * (`resolveBillingOrgInput`) rather than the schema, which a public request schema may not
+ * `.transform()`. Same rules as `organizationId`: null bills personal, blank is a 422.
+ */
+const BillingOrgIdAliasSchema = BillingOrganizationIdSchema.describe(
+  'Alias of `organizationId`, for callers used to the snake_case video and music bodies. Sending both ' +
+    'with different values is a 422.'
+);
+
 // `intent` and `promptEnhancement` are outputs of the route's prompt resolver, which always sets
 // them, so they are not part of the public request (api-contract/contracts/imageGeneration.contract.ts).
 export const GenerateImageRequestBodySchema = GenerateImageIvokeParamsSchema.omit({
@@ -111,6 +121,7 @@ export const GenerateImageRequestBodySchema = GenerateImageIvokeParamsSchema.omi
   sessionId: z.string().optional(),
   sessionName: z.string().optional(),
   organizationId: BillingOrganizationIdSchema,
+  organization_id: BillingOrgIdAliasSchema,
   callbackUrl: GenerationCallbackUrlSchema.optional(),
   projectId: z.string().optional(),
   prompt_resolution: ImagePromptResolutionSchema.optional().describe(
@@ -169,6 +180,7 @@ export const EditImageRequestBodySchema = OpenAIImageGenerationInput.extend({
   sessionId: z.string(),
   questId: z.string().optional(),
   organizationId: BillingOrganizationIdSchema,
+  organization_id: BillingOrgIdAliasSchema,
   aspect_ratio: z.string().optional(),
   fabFileIds: z.array(z.string()).prefault([]),
   /**

@@ -42,6 +42,7 @@ import {
   getFullToolResult,
   MAX_FULL_TOOL_RESULT_CHARS,
   ResponsesStreamTruncatedError,
+  type ICompletionBackend,
 } from '@bike4mind/llm-adapters';
 import {
   ChatModels,
@@ -56,6 +57,7 @@ import {
   NARRATED_TOOL_CALL_NOTICE,
   usdToCreditsStochastic as realUsdToCreditsStochastic,
   type IMessage,
+  type ModelInfo,
 } from '@bike4mind/common';
 import {
   ToolBuilder,
@@ -286,6 +288,7 @@ describe('ChatCompletionProcess', () => {
         findById: vi.fn().mockResolvedValue(mockQuest),
         findByIdWithStatus: vi.fn().mockResolvedValue(mockQuest),
         update: vi.fn().mockResolvedValue(undefined),
+        updateIfUnfinished: vi.fn().mockResolvedValue(undefined),
         create: vi.fn(),
       },
       mcpServers: { find: vi.fn().mockResolvedValue([]) },
@@ -1853,6 +1856,126 @@ describe('ChatCompletionProcess', () => {
       expect(errors[7]).toContain('Not run: "math_evaluate"');
     });
 
+    // Ollama thinks by default on a thinking-capable model sent no think flag, so a turn with the
+    // Thinking toggle off must reach the backend as an explicit off (ollamaThinkingDefault.ts).
+    it('sends an explicit thinking off to an Ollama thinking model when the toggle is off', async () => {
+      const complete = vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+        await cb(['done']);
+      });
+      mockedGetLlmByModel.mockReturnValue({
+        complete,
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: 'qwen3:8b',
+      });
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: 'qwen3:8b',
+          type: 'text',
+          name: 'qwen3:8b',
+          backend: ModelBackend.Ollama,
+          max_tokens: 100,
+          contextWindow: 1000,
+          can_stream: false,
+          can_think: true,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      const body = {
+        ...startQuestParams,
+        params: { ...startQuestParams.params, model: 'qwen3:8b' },
+        tools: [],
+        projectId: undefined,
+        organizationId: undefined,
+      };
+      await service.process({ body, logger: mockLogger });
+
+      expect(complete).toHaveBeenCalled();
+      expect(complete.mock.calls[0][2].thinking).toEqual({ enabled: false, budget_tokens: 0 });
+    });
+
+    describe('Ollama thinking defaults across fallback', () => {
+      const modelInfo = (id: string, backend: ModelBackend): ModelInfo => ({
+        id,
+        type: 'text',
+        name: id,
+        backend,
+        max_tokens: 100,
+        contextWindow: 1000,
+        can_stream: false,
+        can_think: true,
+        pricing: {},
+        supportsImageVariation: false,
+      });
+      const ollama = modelInfo('qwen3:8b', ModelBackend.Ollama);
+      const deepSeek = modelInfo(ChatModels.DEEPSEEK_FLASH, ModelBackend.DeepSeek);
+      const kimi = modelInfo(ChatModels.KIMI_K2_5, ModelBackend.Kimi);
+      const off = { enabled: false, budget_tokens: 0 };
+      const backend = (model: ModelInfo, complete: ICompletionBackend['complete']): ICompletionBackend => ({
+        currentModel: model.id,
+        complete,
+        getModelInfo: vi.fn().mockResolvedValue([model]),
+        pushToolMessages: vi.fn(),
+      });
+
+      it.each([
+        ['Ollama to DeepSeek', ollama, deepSeek, off, undefined],
+        ['Ollama to Kimi', ollama, kimi, off, undefined],
+        ['DeepSeek to Ollama', deepSeek, ollama, undefined, off],
+        ['Kimi to Ollama', kimi, ollama, undefined, off],
+      ] as const)(
+        '%s applies the thinking default to the current backend only',
+        async (_label, primary, fallback, primaryThinking, fallbackThinking) => {
+          mockQuest.promptMeta.model = { name: primary.id, backend: primary.backend };
+          const primaryComplete = vi
+            .fn<ICompletionBackend['complete']>()
+            .mockRejectedValue(new Error('ServiceUnavailableException: primary down'));
+          const fallbackComplete = vi
+            .fn<ICompletionBackend['complete']>()
+            .mockImplementation(async (_model, _messages, _options, callback) => {
+              await callback(['done']);
+            });
+          mockedGetLlmByModel.mockReturnValue(backend(primary, primaryComplete));
+          mockedShouldTriggerFallback.mockReturnValue(true);
+          mockedIsOverloadedError.mockReturnValue(false);
+          mockedGetLlmWithFallback
+            .mockResolvedValueOnce({ model: fallback, backend: backend(fallback, fallbackComplete), attempt: 1 })
+            .mockResolvedValue(null);
+          mockedGetAvailableModels.mockResolvedValue([primary, fallback]);
+          mockedBuildAndSortMessages.mockResolvedValue({
+            messages: [{ role: 'user', content: 'Hello' }],
+            messageTruncation: null,
+          });
+          mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+          mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+          await service.process({
+            body: {
+              ...startQuestParams,
+              params: { ...startQuestParams.params, model: primary.id },
+              tools: [],
+              projectId: undefined,
+              organizationId: undefined,
+            },
+            logger: mockLogger,
+          });
+
+          expect(primaryComplete).toHaveBeenCalledTimes(1);
+          expect(primaryComplete.mock.calls[0][2].thinking).toEqual(primaryThinking);
+          expect(fallbackComplete).toHaveBeenCalledTimes(1);
+          expect(fallbackComplete.mock.calls[0][0]).toBe(fallback.id);
+          expect(fallbackComplete.mock.calls[0][2].thinking).toEqual(fallbackThinking);
+        }
+      );
+    });
+
     it('should process a quest successfully', async () => {
       mockedGetLlmByModel.mockReturnValue({
         complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
@@ -2155,7 +2278,7 @@ describe('ChatCompletionProcess', () => {
           let holdWrites = false;
           let writeStarted = false;
           let releaseWrite: (value: unknown) => void = () => {};
-          mockDb.quests.update.mockImplementation(() => {
+          mockDb.quests.updateIfUnfinished.mockImplementation(() => {
             if (!holdWrites) return Promise.resolve(undefined);
             writeStarted = true;
             return new Promise(resolve => {
@@ -9306,6 +9429,70 @@ describe('ChatCompletionProcess', () => {
     });
   });
 
+  describe('streaming heartbeat vs a user Stop', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('saves mid-turn through updateIfUnfinished so a stored Stop is not overwritten with running', async () => {
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 1000,
+          can_stream: true,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi
+          .fn()
+          .mockImplementation(
+            async (_model: unknown, _messages: unknown, _opts: unknown, cb: (chunks: string[]) => Promise<void>) => {
+              await cb(['partial']);
+              // Outlive the 10s streaming heartbeat so it fires mid-turn.
+              await new Promise(resolve => setTimeout(resolve, 25_000));
+              await cb(['partial answer']);
+            }
+          ),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+
+      // saveQuest passes the live quest object, so record the status at call time.
+      const conditionalSaveStatuses: string[] = [];
+      mockDb.quests.updateIfUnfinished.mockImplementation(async (q: { status: string }) => {
+        conditionalSaveStatuses.push(q.status);
+        return null;
+      });
+      const plainSaveStatuses: string[] = [];
+      mockDb.quests.update.mockImplementation(async (q: { status: string }) => {
+        plainSaveStatuses.push(q.status);
+        return undefined;
+      });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await runWithFakeTimers(service.process({ body, logger: mockLogger }));
+
+      expect(conditionalSaveStatuses.length).toBeGreaterThan(0);
+      expect(conditionalSaveStatuses.every(status => status === 'running')).toBe(true);
+      expect(plainSaveStatuses).not.toContain('running');
+    });
+  });
+
   describe('isStreamIdleTimeoutError', () => {
     it('should match lowercase "stream timeout"', () => {
       expect(
@@ -10089,6 +10276,7 @@ describe('prompt moderation', () => {
         findById: vi.fn().mockResolvedValue(mockQuest),
         findByIdWithStatus: vi.fn().mockResolvedValue(mockQuest),
         update: vi.fn().mockResolvedValue(undefined),
+        updateIfUnfinished: vi.fn().mockResolvedValue(undefined),
         create: vi.fn(),
       },
       sessions: {

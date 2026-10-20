@@ -11,7 +11,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { sessionService } from '@bike4mind/services';
 import { redactSessionForClient } from '@bike4mind/common';
-import { stampGear } from '@server/services/gears/stampGear';
+import { stampGear } from '@bike4mind/server-utils/services/gears/stampGear';
 import { copySurfaceAccessForRequest } from '@server/entitlements/surfaceAccess';
 import { parseTargetSurface } from '@server/utils/parseTargetSurface';
 

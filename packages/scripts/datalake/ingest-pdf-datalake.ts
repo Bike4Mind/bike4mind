@@ -261,7 +261,7 @@ async function statusReport(lake: LakeTarget): Promise<number> {
 /**
  * The effective `PauseLakeConvergence` flag for this lake: the platform switch folded with any
  * Lake-scope override (narrower rung wins). Mirrors `resolvePauseFlag` in
- * apps/client/server/dataLakes/convergenceKillSwitch.ts and MUST stay in sync with it - the
+ * packages/server-utils/src/dataLakes/convergenceKillSwitch.ts and MUST stay in sync with it - the
  * enforcement path itself lives under apps/client, which packages/scripts cannot import, so only the
  * settings read is duplicated: the halt DECISION stays shared (`shouldHaltConvergence`) and the
  * setting key is checked against common's registry by the `SettingKey` type. Fails soft to "not

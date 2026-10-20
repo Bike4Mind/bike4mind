@@ -12,7 +12,7 @@ import {
   getSeverityEmoji,
   formatPrimaryAnomaly,
 } from '@server/services/telemetryFingerprint';
-import { checkFingerprintDedup } from '@server/services/issueDedup';
+import { checkFingerprintDedup } from '@bike4mind/server-utils/services/issueDedup';
 import { GitHubService } from '@server/services/githubService';
 import {
   getFallbackPriority,

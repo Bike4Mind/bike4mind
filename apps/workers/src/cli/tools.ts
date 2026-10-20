@@ -1,7 +1,7 @@
 import { Logger } from '@bike4mind/observability';
 import { executeToolContract } from '@bike4mind/common';
 import { checkRateLimit } from '@server/cli/auth';
-import { executeToolWithLogging } from '@server/cli/toolsHandler.shared';
+import { executeToolWithLogging } from '@bike4mind/server-utils/cli/toolsHandler.shared';
 import { defineLambdaRoute } from '@workers/cli/defineLambdaRoute';
 
 /**

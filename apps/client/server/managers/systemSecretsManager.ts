@@ -18,7 +18,7 @@
 import { Resource } from 'sst';
 import { systemSecretRepository, SystemSecretCategory } from '@bike4mind/database';
 import { isPlaceholderValue } from '@bike4mind/common';
-import { decryptSecret, isValidEncryptionKey } from '../security/secretEncryption';
+import { decryptSecret, isValidEncryptionKey } from '@bike4mind/server-utils/security/secretEncryption';
 import { Config } from '../utils/config';
 
 /**

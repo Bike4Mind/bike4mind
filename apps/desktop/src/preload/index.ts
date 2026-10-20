@@ -27,6 +27,7 @@ import {
   type BrowserPageStateEvent,
   type BrowserPaneRequest,
   type BrowserTabRequest,
+  type CreateSessionRequest,
   type DesktopApi,
 } from '@shared/ipc';
 import type { PrBarState, PrOption, PrSummaryEvent } from '@shared/pullRequest';
@@ -99,7 +100,7 @@ const api: DesktopApi = {
     setSessionArchived: (sessionId: string, archived: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionArchived, sessionId, archived),
     listSessions: () => ipcRenderer.invoke(IPC_CHANNELS.chatListSessions),
-    createSession: () => ipcRenderer.invoke(IPC_CHANNELS.chatCreateSession),
+    createSession: (request?: CreateSessionRequest) => ipcRenderer.invoke(IPC_CHANNELS.chatCreateSession, request),
     createCodeSession: (request: CreateCodeSessionRequest) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatCreateCodeSession, request),
     updateProject: (request: UpdateProjectRequest) => ipcRenderer.invoke(IPC_CHANNELS.chatUpdateProject, request),
@@ -107,7 +108,8 @@ const api: DesktopApi = {
     listRecentFolders: () => ipcRenderer.invoke(IPC_CHANNELS.chatListRecentFolders),
     removeRecentFolder: (directory: string) => ipcRenderer.invoke(IPC_CHANNELS.chatRemoveRecentFolder, directory),
     inspectProject: (directory: string) => ipcRenderer.invoke(IPC_CHANNELS.chatInspectProject, directory),
-    addContextDirectory: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatAddContextDirectory, sessionId),
+    addContextDirectory: (sessionId: string, path?: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatAddContextDirectory, sessionId, path),
     removeContextDirectory: (sessionId: string, directory: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatRemoveContextDirectory, sessionId, directory),
     getSession: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatGetSession, sessionId),

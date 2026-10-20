@@ -9,7 +9,10 @@ import type {
 } from '@bike4mind/common';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
-import { buildEmailMirrorMessage, type EmailMirrorPayload } from './emailMirror';
+import {
+  buildEmailMirrorMessage,
+  type EmailMirrorPayload,
+} from '@bike4mind/server-utils/integrations/slack/emailMirror';
 import { buildFeedbackSlackMessage, type FeedbackPromptMetaInput } from './feedbackMessage';
 import type { FeedbackDeepLinks } from '@server/utils/feedbackDeepLinks';
 import {

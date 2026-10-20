@@ -6,7 +6,7 @@ import { safeCompareTokens } from '@bike4mind/auth/crypto';
 import {
   computeDeterministicStatus,
   computePackagesScoreFromFindings,
-} from '@server/security/securityDashboardScoring';
+} from '@bike4mind/server-utils/security/securityDashboardScoring';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 import { Logger } from '@bike4mind/observability';

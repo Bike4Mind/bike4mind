@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('./listUsableMusicModels', () => ({ listUsableMusicModels: vi.fn() }));
+vi.mock('@bike4mind/server-utils/musicGenerations/listUsableMusicModels', () => ({ listUsableMusicModels: vi.fn() }));
 vi.mock('@bike4mind/services/musicJobs', () => ({ createMusicJob: vi.fn() }));
 
 import { createMusicJob } from '@bike4mind/services/musicJobs';
 import { isMusicToolConfig } from '@bike4mind/services/llm/tools';
 import { buildMusicToolConfig } from './buildMusicToolConfig';
-import { listUsableMusicModels } from './listUsableMusicModels';
+import { listUsableMusicModels } from '@bike4mind/server-utils/musicGenerations/listUsableMusicModels';
 
 const deps = { availability: {} as never, createDeps: { tag: 'create-deps' } as never };
 const input = {
@@ -47,5 +47,14 @@ describe('buildMusicToolConfig', () => {
 
     expect(createMusicJob).toHaveBeenCalledWith(input, deps.createDeps);
     expect(result).toEqual({ ok: true, job: { id: 'job-1' } });
+  });
+
+  it('reads jobs back through the engine repository', async () => {
+    vi.mocked(listUsableMusicModels).mockResolvedValue([{ id: 'test-music' }] as never);
+    const findById = vi.fn().mockResolvedValue({ id: 'job-1', state: 'blocked' });
+    const config = await buildMusicToolConfig('u1', { ...deps, createDeps: { repository: { findById } } as never });
+
+    expect(await config?.findJob?.('job-1')).toEqual({ id: 'job-1', state: 'blocked' });
+    expect(findById).toHaveBeenCalledWith('job-1');
   });
 });
