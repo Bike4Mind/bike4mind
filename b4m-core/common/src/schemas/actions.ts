@@ -1475,6 +1475,17 @@ export const PermissionRequestAction = z.object({
   toolCallId: z.string().optional(),
 });
 
+export const ConfidenceGateAction = z.object({
+  action: z.literal('confidence_gate'),
+  executionId: z.string(),
+  /** 0-indexed wire convention, matching `permission_request` and `IterationStream`. */
+  iteration: z.number(),
+  /** 0..1, the agent's reported confidence for the paused iteration. */
+  confidence: z.number(),
+  /** Pre-formatted server copy, e.g. "Iteration confidence 42% below threshold 60%". */
+  reason: z.string(),
+});
+
 /**
  * Persisted snapshot of a non-background child subagent execution. Replayed on
  * reconnect so `SubagentStepNest` can re-render the nested iteration
@@ -1551,6 +1562,16 @@ export const ReconnectResultAction = z.object({
       // Carried through reconnect so a client that refreshes mid-pause still
       // has the identity `permission_response` needs - see `PermissionRequestAction`.
       toolCallId: z.string().optional(),
+    })
+    .optional(),
+  // Written atomically with `status: 'paused'` by the executor, so a reconnect
+  // to a gate-paused run gets both and can re-render the gate card.
+  pendingGate: z
+    .object({
+      iteration: z.number(),
+      confidence: z.number(),
+      reason: z.string(),
+      requestedAt: z.union([z.string(), z.date()]),
     })
     .optional(),
   totalCreditsUsed: z.number().optional(),
@@ -1661,6 +1682,7 @@ export const MessageDataToClient = z.discriminatedUnion('action', [
   SubagentFailedAction,
   SubagentProgressAction,
   PermissionRequestAction,
+  ConfidenceGateAction,
   ReconnectResultAction,
 ]);
 export type IMessageDataToClient = z.infer<typeof MessageDataToClient>;
