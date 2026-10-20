@@ -759,13 +759,14 @@ export function useAgentExecutionSubscriptions(): void {
 }
 
 /**
- * How long a continued gate waits for the run to move off `paused` before the
- * client re-asks the server for the truth. `gate_response: continue` has no ack
- * of its own - the handler re-invokes the executor, whose `resumed` frame moves
- * the run - and a response for a run the stale sweep already closed is dropped
- * in silence (the gate handler returns without sending anything).
+ * How long a `gate_response` - either decision - waits for the run to move off
+ * `paused` before the client re-asks the server for the truth. Neither decision
+ * is acknowledged directly: `continue` re-invokes the executor (whose `resumed`
+ * frame moves the run), `stop` ends it with a `completed` frame, and a response
+ * for a pause the stale sweep already closed is dropped in silence (the gate
+ * handler returns without sending anything).
  */
-export const GATE_CONTINUE_ACK_MS = 10_000;
+export const GATE_ACK_WINDOW_MS = 10_000;
 
 export function useAgentExecutionDispatch() {
   const { sendJsonMessage } = useWebsocket();
@@ -827,7 +828,7 @@ export function useAgentExecutionDispatch() {
           const execution = useAgentExecutionStore.getState().executions[executionId];
           if (execution?.status !== 'paused') return;
           reconnect(execution.sessionId, executionId);
-        }, GATE_CONTINUE_ACK_MS);
+        }, GATE_ACK_WINDOW_MS);
       },
       reconnect,
     };

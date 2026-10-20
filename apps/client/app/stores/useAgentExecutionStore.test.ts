@@ -1092,6 +1092,85 @@ describe('useAgentExecutionStore - pendingGate lifecycle', () => {
     expect(useAgentExecutionStore.getState().executions['exec-gate-recon-done'].pendingGate).toBeUndefined();
   });
 
+  it('hydrateFromReconnect drops the stored gate for an ACTIVE run that reports no gate', () => {
+    // The ack-window reconcile's clearing path: by the time the reconnect is
+    // answered, the pause was resumed, so the snapshot is `running` with no
+    // `pendingGate`. Only that drop removes a card the server will no longer
+    // answer for, so the stored gate must not be preserved here.
+    const { startExecution, setPendingGate } = useAgentExecutionStore.getState();
+    startExecution('exec-gate-recon-live', 'session-A');
+    setPendingGate('exec-gate-recon-live', GATE);
+
+    useAgentExecutionStore.getState().hydrateFromReconnect({
+      executionId: 'exec-gate-recon-live',
+      sessionId: 'session-A',
+      status: 'running',
+      totalCreditsUsed: 1,
+      iterationCount: 3,
+    });
+
+    const exec = useAgentExecutionStore.getState().executions['exec-gate-recon-live'];
+    expect(exec.status).toBe('running');
+    expect(exec.pendingGate).toBeUndefined();
+  });
+
+  it('hydrateFromReconnect drops a gate that arrives on a RUNNING snapshot', () => {
+    // A snapshot read before an in-flight `gate_response` was applied can report
+    // `running` and still carry the gate. Restoring it there is what let a dead
+    // card survive the following `resumed` frame.
+    useAgentExecutionStore.getState().hydrateFromReconnect({
+      executionId: 'exec-gate-recon-race',
+      sessionId: 'session-A',
+      status: 'running',
+      totalCreditsUsed: 1,
+      iterationCount: 3,
+      pendingGate: GATE,
+    });
+
+    expect(useAgentExecutionStore.getState().executions['exec-gate-recon-race'].pendingGate).toBeUndefined();
+  });
+
+  it('hydrateFromReconnect drops a stored gate when a paused snapshot reports none', () => {
+    // The reconnect snapshot is authoritative for the gate as well as the
+    // status: the server writes `pendingGate` atomically with `paused`, so a
+    // paused snapshot without one means the pause is not a gate pause.
+    const { startExecution, setPendingGate } = useAgentExecutionStore.getState();
+    startExecution('exec-gate-recon-paused', 'session-A');
+    setPendingGate('exec-gate-recon-paused', GATE);
+
+    useAgentExecutionStore.getState().hydrateFromReconnect({
+      executionId: 'exec-gate-recon-paused',
+      sessionId: 'session-A',
+      status: 'paused',
+      totalCreditsUsed: 1,
+      iterationCount: 3,
+    });
+
+    expect(useAgentExecutionStore.getState().executions['exec-gate-recon-paused'].pendingGate).toBeUndefined();
+  });
+
+  it('setStatus clears the gate when the run leaves paused', () => {
+    const { startExecution, setPendingGate, setStatus } = useAgentExecutionStore.getState();
+    startExecution('exec-gate-resumed', 'session-A');
+    setPendingGate('exec-gate-resumed', GATE);
+
+    setStatus('exec-gate-resumed', 'running');
+
+    const exec = useAgentExecutionStore.getState().executions['exec-gate-resumed'];
+    expect(exec.status).toBe('running');
+    expect(exec.pendingGate).toBeUndefined();
+  });
+
+  it('setStatus keeps the gate while the run stays paused', () => {
+    const { startExecution, setPendingGate, setStatus } = useAgentExecutionStore.getState();
+    startExecution('exec-gate-still-paused', 'session-A');
+    setPendingGate('exec-gate-still-paused', GATE);
+
+    setStatus('exec-gate-still-paused', 'paused');
+
+    expect(useAgentExecutionStore.getState().executions['exec-gate-still-paused'].pendingGate).toEqual(GATE);
+  });
+
   it('ignores a confidence_gate that arrives after the run finished', () => {
     const { startExecution, setPendingGate, markCompleted } = useAgentExecutionStore.getState();
     startExecution('exec-gate-late', 'session-A');

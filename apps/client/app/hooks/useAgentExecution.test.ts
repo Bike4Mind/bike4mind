@@ -58,7 +58,7 @@ vi.mock('@client/app/utils/uiSideEffectDispatcher', () => ({
   dispatchUiSideEffects: dispatchUiSideEffectsMock,
 }));
 
-import { useAgentExecutionSubscriptions, useAgentExecutionDispatch, GATE_CONTINUE_ACK_MS } from './useAgentExecution';
+import { useAgentExecutionSubscriptions, useAgentExecutionDispatch, GATE_ACK_WINDOW_MS } from './useAgentExecution';
 import { useAgentExecutionStore } from '@client/app/stores/useAgentExecutionStore';
 import { AGENT_TRACE_ROUTE } from '@client/app/utils/agentTraceLink';
 
@@ -773,6 +773,32 @@ describe('useAgentExecutionSubscriptions -- confidence gate wire', () => {
     });
   });
 
+  it('a resumed frame clears a gate restored by a stale reconnect', async () => {
+    ws.readyState = 1; // OPEN
+    mountSubscriptions();
+    useAgentExecutionStore.getState().startExecution('exec-gate-7', 'sess-7');
+    // A reconnect whose snapshot was read before an in-flight `gate_response`
+    // was applied restores `paused` + the gate.
+    useAgentExecutionStore.getState().hydrateFromReconnect({
+      executionId: 'exec-gate-7',
+      sessionId: 'sess-7',
+      status: 'paused',
+      totalCreditsUsed: 0,
+      iterationCount: 2,
+      pendingGate: { iteration: 2, confidence: 0.42, reason: 'below threshold', requestedAt: 1234 },
+    });
+    expect(useAgentExecutionStore.getState().executions['exec-gate-7'].pendingGate).toBeDefined();
+
+    // The resume frame then moves the run off `paused`. The gate must not
+    // survive it: the card is status-blind, so it would paint a dead
+    // Proceed/Stop over a live run whose responses the server drops.
+    await handlers['resumed']({ action: 'resumed', executionId: 'exec-gate-7' });
+
+    const exec = useAgentExecutionStore.getState().executions['exec-gate-7'];
+    expect(exec.status).toBe('running');
+    expect(exec.pendingGate).toBeUndefined();
+  });
+
   it('respondToGate sends the matching gate_response for continue and stop', () => {
     const { result } = renderHook(() => useAgentExecutionDispatch());
 
@@ -821,9 +847,10 @@ describe('useAgentExecutionSubscriptions -- confidence gate wire', () => {
         ws.sendJsonMessage.mockClear();
 
         act(() => {
-          vi.advanceTimersByTime(GATE_CONTINUE_ACK_MS);
+          vi.advanceTimersByTime(GATE_ACK_WINDOW_MS);
         });
 
+        expect(ws.sendJsonMessage).toHaveBeenCalledTimes(1);
         expect(ws.sendJsonMessage).toHaveBeenCalledWith({
           action: 'agent_execute',
           command: 'reconnect',
@@ -856,7 +883,7 @@ describe('useAgentExecutionSubscriptions -- confidence gate wire', () => {
         // The executor's `resumed` frame lands inside the window.
         useAgentExecutionStore.getState().setStatus('exec-gate-5', 'running');
         act(() => {
-          vi.advanceTimersByTime(GATE_CONTINUE_ACK_MS);
+          vi.advanceTimersByTime(GATE_ACK_WINDOW_MS);
         });
 
         expect(ws.sendJsonMessage).not.toHaveBeenCalled();
@@ -877,7 +904,7 @@ describe('useAgentExecutionSubscriptions -- confidence gate wire', () => {
         // No `completed` frame: the pause was swept, so the server drops the
         // stop and the run still reads paused.
         act(() => {
-          vi.advanceTimersByTime(GATE_CONTINUE_ACK_MS);
+          vi.advanceTimersByTime(GATE_ACK_WINDOW_MS);
         });
 
         expect(ws.sendJsonMessage).toHaveBeenCalledTimes(1);

@@ -457,7 +457,15 @@ export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => 
 
   setStatus: (executionId, status) =>
     set(state => ({
-      executions: withExecution(state, executionId, exec => ({ ...exec, status })),
+      executions: withExecution(state, executionId, exec => ({
+        ...exec,
+        status,
+        // The gate lives only while the run is `paused`. A frame that moves the
+        // run off it (`resumed` for a pause the client already answered)
+        // invalidates the gate: the card renders on presence alone, so keeping
+        // it would paint a dead Proceed/Stop over a live run.
+        pendingGate: status === 'paused' ? exec.pendingGate : undefined,
+      })),
     })),
 
   appendIteration: (executionId, iteration) =>
@@ -591,10 +599,12 @@ export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => 
         // same bug the terminal transitions above guard against.
         pendingPermission: isActiveStatus(snapshot.status) ? snapshot.pendingPermission : undefined,
         isAborting: isActiveStatus(snapshot.status) ? exec.isAborting : false,
-        // Same guard for the confidence gate: `setPendingGate` writes it with
-        // `status: 'paused'`, so it is always live when present on an active run
-        // and stale on a terminal one.
-        pendingGate: isActiveStatus(snapshot.status) ? snapshot.pendingGate : undefined,
+        // Same guard for the confidence gate, and stricter: the gate implies
+        // `paused` (the executor writes both atomically), so any other status
+        // invalidates it. An active-but-running snapshot carrying a gate means
+        // the server read that gate before an in-flight `gate_response` landed;
+        // restoring it would outlive the pause.
+        pendingGate: snapshot.status === 'paused' ? snapshot.pendingGate : undefined,
         lastKnownIteration: Math.max(exec.lastKnownIteration, snapshot.iterationCount),
         // Step replay. Replace iterations only when the server actually
         // supplied them - `undefined` means "live-only reconnect" (legacy

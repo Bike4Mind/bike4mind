@@ -81,8 +81,8 @@ const ConfidenceGateCard: FC<ConfidenceGateCardProps> = ({ executionId }) => {
           variant="outlined"
           color="neutral"
           size="sm"
-          // Same outlined frame as Proceed, but red text to signal the stop
-          // action - mirrors `PermissionCard`'s Deny button.
+          // Mirrors `PermissionCard`'s Deny: outlined frame from Joy's default
+          // styling, red text, body background.
           sx={{
             borderRadius: '6px',
             backgroundColor: 'var(--joy-palette-background-body) !important',
