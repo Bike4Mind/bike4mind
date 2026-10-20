@@ -120,7 +120,7 @@ export interface paths {
     put?: never;
     /**
      * Execute a server-side tool
-     * @description Runs one of the built-in server-side tools (`weather_info`, `web_search`, `web_fetch`) and returns its result as JSON. Authenticate with a JWT access token only - API keys are NOT accepted on this endpoint. Rate-limited to 100 requests/hour per user, counted separately from other endpoints. `request_id` echoes the X-Request-ID response header.
+     * @description Runs one of the built-in server-side tools (`weather_info`, `web_search`, `web_fetch`, `decide`) and returns its result as JSON. Authenticate with a JWT access token only - API keys are NOT accepted on this endpoint. Rate-limited to 100 requests/hour per user, counted separately from other endpoints. `request_id` echoes the X-Request-ID response header.
      */
     post: operations['executeTool'];
     delete?: never;
@@ -1541,7 +1541,7 @@ export interface components {
      */
     executeToolRequest: {
       /** @enum {string} */
-      toolName: 'weather_info' | 'web_search' | 'web_fetch';
+      toolName: 'weather_info' | 'web_search' | 'web_fetch' | 'decide';
       input: {
         [key: string]: unknown;
       };
@@ -2553,6 +2553,7 @@ export interface components {
             | 'retrieve_knowledge_content'
             | 'count_knowledge_base'
             | 'describe_knowledge_base'
+            | 'decide'
             | 'list_my_data_lakes'
             | 'create_data_lake'
             | 'save_content_to_data_lake'
