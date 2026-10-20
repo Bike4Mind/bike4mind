@@ -1,6 +1,6 @@
 import { AxiosError, AxiosHeaders } from 'axios';
 import { describe, expect, it } from 'vitest';
-import { GENERATION_RATE_LIMITED_MESSAGE } from './generationErrors';
+import { GENERATION_ACCOUNT_CANNOT_PAY_MESSAGE, GENERATION_RATE_LIMITED_MESSAGE } from './generationErrors';
 import { describeMusicGenerationError, isMusicNotCancellableError } from './musicGenerationErrors';
 
 const FALLBACK = 'Could not start the song. Try again.';
@@ -57,5 +57,40 @@ describe('isMusicNotCancellableError', () => {
     expect(isMusicNotCancellableError(axiosError(409, null))).toBe(false);
     expect(isMusicNotCancellableError(axiosError(409, 'not_cancellable'))).toBe(false);
     expect(isMusicNotCancellableError(new Error('boom'))).toBe(false);
+  });
+});
+
+describe('describeMusicGenerationError billing context', () => {
+  const personal = { name: 'Me', personal: true };
+  const org = { name: 'Acme', personal: false };
+  const insufficient = () => axiosError(422, { error: 'x', errorCode: 'insufficient_credits' });
+
+  it('tells the user to switch accounts on a 403 from a create', () => {
+    expect(describeMusicGenerationError(axiosError(403, { error: 'x' }), FALLBACK, org)).toBe(
+      GENERATION_ACCOUNT_CANNOT_PAY_MESSAGE
+    );
+    expect(
+      describeMusicGenerationError(axiosError(403, { errorCode: 'billing_organization_mismatch' }), FALLBACK, null)
+    ).toBe(GENERATION_ACCOUNT_CANNOT_PAY_MESSAGE);
+  });
+
+  it('keeps the fallback for a 403 without billing context', () => {
+    expect(describeMusicGenerationError(axiosError(403, { error: 'x' }), FALLBACK)).toBe(FALLBACK);
+  });
+
+  it('names the paying account when credits run out', () => {
+    expect(describeMusicGenerationError(insufficient(), FALLBACK, personal)).toBe(
+      'Your personal credits are not enough for this song.'
+    );
+    expect(describeMusicGenerationError(insufficient(), FALLBACK, org)).toBe(
+      'Acme does not have enough credits for this song.'
+    );
+    expect(describeMusicGenerationError(insufficient(), FALLBACK, null)).toBe(
+      'You do not have enough credits for this song.'
+    );
+  });
+
+  it('lets a rate limit win over the billing message', () => {
+    expect(describeMusicGenerationError(axiosError(429, {}), FALLBACK, org)).toBe(GENERATION_RATE_LIMITED_MESSAGE);
   });
 });

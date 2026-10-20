@@ -13,7 +13,7 @@ vi.mock('@bike4mind/services', async () => ({
   organizationService: await import('../../../../b4m-core/services/src/organizationService/orgAuthority'),
 }));
 
-import { resolveMediaBillingOrgId } from './resolveMediaBillingOrgId';
+import { resolveApiKeyBillingOrg, resolveMediaBillingOrgId } from './resolveMediaBillingOrgId';
 
 const KEY_ORG = '64b000000000000000000001';
 const OTHER_ORG = '64b000000000000000000002';
@@ -99,5 +99,68 @@ describe('resolveMediaBillingOrgId', () => {
     await expect(resolveMediaBillingOrgId(req, OTHER_ORG)).resolves.toBe('resolved-by-session-rules');
     expect(mockResolveBillingOrgId).toHaveBeenCalledWith(req, OTHER_ORG);
     expect(mockFindById).not.toHaveBeenCalled();
+  });
+});
+
+describe('resolveApiKeyBillingOrg', () => {
+  const orgKey = { billingOwnerType: CreditHolderType.Organization, organizationId: KEY_ORG };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFindById.mockResolvedValue(orgWithMembers('u1'));
+  });
+
+  it.each([
+    ['no key', undefined],
+    ['a user-billed key', { billingOwnerType: CreditHolderType.User }],
+  ])('reports not_org_billed for %s without reading the org', async (_label, apiKeyInfo) => {
+    await expect(resolveApiKeyBillingOrg({ apiKeyInfo, user, requestedOrgId: OTHER_ORG })).resolves.toEqual({
+      kind: 'not_org_billed',
+    });
+    expect(mockFindById).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['omitted', undefined],
+    ["the key's own id", KEY_ORG],
+  ])('bills the key org when the request names %s', async (_label, requestedOrgId) => {
+    await expect(resolveApiKeyBillingOrg({ apiKeyInfo: orgKey, user, requestedOrgId })).resolves.toEqual({
+      kind: 'org',
+      organizationId: KEY_ORG,
+    });
+  });
+
+  it.each([
+    ['another org', OTHER_ORG],
+    ['null', null],
+  ])('reports mismatch when the request names %s', async (_label, requestedOrgId) => {
+    await expect(resolveApiKeyBillingOrg({ apiKeyInfo: orgKey, user, requestedOrgId })).resolves.toMatchObject({
+      kind: 'mismatch',
+    });
+    expect(mockFindById).not.toHaveBeenCalled();
+  });
+
+  it('reports stale when the key org no longer exists', async () => {
+    mockFindById.mockResolvedValue(null);
+
+    await expect(
+      resolveApiKeyBillingOrg({ apiKeyInfo: orgKey, user, requestedOrgId: undefined })
+    ).resolves.toMatchObject({ kind: 'stale', message: expect.stringMatching(/no longer exists/) });
+  });
+
+  it('reports stale when a non-admin holder has left the org', async () => {
+    mockFindById.mockResolvedValue(orgWithMembers());
+
+    await expect(
+      resolveApiKeyBillingOrg({ apiKeyInfo: orgKey, user, requestedOrgId: undefined })
+    ).resolves.toMatchObject({ kind: 'stale', message: expect.stringMatching(/no longer a member/) });
+  });
+
+  it('does not report an off-roster admin holder as stale', async () => {
+    mockFindById.mockResolvedValue(orgWithMembers());
+
+    await expect(
+      resolveApiKeyBillingOrg({ apiKeyInfo: orgKey, user: { id: 'admin', isAdmin: true }, requestedOrgId: undefined })
+    ).resolves.toEqual({ kind: 'org', organizationId: KEY_ORG });
   });
 });

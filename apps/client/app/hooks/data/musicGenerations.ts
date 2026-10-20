@@ -6,6 +6,7 @@ import { api } from '@client/app/contexts/ApiContext';
 import { ReadyState, useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { hasGenerationCreditSettlementChanged, invalidateGenerationCreditBalances } from './generationCreditBalances';
 import { fabFileKeys } from './fabFileKeys';
+import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { switcherBillingTarget } from './generationBillingTarget';
 import {
   generationJobPollInterval,
@@ -118,7 +119,14 @@ export function useCreateMusicGeneration() {
       void invalidateGenerationCreditBalances(queryClient);
       toast.success('Song generation started');
     },
-    onError: error => toast.error(describeMusicGenerationError(error, 'Could not start the song. Try again.')),
+    onError: error =>
+      toast.error(
+        describeMusicGenerationError(
+          error,
+          'Could not start the song. Try again.',
+          useSelectedAccount.getState().selectedAccount
+        )
+      ),
   });
 }
 

@@ -38,7 +38,9 @@ export const AgentExecutionStartRequestSchema = z.object({
   agent_id: z.string().optional(),
   /**
    * Bill this run to an organization's credit pool. The caller must belong to it; a
-   * non-member gets 404. Omit to bill the caller personally.
+   * non-member gets 404. Omit to bill the caller personally. An organization-billed API
+   * key always bills its own organization: omit this or set it to the key's; any other
+   * value is a 403 (`billing_organization_mismatch`).
    */
   organization_id: z.string().optional(),
   /**
