@@ -14,6 +14,7 @@ import {
 } from '@bike4mind/common';
 import { stripAllToolBlocks, stripToolDependentMessages } from '../toolPairingUtils';
 import { executeToolsBatch, shouldEndTurnAfterTools } from '../executeToolsBatch';
+import { logToolRound, summarizeToolOutcomes } from '../toolRoundTiming';
 import { recordToolResult, type RecordableToolUse } from '../recordToolResult';
 import {
   ChoiceEndReason,
@@ -243,6 +244,10 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
 
     // Tool chaining safeguard: Track and limit recursive tool calls
     const toolCallCount = options._internal?.toolCallCount ?? 0;
+    const requestStartedAt = options._internal?.requestStartedAt ?? Date.now();
+    if (options._internal?.requestStartedAt === undefined) {
+      options = { ...options, _internal: { ...options._internal, requestStartedAt } };
+    }
     const maxToolCalls = options._internal?.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
 
     // Multi-turn token accumulators. Each Bedrock InvokeModel call (every
@@ -472,6 +477,8 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
 
       if (options.stream) {
         let response;
+        const roundStart = Date.now();
+        let firstChunkAt: number | null = null;
         try {
           response = await this.invokeModelStream(input, options.abortSignal);
         } catch (err: unknown) {
@@ -492,6 +499,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         const isToolArgument = (choice: IChoice) => Boolean(func[choice.index]?.name) && (choice.toolArguments ?? true);
 
         for await (const streamEvent of response.body) {
+          firstChunkAt ??= Date.now();
           if (streamEvent.chunk?.bytes) {
             const json = new TextDecoder().decode(streamEvent.chunk.bytes);
             const { done, chunk } = this.translateStreamChunk(model, JSON.parse(json));
@@ -602,6 +610,18 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
           const toolArgumentChars = func.reduce((n, f) => n + (f?.parameters?.length ?? 0), 0);
           outputTokens = estimateStreamedOutputTokens(emittedTextChars + toolArgumentChars, model);
           await callback([], buildCompletionInfo());
+        }
+
+        if (!func.some(f => f.name)) {
+          logToolRound(Logger.globalInstance, {
+            model,
+            round: toolCallCount,
+            msToFirstChunk: firstChunkAt === null ? null : firstChunkAt - roundStart,
+            roundMs: Date.now() - roundStart,
+            sinceRequestMs: Date.now() - requestStartedAt,
+            stopReason: stopReason ?? null,
+            tools: [],
+          });
         }
 
         // If there is a tool being used, then
@@ -758,6 +778,16 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                 );
               }
             }
+
+            logToolRound(Logger.globalInstance, {
+              model,
+              round: toolCallCount,
+              msToFirstChunk: firstChunkAt === null ? null : firstChunkAt - roundStart,
+              roundMs: Date.now() - roundStart,
+              sinceRequestMs: Date.now() - requestStartedAt,
+              stopReason: stopReason ?? null,
+              tools: summarizeToolOutcomes(outcomes),
+            });
 
             if (
               shouldEndTurnAfterTools(

@@ -4,11 +4,13 @@
  * prompt usage combines with message_delta's cumulative counts.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import { Logger } from '@bike4mind/observability';
 import { ChatModels, estimateStreamedOutputTokens } from '@bike4mind/common';
 import { AnthropicBackend } from './anthropicBackend';
 import type { CompletionInfo, ICompletionOptionTools } from './backend';
 import { DEGENERATE_STREAM_STOP_REASON } from './degenerateStreamGuard';
+import { TOOL_ROUND_LOG_PREFIX, type ToolRoundEntry } from './toolRoundTiming';
 
 type Usage = Record<string, number | null>;
 
@@ -56,8 +58,8 @@ function eventStream(events: unknown[]) {
   };
 }
 
-function buildBackend(streams: unknown[]) {
-  const backend = new AnthropicBackend('test-key');
+function buildBackend(streams: unknown[], logger?: Logger) {
+  const backend = new AnthropicBackend('test-key', logger);
   (backend as unknown as { _api: unknown })._api = {
     messages: { create: async () => streams.shift() },
   };
@@ -186,5 +188,76 @@ describe('AnthropicBackend - message_start and message_delta usage', () => {
     expect(last.outputTokens).toBe(5);
     expect(last.cacheReadInputTokens).toBe(5000);
     expect(last.turnUsage).toEqual([{ inputTokens: 10, outputTokens: 5, cacheReadInputTokens: 5000 }]);
+  });
+});
+
+describe('AnthropicBackend - per-round tool timing log', () => {
+  it('logs one ToolRound line per round, in order, with the tool name and result size', async () => {
+    const logger = new Logger();
+    const info = vi.spyOn(logger, 'info').mockImplementation(() => {});
+    const terminalTurn = eventStream([
+      { type: 'message_start' },
+      textStart,
+      textDelta('It is sunny.'),
+      { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { input_tokens: 5, output_tokens: 3 } },
+      { type: 'message_stop' },
+    ]);
+    const backend = buildBackend([toolTurn, terminalTurn], logger);
+
+    await backend.complete(
+      ChatModels.CLAUDE_4_8_OPUS,
+      [{ role: 'user', content: 'weather?' }],
+      { stream: true, tools: [weatherTool], executeTools: true },
+      async () => undefined
+    );
+
+    const rounds = info.mock.calls
+      .map(([line]) => String(line))
+      .filter(line => line.startsWith(TOOL_ROUND_LOG_PREFIX))
+      .map(line => JSON.parse(line.slice(TOOL_ROUND_LOG_PREFIX.length + 1)) as ToolRoundEntry);
+
+    expect(rounds.map(r => r.round)).toEqual([0, 1]);
+    expect(rounds[0].tools).toEqual([{ name: 'get_weather', resultChars: 'sunny'.length }]);
+    expect(rounds[0].stopReason).toBe('tool_use');
+    expect(rounds[0].msToFirstChunk).not.toBeNull();
+    expect(rounds[1].tools).toEqual([]);
+    expect(rounds[1].stopReason).toBe('end_turn');
+    expect(rounds[1].sinceRequestMs).toBeGreaterThanOrEqual(rounds[0].sinceRequestMs);
+  });
+
+  it('logs the round that ends the turn after only end-of-turn tools ran', async () => {
+    const logger = new Logger();
+    const info = vi.spyOn(logger, 'info').mockImplementation(() => {});
+    const endTool: ICompletionOptionTools = {
+      toolSchema: { name: 'show_card', description: 'Render a card.', parameters: { type: 'object', properties: {} } },
+      toolFn: async () => 'card rendered',
+      endsTurnAfterText: true,
+    };
+    const answerThenEndTool = eventStream([
+      { type: 'message_start' },
+      textStart,
+      textDelta('Here is the answer.'),
+      { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'call_2', name: 'show_card' } },
+      { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{}' } },
+      { type: 'content_block_stop', index: 1 },
+      { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { input_tokens: 5, output_tokens: 3 } },
+      { type: 'message_stop' },
+    ]);
+    const backend = buildBackend([toolTurn, answerThenEndTool], logger);
+
+    await backend.complete(
+      ChatModels.CLAUDE_4_8_OPUS,
+      [{ role: 'user', content: 'weather?' }],
+      { stream: true, tools: [weatherTool, endTool], executeTools: true },
+      async () => undefined
+    );
+
+    const rounds = info.mock.calls
+      .map(([line]) => String(line))
+      .filter(line => line.startsWith(TOOL_ROUND_LOG_PREFIX))
+      .map(line => JSON.parse(line.slice(TOOL_ROUND_LOG_PREFIX.length + 1)) as ToolRoundEntry);
+
+    expect(rounds.map(r => r.round)).toEqual([0, 1]);
+    expect(rounds[1].tools).toEqual([{ name: 'show_card', resultChars: 'card rendered'.length }]);
   });
 });
