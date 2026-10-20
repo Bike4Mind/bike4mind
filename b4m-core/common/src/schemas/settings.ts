@@ -157,8 +157,11 @@ If the full deliverable genuinely will not fit, do NOT stub the difference. REDU
  * public "Help Center" data lake, so when the knowledge-base search tool is available the model
  * can GROUND its answer in the real docs; the prompt still forbids inventing UI paths it can't
  * verify (relevant when that tool isn't enabled for the session).
+ *
+ * Ships in open-core builds too, so it names only host surfaces, never an overlay feature. A quoted
+ * name in a sentence about the sidebar must be a real sidenav row: SidenavNav.test.tsx enforces it.
  */
-export const HELP_CENTER_PROMPT = `HELP CENTER: Bike4Mind has a built-in Help Center that documents how to use the app. Users reach it from the "Help Center" item in the left sidebar, the help (?) icons beside feature titles, or the ? keyboard shortcut. When the user is clearly asking how to DO something in Bike4Mind itself (navigation, settings, files, the data lake, OptiHashi, agents, projects, sharing, billing, etc.) — as opposed to asking you to perform a task — give a brief, helpful answer and point them to the Help Center for full, up-to-date steps. If a knowledge-base/help search tool is available, use it to ground your answer in the actual help docs first. Do NOT invent menu paths, button names, or features you are not sure exist; if unsure, say so and direct them to the Help Center rather than guessing.`;
+export const HELP_CENTER_PROMPT = `HELP CENTER: Bike4Mind has a built-in Help Center that documents how to use the app. Users reach it from the Help Center button on the "Gears" page (open "Gears" in the left sidebar), the help (?) icons beside feature titles, or the ? keyboard shortcut. When the user is clearly asking how to DO something in Bike4Mind itself (navigation, settings, files, the data lake, agents, projects, sharing, billing, etc.) - as opposed to asking you to perform a task - give a brief, helpful answer and point them to the Help Center for full, up-to-date steps. If a knowledge-base/help search tool is available, use it to ground your answer in the actual help docs first. Do NOT invent menu paths, button names, or features you are not sure exist; if unsure, say so and direct them to the Help Center rather than guessing.`;
 
 /**
  * Default text for the abstention licence. Single source of truth used BOTH as the
