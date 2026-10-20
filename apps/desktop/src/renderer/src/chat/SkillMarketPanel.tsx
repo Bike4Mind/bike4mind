@@ -82,8 +82,8 @@ function Grid({ listings, onOpen }: { listings: SkillMarketListing[]; onOpen: (i
 /**
  * The Skill Market as a screen beside Artifacts and Customize: browse and search the listings,
  * open one, import it; upload a local skill and manage the user's own listings. Rating,
- * reporting and editing tags stay on the web, one "Open on web" click away. `initial` opens straight onto one listing (an update badge in
- * Customize, or an unlisted share link).
+ * reporting and editing tags stay on the web, one "Open on web" click away. `initial` opens
+ * straight onto one listing (an update badge in Customize, or an unlisted share link).
  */
 export function SkillMarketPanel({
   onClose,
