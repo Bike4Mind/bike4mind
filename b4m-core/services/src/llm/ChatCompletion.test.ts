@@ -2019,6 +2019,58 @@ describe('ChatCompletionProcess', () => {
       );
     });
 
+    describe('data-source status copy', () => {
+      // Literal copy, not the module constants: this pins what the user reads.
+      const processHelloTurn = async (messageFileIds: string[] = []) => {
+        mockedGetLlmByModel.mockReturnValue({
+          complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+            await cb(['Hi!']);
+          }),
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: ChatModels.GPT4,
+        });
+        mockedGetAvailableModels.mockResolvedValue([
+          {
+            id: ChatModels.GPT4,
+            type: 'text',
+            name: 'GPT-4',
+            backend: ModelBackend.OpenAI,
+            max_tokens: 100,
+            contextWindow: 1000,
+            can_stream: false,
+            pricing: {},
+            supportsImageVariation: false,
+          },
+        ]);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: 'Hello' }],
+          messageTruncation: null,
+        });
+        mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+        mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+        await service.process({
+          body: { ...startQuestParams, messageFileIds, tools: [], projectId: undefined, organizationId: undefined },
+          logger: mockLogger,
+        });
+
+        return vi.mocked(service.sendStatusUpdate).mock.calls.map(([, status]) => status);
+      };
+
+      it('sends neutral copy, never the data-source copy, on a source-free turn', async () => {
+        const statuses = await processHelloTurn();
+
+        expect(statuses).toContain('Preparing context...');
+        expect(statuses).not.toContain('Gathering data sources...');
+      });
+
+      it('sends the data-source copy when the turn has an attached file', async () => {
+        const statuses = await processHelloTurn(['file-a']);
+
+        expect(statuses).toContain('Gathering data sources...');
+      });
+    });
+
     it('skips a prefetched quest that invoke already saved as an error', async () => {
       const complete = vi.fn();
       mockedGetLlmByModel.mockReturnValue({ complete, getModelInfo: vi.fn(), currentModel: ChatModels.GPT4 });
