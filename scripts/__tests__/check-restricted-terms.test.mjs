@@ -105,24 +105,34 @@ describe('compileTerms', () => {
     expect(m.test('')).toBe(false);
   });
 
-  it('does not echo the list when the fragments fail to compile together', () => {
-    // Stand in for a combined-pattern failure (for example "too large"), whose
-    // SyntaxError quotes the full source.
-    const RealRegExp = RegExp;
-    globalThis.RegExp = function (source, flags) {
-      if (source.startsWith('(?:(?:')) throw new SyntaxError(`Invalid regular expression: /${source}/`);
-      return new RealRegExp(source, flags);
-    };
-    let message = '';
-    try {
-      compileTerms(TERMS);
-    } catch (err) {
-      message = err.message;
-    } finally {
-      globalThis.RegExp = RealRegExp;
+  it('catches a term that a shorter list line is a prefix of, in either order', () => {
+    for (const terms of ['acme\nacmecorp', 'acmecorp\nacme']) {
+      const prefix = compileTerms(terms);
+      expect(prefix.test('src/acmecorp/client.ts'), terms).toBe(true);
+      expect(prefix.test('we ship acmecorp today'), terms).toBe(true);
+      expect(prefix.test('useAcmecorpClient'), terms).toBe(true);
+      expect(prefix.test('acmecorp'), terms).toBe(true);
     }
-    expect(message).toMatch(/does not compile as one pattern/);
-    expect(message).not.toMatch(/zorblax/i);
+  });
+
+  it('backtracks across alternatives and lazy quantifiers inside one line', () => {
+    expect(compileTerms('acme|acmecorp').test('acmecorp')).toBe(true);
+    expect(compileTerms('acme\\w*?').test('acmecorp')).toBe(true);
+  });
+
+  it('does not match an astral letter next to a term, and does not hang on one', () => {
+    // One astral letter supplied by the text, one by a fragment that can start on it.
+    expect(compileTerms('acme').test('\u{10428}acme')).toBe(false);
+    expect(compileTerms('acme').test('acme\u{10428}')).toBe(false);
+    expect(compileTerms('\\Wacme').test('\u{1F600}acmez')).toBe(false);
+    expect(compileTerms('.acme').test('\u{10428}acmez')).toBe(false);
+  });
+
+  it('folds a term that contains a combining mark the same way as the text', () => {
+    // Devi: NFD leaves the vowel signs as combining marks, and NFKC cannot compose them.
+    expect(compileTerms('\u0939\u093F\u0902\u0926\u0940').test('text \u0939\u093F\u0902\u0926\u0940 here')).toBe(
+      true
+    );
   });
 
   it('returns null for an empty list', () => {
@@ -176,6 +186,9 @@ describe('matches', () => {
     const punctuation = compileTerms('@acme\nacme-');
     expect(punctuation.test('user@acme.com')).toBe(true);
     expect(punctuation.test('acme-x')).toBe(true);
+    // A punctuation edge only covers its own side; the other one still has to hold.
+    expect(punctuation.test('user@acmecorp.com')).toBe(false);
+    expect(compileTerms('@acme@').test('a@acme@b')).toBe(true);
   });
 
   it('folds fragments the same way as the text they are matched against', () => {

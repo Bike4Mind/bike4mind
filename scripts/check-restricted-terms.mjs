@@ -50,14 +50,27 @@ const LOWER = /\p{Ll}/u;
 const UPPER = /\p{Lu}/u;
 const LETTER = /\p{L}/u;
 
+// Read whole characters, not code units: half of an astral character is a lone
+// surrogate, which `\p{L}` does not match, so indexing would see a word edge
+// where there is none.
+function charAt(text, i) {
+  return i >= text.length ? '' : String.fromCodePoint(text.codePointAt(i));
+}
+
+function charBefore(text, i) {
+  if (i <= 0) return '';
+  const low = text.charCodeAt(i - 1);
+  return low >= 0xdc00 && low <= 0xdfff ? text.slice(i - 2, i) : text.slice(i - 1, i);
+}
+
 /** Whether an identifier changes case or switches between letters and digits between `i - 1` and `i`. */
 function isHump(text, i) {
   if (i <= 0 || i >= text.length) return false;
-  const before = text[i - 1];
-  const at = text[i];
+  const before = charBefore(text, i);
+  const at = charAt(text, i);
   if (!ALNUM.test(before) || !ALNUM.test(at)) return false;
   if (LOWER.test(before) && UPPER.test(at)) return true; // fooBar
-  if (UPPER.test(before) && UPPER.test(at) && LOWER.test(text[i + 1] ?? '')) return true; // HTTPServer
+  if (UPPER.test(before) && UPPER.test(at) && LOWER.test(charAt(text, i + at.length))) return true; // HTTPServer
   return LETTER.test(before) !== LETTER.test(at); // foo2, 2foo
 }
 
@@ -67,56 +80,63 @@ function isHump(text, i) {
 // there, so that side is not checked.
 function hasWordEdges(text, start, match) {
   const end = start + match.length;
-  const first = match[0];
-  const last = match[match.length - 1];
+  const first = charAt(match, 0);
+  const last = charBefore(match, match.length);
   const leftOk =
-    (first !== undefined && !ALNUM.test(first)) || start === 0 || !ALNUM.test(text[start - 1]) || isHump(text, start);
+    !ALNUM.test(first) || start === 0 || !ALNUM.test(charBefore(text, start)) || isHump(text, start);
   const rightOk =
-    (last !== undefined && !ALNUM.test(last)) || end === text.length || !ALNUM.test(text[end]) || isHump(text, end);
+    !ALNUM.test(last) || end === text.length || !ALNUM.test(charAt(text, end)) || isHump(text, end);
   return leftOk && rightOk;
+}
+
+/** Folds text and list lines the same way, so an accent or a format character cannot hide a term. */
+function fold(s) {
+  return s.normalize('NFD').replace(/\p{Cf}|\p{Mn}/gu, '').normalize('NFKC');
 }
 
 /**
  * Compiles the term list into a matcher, or throws a message safe to print.
  * The matcher's `test` is boundary-aware (see `hasWordEdges`), so a term matches
  * inside `term_helper`, `term-cli` and `useTermClient` but not `termination`.
- * Fragments are folded the same way as the text they are matched against.
+ * Each line is compiled on its own: joined into one pattern, a shorter line that
+ * is a prefix of a longer one hides it, as alternation keeps the first match.
  */
 export function compileTerms(raw) {
   const fragments = [];
   (raw ?? '').split(/\r?\n/).forEach((line, i) => {
-    const fragment = line.trim().normalize('NFKC');
+    const fragment = fold(line.trim());
     if (!fragment || fragment.startsWith('#')) return;
+    let whole;
+    let edges;
     try {
-      new RegExp(fragment, 'iu');
+      whole = new RegExp(fragment, 'giu');
+      // The loop below tries one match at a time and cannot backtrack across `|`
+      // alternatives or lazy quantifiers, so also ask the plain pattern, which can.
+      edges = new RegExp(`(?<![\\p{L}\\p{N}])(?:${fragment})(?![\\p{L}\\p{N}])`, 'iu');
     } catch {
       throw new SafeError(`Line ${i + 1} of the restricted-term list is not a valid regular expression.`);
     }
-    fragments.push(`(?:${fragment})`);
-  });
-  if (fragments.length === 0) return null;
-  // Fragments that compile alone can still fail together (too large, clashing
-  // groups), and a RegExp SyntaxError quotes the whole pattern, so never let it out.
-  let pattern;
-  try {
-    pattern = new RegExp(`(?:${fragments.join('|')})`, 'giu');
-  } catch {
-    throw new SafeError('The restricted-term list is valid line by line but does not compile as one pattern.');
-  }
-  return {
-    test(text) {
-      // Fold first: fullwidth letters, a zero-width space or a strike-through
-      // overlay must not hide a term.
-      const folded = text.normalize('NFKC').replace(/\p{Cf}|\p{Mn}/gu, '');
+    fragments.push(text => {
+      if (edges.test(text)) return true;
       // The pattern is stateful (`g`): start every scan from the top, and after a
-      // rejected match step one character ahead so an overlapping one is still seen.
-      pattern.lastIndex = 0;
+      // rejected match step one whole character ahead so an overlapping one is
+      // still seen.
+      whole.lastIndex = 0;
       let match;
-      while ((match = pattern.exec(folded)) !== null) {
-        if (hasWordEdges(folded, match.index, match[0])) return true;
-        pattern.lastIndex = match.index + 1;
+      while ((match = whole.exec(text)) !== null) {
+        if (hasWordEdges(text, match.index, match[0])) return true;
+        whole.lastIndex = match.index + (text.codePointAt(match.index) > 0xffff ? 2 : 1);
       }
       return false;
+    });
+  });
+  if (fragments.length === 0) return null;
+  return {
+    test(text) {
+      // Fold first: fullwidth letters, a zero-width space, a strike-through
+      // overlay or an accented letter must not hide a term.
+      const folded = fold(text);
+      return fragments.some(test => test(folded));
     },
   };
 }
