@@ -5,7 +5,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
 const { state } = vi.hoisted(() => ({
-  state: { enforceCredits: true, credits: 9982.6, payerNote: null as string | null, model: 'model-a' },
+  state: { enforceCredits: true, credits: 9982.6, payerNote: null as string | null, model: 'model-a', compact: false },
 }));
 
 vi.mock('../subscription/CreditsExplanationModal', () => ({
@@ -18,6 +18,10 @@ vi.mock('@client/app/hooks/data/settings', () => ({
 }));
 vi.mock('@client/app/contexts/LLMContext', () => ({
   useLLM: (selector: (value: { model: string }) => unknown) => selector({ model: state.model }),
+}));
+vi.mock('./SessionBottom/ComposerStatusLine', () => ({
+  STATUS_ITEM_HEIGHT: 24,
+  useStatusLineCompact: () => state.compact,
 }));
 vi.mock('@client/app/hooks/data/useModelInfo', () => ({
   useModelInfo: () => ({
@@ -35,6 +39,14 @@ vi.mock('@client/app/hooks/data/useModelInfo', () => ({
         type: 'text',
         backend: 'openai',
         pricing: { 1000000: { input: 0.000002, output: 0.000008 } },
+      },
+      {
+        id: 'model-free',
+        name: 'Free Model',
+        type: 'text',
+        backend: 'openai',
+        freeToRun: true,
+        pricing: { 1000000: { input: 0.000001, output: 0.000004 } },
       },
     ],
   }),
@@ -56,6 +68,7 @@ describe('CreditBalanceChip', () => {
     state.credits = 9982.6;
     state.payerNote = null;
     state.model = 'model-a';
+    state.compact = false;
   });
 
   it('shows answers as the primary unit and opens the explanation instead of Billing', () => {
@@ -86,6 +99,64 @@ describe('CreditBalanceChip', () => {
       </CssVarsProvider>
     );
     expect(screen.getByTestId('credit-balance-chip').textContent).not.toBe(first);
+  });
+
+  it('marks the count as approximate', () => {
+    renderChip();
+    expect(screen.getByTestId('credit-balance-chip').textContent).toMatch(/^~[\d,]+ answers$/);
+    expect(screen.getByTestId('credit-balance-chip')).toHaveAccessibleName(/about [\d,]+ typical answers left on Model A/);
+  });
+
+  it('says 0 answers at a zero or negative balance', () => {
+    state.credits = 0;
+    const { unmount } = renderChip();
+    expect(screen.getByTestId('credit-balance-chip')).toHaveTextContent(/^0 answers$/);
+    unmount();
+    state.credits = -5;
+    renderChip();
+    expect(screen.getByTestId('credit-balance-chip')).toHaveTextContent(/^0 answers$/);
+  });
+
+  it('says <1 answer when the balance is positive but buys less than one', () => {
+    state.credits = 1;
+    renderChip();
+    expect(screen.getByTestId('credit-balance-chip')).toHaveTextContent(/^<1 answer$/);
+  });
+
+  it('shortens every count in compact mode, including 1, <1 and 0', () => {
+    state.compact = true;
+    const cases: [number, RegExp][] = [
+      [9982.6, /^~[\d,]+$/],
+      [1, /^<1$/],
+      [0, /^0$/],
+    ];
+    for (const [credits, pattern] of cases) {
+      state.credits = credits;
+      const { unmount } = renderChip();
+      expect(screen.getByTestId('credit-balance-chip').textContent).toMatch(pattern);
+      unmount();
+    }
+  });
+
+  it('shortens a single answer in compact mode', () => {
+    state.compact = true;
+    state.credits = 25;
+    renderChip();
+    expect(screen.getByTestId('credit-balance-chip')).toHaveTextContent(/^~1$/);
+  });
+
+  it('uses the singular for a single answer', () => {
+    state.credits = 25;
+    renderChip();
+    expect(screen.getByTestId('credit-balance-chip')).toHaveTextContent(/^~1 answer$/);
+  });
+
+  it('falls back to credits only, without a repeated clause, for a free model', () => {
+    state.model = 'model-free';
+    renderChip();
+    const chip = screen.getByTestId('credit-balance-chip');
+    expect(chip).not.toHaveTextContent(/answer/);
+    expect(chip).toHaveAccessibleName(/^9,98\d credits left on Free Model\. Learn about credits$/);
   });
 
   it('renders nothing while credits are not enforced', () => {

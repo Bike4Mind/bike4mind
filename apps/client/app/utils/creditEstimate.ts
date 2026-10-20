@@ -3,6 +3,7 @@ import {
   ARTIFACT_EMISSION_PROMPT,
   getTextModelCreditsPer1M,
   HELP_CENTER_PROMPT,
+  isModelDeprecated,
   REPLY_CHOICES_GUIDANCE,
   tokenEstimateMultiplier,
   type ModelInfo,
@@ -38,6 +39,7 @@ export interface ModelAnswerCost {
 
 /** Credits a typical answer costs on `model`, at the rates billing charges; null when unpriced or free. */
 export function typicalAnswerCredits(model: ModelInfo): number | null {
+  if (model.freeToRun) return null;
   const rates = getTextModelCreditsPer1M(model);
   if (!rates) return null;
   const multiplier = tokenEstimateMultiplier(model.id);
@@ -82,7 +84,7 @@ export function findAffordableModelOffer(
   if (selectedCredits === null || selectedCredits <= credits) return null;
 
   const affordable = models
-    .filter(model => model.type === 'text' && model.id !== selectedModelId && !model.disabled)
+    .filter(model => model.type === 'text' && model.id !== selectedModelId && !model.disabled && !isModelDeprecated(model))
     .map(model => ({ model, credits: preflightAnswerCredits(model) }))
     .filter((candidate): candidate is { model: ModelInfo; credits: number } => candidate.credits !== null)
     .filter(candidate => candidate.credits <= credits && candidate.credits < selectedCredits)

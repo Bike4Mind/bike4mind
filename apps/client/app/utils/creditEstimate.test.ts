@@ -3,6 +3,7 @@ import {
   ARTIFACT_EMISSION_PROMPT,
   ChatModels,
   getTextModelCreditsPer1M,
+  isModelDeprecated,
   tokenEstimateMultiplier,
   type ModelInfo,
 } from '@bike4mind/common';
@@ -66,6 +67,10 @@ describe('typicalAnswerCredits', () => {
     expect(typicalAnswerCredits(free)).toBeNull();
   });
 
+  it('returns null for a free-to-run model even when it still lists prices', () => {
+    expect(typicalAnswerCredits({ ...SONNET_55, freeToRun: true } as ModelInfo)).toBeNull();
+  });
+
   it('returns null for an unpriced model rather than calling it free', () => {
     expect(typicalAnswerCredits({ ...SONNET_55, pricing: undefined } as unknown as ModelInfo)).toBeNull();
   });
@@ -89,6 +94,34 @@ describe('preflight affordability', () => {
       findAffordableModelOffer([SONNET_55, GPT_MINI], SONNET_55.id, preflightAnswerCredits(SONNET_55)!)
     ).toBeNull();
     expect(findAffordableModelOffer([SONNET_55], SONNET_55.id, 1)).toBeNull();
+  });
+
+  it('never offers a disabled model', () => {
+    const disabled = { ...HAIKU_55, disabled: true } as ModelInfo;
+    const balance = preflightAnswerCredits(GPT_MINI)!;
+
+    expect(findAffordableModelOffer([SONNET_55, GPT_MINI, disabled], SONNET_55.id, balance)?.affordable.id).toBe(
+      GPT_MINI.id
+    );
+  });
+
+  it('never offers a deprecated model', () => {
+    const deprecated = { ...HAIKU_55, deprecationDate: '2020-01-01' } as ModelInfo;
+    const balance = preflightAnswerCredits(GPT_MINI)!;
+
+    expect(isModelDeprecated(deprecated)).toBe(true);
+    expect(findAffordableModelOffer([SONNET_55, GPT_MINI, deprecated], SONNET_55.id, balance)?.affordable.id).toBe(
+      GPT_MINI.id
+    );
+  });
+
+  it('currently offers an accessible free-to-run model first, since it needs 0 credits', () => {
+    const free = { ...GPT_MINI, id: 'free-model', name: 'Free', freeToRun: true } as ModelInfo;
+    const balance = preflightAnswerCredits(HAIKU_55)!;
+
+    expect(findAffordableModelOffer([SONNET_55, HAIKU_55, free], SONNET_55.id, balance)?.affordable.id).toBe(
+      'free-model'
+    );
   });
 });
 

@@ -2,10 +2,12 @@ import { Box, Button, Modal, ModalClose, ModalDialog, Typography } from '@mui/jo
 import { useMemo, useState } from 'react';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
+import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { useEffectiveCredits } from '@client/app/hooks/useEffectiveCredits';
 import { estimateAnswerCount, typicalAnswerCredits } from '@client/app/utils/creditEstimate';
 import { formatCreditAmount } from '@client/app/utils/formatCredits';
 import BillingModal from './BillingModal';
+import CreditsModal from './CreditsModal';
 
 interface CreditsExplanationModalProps {
   open: boolean;
@@ -14,7 +16,11 @@ interface CreditsExplanationModalProps {
 
 const CreditsExplanationModal = ({ open, onClose }: CreditsExplanationModalProps) => {
   const [billingOpen, setBillingOpen] = useState(false);
+  const [usageOpen, setUsageOpen] = useState(false);
   const model = useLLM(state => state.model);
+  const organizationId = useLLM(state => state.organizationId);
+  const defaultFreeCredits = Number(useGetSettingsValue('defaultFreeCredits')) || 0;
+  const showFreeCreditsNote = defaultFreeCredits > 0 && !organizationId;
   const credits = useEffectiveCredits();
   const { data: models } = useModelInfo();
   const selected = useMemo(() => models?.find(candidate => candidate.id === model), [models, model]);
@@ -23,12 +29,13 @@ const CreditsExplanationModal = ({ open, onClose }: CreditsExplanationModalProps
 
   const close = () => {
     setBillingOpen(false);
+    setUsageOpen(false);
     onClose();
   };
 
   return (
     <>
-      <Modal open={open && !billingOpen} onClose={close} data-testid="credits-explanation-modal">
+      <Modal open={open && !billingOpen && !usageOpen} onClose={close} data-testid="credits-explanation-modal">
         <ModalDialog sx={{ width: 'min(480px, calc(100vw - 32px))', p: 3 }}>
           <ModalClose />
           <Typography level="h3">How credits work</Typography>
@@ -39,9 +46,11 @@ const CreditsExplanationModal = ({ open, onClose }: CreditsExplanationModalProps
             <Typography level="h2" data-testid="credits-explanation-answers">
               {answers === null
                 ? 'Answer estimate unavailable'
-                : answers < 1
-                  ? 'Less than 1 answer left'
-                  : `About ${answers.toLocaleString('en-US')} ${answers === 1 ? 'answer' : 'answers'} left`}
+                : credits <= 0
+                  ? 'No typical answers left'
+                  : answers < 1
+                    ? 'Less than 1 typical answer left'
+                    : `About ${answers.toLocaleString('en-US')} typical ${answers === 1 ? 'answer' : 'answers'} left`}
             </Typography>
             <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
               {selected ? `On ${selected.name}, based on a typical answer.` : 'Based on a typical answer.'}
@@ -55,14 +64,24 @@ const CreditsExplanationModal = ({ open, onClose }: CreditsExplanationModalProps
             </Typography>
           </Box>
           <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
-            Free starting credits require no card. Your chats and files remain yours if the balance runs out.
+            {showFreeCreditsNote && 'Free starting credits require no card. '}Your chats and files remain yours if the
+            balance runs out.
           </Typography>
           <Button data-testid="credits-explanation-top-up" onClick={() => setBillingOpen(true)} sx={{ mt: 1 }}>
             See plans and top up
           </Button>
+          <Button
+            data-testid="credits-explanation-usage"
+            variant="plain"
+            color="neutral"
+            onClick={() => setUsageOpen(true)}
+          >
+            See usage
+          </Button>
         </ModalDialog>
       </Modal>
       <BillingModal open={billingOpen} focus="credits" onClose={close} />
+      <CreditsModal open={usageOpen} onClose={close} />
     </>
   );
 };
