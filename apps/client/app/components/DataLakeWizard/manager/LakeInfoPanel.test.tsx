@@ -225,7 +225,9 @@ describe('LakeInfoPanel - source card', () => {
 
   it('mounts the source card for the creator of a personal lake', () => {
     renderPanel({ ...baseLake, organizationId: '', isCreator: true } as ManagerLake);
-    expect(screen.getByTestId('datalake-selected-lake-source')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-selected-lake-source')).toContainElement(
+      screen.getByTestId('lake-source-connect-actions-stub')
+    );
   });
 
   it('omits the source card for an org lake the caller cannot manage', () => {
