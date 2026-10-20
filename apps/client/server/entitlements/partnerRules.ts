@@ -18,8 +18,8 @@
 import { partnerSignupRuleRepository } from '@bike4mind/database';
 import { normalizeTag, KNOWN_ENTITLEMENT_KEYS, unknownEntitlementKeys } from '@client/lib/entitlements/registry';
 import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
-import type { EntitlementKey } from '@client/lib/entitlements/types';
-import { BadRequestError } from '@server/utils/errors';
+import type { EntitlementKey } from '@bike4mind/server-utils/lib/entitlements/types';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 /** Resolved rule shape held in the cache (keyed by its normalized domain). */
 type ResolvedRule = {

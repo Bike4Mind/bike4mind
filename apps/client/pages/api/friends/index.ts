@@ -1,7 +1,7 @@
 import { activityRepository, Friendship, friendshipRepository, User, userRepository } from '@bike4mind/database';
 import { friendshipService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
-import { NotFoundError } from '@server/utils/errors';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import { logEvent } from '@server/utils/analyticsLog';
 import { FriendshipEvents } from '@bike4mind/common';

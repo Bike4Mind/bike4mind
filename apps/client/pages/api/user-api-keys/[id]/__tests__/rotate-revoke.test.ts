@@ -50,7 +50,7 @@ vi.mock('@bike4mind/database', () => ({
 const logEventSafe = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe }));
 
-import { NotFoundError } from '@server/utils/errors';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { realtimeConnectionRepository } from '@bike4mind/database';
 // Order matters: the first baseApi() call is rotate, the second is revoke.
 import '@pages/api/user-api-keys/[id]/rotate';

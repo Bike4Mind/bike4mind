@@ -13,7 +13,7 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 import { CcBridgeDeviceLabelSchema } from '@server/utils/ccBridgeDeviceLabel';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
-import { getClientIp } from '@server/utils/ip';
+import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 
 const RedeemRequestSchema = z.object({
   pairingToken: z.string().min(16).max(200),

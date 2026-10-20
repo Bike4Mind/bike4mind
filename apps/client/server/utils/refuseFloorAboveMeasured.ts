@@ -1,7 +1,7 @@
 import { forcedRetrievalFloorAboveMeasured, forcedRetrievalFloorAboveMeasuredMessage } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { resolveDefaultEmbeddingModel } from '@server/utils/resolveDefaultEmbeddingModel';
 
 /**

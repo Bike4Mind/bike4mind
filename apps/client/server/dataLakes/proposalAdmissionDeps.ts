@@ -10,7 +10,7 @@ import { FabFile } from '@bike4mind/database/content';
 import { fabFilesService } from '@bike4mind/services';
 import type { dataLakeService } from '@bike4mind/services';
 import type { AccessContext } from '@bike4mind/common';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 
 /**
  * Binds the acquisition queue's approval step to the ORDINARY URL ingestion door (#1671): the same

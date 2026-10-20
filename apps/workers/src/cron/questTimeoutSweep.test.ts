@@ -39,7 +39,7 @@ vi.mock('@bike4mind/observability', () => ({
   }),
 }));
 
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { MONGODB_URI: 'mongodb://localhost:27017/%STAGE%' },
 }));
 
@@ -48,7 +48,7 @@ vi.mock('sst', () => ({
 }));
 
 const mockEmitMetric = vi.fn().mockResolvedValue(undefined);
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   emitMetric: (...args: unknown[]) => mockEmitMetric(...args),
 }));
 

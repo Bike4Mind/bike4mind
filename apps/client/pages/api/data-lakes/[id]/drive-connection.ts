@@ -19,9 +19,9 @@ import {
   authorizeLakeConnectorAccess,
   authorizeLakeConnectorRead,
 } from '@server/dataLakes/authorizeLakeConnectorAccess';
-import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
-import { sendToQueue } from '@server/utils/sqs';
-import { NotFoundError } from '@server/utils/errors';
+import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { Request } from 'express';
 
 /**

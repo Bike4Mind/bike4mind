@@ -22,8 +22,8 @@
  */
 
 import { buildAgentPersonaPrompt, pairDataLakeTools, type IAgent, type OrchestrationDefaults } from '@bike4mind/common';
-import { buildDefaultOrchestrationProfile } from '@client/lib/agentOrchestration';
-import { isHeadlessConnection } from '@server/utils/headlessConnection';
+import { buildDefaultOrchestrationProfile } from '@bike4mind/server-utils/lib/agentOrchestration';
+import { isHeadlessConnection } from '@bike4mind/server-utils/utils/headlessConnection';
 
 /**
  * Subset of the orchestration fields the executor actually consumes when

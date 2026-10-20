@@ -20,8 +20,8 @@ vi.mock('@bike4mind/database', () => ({ userRepository: { update: h.update } }))
 vi.mock('@bike4mind/services', () => ({ userService: { createUser: h.createUser } }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.publish } } }));
-vi.mock('@server/utils/mailer/emailHelpers', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/utils/mailer/emailHelpers')>()),
+vi.mock('@bike4mind/server-utils/utils/mailer/emailHelpers', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/mailer/emailHelpers')>()),
   getLogoUrl: () => 'logo',
   buildEmailLogoImg: () => '',
 }));

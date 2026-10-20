@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { csrfProtection } from './csrfProtection';
-import { ForbiddenError } from '../utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import type { Request, Response, NextFunction } from 'express';
 
 const makeReq = (overrides: Partial<{ method: string; headers: Record<string, string> }> = {}): Request =>

@@ -31,8 +31,8 @@ import {
   resolveAgentExecutorTarget,
   AgentExecutorRejectedError,
 } from '@server/utils/dispatchAgentExecution';
-import { settleStrandedQuests } from '@server/utils/settleStrandedQuests';
-import { isHeadlessConnection } from '@server/utils/headlessConnection';
+import { settleStrandedQuests } from '@bike4mind/server-utils/utils/settleStrandedQuests';
+import { isHeadlessConnection } from '@bike4mind/server-utils/utils/headlessConnection';
 import { pinFilesToSessionKnowledge } from '@server/managers/sessionCrud';
 import { pinnableMessageFileIds } from '@server/managers/pinnableMessageFileIds';
 
@@ -86,7 +86,7 @@ export type StartAgentExecutionInput = {
   questId: string;
   query: string;
   model: string;
-  /** `HEADLESS_CONNECTION_ID` (`@server/utils/headlessConnection`) when there is no WS peer. */
+  /** `HEADLESS_CONNECTION_ID` (`@bike4mind/server-utils/utils/headlessConnection`) when there is no WS peer. */
   connectionId: string;
   organizationId?: string;
   /**

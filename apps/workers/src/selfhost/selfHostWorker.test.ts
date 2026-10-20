@@ -7,7 +7,7 @@ const { mockReceiveFromQueue, mockDeleteFromQueue } = vi.hoisted(() => ({
   mockDeleteFromQueue: vi.fn(),
 }));
 
-vi.mock('@server/utils/sqs', () => ({
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({
   receiveFromQueue: mockReceiveFromQueue,
   deleteFromQueue: mockDeleteFromQueue,
 }));

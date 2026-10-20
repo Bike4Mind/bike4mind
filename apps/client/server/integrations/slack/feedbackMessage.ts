@@ -1,5 +1,5 @@
 import { escapeSlackText } from '@bike4mind/services';
-import { FEEDBACK_LINK_LABELS, type FeedbackDeepLinks } from '@server/utils/feedbackDeepLinks';
+import { FEEDBACK_LINK_LABELS, type FeedbackDeepLinks } from '@bike4mind/server-utils/utils/feedbackDeepLinks';
 
 /**
  * Fields this module reads out of a feedback submission's (already-redacted)

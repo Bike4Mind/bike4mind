@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { IAgent, OrchestrationDefaults } from '@bike4mind/common';
+import { OrchestrationDefaultsSchema, type IAgent, type OrchestrationDefaults } from '@bike4mind/common';
 import { hasOrchestrationFields, pickOrchestrationAgent, buildDefaultOrchestrationProfile } from './agentOrchestration';
 
 const baseAgent = { id: 'a1', name: 'agent-1' } as unknown as IAgent;
@@ -69,6 +69,7 @@ describe('buildDefaultOrchestrationProfile', () => {
     defaultThoroughness: 'medium',
     fallbackModels: ['claude-haiku'],
     dagEnabled: true,
+    intentClassifier: OrchestrationDefaultsSchema.parse({}).intentClassifier,
   };
 
   it('marks the result as synthetic with a stable id', () => {

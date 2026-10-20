@@ -1,4 +1,4 @@
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { Context } from 'aws-lambda';
 import { randomUUID } from 'crypto';
 

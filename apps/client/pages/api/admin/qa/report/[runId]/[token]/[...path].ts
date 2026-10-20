@@ -2,8 +2,8 @@ import path from 'node:path';
 import { isSafeQaPath } from '@bike4mind/common';
 import { QaRun } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
-import { NotFoundError, UnauthorizedError } from '@server/utils/errors';
-import { getQaArtifactsStorage } from '@server/utils/storage';
+import { NotFoundError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
+import { getQaArtifactsStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { verifyQaReportToken } from '@server/qa/reportToken';
 
 const RUN_ID = /^[a-f0-9]{24}$/;

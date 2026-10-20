@@ -1,6 +1,6 @@
 import { questRepository } from '@bike4mind/database';
 import type { fabFilesService } from '@bike4mind/services';
-import { getGeneratedImageStorage } from '@server/utils/storage';
+import { getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 
 /** The generated bucket and reply lookup every file and notebook delete door hands deleteStoredObjects. */
 export const getGeneratedCopyStore = (): fabFilesService.GeneratedCopyStore => ({

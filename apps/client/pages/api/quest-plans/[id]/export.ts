@@ -2,10 +2,10 @@ import { questMasterPlanRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
-import { sendToQueue } from '@server/utils/sqs';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { isValidObjectId } from '@server/utils/objectId';
-import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
+import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { v4 as uuidv4 } from 'uuid';
 import { Logger } from '@bike4mind/observability';
 

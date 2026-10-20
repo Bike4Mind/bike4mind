@@ -59,7 +59,7 @@ import {
   AdminOrgAuditEvents,
   DataLakeAuditEvents,
   EmailAuditEvents,
-} from '@server/utils/auditLogEvents';
+} from '@bike4mind/server-utils/utils/auditLogEvents';
 
 export const ANALYTICS_EVENTS = {
   ...BriefcaseEvents,

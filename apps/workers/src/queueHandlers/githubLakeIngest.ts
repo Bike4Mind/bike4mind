@@ -20,7 +20,7 @@ import {
 import { getSettingByName } from '@bike4mind/utils';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { isSettingEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
-import { sendToQueue } from '@server/utils/sqs';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import {
   getBranchHeadSha,
   getGitHubLakeAppConfig,

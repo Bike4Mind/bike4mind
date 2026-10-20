@@ -14,7 +14,7 @@ import Stripe from 'stripe';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { resolveSubscriptionSource } from '@server/services/organizationService';
 import { sendToClient } from '@server/websocket/utils';
-import { emitMetric } from '@server/utils/cloudwatch';
+import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
 import { organizationService, creditService } from '@bike4mind/services';
 import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';

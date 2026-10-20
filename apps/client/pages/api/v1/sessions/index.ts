@@ -2,7 +2,7 @@ import { sessionService, dataLakeService } from '@bike4mind/services';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { decodeCursor, encodeCursor } from '@server/utils/cursorPagination';
-import { UnprocessableEntityError } from '@server/utils/errors';
+import { UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
 import {
   agentRepository,
   dataLakeAccessGrantRepository,
@@ -17,7 +17,7 @@ import {
   activityRepository,
 } from '@bike4mind/database';
 import { logEvent } from '@server/utils/analyticsLog';
-import { isValidObjectId } from '@server/utils/objectId';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import {
   SessionEvents,
@@ -37,7 +37,7 @@ import {
 import { surfaceAccessForRequest } from '@server/entitlements/surfaceAccess';
 import { projectService } from '@bike4mind/services';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
-import { ActivityType } from '@client/config/activityType';
+import { ActivityType } from '@bike4mind/server-utils/config/activityType';
 import { holdsApiKeyScope } from '@server/middlewares/apiKeyScopeGate';
 import { CreateSessionRequestBody } from '../../../../types/api';
 import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';

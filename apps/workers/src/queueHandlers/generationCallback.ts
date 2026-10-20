@@ -8,10 +8,10 @@ import {
   GENERATION_CALLBACK_MAX_RECEIVE_COUNT,
   getDeliveryAttempt,
   isFinalDeliveryAttempt,
-} from '@server/utils/sqsDelivery';
+} from '@bike4mind/server-utils/utils/sqsDelivery';
 import { GenerationCallbackMessageSchema } from '@bike4mind/server-utils/generationCallback/messages';
 import { toQuestPollBody } from '@server/utils/questPollBody';
-import { assertUrlAllowed, SsrfError } from '@server/utils/ssrfProtection';
+import { assertUrlAllowed, SsrfError } from '@bike4mind/server-utils/utils/ssrfProtection';
 import { buildSignedWebhookHeaders, RetryableError, WEBHOOK_HTTP_TIMEOUT_MS } from '@workers/webhooks/signedWebhook';
 
 /**

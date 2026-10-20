@@ -4,7 +4,7 @@ const { config, mockPost } = vi.hoisted(() => ({
   config: { QA_ALARM_SLACK_WEBHOOKS: undefined as string | undefined },
   mockPost: vi.fn(),
 }));
-vi.mock('@server/utils/config', () => ({ Config: config }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: config }));
 vi.mock('axios', () => ({ default: { post: (...a: unknown[]) => mockPost(...a) } }));
 
 import { defaultAlarmDeps, parseWebhookMap } from './evaluateAlarm';

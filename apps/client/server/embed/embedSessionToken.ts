@@ -1,6 +1,6 @@
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 
 // Embed session token - a short-lived signed JWT minted by POST /api/embed/session
 // so the long-lived embed API key secret never reaches the browser. The widget

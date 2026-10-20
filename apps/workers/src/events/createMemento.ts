@@ -14,7 +14,7 @@ import {
 import { apiKeyService, mementoService } from '@bike4mind/services';
 import { MementoEvaluationService } from '@bike4mind/services/llm';
 import { isMementosV2Enabled, writeFactToLedger } from '@server/memory/mementoLedgerMirror';
-import { generateMementoSummaryEmbedding } from '@server/utils/mementoEmbedding';
+import { generateMementoSummaryEmbedding } from '@bike4mind/server-utils/utils/mementoEmbedding';
 
 const { findMostSimilarMemento } = mementoService;
 

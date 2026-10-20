@@ -5,7 +5,7 @@ import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
 import { grantingLakes, resolveAccessibleLakes } from '@server/dataLakes';
 import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { FILES_READ_SCOPES } from '@server/files/fileScopes';
 import { holdsDataLakeReadScope } from '@server/dataLakes/dataLakeScopes';
 import { normalizeId } from '@bike4mind/utils/normalizeId';

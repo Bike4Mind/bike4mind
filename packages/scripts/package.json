@@ -91,6 +91,7 @@
     "@bike4mind/llm-adapters": "workspace:*",
     "@bike4mind/observability": "workspace:*",
     "@bike4mind/services": "workspace:*",
+    "@bike4mind/server-utils": "workspace:*",
     "@bike4mind/utils": "workspace:*",
     "@inquirer/prompts": "^8.5.2",
     "axios": "1.20.0",

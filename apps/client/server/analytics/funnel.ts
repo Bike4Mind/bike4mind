@@ -1,7 +1,7 @@
 import type { Request } from 'express';
 import type { IUserAcquisition } from '@bike4mind/common';
 import { adminSettingsRepository, User, userRepository } from '@bike4mind/database';
-import type { AcquisitionTouches } from '@client/lib/subscriptions/acquisition';
+import type { AcquisitionTouches } from '@bike4mind/server-utils/lib/subscriptions/acquisition';
 import { readConsentedAcquisitionTouches } from './acquisition';
 import { emitProductEvent, HOST_PRODUCT_ID } from './emitActiveEvent';
 import { pseudonymizeUserId } from './pseudonymize';

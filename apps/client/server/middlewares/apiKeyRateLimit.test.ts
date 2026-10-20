@@ -37,7 +37,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('@server/utils/cloudwatch', () => ({ emitMetric: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetric: vi.fn().mockResolvedValue(undefined) }));
 
 import { apiKeyRateLimit } from './apiKeyRateLimit';
 import { buildRateLimitKeys } from '@server/utils/apiKeyRateLimitCheck';

@@ -8,7 +8,7 @@ import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/d
 // repositories, the models and the unique index they build are REAL, which is the point: every unit
 // layer around this seam mocks the repository, so none of them can show that the folder claim
 // actually leaves the index.
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { GOOGLE_CLIENT_ID: 'test-client-id', GOOGLE_CLIENT_SECRET: 'test-client-secret' },
 }));
 vi.mock('@server/security/tokenEncryption', () => ({

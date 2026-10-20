@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
 import { MCPClient } from '@bike4mind/mcp';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
-import { BadRequestError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { respond } from '@server/utils/respond';
 import { assertMcpServerEnabled } from '@server/utils/mcpServerFlag';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';

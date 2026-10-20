@@ -6,7 +6,7 @@ import qs from 'qs';
 import { Request } from 'express';
 import { Organization, organizationRepository } from '@bike4mind/database/infra';
 import { UserActivityCounter } from '@bike4mind/database/auth';
-import { isValidObjectId } from '@server/utils/objectId';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 
 const OrganizationStatsSchema = z.object({
   organizationIds: z.array(z.string()),

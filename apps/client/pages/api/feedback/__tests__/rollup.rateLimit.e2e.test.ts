@@ -45,7 +45,7 @@ vi.mock('@server/auth/auth', () => ({
 vi.mock('@server/analytics/analyticsMiddleware', () => ({
   analyticsMiddleware: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { MONGODB_URI: 'mongodb://localhost/%STAGE%', STAGE: 'test' },
   isDevelopment: () => true,
 }));

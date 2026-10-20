@@ -1,5 +1,5 @@
 import { isGPTImageModel } from '@bike4mind/common';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 /**
  * Reject `referenceImageFabFileIds` for a model that cannot carry them, before any work is queued.

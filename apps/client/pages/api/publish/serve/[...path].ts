@@ -5,7 +5,7 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 import type { Request, Response, NextFunction } from 'express';
 import { marked } from 'marked';
 import type { Types } from 'mongoose';
-import { getPublishedArtifactsStorage } from '@server/utils/storage';
+import { getPublishedArtifactsStorage } from '@bike4mind/server-utils/utils/storage/index';
 import {
   PublishedArtifact,
   liveShareTokens,
@@ -27,7 +27,7 @@ import {
   type SandboxAsset,
 } from '@server/services/publish';
 import { stripSearchResultCardFences, type CitableSource } from '@bike4mind/common';
-import { getClientIp } from '@server/utils/ip';
+import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { parsePublishPath } from '@server/services/publish/parsePublishPath';
 import { HASH_BRIDGE_JS } from '@server/services/publish/fragmentNav';
 import { requestHasGateProof } from '@server/services/publish/publishGateToken';
