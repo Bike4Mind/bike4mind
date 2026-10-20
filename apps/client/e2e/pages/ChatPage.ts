@@ -278,8 +278,9 @@ export class ChatPage extends BasePage {
    *
    * Caveat: this only guarantees no placeholder is currently pending, not that an artifact
    * rendered. waitForStreamingComplete can return before "<artifact" has streamed (the stop
-   * button flashed by unseen and any new reply text counted as done); in that narrow window the count is already 0 and this returns at once. Fine for these prompts, which
-   * do stream an artifact - revisit if a prompt relies on this as proof one mounted.
+   * button flashed by unseen and any new reply text counted as done); in that narrow window the
+   * count is already 0 and this returns at once. Fine for these prompts, which do stream an
+   * artifact - revisit if a prompt relies on this as proof one mounted.
    */
   async waitForArtifactSettled(timeout: number = TIMEOUTS.IMAGE_GENERATION) {
     const root = this.aiResponseRoot.last();
