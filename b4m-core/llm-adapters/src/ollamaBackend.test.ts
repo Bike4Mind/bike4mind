@@ -470,6 +470,70 @@ describe('OllamaBackend.buildMessages image handling', () => {
   });
 });
 
+// A client running its own tool loop (desktop/CLI, executeTools:false) replays earlier rounds as
+// tool_use/tool_result history. Ollama's native /api/chat 400s ("Value looks like object, but
+// can't find closing '}' symbol") when a replayed call's arguments are a JSON string.
+describe('OllamaBackend.buildMessages replayed tool calls', () => {
+  const answer = [{ message: { content: 'ok', tool_calls: [] }, prompt_eval_count: 3, eval_count: 2 }];
+
+  async function sentMessages(history: unknown[]) {
+    const { backend, chat } = makeBackend(answer);
+    await backend.complete(
+      'qwen3:8b',
+      history as any,
+      { stream: false, executeTools: false, tools: [mathTool(async () => '4')] } as any,
+      async () => {}
+    );
+    return (chat.mock.calls[0][0] as { messages: Array<Record<string, any>> }).messages;
+  }
+
+  const replayedCall = (call: Record<string, unknown>) => [
+    { role: 'user', content: 'What is 2+2?' },
+    { role: 'assistant', content: '', tool_calls: [{ id: 'call_1', type: 'function', function: call }] },
+    { role: 'tool', tool_call_id: 'call_1', content: '4' },
+  ];
+
+  it('sends tool_use history to Ollama with object arguments', async () => {
+    const messages = await sentMessages([
+      { role: 'user', content: 'What is 2+2?' },
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'toolu_1', name: 'math_evaluate', input: { expression: '2+2' } }],
+      },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: '4' }] },
+    ]);
+    const assistant = messages.find(m => m.role === 'assistant');
+    expect(assistant?.tool_calls?.[0]?.function).toEqual({
+      name: 'math_evaluate',
+      arguments: { expression: '2+2' },
+    });
+    expect(messages.find(m => m.role === 'tool')?.content).toBe('4');
+  });
+
+  it('parses string arguments on OpenAI-shaped tool_calls', async () => {
+    const messages = await sentMessages(
+      replayedCall({ name: 'math_evaluate', arguments: JSON.stringify({ expression: '2+2' }) })
+    );
+    expect(messages[1].tool_calls[0].function.arguments).toEqual({ expression: '2+2' });
+  });
+
+  it('keeps arguments that are already an object', async () => {
+    const messages = await sentMessages(replayedCall({ name: 'math_evaluate', arguments: { expression: '1' } }));
+    expect(messages[1].tool_calls[0].function.arguments).toEqual({ expression: '1' });
+  });
+
+  it('wraps unparseable or non-object arguments under _raw and maps empty ones to {}', async () => {
+    const malformed = await sentMessages(replayedCall({ name: 'math_evaluate', arguments: '{"expression":' }));
+    expect(malformed[1].tool_calls[0].function.arguments).toEqual({ _raw: '{"expression":' });
+
+    const array = await sentMessages(replayedCall({ name: 'math_evaluate', arguments: '[1,2]' }));
+    expect(array[1].tool_calls[0].function.arguments).toEqual({ _raw: '[1,2]' });
+
+    const empty = await sentMessages(replayedCall({ name: 'math_evaluate', arguments: '' }));
+    expect(empty[1].tool_calls[0].function.arguments).toEqual({});
+  });
+});
+
 // Ollama applies its own 4096-token default when a request carries no `options`
 // object, truncating the prompt from the front - which drops the tool block out
 // of the chat template and makes a tool-capable model answer that it has no
