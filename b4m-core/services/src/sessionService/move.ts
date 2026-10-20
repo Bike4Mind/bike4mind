@@ -51,9 +51,13 @@ export const moveSession = async (userId: string, parameters: MoveSessionParamet
   // to the user before entering a workspace; otherwise the move back out would unset those values as owned.
   const userSetFields = userSetSessionFields(session, adapters.workspaceSessionSettings, session.userSetFields);
   const recordUserSet = userSetFields.some(field => !session.userSetFields?.includes(field));
-  const data = { id, surface: target, ...(recordUserSet ? { userSetFields } : {}) };
   const updated =
-    ownedFields.length > 0 ? await db.sessions.update(data, { unset: ownedFields }) : await db.sessions.update(data);
+    ownedFields.length > 0
+      ? await db.sessions.update(
+          { id, surface: target, ...(recordUserSet ? { userSetFields } : {}) },
+          { unset: ownedFields }
+        )
+      : await db.sessions.update({ id, surface: target, ...(recordUserSet ? { userSetFields } : {}) });
   if (!updated) throw new NotFoundError('Session not found');
   return updated;
 };
