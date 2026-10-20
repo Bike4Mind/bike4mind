@@ -28,7 +28,9 @@ function ListingCard({ listing, onOpen }: { listing: SkillMarketListing; onOpen:
       role="button"
       tabIndex={0}
       onKeyDown={event => {
-        if (event.key === 'Enter') onOpen();
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        onOpen();
       }}
       data-testid="skill-market-card"
     >
