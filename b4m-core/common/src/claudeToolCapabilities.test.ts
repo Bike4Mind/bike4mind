@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { completionsSupportsToolSearch, supportsToolChanges, supportsToolSearch } from './claudeToolCapabilities';
+import {
+  completionsSupportsToolChanges,
+  completionsSupportsToolSearch,
+  supportsToolChanges,
+  supportsToolSearch,
+} from './claudeToolCapabilities';
 import { CHAT_MODELS, ChatModels, isClaudeModelId, ModelBackend } from './models';
 
 // [tool search, tool changes]. Every Claude id in ChatModels must be listed, so a new one forces a decision.
@@ -136,5 +141,27 @@ describe('completionsSupportsToolSearch', () => {
       false
     );
     expect(completionsSupportsToolSearch({ id: ChatModels.GPT4o, backend: ModelBackend.OpenAI })).toBe(false);
+  });
+});
+
+describe('completionsSupportsToolChanges', () => {
+  it('is true for a direct Anthropic model that supports tool changes', () => {
+    expect(completionsSupportsToolChanges({ id: ChatModels.CLAUDE_5_5_OPUS, backend: ModelBackend.Anthropic })).toBe(
+      true
+    );
+  });
+
+  it('is false for the Bedrock-served id, which the completions route does not forward natively', () => {
+    expect(supportsToolChanges({ id: ChatModels.CLAUDE_5_5_OPUS_BEDROCK, backend: ModelBackend.Bedrock })).toBe(true);
+    expect(
+      completionsSupportsToolChanges({ id: ChatModels.CLAUDE_5_5_OPUS_BEDROCK, backend: ModelBackend.Bedrock })
+    ).toBe(false);
+  });
+
+  it('is false for a Claude model without tool changes and for non-Claude models', () => {
+    expect(completionsSupportsToolChanges({ id: ChatModels.CLAUDE_4_1_OPUS, backend: ModelBackend.Anthropic })).toBe(
+      false
+    );
+    expect(completionsSupportsToolChanges({ id: ChatModels.GPT4o, backend: ModelBackend.OpenAI })).toBe(false);
   });
 });
