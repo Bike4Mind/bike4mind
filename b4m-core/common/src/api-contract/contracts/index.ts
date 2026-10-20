@@ -37,7 +37,7 @@ import {
 import { createTranscriptionUploadContract, createTranscriptionContract } from './transcription.contract';
 import { createSessionContract } from './sessionCreate.contract';
 import { listSessionsContract } from './sessionList.contract';
-import { listWhatsNewContract } from './whatsNew.contract';
+import { getWhatsNewMediaContract, listWhatsNewContract } from './whatsNew.contract';
 import {
   listDataLakesContract,
   getDataLakeContract,
@@ -132,6 +132,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   createVoiceSessionContract,
   endVoiceSessionContract,
   listWhatsNewContract,
+  getWhatsNewMediaContract,
   listProjectsContract,
   getProjectContract,
   createProjectContract,

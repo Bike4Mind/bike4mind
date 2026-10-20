@@ -830,6 +830,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/whats-new/media/{id}/{asset}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get release note media
+     * @description Redirects to one file of a published release note video: `landscape` and `portrait` are the 16:9 and 9:16 MP4s, the `-poster` assets their still images. The `video` URLs that listWhatsNew returns for uploaded files point here, so a browser can use them as `src` and `poster` as they are. Public: no credentials are needed, and the note must be one listWhatsNew would show. The redirect is cacheable for up to 10 minutes and its target stays valid for at least 50 minutes after that, so follow it rather than storing the target. Rate limited per client IP.
+     */
+    get: operations['getWhatsNewMedia'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/projects': {
     parameters: {
       query?: never;
@@ -12819,6 +12839,88 @@ export interface operations {
         };
       };
       /** @description `limit` is out of range, or `cursor` is malformed or was issued by a different endpoint. A cursor is opaque: pass back exactly the `next_cursor` you were given. On a deployment that proxies an upstream feed, a cursor issued by that upstream which can no longer be served there ends the list (200 with empty `data`) rather than returning 422. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Per-IP rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Unexpected server error. */
+      500: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  getWhatsNewMedia: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+        asset: 'landscape' | 'landscape-poster' | 'portrait' | 'portrait-poster';
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description `Location` is a time-limited signed GET for the file. */
+      303: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Signed URL of the file. */
+          Location?: string;
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description No published note has this id, or the note has no such file, or the file is not an upload this deployment serves (a linked URL is listed as is, not through this route). */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

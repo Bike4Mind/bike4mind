@@ -53,6 +53,7 @@ vi.mock('@bike4mind/database', () => ({
   releaseNoteRepository: { listPublished: mockListPublished },
 }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: mockGetSettings }));
+vi.mock('sst', () => ({ Resource: { fabFileBucket: { name: 'files-bucket' } } }));
 vi.mock('@server/releaseNotes/upstreamFeed', () => ({
   getWhatsNewFeedUrl: mockFeedUrl,
   fetchUpstreamFeed: mockFetchUpstream,
@@ -120,6 +121,7 @@ async function errorOf(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.unstubAllEnvs();
   mockGetSettings.mockResolvedValue({ releaseNotesConfig: JSON.stringify({ enabled: true }) });
   mockFeedUrl.mockReturnValue(undefined);
   mockListPublished.mockImplementation(async ({ after, limit }: { after?: Keyset; limit: number }) => {
@@ -167,6 +169,21 @@ describe('GET /api/v1/whats-new', () => {
       portrait_poster_url: null,
     });
     expect('video' in body.data[1]).toBe(false);
+  });
+
+  it('serves an uploaded video file as an absolute URL to the media route', async () => {
+    vi.stubEnv('APP_URL', 'https://app.example.com');
+    const video = {
+      landscapeUrl: 'https://files-bucket.s3.us-east-2.amazonaws.com/modals/wide.mp4',
+      landscapePosterUrl: null,
+      portraitUrl: null,
+      portraitPosterUrl: null,
+    };
+    mockListPublished.mockResolvedValueOnce({ items: [{ ...NOTES[0], video }], hasMore: false });
+    const body = (await run())._getJSONData();
+    expect(body.data[0].video.landscape_url).toBe(
+      `https://app.example.com/api/v1/whats-new/media/${NOTES[0].id}/landscape`
+    );
   });
 
   it('passes the request time to listPublished so embargoed notes stay out', async () => {

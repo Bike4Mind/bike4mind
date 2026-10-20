@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ModalVideoShapeSchema, type ModalVideo } from '../types/entities/ModalTypes';
+import { ModalVideoShapeSchema, type ModalVideo, type ModalVideoField } from '../types/entities/ModalTypes';
 
 export const RELEASE_NOTES_SCHEMA_VERSION = 1;
 
@@ -110,6 +110,20 @@ export const fromPublicReleaseNoteVideo = (video: PublicReleaseNoteVideo): Modal
   portraitPosterUrl: video.portrait_poster_url ?? null,
 });
 
+/** Each file of a release note video, by its path segment in GET /api/v1/whats-new/media/{id}/{asset}. */
+export const RELEASE_NOTE_MEDIA_FIELDS = {
+  landscape: 'landscapeUrl',
+  'landscape-poster': 'landscapePosterUrl',
+  portrait: 'portraitUrl',
+  'portrait-poster': 'portraitPosterUrl',
+} as const satisfies Record<string, ModalVideoField>;
+export type ReleaseNoteMediaAsset = keyof typeof RELEASE_NOTE_MEDIA_FIELDS;
+
+export const ReleaseNoteMediaParamsSchema = z.object({
+  id: z.string().min(1),
+  asset: z.enum(Object.keys(RELEASE_NOTE_MEDIA_FIELDS) as [ReleaseNoteMediaAsset, ...ReleaseNoteMediaAsset[]]),
+});
+
 /**
  * A release note as GET /api/v1/whats-new serves it. An allowlist: provenance (sourcePrs, deployedSha),
  * workflow state (status, editedAt) and storage fields never reach the public wire.
@@ -128,7 +142,8 @@ export const PublicReleaseNoteSchema = z.object({
       importance: z.number().int().min(1).max(3),
     })
   ),
-  // Additive: absent when the note has no video. Hosts are not checked here; an upstream feed's videos
+  // Additive: absent when the note has no video. An uploaded file is served as an absolute URL to
+  // GET /api/v1/whats-new/media/{id}/{asset}. Hosts are not checked here; an upstream feed's videos
   // are vetted on ingest (server/releaseNotes/upstreamFeed.ts).
   video: PublicReleaseNoteVideoSchema.nullable().optional(),
 });
