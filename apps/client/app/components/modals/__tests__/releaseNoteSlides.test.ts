@@ -38,6 +38,11 @@ describe('releaseNoteToModal', () => {
     expect(slide.video).toBeNull();
   });
 
+  it('passes the note video through to the slide', () => {
+    const video = { landscapeUrl: 'https://d111.cloudfront.net/wide.mp4', portraitUrl: null };
+    expect(releaseNoteToModal(note({ video })).video).toEqual(video);
+  });
+
   it('falls back to the release tag when the headline is blank', () => {
     expect(releaseNoteToModal(note({ headline: '  ' })).title).toBe('v1.2.3');
   });

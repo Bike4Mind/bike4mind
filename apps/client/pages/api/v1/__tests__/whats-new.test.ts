@@ -150,6 +150,25 @@ describe('GET /api/v1/whats-new', () => {
     expect(res.getHeader('Cache-Control')).toBe('public, s-maxage=300, stale-while-revalidate=600');
   });
 
+  it('includes the video when the note has one and omits the key otherwise', async () => {
+    const video = {
+      landscapeUrl: 'https://d111.cloudfront.net/wide.mp4',
+      landscapePosterUrl: null,
+      portraitUrl: null,
+      portraitPosterUrl: null,
+      _internal: 'x',
+    };
+    mockListPublished.mockResolvedValueOnce({ items: [{ ...NOTES[0], video }, NOTES[1]], hasMore: false });
+    const body = (await run())._getJSONData();
+    expect(body.data[0].video).toEqual({
+      landscapeUrl: 'https://d111.cloudfront.net/wide.mp4',
+      landscapePosterUrl: null,
+      portraitUrl: null,
+      portraitPosterUrl: null,
+    });
+    expect('video' in body.data[1]).toBe(false);
+  });
+
   it('passes the request time to listPublished so embargoed notes stay out', async () => {
     const before = Date.now();
     await run();

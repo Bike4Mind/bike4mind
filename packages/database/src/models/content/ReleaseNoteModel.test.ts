@@ -64,6 +64,38 @@ describe('ReleaseNoteRepository.upsertGenerated', () => {
     expect(await ReleaseNote.countDocuments()).toBe(1);
   });
 
+  it('keeps a stored video when an unedited note is regenerated', async () => {
+    await releaseNoteRepository.upsertGenerated(makeNote());
+    const video = { landscapeUrl: 'https://d111.cloudfront.net/wide.mp4' };
+    await ReleaseNote.updateOne({ releaseTag: 'v1.2.3.4' }, { $set: { video } });
+
+    const { note } = await releaseNoteRepository.upsertGenerated(makeNote({ headline: 'Regenerated' }));
+    expect(note.headline).toBe('Regenerated');
+    expect(note.video?.landscapeUrl).toBe(video.landscapeUrl);
+  });
+
+  it('keeps the video of an edited note across regeneration', async () => {
+    await releaseNoteRepository.upsertGenerated(makeNote());
+    const { note: stored } = await releaseNoteRepository.upsertGenerated(makeNote());
+    await releaseNoteRepository.edit(stored.id, { video: { landscapeUrl: 'https://d111.cloudfront.net/wide.mp4' } });
+
+    const { note, preserved } = await releaseNoteRepository.upsertGenerated(makeNote({ headline: 'Regenerated' }));
+    expect(preserved).toBe(true);
+    expect(note.video?.landscapeUrl).toBe('https://d111.cloudfront.net/wide.mp4');
+    expect(note.editedAt).not.toBeNull();
+  });
+
+  it('sets editedAt when a video is attached and cleared', async () => {
+    const { note: stored } = await releaseNoteRepository.upsertGenerated(makeNote());
+    const set = await releaseNoteRepository.edit(stored.id, {
+      video: { portraitUrl: 'https://d111.cloudfront.net/t.mp4' },
+    });
+    expect(set.kind === 'ok' && set.note.editedAt).toBeInstanceOf(Date);
+
+    const cleared = await releaseNoteRepository.edit(stored.id, { video: null });
+    expect(cleared.kind === 'ok' && cleared.note.video).toBeNull();
+  });
+
   it('treats a duplicate key from a concurrent unedited insert as a race, not an edit', async () => {
     await ReleaseNote.create({ ...makeNote(), editedAt: null });
     const spy = vi

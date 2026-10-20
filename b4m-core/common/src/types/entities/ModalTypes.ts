@@ -64,24 +64,25 @@ export function getModalVideoErrors(
   return errors;
 }
 
+/** The video's fields with no host check, for reading stored or upstream data written under another policy. */
+export const ModalVideoShapeSchema = z.object({
+  landscapeUrl: z.string().nullable().optional(),
+  landscapePosterUrl: z.string().nullable().optional(),
+  portraitUrl: z.string().nullable().optional(),
+  portraitPosterUrl: z.string().nullable().optional(),
+});
+
 /**
  * Product video for a modal slide. Landscape is the 16:9 cut shown on desktop, portrait the 9:16 cut
  * shown on mobile; the slider falls back to the other orientation when one is missing. The API passes
  * its deployment's extra origins; the bare `ModalVideoSchema` allows only the static host list.
  */
 export function createModalVideoSchema(policy: ModalMediaUrlPolicy = {}) {
-  return z
-    .object({
-      landscapeUrl: z.string().nullable().optional(),
-      landscapePosterUrl: z.string().nullable().optional(),
-      portraitUrl: z.string().nullable().optional(),
-      portraitPosterUrl: z.string().nullable().optional(),
-    })
-    .superRefine((video, ctx) => {
-      for (const [field, message] of Object.entries(getModalVideoErrors(video, policy))) {
-        ctx.addIssue({ code: 'custom', path: [field], message });
-      }
-    });
+  return ModalVideoShapeSchema.superRefine((video, ctx) => {
+    for (const [field, message] of Object.entries(getModalVideoErrors(video, policy))) {
+      ctx.addIssue({ code: 'custom', path: [field], message });
+    }
+  });
 }
 
 export const ModalVideoSchema = createModalVideoSchema();

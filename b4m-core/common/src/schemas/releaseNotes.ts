@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ModalVideoShapeSchema } from '../types/entities/ModalTypes';
 
 export const RELEASE_NOTES_SCHEMA_VERSION = 1;
 
@@ -30,6 +31,8 @@ export const ReleaseNoteSchema = z.object({
   publishAt: z.coerce.date(),
   // Set by a human edit; a non-null value makes the note immune to regeneration.
   editedAt: z.coerce.date().nullable(),
+  // Attached by an admin edit, never generated.
+  video: ModalVideoShapeSchema.nullable().optional(),
   schemaVersion: z.number().int(),
 });
 export type ReleaseNote = z.infer<typeof ReleaseNoteSchema>;
@@ -102,5 +105,7 @@ export const PublicReleaseNoteSchema = z.object({
       importance: z.number().int().min(1).max(3),
     })
   ),
+  // Additive: absent when the note has no video. Hosts are checked on write, not on read.
+  video: ModalVideoShapeSchema.nullable().optional(),
 });
 export type PublicReleaseNote = z.infer<typeof PublicReleaseNoteSchema>;

@@ -17,8 +17,12 @@ import {
 } from '@mui/joy';
 import DeleteIcon from '@mui/icons-material/Delete';
 import { toast } from 'sonner';
-import type { ReleaseNoteCategory, ReleaseNoteItem } from '@bike4mind/common';
+import type { ModalVideo, ReleaseNoteCategory, ReleaseNoteItem } from '@bike4mind/common';
+import { getModalVideoErrors } from '@bike4mind/common';
 import { getErrorMessage } from '@client/app/utils/error';
+import { useConfig } from '@client/app/hooks/data/settings';
+import AdminModalVideoFields from '@client/app/components/admin/AdminModalVideoFields';
+import { videoUrlsOf } from '@client/app/components/modals/whatsNewSlideMedia';
 import { type AdminReleaseNote, useEditReleaseNote } from './useReleaseNotes';
 
 const CATEGORIES: ReleaseNoteCategory[] = ['new', 'improved', 'fixed'];
@@ -33,13 +37,19 @@ const ReleaseNoteEditDialog: React.FC<Props> = ({ note, onClose }) => {
   const [headline, setHeadline] = useState(note.headline);
   const [summary, setSummary] = useState(note.summary);
   const [items, setItems] = useState<ReleaseNoteItem[]>(note.items);
+  const [video, setVideo] = useState<ModalVideo | null>(note.video ?? null);
+  // Stored and uploaded URLs pass the form check whatever their host (see AdminModalVideoFields)
+  const [trustedUrls, setTrustedUrls] = useState<ReadonlySet<string>>(() => new Set(videoUrlsOf(note.video)));
+  const { data: config } = useConfig();
+  const videoChanged = JSON.stringify(video) !== JSON.stringify(note.video ?? null);
+  const videoInvalid = Object.keys(getModalVideoErrors(video, { allowedUrls: trustedUrls })).length > 0;
 
   const updateItem = (index: number, patch: Partial<ReleaseNoteItem>) =>
     setItems(prev => prev.map((item, i) => (i === index ? { ...item, ...patch } : item)));
 
   const onSave = () =>
     edit.mutate(
-      { id: note.id, edit: { headline, summary, items } },
+      { id: note.id, edit: { headline, summary, items, ...(videoChanged && { video }) } },
       {
         onSuccess: () => {
           toast.success('Release note saved');
@@ -115,10 +125,22 @@ const ReleaseNoteEditDialog: React.FC<Props> = ({ note, onClose }) => {
             >
               Add item
             </Button>
+            <AdminModalVideoFields
+              value={video}
+              onChange={setVideo}
+              bucketName={config?.fabfileBucketName}
+              trustedUrls={trustedUrls}
+              onUploaded={url => setTrustedUrls(prev => new Set(prev).add(url))}
+            />
           </Stack>
         </DialogContent>
         <DialogActions>
-          <Button onClick={onSave} loading={edit.isPending} data-testid="release-note-edit-save-btn">
+          <Button
+            onClick={onSave}
+            loading={edit.isPending}
+            disabled={videoInvalid}
+            data-testid="release-note-edit-save-btn"
+          >
             Save
           </Button>
           <Button variant="plain" color="neutral" onClick={onClose}>

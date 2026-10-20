@@ -29,6 +29,18 @@ const ReleaseNoteSchema = new Schema(
     status: { type: String, enum: ['scheduled', 'hidden'], required: true },
     publishAt: { type: Date, required: true },
     editedAt: { type: Date, default: null },
+    video: {
+      type: new Schema(
+        {
+          landscapeUrl: { type: String, default: null },
+          landscapePosterUrl: { type: String, default: null },
+          portraitUrl: { type: String, default: null },
+          portraitPosterUrl: { type: String, default: null },
+        },
+        { _id: false }
+      ),
+      default: null,
+    },
     schemaVersion: { type: Number, required: true },
   },
   {
@@ -47,7 +59,7 @@ export const ReleaseNote =
   (mongoose.models.ReleaseNote as mongoose.Model<IReleaseNoteDocument>) ||
   model<IReleaseNoteDocument>('ReleaseNote', ReleaseNoteSchema);
 
-export type GeneratedReleaseNote = Omit<ReleaseNoteData, 'editedAt'>;
+export type GeneratedReleaseNote = Omit<ReleaseNoteData, 'editedAt' | 'video'>;
 
 /** Decoded keyset cursor: the last row of the previous page. */
 export interface ReleaseNoteKeyset {
@@ -66,7 +78,7 @@ export type ReleaseNoteAdminStatus = 'scheduled' | 'hidden' | 'published';
 export type ReleaseNoteMutationResult =
   { kind: 'ok'; note: IReleaseNoteDocument } | { kind: 'notFound' } | { kind: 'emptyItems' };
 
-export type ReleaseNoteEdit = Partial<Pick<ReleaseNoteData, 'headline' | 'summary' | 'items'>>;
+export type ReleaseNoteEdit = Partial<Pick<ReleaseNoteData, 'headline' | 'summary' | 'items' | 'video'>>;
 
 const PAGE_SORT = { publishAt: -1, _id: -1 } as const;
 

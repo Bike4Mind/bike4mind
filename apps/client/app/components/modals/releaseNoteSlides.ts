@@ -36,7 +36,7 @@ export function releaseNoteToModal(note: PublicReleaseNote): IModalDocument {
     numberOfViews: { type: 'firstTimeView', value: 0, threshold: 1, tags: [] },
     imageUrl: null,
     images: null,
-    video: null,
+    video: note.video ?? null,
     textMessage: null,
     generationMetadata: null,
     createdAt: publishedAt,

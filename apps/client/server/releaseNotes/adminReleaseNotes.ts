@@ -8,6 +8,7 @@ import {
   findDenied,
   parseReleaseNotesConfig,
   ReleaseNotesConfigSchema,
+  type ModalVideo,
   type ReleaseNoteItem,
   type ReleaseNotesConfig,
 } from '@bike4mind/common';
@@ -23,6 +24,7 @@ export interface AdminReleaseNote {
   headline: string;
   summary: string;
   items: ReleaseNoteItem[];
+  video: ModalVideo | null;
   state: ReleaseNoteAdminStatus;
   publishAt: string;
   deployedAt: string;
@@ -51,6 +53,7 @@ export const toAdminReleaseNote = (
   headline: note.headline,
   summary: note.summary,
   items: note.items.map(({ category, text, importance, sourcePrs }) => ({ category, text, importance, sourcePrs })),
+  video: note.video ?? null,
   state: note.status === 'hidden' ? 'hidden' : note.publishAt <= now ? 'published' : 'scheduled',
   publishAt: note.publishAt.toISOString(),
   deployedAt: note.deployedAt.toISOString(),
