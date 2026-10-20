@@ -323,6 +323,27 @@ describe('run', () => {
     expect(output.toLowerCase()).not.toContain('zorblax');
   });
 
+  it('scans short terms and UTF-16LE text in a binary file', async () => {
+    const routes = prRoutes({
+      files: [file('short.bin', undefined, { changes: 10 }), file('utf16.bin', undefined, { changes: 10 })],
+    });
+    routes['/repos/acme/widgets/contents/short.bin'] = {
+      ...response(''),
+      arrayBuffer: async () => new Uint8Array([0, ...new TextEncoder().encode('glp'), 0]).buffer,
+    };
+    routes['/repos/acme/widgets/contents/utf16.bin'] = {
+      ...response(''),
+      arrayBuffer: async () => new Uint8Array([0x89, 0, ...new TextEncoder().encode('z\0o\0r\0b\0l\0a\0x\0')]).buffer,
+    };
+    const { code, output } = await check({ terms: 'glp', routes });
+    expect(code).toBe(1);
+    expect(output).toContain('file short.bin (binary text)');
+
+    const utf16 = await check({ routes });
+    expect(utf16.code).toBe(1);
+    expect(utf16.output).toContain('file utf16.bin (binary text)');
+  });
+
   it('checks an added file whose patch is omitted', async () => {
     const routes = prRoutes({ files: [file('data.txt', undefined, { status: 'added', changes: 0 })] });
     routes['/repos/acme/widgets/contents/data.txt'] = response('zorblax');

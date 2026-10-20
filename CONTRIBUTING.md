@@ -288,7 +288,7 @@ The **Restricted Terms** check blocks a maintainer-configured list of restricted
 Two details the location tells you:
 
 - A hit named `commit <sha> ...` is in that commit's own diff, which stays in the branch history even if a later commit removes the line. Squash or rewrite that commit; editing the file in a new commit does not clear it.
-- A file GitHub cannot show a diff for (binary, or too large) is checked in full at the PR head, not line by line.
+- A file GitHub cannot show a diff for (binary, or too large) is checked in full at the commit being checked (for binary files, its readable text), not line by line.
 
 ### Fixing a dependency advisory
 

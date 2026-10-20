@@ -221,8 +221,8 @@ async function scanFiles({ files, matcher, gh, repo, ref, hit, note, label = '' 
       continue;
     } else {
       // GitHub omits the patch for binary files and for diffs it considers too
-      // large. Fetch the whole file at the head ref: anything else is checked in
-      // full, since its added lines cannot be isolated.
+      // large. Fetch the whole file at `ref` and check it in full, since its
+      // added lines cannot be isolated.
       let content;
       try {
         const path = file.filename.split('/').map(encodeURIComponent).join('/');
@@ -233,9 +233,13 @@ async function scanFiles({ files, matcher, gh, repo, ref, hit, note, label = '' 
       }
       if (isBinary(content)) {
         // Binary content is still published with the repository, so scan its
-        // printable runs rather than skipping it; it has no lines to number.
+        // printable text rather than skipping it; it has no lines to number. The
+        // NUL-stripped view catches UTF-16LE strings, which have a NUL between
+        // every character and so never form a printable run on their own.
         const text = content.toString('latin1');
-        lines = (text.match(/[\x20-\x7e]{4,}/g) ?? []).map(run => ({ text: run }));
+        lines = [text, text.replace(/\0/g, '')]
+          .flatMap(view => view.match(/[\x20-\x7e]+/g) ?? [])
+          .map(run => ({ text: run }));
       } else {
         lines = content
           .toString('utf8')
