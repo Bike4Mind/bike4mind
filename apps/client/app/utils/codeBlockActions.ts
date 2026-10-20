@@ -5,14 +5,18 @@ import { useMemo, useSyncExternalStore } from 'react';
  * Registration seam for extra controls on a fenced code block in chat (a Run button, say).
  *
  * Core ships no actions; a surface registers one (typically on mount, unregistering on
- * unmount so the action stays scoped to that surface) and both code-block renderers pick it
- * up: CodeBlockHeader for short fences and CodeArtifactPreviewCard for long ones. Keep those
- * two in sync - a long script renders through the card, never the header.
+ * unmount so the action stays scoped to that surface) and every chat code renderer picks it
+ * up. Keep these in sync:
+ * - reply fences: CodeBlockHeader up to 10 lines, CodeArtifactPreviewCard beyond that
+ *   (PromptReplies createCodeComponent);
+ * - prompt fences: always CodeBlockHeader (UserPrompt);
+ * - code artifacts: CodeArtifactPreviewCard, whose language defaults to 'typescript'
+ *   (artifacts/handlers/code.tsx).
  */
 
 export type CodeBlockActionProps = {
   code: string;
-  /** The fence's language as written (e.g. 'py' or 'python'); 'text' when it had none. */
+  /** The language as written (e.g. 'py' or 'python'); 'text' for a fence that had none. */
   language: string;
   /**
    * Element under the code where the action may portal its output (createPortal). Null on
@@ -36,7 +40,11 @@ function publish(next: readonly CodeBlockAction[]) {
   listeners.forEach(listener => listener());
 }
 
-/** Register an action. Returns an unregister function. */
+/**
+ * Register an action. Returns an unregister function. One live registration per id: a
+ * second registration replaces the first (whose cleanup then does nothing). Registrations
+ * are not counted, so the same object registered twice is gone after the first cleanup.
+ */
 export function registerCodeBlockAction(action: CodeBlockAction): () => void {
   publish([...actions.filter(existing => existing.id !== action.id), action]);
   return () => {
