@@ -183,8 +183,9 @@ describe('POST /api/files/createFabFile - data-lake tags', () => {
   it('allows a key holding datalake:write to join a lake via its prefix arm alone', async () => {
     h.lakeFind.mockResolvedValue([LAKE]);
     const { res } = makeRes();
+    // files:write too: the route gate (stubbed here) and the release-notes narrowing both need it.
     await run(body({ tags: [{ name: 'acme:legal', strength: 1 }] }), res, {
-      apiKeyInfo: { scopes: ['datalake:write'] },
+      apiKeyInfo: { scopes: ['files:write', 'datalake:write'] },
     });
 
     expect(h.fabFileCreate).toHaveBeenCalled();
@@ -378,8 +379,8 @@ describe('POST /api/files/createFabFile - lake write authorization beyond the cr
 });
 
 describe('POST /api/files/createFabFile - scope gate', () => {
-  it('requires files:write at the baseApi route gate', () => {
-    expect(h.baseApiOptions).toEqual({ requiredScopes: ['files:write'] });
+  it('requires files:write, or release-notes:write for the narrowed form below, at the baseApi route gate', () => {
+    expect(h.baseApiOptions).toEqual({ requiredScopes: ['files:write', 'release-notes:write'] });
   });
 });
 
@@ -497,5 +498,44 @@ describe('POST /api/files/createFabFile - admin modal video', () => {
     const { res } = makeRes();
     await expect(run(mp4({ purpose: 'other' }), res, asAdmin)).rejects.toThrow();
     expect(h.fabFileCreate).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/files/createFabFile - release-notes:write key', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.lakeFind.mockResolvedValue([]);
+    h.userFindById.mockResolvedValue({ id: 'u1', isAdmin: true, storageLimit: 1e12, currentStorageSize: 0 });
+    h.fabFileCreate.mockImplementation(async data => ({ id: 'f1', ...data }));
+    h.signUrl.mockResolvedValue('https://signed.test/put');
+  });
+
+  const releaseKey = { apiKeyInfo: { scopes: ['release-notes:write'] } };
+  const mp4 = (overrides: Record<string, unknown> = {}) =>
+    body({ fileName: 'demo.mp4', mimeType: 'video/mp4', fileSize: 1000, purpose: 'modal-media', ...overrides });
+
+  it("uploads What's New media for an admin user under the modals prefix", async () => {
+    const { res, json } = makeRes();
+    await run(mp4(), res, { ...releaseKey, user: { id: 'u1', isAdmin: true } });
+
+    const persisted = h.fabFileCreate.mock.calls[0][0] as { filePath: string };
+    expect(persisted.filePath).toMatch(/^modals\/.+\.mp4$/);
+    expect(json.mock.calls[0][0]).toHaveProperty('mediaUrl');
+  });
+
+  it.each([
+    ['without a purpose', body(), { user: { id: 'u1', isAdmin: true } }],
+    ['with another purpose', mp4({ purpose: 'other' }), { user: { id: 'u1', isAdmin: true } }],
+    ['for a non-admin user', mp4(), { user: { id: 'u1', isAdmin: false } }],
+  ])('refuses any other file %s with a 403', async (_case, payload, overrides) => {
+    const { res } = makeRes();
+    await expect(run(payload, res, { ...releaseKey, ...overrides })).rejects.toMatchObject({ statusCode: 403 });
+    expect(h.fabFileCreate).not.toHaveBeenCalled();
+  });
+
+  it('leaves a files:write key free to upload an ordinary file', async () => {
+    const { res } = makeRes();
+    await run(body(), res, { apiKeyInfo: { scopes: ['files:write'] }, user: { id: 'u1', isAdmin: true } });
+    expect(h.fabFileCreate).toHaveBeenCalled();
   });
 });

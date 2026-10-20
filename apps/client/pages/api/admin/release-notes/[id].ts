@@ -23,7 +23,9 @@ const EditSchema = z
   .strict()
   .refine(edit => Object.values(edit).some(value => value !== undefined), { message: 'Nothing to update' });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).patch(async (req, res) => {
+const api = baseApi({ requiredScopes: [ApiKeyScope.ADMIN, ApiKeyScope.RELEASE_NOTES_WRITE] });
+
+const handler = api.patch(async (req, res) => {
   if (!req.user?.isAdmin) {
     throw new ForbiddenError('Unauthorized. Admin access required.');
   }

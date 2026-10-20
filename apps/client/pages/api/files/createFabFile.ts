@@ -28,7 +28,11 @@ import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { resolveBrowserUploadUrl } from '@server/utils/browserUploadUrl';
-import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
+import {
+  FILES_WRITE_OR_RELEASE_NOTES_SCOPES,
+  FILES_WRITE_SCOPES,
+  isReleaseNotesOnlyUpload,
+} from '@server/files/fileScopes';
 import { getS3Url } from '@client/app/utils/s3Url';
 import { Resource } from 'sst';
 
@@ -45,7 +49,7 @@ const createFabFileSchema = fabFilesService.createFabFileSchema
 const isModalVideo = (params: { mimeType?: string | null; fileName: string }) =>
   params.mimeType === 'video/mp4' && getFileExtension(params.fileName) === 'mp4';
 
-const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
+const handler = baseApi({ requiredScopes: FILES_WRITE_OR_RELEASE_NOTES_SCOPES })
   .use((req, res, next) => {
     if (!req.ability?.can(Permission.create, FabFile)) {
       throw new BadRequestError('Unauthorized');
@@ -58,6 +62,11 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
 
       const parsed = createFabFileSchema.parse(req.body);
       const adminModalMedia = !!user.isAdmin && parsed.purpose === 'modal-media';
+      if (!adminModalMedia && isReleaseNotesOnlyUpload(req)) {
+        throw new ForbiddenError("This API key may only upload What's New media; files:write is required", {
+          required_scopes: FILES_WRITE_SCOPES,
+        });
+      }
       const params = adminModalMedia ? { ...parsed, prefix: MODAL_MEDIA_PREFIX } : parsed;
 
       // NOTE: unlike the presign siblings (generate-presigned-url.ts) we do NOT reject executable

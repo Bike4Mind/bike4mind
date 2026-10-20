@@ -156,6 +156,24 @@ describe('POST /api/admin/users/:userId/generate-api-key - scope allowlist guard
     );
   });
 
+  it('allows release-notes:write for a platform-admin target', async () => {
+    mockUserFind.mockResolvedValue({ id: 'target-user', username: 'targetUser', isAdmin: true });
+    const { req, res } = post({ name: 'release video', scopes: ['release-notes:write'] });
+    await mockRefs.postHandler!(req, res);
+    expect(res._getStatusCode()).toBe(201);
+    expect(mockCreateKey).toHaveBeenCalledWith(
+      'target-user',
+      expect.objectContaining({ scopes: ['release-notes:write'] }),
+      expect.anything()
+    );
+  });
+
+  it('refuses release-notes:write for a target who is not a platform admin, since the routes would refuse the key', async () => {
+    const { req, res } = post({ name: 'release video', scopes: ['release-notes:write'] });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/platform admin/i);
+    expect(mockCreateKey).not.toHaveBeenCalled();
+  });
+
   it('allows standard user scopes (notebooks:read) through the admin endpoint', async () => {
     const { req, res } = post({ name: 'plain', scopes: ['notebooks:read'] });
     await mockRefs.postHandler!(req, res);
