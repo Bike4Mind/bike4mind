@@ -1,7 +1,39 @@
 import { describe, it, expect } from 'vitest';
 import { ADMIN_AUDIT_LOG_TAB_SLUG, ADMIN_FEEDBACK_TAB_SLUG, ADMIN_USERS_TAB_SLUG } from '@bike4mind/common';
 import { AdminTab } from './adminSidebarConfig';
-import { adminTabFromSlug } from './adminTabSlugs';
+import { adminTabFromSlug, adminTabToSlug } from './adminTabSlugs';
+
+const ALL_TABS = Object.values(AdminTab).filter((value): value is AdminTab => typeof value === 'number');
+
+describe('adminTabToSlug', () => {
+  it('gives every AdminTab member a URL-safe slug', () => {
+    for (const tab of ALL_TABS) {
+      expect(adminTabToSlug(tab), `AdminTab ${AdminTab[tab]}`).toMatch(/^[a-z0-9-]+$/);
+    }
+  });
+
+  it('never reuses a slug', () => {
+    const slugs = ALL_TABS.map(tab => adminTabToSlug(tab));
+    expect(new Set(slugs).size).toBe(slugs.length);
+  });
+
+  it('round-trips every tab through its slug', () => {
+    for (const tab of ALL_TABS) {
+      expect(adminTabFromSlug(adminTabToSlug(tab))).toBe(tab);
+    }
+  });
+
+  it('keeps the slugs links already carry', () => {
+    expect(adminTabToSlug(AdminTab.Feedback)).toBe(ADMIN_FEEDBACK_TAB_SLUG);
+    expect(adminTabToSlug(AdminTab.Users)).toBe('users');
+  });
+
+  it('writes nothing for a value that is not an AdminTab member', () => {
+    expect(adminTabToSlug(null)).toBeUndefined();
+    expect(adminTabToSlug('some-injected-tab')).toBeUndefined();
+    expect(adminTabToSlug(9999 as AdminTab)).toBeUndefined();
+  });
+});
 
 describe('adminTabFromSlug', () => {
   it('resolves the feedback slug to the feedback tab', () => {
@@ -39,5 +71,6 @@ describe('adminTabFromSlug', () => {
   it('does not resolve slugs off the prototype chain', () => {
     expect(adminTabFromSlug('toString')).toBeUndefined();
     expect(adminTabFromSlug('constructor')).toBeUndefined();
+    expect(adminTabFromSlug('__proto__')).toBeUndefined();
   });
 });

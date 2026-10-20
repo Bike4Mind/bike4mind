@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { IFabFileDocument, MessageContentObject } from '@bike4mind/common';
-import type { FabFileNotice } from '@bike4mind/utils';
+import { ATTACHMENT_END_DELIMITER, type FabFileNotice } from '@bike4mind/utils';
 import {
   materializeAttachmentContent,
   composeFirstIterationMessage,
@@ -51,6 +51,18 @@ describe('materializeAttachmentContent', () => {
     expect(result.inlinedFileIds).toEqual(['a']);
     expect(result.imageBlocks).toEqual([]);
     expect(result.notices).toEqual([]);
+  });
+
+  it('preserves the shared extractor boundary when composing the agent query', async () => {
+    const attachmentText = 'every 1,000 miles.' + ATTACHMENT_END_DELIMITER;
+    const extract = vi.fn().mockResolvedValue(
+      extractorResult({
+        userMessages: [{ role: 'user', content: attachmentText }],
+        deliveredFileIds: ['a'],
+      })
+    );
+    const result = await materializeAttachmentContent([file('a')], [], extract, makeLogger());
+    expect(composeFirstIterationMessage('Search the web', result)).toBe('Search the web\n\n' + attachmentText);
   });
 
   it('separates image blocks from text so the message can go multimodal', async () => {

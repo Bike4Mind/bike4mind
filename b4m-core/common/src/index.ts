@@ -173,3 +173,4 @@ export * from './zipEntry';
 export * from './storageCharge';
 export * from './storageOwner';
 export * from './storageBreakdown';
+export * from './organizationStorage';
