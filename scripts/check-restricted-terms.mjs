@@ -110,22 +110,45 @@ export function compileTerms(raw) {
     let edges;
     try {
       whole = new RegExp(fragment, 'giu');
-      // The loop below tries one match at a time and cannot backtrack across `|`
+      // The scan below tries one match at a time and cannot backtrack across `|`
       // alternatives or lazy quantifiers, so also ask the plain pattern, which can.
       edges = new RegExp(`(?<![\\p{L}\\p{N}])(?:${fragment})(?![\\p{L}\\p{N}])`, 'iu');
     } catch {
       throw new SafeError(`Line ${i + 1} of the restricted-term list is not a valid regular expression.`);
     }
+    if (whole.test('')) {
+      throw new SafeError(`Line ${i + 1} of the restricted-term list matches an empty string, so it would flag every change.`);
+    }
+    // A longer match at the same start, from `minLength` characters on: the
+    // lookbehind makes the engine backtrack into later alternatives and lazy
+    // quantifiers to satisfy it. Anchored on the remaining text rather than made
+    // sticky, because a sticky match takes the same short branch the caller
+    // already rejected.
+    const longerAt = (text, start, minLength) =>
+      new RegExp(`^(?:${fragment})(?<=[\\s\\S]{${minLength}})`, 'iu').exec(text.slice(start))?.[0];
     fragments.push(text => {
       if (edges.test(text)) return true;
-      // The pattern is stateful (`g`): start every scan from the top, and after a
-      // rejected match step one whole character ahead so an overlapping one is
-      // still seen.
-      whole.lastIndex = 0;
+      // Alternation keeps the first branch that completes, so the match the scan
+      // finds can be shorter than the one whose edges hold (`acme|acmecorp` on
+      // `useAcmecorpClient`, `acme\w*?` on the same text). Walk the longer ones
+      // out before giving up on that start.
+      let at = 0;
       let match;
-      while ((match = whole.exec(text)) !== null) {
-        if (hasWordEdges(text, match.index, match[0])) return true;
-        whole.lastIndex = match.index + (text.codePointAt(match.index) > 0xffff ? 2 : 1);
+      while (at <= text.length) {
+        // The pattern is stateful (`g`): every scan starts from the top.
+        whole.lastIndex = at;
+        match = whole.exec(text);
+        if (!match) break;
+        let found = match[0];
+        for (;;) {
+          if (hasWordEdges(text, match.index, found)) return true;
+          const longer = longerAt(text, match.index, [...found].length + 1);
+          if (!longer) break;
+          found = longer;
+        }
+        // One whole character ahead, so an overlapping match is still seen. Never
+        // behind `at`, so a wrong step cannot stall the scan.
+        at = Math.max(at + 1, match.index + (text.codePointAt(match.index) > 0xffff ? 2 : 1));
       }
       return false;
     });

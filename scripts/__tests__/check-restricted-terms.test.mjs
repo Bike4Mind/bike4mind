@@ -118,6 +118,22 @@ describe('compileTerms', () => {
   it('backtracks across alternatives and lazy quantifiers inside one line', () => {
     expect(compileTerms('acme|acmecorp').test('acmecorp')).toBe(true);
     expect(compileTerms('acme\\w*?').test('acmecorp')).toBe(true);
+    // The first branch to complete is not always the one whose edges hold.
+    const alternative = compileTerms('acme|acmecorp');
+    expect(alternative.test('useAcmecorpClient')).toBe(true);
+    expect(alternative.test('acmecorp2')).toBe(true);
+    expect(compileTerms('acme\\w*?').test('useAcmecorpClient')).toBe(true);
+  });
+
+  it('rejects a line that can match nothing, naming only its line number', () => {
+    expect(() => compileTerms('zorblax\n(acme)?')).toThrow(
+      /^Line 2 of the restricted-term list matches an empty string/
+    );
+    try {
+      compileTerms('zorblax\n(acme)?');
+    } catch (err) {
+      expect(err.message).not.toContain('acme');
+    }
   });
 
   it('does not match an astral letter next to a term, and does not hang on one', () => {
@@ -227,6 +243,13 @@ describe('run', () => {
     const { code, output } = await check({ terms: '', routes: prRoutes() });
     expect(code).toBe(1);
     expect(output).toContain('RESTRICTED_TERMS secret is missing or empty');
+  });
+
+  it('fails on a list line that can match nothing, without echoing it', async () => {
+    const { code, output } = await check({ terms: 'zorblax\n(flim)?', routes: prRoutes() });
+    expect(code).toBe(1);
+    expect(output).toContain('Line 2 of the restricted-term list matches an empty string');
+    expect(output).not.toContain('flim');
   });
 
   it('passes a clean PR', async () => {
