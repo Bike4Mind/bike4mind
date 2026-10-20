@@ -19,6 +19,7 @@ const personalLake = (tag: string) => ({
 const LAKES = [
   orgLake('acme', 'org-acme', '2026-01-01'),
   orgLake('globex', 'org-globex', '2026-02-01'),
+  orgLake('initech', 'org-initech', '2026-03-01'),
   personalLake('mine'),
 ];
 
@@ -127,6 +128,31 @@ describe('reassignStorageOwner', () => {
 
     expect(await reassignStorageOwner('f1', db)).toBeNull();
     expect(raw.fabFiles.setOwnerOrganizationIfUnchanged).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the oldest remaining org lake once the ingesting lake is removed', async () => {
+    const row = file(['datalake:initech', 'datalake:globex'], {
+      organizationId: 'org-acme',
+      sourceLakeId: 'lake-acme',
+    });
+    const { db, counters } = makeDb(row);
+
+    await reassignStorageOwner('f1', db);
+
+    expect(row.organizationId).toBe('org-globex');
+    expect(counters.orgs.get('org-acme')).toBe(-100);
+    expect(counters.orgs.get('org-globex')).toBe(100);
+  });
+
+  it('sends the file to its uploader once the ingesting lake is removed and no org lake remains', async () => {
+    const row = file(['datalake:mine'], { organizationId: 'org-acme', sourceLakeId: 'lake-acme' });
+    const { db, counters } = makeDb(row);
+
+    await reassignStorageOwner('f1', db);
+
+    expect(row.organizationId).toBeUndefined();
+    expect(counters.orgs.get('org-acme')).toBe(-100);
+    expect(counters.users.get('u1')).toBe(100);
   });
 
   it('writes nothing when the owner is unchanged', async () => {
