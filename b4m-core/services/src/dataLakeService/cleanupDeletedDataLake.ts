@@ -293,8 +293,10 @@ export const cleanupDeletedDataLake = async (
       // deleting first would leave a held row over objects that are gone (same rule as
       // fabFileService/deleteStoredObjects.ts).
       const file = storageKeysById.get(id);
-      if (storage && file && isModerationEvidenceHold(file)) {
+      if (file && isModerationEvidenceHold(file)) {
         logger?.warn('[dataLake] keeping the stored objects of a blocked file (legal hold)', { fabFileId: id });
+        // Keep the whole snapshot together even if moderation clears before the row delete.
+        return;
       } else if (storage) {
         // EVERY stored key, not just the current one - an AI-edited file's earlier revisions each sit
         // under their own object key (see purgeDataLakeDocument.ts, the single-document sibling this
@@ -332,10 +334,8 @@ export const cleanupDeletedDataLake = async (
       }
     },
     async slice => {
-      if (storage) {
-        const rows = await db.fabFiles.findStorageKeysByIds(slice);
-        storageKeysById = new Map(rows.map(row => [row.id, row]));
-      }
+      const rows = await db.fabFiles.findStorageKeysByIds(slice);
+      storageKeysById = new Map(rows.map(row => [row.id, row]));
       await db.dataLakeFindings?.deleteForPurgedDocuments(slice);
     }
   );

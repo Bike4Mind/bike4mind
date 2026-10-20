@@ -645,6 +645,24 @@ describe('purgeDataLakeDocument', () => {
     );
   });
 
+  it('keeps a held document with no stored keys without attempting downstream deletion', async () => {
+    const db = makeDb({ moderationStatus: 'blocked', blockReason: 'explicit' });
+    const storage = makeStorage();
+
+    const receipt = await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage });
+
+    expect(db.fabFiles.hardDeleteOneById).not.toHaveBeenCalled();
+    expect(db.fabFileChunks.deleteManyByFabFileId).not.toHaveBeenCalled();
+    expect(db.dataLakeFindings.deleteForPurgedDocument).not.toHaveBeenCalled();
+    expect(db.sessions.findAllWithKnowledgeId).not.toHaveBeenCalled();
+    expect(receipt).toMatchObject({
+      heldForModeration: true,
+      documentDeleted: false,
+      verified: false,
+      storageObjectsTotal: 0,
+    });
+  });
+
   it("still deletes an unsupported_format block's stored objects, matching the user-delete path", async () => {
     const db = makeDb({
       filePath: 'uploads/photo.heic',

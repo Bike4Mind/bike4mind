@@ -209,3 +209,31 @@ describe('purgeDataLakeConnectionFiles evidence hold', () => {
     expect(storage.delete).toHaveBeenCalledWith('uploads/photo.heic');
   });
 });
+
+describe('purgeDataLakeConnectionFiles - held snapshot safety', () => {
+  it.each([true, false])(
+    'keeps a held row even if its hold clears before the row delete (storage wired: %s)',
+    async storageWired => {
+      const db = makeDb();
+      const storage = { delete: vi.fn(async () => {}) };
+      const heldFile = file({
+        id: 'f-held',
+        filePath: 'uploads/evidence.png',
+        moderationStatus: 'blocked',
+        fileSize: 100,
+        storageChargedAt: CHARGED_AT,
+      });
+
+      const result = await purgeDataLakeConnectionFiles(SCOPE, [heldFile], {
+        db,
+        storage: storageWired ? storage : undefined,
+      });
+
+      expect(storage.delete).not.toHaveBeenCalled();
+      expect(db.fabFiles.hardDeleteOneById).not.toHaveBeenCalled();
+      expect(db.fabFileChunks.deleteManyByFabFileId).not.toHaveBeenCalled();
+      expect(db.users.incrementCurrentStorage).not.toHaveBeenCalled();
+      expect(result).toEqual({ filesPurged: 0, storageObjectsDeleted: 0 });
+    }
+  );
+});

@@ -2088,6 +2088,20 @@ describe('usePurgeDataLakeDocument', () => {
     expect(keys).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
   });
 
+  it('reports a moderation hold without calling it a failed deletion', async () => {
+    vi.mocked(toast.warning).mockClear();
+    apiPost.mockResolvedValueOnce({ data: { verified: false, heldForModeration: true, chunksRemaining: 3 } });
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync('f1');
+    });
+
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(toast.warning).toHaveBeenCalledWith(
+      'Kept under moderation hold: the document and its stored copies were preserved.'
+    );
+  });
+
   it("surfaces the server's refusal, not axios' status line, on the irreversible door", async () => {
     // A mid-sweep failure is exactly where "Request failed with status code 500" cannot tell the
     // owner whether their document is half destroyed.

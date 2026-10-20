@@ -15,7 +15,7 @@ interface PurgeLakeDocumentActionProps {
    * now-dead signed URL behind the dialog.
    */
   onPurgeComplete?: () => void;
-  /** Fires once the owner dismisses the receipt, so the host can drop its selection. */
+  /** Fires when the owner dismisses a receipt for a deleted document, so the host can drop its selection. */
   onPurged?: () => void;
 }
 
@@ -53,7 +53,7 @@ export default function PurgeLakeDocumentAction({
 
   const dismissReceipt = () => {
     setReceipt(null);
-    onPurged?.();
+    if (receipt?.documentDeleted) onPurged?.();
   };
 
   return (
@@ -93,7 +93,7 @@ export default function PurgeLakeDocumentAction({
                   onSuccess: result => {
                     setConfirming(false);
                     setReceipt(result);
-                    onPurgeComplete?.();
+                    if (result.documentDeleted) onPurgeComplete?.();
                   },
                 })
               }
@@ -121,7 +121,7 @@ export default function PurgeLakeDocumentAction({
               {receipt?.verified
                 ? `"${receipt.fileName}" is gone. ${receipt.chunksBefore} chunk(s) and their vectors were destroyed, and the document was confirmed absent afterwards.`
                 : receipt?.heldForModeration
-                  ? `"${receipt.fileName}" is held for moderation review, so the document and its stored copies were kept. It cannot be permanently deleted while the hold is in place.`
+                  ? `"${receipt.fileName}" is held for moderation review, so the document${receipt.storageObjectsTotal > 0 ? ' and its stored copies were' : ' was'} kept. It cannot be permanently deleted while the hold is in place.`
                   : `"${receipt?.fileName}" was not fully destroyed: ${receipt?.chunksRemaining} chunk(s) still remain${
                       receipt?.documentDeleted ? '' : ' and the document is still present'
                     }. The attempt has been recorded - retry, or contact support.`}

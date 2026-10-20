@@ -287,7 +287,7 @@ export const purgeDataLakeDocument = async (
   // chunks and its rollups stay consistent and a retry converges.
   let deletedByThisCall = false;
   let sessionsUnlinked = true;
-  if (storageObjectDeleted) {
+  if (!heldForModeration && storageObjectDeleted) {
     // The row goes FIRST, its chunks after (#2583). Chunks-then-row used to leave an interruption
     // between the two stranding the ROW: a stale vectorizedChunkCount over zero real chunk rows -
     // unretrievable by either read path, while every counter-based health surface reported it

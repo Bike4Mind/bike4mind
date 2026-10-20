@@ -183,10 +183,12 @@ export const purgeDataLakeConnectionFiles = async (
         slice.map(async file => {
           // An evidence-held file keeps its bytes (same rule as fabFileService/deleteStoredObjects.ts);
           // its row delete below is refused too, so deleting first would strand a held row over nothing.
-          if (storage && isModerationEvidenceHold(file)) {
+          if (isModerationEvidenceHold(file)) {
             logger?.warn('[dataLake] keeping the stored objects of a blocked file (legal hold)', {
               fabFileId: file.id,
             });
+            // Do not delete the row after deliberately preserving its objects, even if its hold clears.
+            return;
           } else if (storage) {
             const currentKey = isStorageKey(file.filePath) ? file.filePath : null;
             // EVERY stored key, not just the current one - an AI-edited file's earlier revisions

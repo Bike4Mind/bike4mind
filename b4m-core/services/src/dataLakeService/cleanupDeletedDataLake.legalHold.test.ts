@@ -187,3 +187,49 @@ describe('cleanupDeletedDataLake - evidence-held stored objects', () => {
     expect(storage.delete).toHaveBeenCalledWith('files/photo.heic');
   });
 });
+
+describe('cleanupDeletedDataLake - held snapshot safety', () => {
+  it('fails closed when the moderation lookup rejects without a storage adapter', async () => {
+    const db = buildDb();
+    db.fabFiles.findStorageKeysByIds.mockRejectedValue(new Error('moderation lookup failed'));
+    const deleteFileAndChunks = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      cleanupDeletedDataLake(ACTOR, LAKE_ID, {
+        db,
+        beginPurge: vi.fn().mockResolvedValue(true),
+        purgeClaimId: CLAIM_ID,
+        deleteFileAndChunks,
+      })
+    ).rejects.toThrow('moderation lookup failed');
+
+    expect(deleteFileAndChunks).not.toHaveBeenCalled();
+    expect(db.fabFiles.hardDeleteOneById).not.toHaveBeenCalled();
+    expect(db.fabFileChunks.deleteManyByFabFileId).not.toHaveBeenCalled();
+    expect(db.dataLakes.delete).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])(
+    'does not attempt a held row delete even if the repository would now allow it (storage wired: %s)',
+    async storageWired => {
+      const db = buildDb();
+      db.fabFiles.findStorageKeysByIds.mockResolvedValue([
+        { id: 'file-blocked', filePath: 'files/evidence.png', moderationStatus: 'blocked', blockReason: 'explicit' },
+      ]);
+      const deleteFileAndChunks = vi.fn().mockResolvedValue(undefined);
+      const storage = { delete: vi.fn().mockResolvedValue(undefined) };
+
+      await cleanupDeletedDataLake(ACTOR, LAKE_ID, {
+        db,
+        beginPurge: vi.fn().mockResolvedValue(true),
+        purgeClaimId: CLAIM_ID,
+        deleteFileAndChunks,
+        storage: storageWired ? storage : undefined,
+      });
+
+      expect(storage.delete).not.toHaveBeenCalled();
+      expect(deleteFileAndChunks).not.toHaveBeenCalled();
+      expect(db.dataLakes.delete).toHaveBeenCalledWith(LAKE_ID);
+    }
+  );
+});

@@ -136,14 +136,39 @@ describe('PurgeLakeDocumentAction', () => {
         verified: false,
       })
     );
+    const onPurgeComplete = vi.fn();
+    const onPurged = vi.fn();
+    renderAction(onPurged, onPurgeComplete);
+    await user.click(screen.getByTestId('datalake-purgefile-btn-f1'));
+    await user.click(screen.getByTestId('datalake-purgefile-confirm-btn'));
+
+    const summary = (await screen.findByTestId('datalake-purgefile-receipt-summary')).textContent;
+    expect(onPurgeComplete).not.toHaveBeenCalled();
+    expect(summary).toContain('held for moderation review');
+    expect(summary).not.toContain('retry');
+    expect(screen.queryByTestId('datalake-purgefile-receipt-storage')).toBeNull();
+    await user.click(screen.getByTestId('datalake-purgefile-receipt-close'));
+    expect(onPurged).not.toHaveBeenCalled();
+  });
+
+  it('does not claim stored copies exist for a held document with no storage keys', async () => {
+    const user = userEvent.setup();
+    h.mutate.mockImplementation((_id: string, opts: { onSuccess: (r: DataLakeDocumentPurgeReceipt) => void }) =>
+      opts.onSuccess({
+        ...RECEIPT,
+        documentDeleted: false,
+        verified: false,
+        heldForModeration: true,
+        storageObjectsTotal: 0,
+      })
+    );
     renderAction();
     await user.click(screen.getByTestId('datalake-purgefile-btn-f1'));
     await user.click(screen.getByTestId('datalake-purgefile-confirm-btn'));
 
     const summary = (await screen.findByTestId('datalake-purgefile-receipt-summary')).textContent;
-    expect(summary).toContain('held for moderation review');
-    expect(summary).not.toContain('retry');
-    expect(screen.queryByTestId('datalake-purgefile-receipt-storage')).toBeNull();
+    expect(summary).toContain('the document was kept');
+    expect(summary).not.toContain('stored copies');
   });
 
   it('leaves the storage note out of a clean receipt', async () => {
