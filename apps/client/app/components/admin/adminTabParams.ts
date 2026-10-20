@@ -55,7 +55,11 @@ const ALL_ADMIN_SEARCH_PARAMS: readonly AdminSearchParam[] = [
   ...Object.values(ADMIN_TAB_PARAMS).flat(),
 ];
 
-/** Strings only, `String()`-coercing the values TanStack's JSON search parser turned into numbers. */
+/**
+ * Strings only, `String()`-coercing the values TanStack's JSON search parser turned into numbers.
+ * Must stay in sync with `optionalStringParam` in router.tsx (same rule; importing from there would
+ * be a cycle).
+ */
 const optionalString = (value: unknown): string | undefined => (value ? String(value) : undefined);
 
 /**

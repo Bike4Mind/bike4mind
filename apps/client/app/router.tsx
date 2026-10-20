@@ -103,6 +103,7 @@ const QuestMasterV5Page = lazy(() => import('./routes/quests-v5'));
 // Identical to the inline form it replaces: falsy (missing or empty) becomes undefined,
 // anything else is String()-coerced. A few routes below deliberately keep a stricter
 // `typeof === 'string'` guard instead, which is not the same thing - do not fold those in.
+// Must stay in sync with `optionalString` in components/admin/adminTabParams.ts.
 const optionalStringParam = (search: Record<string, unknown>, key: string): string | undefined =>
   search[key] ? String(search[key]) : undefined;
 
