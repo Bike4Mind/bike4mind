@@ -1,13 +1,11 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
-import type { AuditEntry, UserActivityDirection, UserActivityPage, UserCreditHistory } from '@bike4mind/common';
+import type { UserActivityDirection, UserActivityPage, UserCreditHistory } from '@bike4mind/common';
+import { reviveAuditEntry, type WireAuditEntry } from './adminAuditLog';
 
 const DEFAULT_PAGE_SIZE = 50;
 
-/** JSON carries `occurredAt` as an ISO string; consumers expect the real `AuditEntry` Date. */
-type WireUserActivityPage = Omit<UserActivityPage, 'entries'> & {
-  entries: Array<Omit<AuditEntry, 'occurredAt'> & { occurredAt: string }>;
-};
+type WireUserActivityPage = Omit<UserActivityPage, 'entries'> & { entries: WireAuditEntry[] };
 
 export const useUserActivity = (
   userId: string,
@@ -28,7 +26,7 @@ export const useUserActivity = (
       });
       return {
         ...response.data,
-        entries: response.data.entries.map(entry => ({ ...entry, occurredAt: new Date(entry.occurredAt) })),
+        entries: response.data.entries.map(reviveAuditEntry),
       };
     },
     getNextPageParam: lastPage => lastPage.nextCursor ?? undefined,
