@@ -32,17 +32,43 @@ export const SUGGESTION_MODELS: readonly string[] = [
 ];
 
 /**
+ * The models a user may pin the guess to: the small hosted ones above, in that order, then every
+ * model this deployment serves through Ollama.
+ *
+ * Local models are offered here even though the automatic pick skips them. The automatic pick
+ * guards a user who never chose; an explicit Ollama pick opts into that backend's formatting
+ * quality, and `sanitizeSuggestion` still drops what it cannot use.
+ */
+export function suggestionModelChoices(available: readonly ChatModelOption[]): ChatModelOption[] {
+  const hosted = SUGGESTION_MODELS.flatMap(id => available.filter(model => model.id === id));
+  return [...hosted, ...available.filter(isLocalModel)];
+}
+
+export function isLocalModel(model: Pick<ChatModelOption, 'backend'>): boolean {
+  return model.backend === 'ollama';
+}
+
+/**
  * Which model guesses the next prompt, or null to suggest nothing.
  *
- * Unlike a title, this declines rather than falling back to the session's own model. A title is
- * generated once per conversation, so spending the big model on one is defensible; this runs
- * after every reply, and quietly billing a frontier model per turn for a greyed-out hint is
- * not a trade anyone opted into. A deployment with none of the small models simply gets the
- * ordinary placeholder.
+ * `preferred` is the user's pick from Settings, and null means automatic. A pick the deployment
+ * no longer offers declines rather than falling back: an Ollama pick must not quietly send
+ * text to a different provider when Ollama stops.
+ *
+ * Unlike a title, automatic declines rather than falling back to the session's own model. A
+ * title is generated once per conversation, so spending the big model on one is defensible;
+ * this runs after every reply, and quietly billing a frontier model per turn for a greyed-out
+ * hint is not a trade anyone opted into. A deployment with none of the small models simply gets
+ * the ordinary placeholder.
  */
-export function pickSuggestionModel(available: readonly ChatModelOption[]): string | null {
+export function pickSuggestionModel(
+  available: readonly ChatModelOption[],
+  preferred: string | null = null
+): ChatModelOption | null {
+  if (preferred) return suggestionModelChoices(available).find(model => model.id === preferred) ?? null;
   for (const candidate of SUGGESTION_MODELS) {
-    if (available.some(model => model.id === candidate)) return candidate;
+    const offered = available.find(model => model.id === candidate);
+    if (offered) return offered;
   }
   return null;
 }

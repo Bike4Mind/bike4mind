@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { promptSuggestionsEnabled, usePromptSuggestions } from './promptSuggestions';
+import {
+  promptSuggestionModel,
+  promptSuggestionsEnabled,
+  usePromptSuggestionModel,
+  usePromptSuggestions,
+} from './promptSuggestions';
 
 export interface PromptSuggestionController {
   /** The guess to draw as placeholder text, or null to use the ordinary placeholder. */
@@ -27,6 +32,7 @@ export function usePromptSuggestion(sessionId: string | null): PromptSuggestionC
   const [suggestion, setSuggestion] = useState<string | null>(null);
   // Subscribed to rather than read, so turning the setting off clears a hint already on screen.
   const [enabled] = usePromptSuggestions();
+  const [model] = usePromptSuggestionModel();
 
   // Which session and which request the state belongs to, read inside callbacks that outlive
   // the render they were made in. `request` drops a late answer: the call takes a second or two,
@@ -42,8 +48,9 @@ export function usePromptSuggestion(sessionId: string | null): PromptSuggestionC
   }, [sessionId]);
 
   useEffect(() => {
-    if (!enabled) setSuggestion(null);
-  }, [enabled]);
+    request.current += 1;
+    setSuggestion(null);
+  }, [enabled, model]);
 
   useEffect(() => {
     return window.b4m.chat.onStreamEvent(event => {
@@ -66,10 +73,12 @@ export function usePromptSuggestion(sessionId: string | null): PromptSuggestionC
 
       const id = (request.current += 1);
       const forSession = event.sessionId;
+      const forModel = promptSuggestionModel();
       void window.b4m.chat
-        .suggestNextPrompt(forSession)
+        .suggestNextPrompt(forSession, forModel)
         .then(next => {
           if (request.current !== id || activeSessionId.current !== forSession) return;
+          if (!promptSuggestionsEnabled() || promptSuggestionModel() !== forModel) return;
           setSuggestion(next);
         })
         // Main answers null for its own failures, so this only catches the channel itself

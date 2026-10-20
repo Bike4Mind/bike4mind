@@ -3,16 +3,28 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ChatStreamEvent } from '@shared/chat';
-import { setPromptSuggestionsEnabled } from './promptSuggestions';
+import { setPromptSuggestionModel, setPromptSuggestionsEnabled } from './promptSuggestions';
 import { usePromptSuggestion, type PromptSuggestionController } from './usePromptSuggestion';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+function deferredAnswer() {
+  let resolve: (answer: string | null) => void = () => {
+    throw new Error('Promise not initialized');
+  };
+  const promise = new Promise<string | null>(complete => {
+    resolve = complete;
+  });
+  return { promise, resolve };
+}
 
 describe('usePromptSuggestion', () => {
   let listener: ((event: ChatStreamEvent) => void) | null;
   let controller: PromptSuggestionController | null;
   let container: HTMLElement;
   let root: Root;
+  let asked: (string | null | undefined)[];
+  let answer: () => Promise<string | null>;
 
   function Probe({ sessionId }: { sessionId: string | null }) {
     controller = usePromptSuggestion(sessionId);
@@ -27,9 +39,15 @@ describe('usePromptSuggestion', () => {
     listener = null;
     controller = null;
     setPromptSuggestionsEnabled(true);
+    setPromptSuggestionModel(null);
+    asked = [];
+    answer = async () => 'Add a test';
     (window as unknown as { b4m: unknown }).b4m = {
       chat: {
-        suggestNextPrompt: async () => 'Add a test',
+        suggestNextPrompt: async (_sessionId: string, model?: string | null) => {
+          asked.push(model);
+          return answer();
+        },
         onStreamEvent: (next: (event: ChatStreamEvent) => void) => {
           listener = next;
           return () => undefined;
@@ -77,6 +95,56 @@ describe('usePromptSuggestion', () => {
     await render('s1');
     await settle();
     await act(async () => setPromptSuggestionsEnabled(false));
+    expect(controller?.suggestion).toBeNull();
+  });
+
+  it('asks with the model picked in Settings at the time of the call', async () => {
+    await render('s1');
+    await settle();
+    await act(async () => setPromptSuggestionModel('qwen3:8b'));
+    await settle();
+    expect(asked).toEqual([null, 'qwen3:8b']);
+  });
+
+  it('clears the visible hint when the selected model changes', async () => {
+    await render('s1');
+    await settle();
+    await act(async () => setPromptSuggestionModel('qwen3:8b'));
+    expect(controller?.suggestion).toBeNull();
+  });
+
+  it.each(['model', 'disabled', 'disabled then enabled', 'session', 'dismissed', 'new turn'])(
+    'discards a pending answer after the preference or conversation is %s',
+    async change => {
+      const pending = deferredAnswer();
+      answer = () => pending.promise;
+      await render('s1');
+      await settle();
+
+      if (change === 'model') await act(async () => setPromptSuggestionModel('qwen3:8b'));
+      if (change === 'disabled' || change === 'disabled then enabled') {
+        await act(async () => setPromptSuggestionsEnabled(false));
+      }
+      if (change === 'disabled then enabled') await act(async () => setPromptSuggestionsEnabled(true));
+      if (change === 'session') await render('s2');
+      if (change === 'dismissed') await act(async () => controller?.dismiss());
+      if (change === 'new turn') await emit({ type: 'start', sessionId: 's1', messageId: 'm2' });
+
+      await act(async () => pending.resolve('An outdated suggestion'));
+      expect(controller?.suggestion).toBeNull();
+    }
+  );
+
+  it('checks the current preference before accepting an answer in the same event', async () => {
+    const pending = deferredAnswer();
+    answer = () => pending.promise;
+    await render('s1');
+    await settle();
+    await act(async () => {
+      setPromptSuggestionModel('qwen3:8b');
+      pending.resolve('An outdated suggestion');
+      await pending.promise;
+    });
     expect(controller?.suggestion).toBeNull();
   });
 });

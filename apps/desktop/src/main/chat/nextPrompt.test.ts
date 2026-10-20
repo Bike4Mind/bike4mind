@@ -1,18 +1,24 @@
 import type { ChatModelOption } from '@shared/chat';
 import { describe, expect, it } from 'vitest';
-import { pickSuggestionModel, sanitizeSuggestion, suggestionRequestMessages, SUGGESTION_MODELS } from './nextPrompt';
+import {
+  pickSuggestionModel,
+  sanitizeSuggestion,
+  suggestionModelChoices,
+  suggestionRequestMessages,
+  SUGGESTION_MODELS,
+} from './nextPrompt';
 
-const option = (id: string): ChatModelOption => ({ id, name: id });
+const option = (id: string, backend?: string): ChatModelOption => ({ id, name: id, ...(backend ? { backend } : {}) });
 
 describe('pickSuggestionModel', () => {
   it('prefers a small model over the one the conversation is held on', () => {
     const available = [option('claude-opus-4-5-20251101'), option(SUGGESTION_MODELS[0])];
-    expect(pickSuggestionModel(available)).toBe(SUGGESTION_MODELS[0]);
+    expect(pickSuggestionModel(available)?.id).toBe(SUGGESTION_MODELS[0]);
   });
 
   it('follows the preference order when the server offers several', () => {
     const available = [option(SUGGESTION_MODELS[2]), option(SUGGESTION_MODELS[0])];
-    expect(pickSuggestionModel(available)).toBe(SUGGESTION_MODELS[0]);
+    expect(pickSuggestionModel(available)?.id).toBe(SUGGESTION_MODELS[0]);
   });
 
   // Unlike a title, this never falls back to the session's own model: it runs after EVERY reply,
@@ -23,6 +29,43 @@ describe('pickSuggestionModel', () => {
 
   it('declines when the catalog could not be read', () => {
     expect(pickSuggestionModel([])).toBeNull();
+  });
+
+  it('never picks a local model on its own', () => {
+    expect(pickSuggestionModel([option('qwen3:8b', 'ollama')])).toBeNull();
+  });
+
+  it('uses the model pinned in Settings, local ones included', () => {
+    const available = [option(SUGGESTION_MODELS[0]), option('qwen3:8b', 'ollama')];
+    expect(pickSuggestionModel(available, 'qwen3:8b')?.id).toBe('qwen3:8b');
+    expect(pickSuggestionModel(available, SUGGESTION_MODELS[0])?.id).toBe(SUGGESTION_MODELS[0]);
+  });
+
+  // A user who pinned Ollama must not be routed to a different provider when it stops.
+  it('declines rather than substituting when the pinned model is not offered', () => {
+    expect(pickSuggestionModel([option(SUGGESTION_MODELS[0])], 'qwen3:8b')).toBeNull();
+  });
+
+  it('refuses a pin on a big hosted model the picker never offered', () => {
+    expect(pickSuggestionModel([option('claude-opus-4-5-20251101')], 'claude-opus-4-5-20251101')).toBeNull();
+  });
+});
+
+describe('suggestionModelChoices', () => {
+  it('lists the small hosted models in preference order, then every local model', () => {
+    const available = [
+      option('claude-opus-4-5-20251101'),
+      option('qwen3:8b', 'ollama'),
+      option(SUGGESTION_MODELS[2]),
+      option(SUGGESTION_MODELS[0]),
+      option('llama3.2', 'ollama'),
+    ];
+    expect(suggestionModelChoices(available).map(model => model.id)).toEqual([
+      SUGGESTION_MODELS[0],
+      SUGGESTION_MODELS[2],
+      'qwen3:8b',
+      'llama3.2',
+    ]);
   });
 });
 
