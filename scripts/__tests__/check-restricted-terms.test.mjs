@@ -149,6 +149,8 @@ describe('compileTerms', () => {
     expect(compileTerms('\u0939\u093F\u0902\u0926\u0940').test('text \u0939\u093F\u0902\u0926\u0940 here')).toBe(
       true
     );
+    // A halfwidth voiced sound mark only becomes a combining mark at NFKC.
+    expect(compileTerms('acmecorp').test('acme\u{FF9E}corp')).toBe(true);
   });
 
   it('returns null for an empty list', () => {

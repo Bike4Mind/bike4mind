@@ -91,7 +91,15 @@ function hasWordEdges(text, start, match) {
 
 /** Folds text and list lines the same way, so an accent or a format character cannot hide a term. */
 function fold(s) {
-  return s.normalize('NFD').replace(/\p{Cf}|\p{Mn}/gu, '').normalize('NFKC');
+  return (
+    s
+      .normalize('NFD')
+      .replace(/\p{Cf}|\p{Mn}/gu, '')
+      // Compatibility mapping can leave a combining mark behind (a halfwidth
+      // voiced sound mark after a Latin letter stays one), so strip again.
+      .normalize('NFKC')
+      .replace(/\p{Cf}|\p{Mn}/gu, '')
+  );
 }
 
 /**
