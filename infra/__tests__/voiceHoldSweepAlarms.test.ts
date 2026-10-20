@@ -57,4 +57,19 @@ describe('stale voice hold sweep alarms', () => {
       });
     });
   }
+
+  describe('voiceHoldSweepLambdaErrors', () => {
+    const alarm = alarmBlock('voiceHoldSweepLambdaErrors');
+
+    it('is found in infra/alarms.ts', () => {
+      expect(alarm).toBeDefined();
+    });
+
+    it('watches the sweep function Errors metric and pages the DLQ alarm topic', () => {
+      expect(alarm).toMatch(/namespace: 'AWS\/Lambda'/);
+      expect(alarm).toMatch(/metricName: 'Errors'/);
+      expect(alarm).toMatch(/FunctionName: voiceHoldSweepCron\.nodes\.function\.name/);
+      expect(alarm).toMatch(/alarmActions: \[dlqAlarmTopic\.arn\]/);
+    });
+  });
 });

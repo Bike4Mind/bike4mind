@@ -11,7 +11,12 @@
  * that touch alarm/dashboard code).
  */
 
-import { modelDiscoveryCronEnabled, modelDiscoveryFunction, modelDiscoveryStalenessFunction } from './cron';
+import {
+  modelDiscoveryCronEnabled,
+  modelDiscoveryFunction,
+  modelDiscoveryStalenessFunction,
+  voiceHoldSweepCron,
+} from './cron';
 import { whatsNewGenerationQueueSubscription, webhookDeliveryQueueSubscription } from './queues';
 import { subscribeQueryRoute, unsubscribeQueryRoute } from './subscriberFanout';
 import { dlqAlarmTopic } from './dlqAlarms';
@@ -1653,6 +1658,32 @@ if (isMonitoredStage) {
     threshold: 0,
     treatMissingData: 'notBreaching',
     dimensions: { Stage: $app.stage },
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'Voice',
+      Severity: 'High',
+    },
+  });
+
+  /**
+   * Alarm: Stale voice hold sweep Lambda errors
+   *
+   * A timeout, OOM or init crash never reaches the handler's emit, so it shows up here and nowhere
+   * else. A run that throws also counts in voiceHoldSweepFailures. Same 2-of-3 rule as that alarm.
+   */
+  new aws.cloudwatch.MetricAlarm('voiceHoldSweepLambdaErrors', {
+    name: `${$app.name}-${$app.stage}-voice-hold-sweep-lambda-errors`,
+    alarmDescription: 'The stale voice hold sweep Lambda is erroring (timeout, OOM or crash)',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 3,
+    datapointsToAlarm: 2,
+    metricName: 'Errors',
+    namespace: 'AWS/Lambda',
+    period: 300,
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    dimensions: { FunctionName: voiceHoldSweepCron.nodes.function.name },
     alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'Voice',

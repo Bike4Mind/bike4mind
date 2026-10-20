@@ -26,6 +26,7 @@ describe('voiceHoldSweep cron', () => {
     expect(cron).toMatch(/handler:\s*'apps\/workers\/src\/cron\/voiceHoldSweep\.handler'/);
     expect(cron).toMatch(/vpc:\s*lambdaVpc/);
     expect(cron).toMatch(/link:\s*\[\.\.\.allSecrets\]/);
+    expect(cron).toMatch(/retries:\s*0/);
     expect(cron).toMatch(/enabled:\s*\['production',\s*'dev'\]\.includes\(\$app\.stage\)/);
   });
 
