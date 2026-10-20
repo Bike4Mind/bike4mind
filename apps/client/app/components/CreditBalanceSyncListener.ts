@@ -17,8 +17,11 @@ export const BALANCE_SYNC_DELAYS_MS = [1500, 5000] as const;
  * Pull the billed balance from the server and write it where the composer chip reads it:
  * `currentUser.currentCredits` for the personal account, the organization queries for a team
  * pool. Failures are swallowed; the `users` push and the next identify still apply.
+ * `isStale` lets a caller drop a pull that a newer turn has overtaken: its result is not
+ * written, since it would release the newer turn's hold before that turn's own pulls land.
  */
-export async function syncCreditBalance(queryClient: QueryClient): Promise<void> {
+export async function syncCreditBalance(queryClient: QueryClient, isStale?: () => boolean): Promise<void> {
+  if (isStale?.()) return;
   // The organization the sends carried (see CreditPayerNote for why not the account menu's pick).
   if (useLLM.getState().organizationId) {
     await queryClient.invalidateQueries({ queryKey: ['organizations'] });
@@ -29,6 +32,7 @@ export async function syncCreditBalance(queryClient: QueryClient): Promise<void>
       queryFn: fetchCreditsBalance,
       staleTime: 0,
     });
+    if (isStale?.()) return;
     const { currentUser, setCurrentUser } = useUser.getState();
     if (
       currentUser &&
@@ -55,16 +59,22 @@ const CreditBalanceSyncListener = () => {
   useEffect(() => {
     let timers: ReturnType<typeof setTimeout>[] = [];
     let wasStreaming = useStreamingState.getState().isAnyStreaming();
+    // Clearing the timers only cancels pulls that have not fired; one already in flight
+    // from an earlier turn is told apart by this counter.
+    let turnEnds = 0;
 
     const unsubscribe = useStreamingState.subscribe(state => {
       const streaming = state.isAnyStreaming();
       if (wasStreaming && !streaming) {
         timers.forEach(clearTimeout);
+        const turn = ++turnEnds;
+        const isStale = () => turn !== turnEnds;
         timers = BALANCE_SYNC_DELAYS_MS.map((delay, index) =>
           setTimeout(() => {
-            const sync = syncCreditBalance(queryClient);
+            const sync = syncCreditBalance(queryClient, isStale);
             // Only the last pull confirms the balance: an unchanged first pull may just be a slow settle.
-            void (index === BALANCE_SYNC_DELAYS_MS.length - 1 ? sync.finally(markSynced) : sync);
+            const isLast = index === BALANCE_SYNC_DELAYS_MS.length - 1;
+            void (isLast ? sync.finally(() => !isStale() && markSynced()) : sync);
           }, delay)
         );
       }
