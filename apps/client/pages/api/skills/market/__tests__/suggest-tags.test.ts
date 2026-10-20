@@ -64,13 +64,21 @@ describe('POST /api/skills/market/suggest-tags', () => {
     expect(h.getLlm).not.toHaveBeenCalled();
   });
 
+  it('returns no tags for an imported skill without calling the LLM', async () => {
+    h.findById.mockResolvedValue({ ...skill, importedFrom: { listingId: 'l-1' } });
+    const { req, res } = makeReqRes({ skillId: 'skill-1' });
+    await handler(req, res);
+    expect(res._getJSONData()).toEqual({ tags: [] });
+    expect(h.getLlm).not.toHaveBeenCalled();
+  });
+
   it('returns normalized tags', async () => {
     h.getLlm.mockResolvedValue({ model: 'm', complete: async () => '{"tags":["#Writing","Code Review","bad!"]}' });
     const { req, res } = makeReqRes({ skillId: 'skill-1' });
     await handler(req, res);
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ tags: ['writing', 'code-review'] });
-    expect(h.getLlm).toHaveBeenCalledWith(expect.anything(), USER, { maxTokens: 200 });
+    expect(h.getLlm).toHaveBeenCalledWith(expect.anything(), USER, { maxTokens: 500 });
   });
 
   it.each([

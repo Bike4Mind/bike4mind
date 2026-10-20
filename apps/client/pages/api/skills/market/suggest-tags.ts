@@ -32,10 +32,12 @@ const handler = baseApi({ auth: 'jwtOnly' })
     const skill = await skillRepository.findById(skillId);
     // Same ownership rule as publish.
     if (!skill || skill.userId !== user.id) throw new NotFoundError('Skill not found');
+    // Publish rejects imported skills, so there is nothing to tag.
+    if (skill.importedFrom) return res.json({ tags: [] });
 
     let tags: string[] = [];
     try {
-      const llm = await getOperationsClassifierLlm(req.logger, user.id, { maxTokens: 200 });
+      const llm = await getOperationsClassifierLlm(req.logger, user.id, { maxTokens: 500 });
       tags = await suggestListingTags(toSnapshot(skill), llm);
     } catch (error) {
       req.logger.warn('[skill-market] tag suggestion failed', {
