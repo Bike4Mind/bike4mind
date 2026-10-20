@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
+import { MAX_STORAGE_LIMIT_MB } from '@bike4mind/common';
 import OrganizationStorageLimitField, { parseStorageLimitInput } from './OrganizationStorageLimitField';
 
 const useOrgStorageUsage = vi.fn();
@@ -26,9 +27,12 @@ describe('parseStorageLimitInput', () => {
     expect(parseStorageLimitInput('0')).toEqual({ valid: true, storageLimit: 0 });
   });
 
-  it('rejects negative and non-numeric input', () => {
+  it('rejects negative, malformed and out-of-range input', () => {
     expect(parseStorageLimitInput('-1')).toEqual({ valid: false });
     expect(parseStorageLimitInput('abc')).toEqual({ valid: false });
+    expect(parseStorageLimitInput('5e')).toEqual({ valid: false });
+    expect(parseStorageLimitInput(String(MAX_STORAGE_LIMIT_MB + 1))).toEqual({ valid: false });
+    expect(parseStorageLimitInput('1e303')).toEqual({ valid: false });
   });
 });
 
@@ -59,6 +63,6 @@ describe('OrganizationStorageLimitField', () => {
   it('flags an invalid value', () => {
     render(<OrganizationStorageLimitField orgId="org1" value="-3" onChange={vi.fn()} />, { wrapper: Wrapper });
 
-    expect(screen.getByTestId('admin-org-storage-usage').textContent).toBe('Enter a number of MB, 0 or more');
+    expect(screen.getByTestId('admin-org-storage-usage').textContent).toContain('Enter a number of MB from 0 to');
   });
 });

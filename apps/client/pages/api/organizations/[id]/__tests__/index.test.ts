@@ -120,9 +120,10 @@ describe('PUT /api/organizations/[id] - URL id wins', () => {
     }
   });
 
-  it('rejects a negative storageLimit before reaching the service', async () => {
+  it.each([-5, 1e303])('rejects an out-of-range storageLimit (%d) before reaching the service', async storageLimit => {
+    update.mockClear();
     const { req, res } = mocks({ id: 'caller', isAdmin: true }, 'PUT');
-    (req as any).body = { storageLimit: -5 };
+    (req as any).body = { storageLimit };
     await expect(mockRefs.putHandler!(req, res)).rejects.toThrow();
     expect(update).not.toHaveBeenCalled();
   });

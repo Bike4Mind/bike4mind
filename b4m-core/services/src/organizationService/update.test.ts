@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import mongoose from 'mongoose';
 import { update } from './update';
-import { IOrganizationDocument, IUserDocument } from '@bike4mind/common';
+import { IOrganizationDocument, IUserDocument, MAX_STORAGE_LIMIT_MB } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
 
 describe('organizationService - update', () => {
@@ -259,10 +259,8 @@ describe('organizationService - update', () => {
     expect(mockAdapters.db.organizations.update).toHaveBeenCalledWith({ id: 'org1', storageLimit: 0.5 });
   });
 
-  it('rejects a negative storage limit', async () => {
-    await expect(
-      update(mockAdminUser as IUserDocument, { id: 'org1', storageLimit: -1 }, mockAdapters)
-    ).rejects.toThrow();
+  it.each([-1, MAX_STORAGE_LIMIT_MB + 1])('rejects an out-of-range storage limit (%d)', async storageLimit => {
+    await expect(update(mockAdminUser as IUserDocument, { id: 'org1', storageLimit }, mockAdapters)).rejects.toThrow();
     expect(mockAdapters.db.organizations.update).not.toHaveBeenCalled();
   });
 

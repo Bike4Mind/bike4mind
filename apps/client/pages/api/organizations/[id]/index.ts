@@ -11,7 +11,7 @@ import {
 import { groupRepository } from '@bike4mind/database/social';
 import { invalidatePartnerRuleCache } from '@server/entitlements/partnerRules';
 import { organizationService } from '@bike4mind/services';
-import { toSafeOrganization } from '@bike4mind/common';
+import { MAX_STORAGE_LIMIT_MB, toSafeOrganization } from '@bike4mind/common';
 import { BadRequestError } from '@server/utils/errors';
 import { Request } from 'express';
 import { subscriptionRepository } from '@server/models/Subscription';
@@ -24,7 +24,7 @@ const updateOrgBodySchema = z.object({
   currentCredits: z.coerce.number().optional(),
   systemPrompt: z.string().max(10000).optional(),
   maxCreditsPerMember: z.number().int().positive().nullable().optional(),
-  storageLimit: z.number().min(0).nullable().optional(),
+  storageLimit: z.number().min(0).max(MAX_STORAGE_LIMIT_MB).nullable().optional(),
 });
 
 const handler = baseApi()

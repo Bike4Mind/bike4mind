@@ -1,4 +1,4 @@
-import { IOrganizationRepository, IUserDocument } from '@bike4mind/common';
+import { IOrganizationRepository, IUserDocument, MAX_STORAGE_LIMIT_MB } from '@bike4mind/common';
 import { secureParameters } from '@bike4mind/utils';
 import { NotFoundError } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -12,7 +12,7 @@ const updateSchema = z.object({
   systemPrompt: z.string().max(10000).optional(), // ~2500 tokens
   maxCreditsPerMember: z.number().int().positive().nullable().optional(),
   /** Decimal MB; null clears the override back to DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB. */
-  storageLimit: z.number().min(0).nullable().optional(),
+  storageLimit: z.number().min(0).max(MAX_STORAGE_LIMIT_MB).nullable().optional(),
 });
 
 type UpdateParameters = z.infer<typeof updateSchema>;

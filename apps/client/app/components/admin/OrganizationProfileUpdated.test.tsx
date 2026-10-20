@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { IOrganizationDocument, WithId } from '@bike4mind/common';
@@ -41,7 +41,7 @@ describe('OrganizationProfileUpdated - storage limit', () => {
   it('prefills the current limit', () => {
     renderModal(makeOrg({ storageLimit: 50 }));
 
-    expect(screen.getByTestId('admin-org-storage-limit-input')).toHaveValue(50);
+    expect(screen.getByTestId('admin-org-storage-limit-input')).toHaveValue('50');
   });
 
   it('sends a changed fractional limit as a number', () => {
@@ -60,6 +60,28 @@ describe('OrganizationProfileUpdated - storage limit', () => {
     fireEvent.click(screen.getByTestId('admin-org-update-btn'));
 
     expect(sentData().storageLimit).toBeNull();
+  });
+
+  it('compares a second save in the same session against the last saved value, not the opening snapshot', async () => {
+    renderModal(makeOrg());
+
+    setLimit('500');
+    fireEvent.click(screen.getByTestId('admin-org-update-btn'));
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+
+    setLimit('');
+    fireEvent.click(screen.getByTestId('admin-org-update-btn'));
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(2));
+
+    expect(mutateAsync.mock.calls[1][0].data.storageLimit).toBeNull();
+  });
+
+  it('blocks malformed text instead of reading it as a clear', () => {
+    renderModal(makeOrg({ storageLimit: 500 }));
+
+    setLimit('5e');
+
+    expect(screen.getByTestId('admin-org-update-btn')).toBeDisabled();
   });
 
   it('omits storageLimit when it was not changed', () => {
