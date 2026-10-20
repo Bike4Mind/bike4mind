@@ -59,10 +59,11 @@ const AcceptPoliciesPage = () => {
 
   const redirectTo = (search as { redirectTo?: string }).redirectTo;
   useEffect(() => {
-    if (shownRef.current) return;
+    // No token means the redirect to /login below runs instead of showing the policies.
+    if (shownRef.current || !accessToken) return;
     shownRef.current = true;
     logEvent({ type: FirstRunEvents.POLICIES_SHOWN, metadata: { path: 'interstitial' } });
-  }, [logEvent]);
+  }, [accessToken, logEvent]);
 
   // True only once identify has both a confirmed 401 (not mfaPending, which both ApiContext's
   // interceptor and UserContext's bootstrap effect also exempt - no refresh token is issued

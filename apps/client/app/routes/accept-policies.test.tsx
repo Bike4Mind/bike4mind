@@ -105,6 +105,12 @@ describe('AcceptPoliciesPage', () => {
     expect(mockLogEvent).toHaveBeenCalledWith({ type: 'policies_shown', metadata: { path: 'interstitial' } });
   });
 
+  it('does not log the interstitial as shown when there is no token and it redirects to login', () => {
+    mockAccessTokenState.accessToken = null;
+    renderPage();
+    expect(mockLogEvent).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'policies_shown' }));
+  });
+
   // Regression guard for #59: the ToS/AUP/Privacy links in the acceptance-checkbox label must
   // point at the right policy pages and open in a new tab. (The underlying bug - clicks landing
   // on the checkbox's transparent input overlay instead of the anchor - is a visual stacking-order

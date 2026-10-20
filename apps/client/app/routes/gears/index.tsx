@@ -411,7 +411,11 @@ const panelSx = {
 
 const GearsPage = () => {
   const { mutate: logEvent } = useLogEvent();
+  // Ref-guarded so StrictMode's dev double-mount does not log the open twice.
+  const openLoggedRef = useRef(false);
   useEffect(() => {
+    if (openLoggedRef.current) return;
+    openLoggedRef.current = true;
     logEvent({ type: FirstRunEvents.GEARS_PAGE_OPENED });
   }, [logEvent]);
   const [tab, setTab] = useState<GearsTabKey>('getting-started');
