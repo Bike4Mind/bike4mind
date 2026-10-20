@@ -30,8 +30,10 @@ export const ADMIN_GLOBAL_PARAMS = [EMERGENCY_ACCESS_PARAM, ADMIN_TAB_PARAM] as 
 
 /**
  * Tab slug -> the params that tab owns. A key must be owned by exactly one tab (the test enforces
- * it): a shared name would carry one tab's value into the other on a tab switch. Never put tokens,
- * free-text PII, form input or setting values here - these URLs get pasted into Slack.
+ * it): a shared name would carry one tab's value into the other on a tab switch. These URLs get
+ * pasted into Slack and copied into login redirects, so never register tokens, form fields, setting
+ * values, or a search box over user records (emails, names). Admin Settings' `q` is the accepted
+ * exception: it searches platform config, not people.
  */
 export const ADMIN_TAB_PARAMS = {
   [ADMIN_FEEDBACK_TAB_SLUG]: [FEEDBACK_ID_PARAM],
