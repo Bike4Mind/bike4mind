@@ -36,10 +36,48 @@ describe('useSelectedModelAnswerCost', () => {
   });
 
   it('follows the selection to another model', () => {
+    const { result, rerender } = renderHook(() => useSelectedModelAnswerCost());
+    expect(result.current?.modelName).toBe('Sonnet');
     state.selected = 'mini';
-    const { result } = renderHook(() => useSelectedModelAnswerCost());
+    rerender();
     expect(result.current?.modelName).toBe('Mini');
     expect(result.current?.creditsPerAnswer).toBeLessThan(typicalAnswerCredits(SONNET)!);
+  });
+
+  it('recomputes when the catalog loads and its pricing changes', () => {
+    state.models = undefined;
+    const { result, rerender } = renderHook(() => useSelectedModelAnswerCost());
+    expect(result.current).toBeNull();
+
+    state.models = [SONNET];
+    rerender();
+    expect(result.current?.creditsPerAnswer).toBe(typicalAnswerCredits(SONNET));
+
+    const repriced = model('sonnet', 'Sonnet', 4, 20);
+    state.models = [repriced];
+    rerender();
+    expect(result.current?.creditsPerAnswer).toBe(typicalAnswerCredits(repriced));
+
+    state.models = [];
+    rerender();
+    expect(result.current).toBeNull();
+  });
+
+  it.each([
+    ['image', { ...SONNET, type: 'image' }],
+    ['unpriced', { ...SONNET, pricing: undefined }],
+    ['free', model('sonnet', 'Free', 0, 0)],
+  ])('hides the estimate for a %s model and restores it for a text model', (_label, selected) => {
+    const { result, rerender } = renderHook(() => useSelectedModelAnswerCost());
+    expect(result.current).not.toBeNull();
+
+    state.models = [selected];
+    rerender();
+    expect(result.current).toBeNull();
+
+    state.models = [SONNET];
+    rerender();
+    expect(result.current?.modelName).toBe('Sonnet');
   });
 
   it('is null while the catalog loads or when the selected model is not in it', () => {

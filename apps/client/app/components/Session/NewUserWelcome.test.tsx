@@ -91,6 +91,34 @@ describe('NewUserWelcome', () => {
     expect(screen.queryByTestId('new-user-welcome-answers-estimate')).not.toBeInTheDocument();
   });
 
+  it('updates, hides and restores the estimate as the selected model changes', () => {
+    const { rerender } = renderWelcome();
+    const refresh = () =>
+      rerender(
+        <CssVarsProvider theme={appTheme}>
+          <NewUserWelcome />
+        </CssVarsProvider>
+      );
+
+    state.answerCost = { modelName: 'Mini', creditsPerAnswer: 15 };
+    refresh();
+    expect(screen.getByTestId('new-user-welcome-answers-estimate')).toHaveTextContent(
+      /^Estimate: about 660 answers on Mini\./
+    );
+
+    state.answerCost = null;
+    refresh();
+    expect(screen.queryByTestId('new-user-welcome-answers-estimate')).not.toBeInTheDocument();
+    expect(screen.getByTestId('new-user-welcome-credits')).toBeInTheDocument();
+    expect(screen.getAllByTestId(/^new-user-welcome-prompt-/)).toHaveLength(3);
+
+    state.answerCost = { modelName: 'Claude Sonnet 5.5', creditsPerAnswer: 54 };
+    refresh();
+    expect(screen.getByTestId('new-user-welcome-answers-estimate')).toHaveTextContent(
+      /^Estimate: about 180 answers on Claude Sonnet 5\.5\./
+    );
+  });
+
   it('does not interrupt a returning user who already has notebooks', () => {
     state.sessions = [{ id: 's1' }];
     renderWelcome();
