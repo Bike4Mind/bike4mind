@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { GenerateContentResponse } from '@google/genai';
 import { ChatModels, type ICompletionOptionTools, type IMessage, type ModelInfo } from '@bike4mind/common';
 import { GeminiBackend } from './geminiBackend';
+import { resolveOutputMaxTokens } from './thinkingParams';
 
 type Usage = NonNullable<GenerateContentResponse['usageMetadata']>;
 type CapturedRequest = { model: string; contents: unknown; config?: Record<string, unknown> } & Record<string, unknown>;
@@ -207,6 +208,20 @@ describe.each([
       expect(requests[0].config?.maxOutputTokens).toBe(16600);
       if (thinkingConfig) expect(requests[0].config?.thinkingConfig).toEqual(thinkingConfig);
       else expect(requests[0].config).not.toHaveProperty('thinkingConfig');
+    });
+
+    it('preserves default thinking after resolving an omitted caller budget', async () => {
+      const record = { ...(await discoveredRecord(true)), id: 'gemini-3-x' as ChatModels, max_tokens: 65_536 };
+      const maxTokens = resolveOutputMaxTokens({
+        requested: undefined,
+        fallback: 4096,
+        modelInfo: record,
+        modelMaxOutputTokens: record.max_tokens,
+      });
+      const { requests } = await run({ model: record.id, dispatchInfo: record, options: { maxTokens } });
+
+      expect(requests[0].config?.maxOutputTokens).toBe(65_536);
+      expect(requests[0].config).not.toHaveProperty('thinkingConfig');
     });
 
     it('caps output when the record omits can_think', async () => {
