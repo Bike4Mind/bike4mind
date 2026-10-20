@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ImageModerationBlockedError } from '@bike4mind/utils/imageModeration';
 import { ImageModels } from '@bike4mind/common';
+import { ImageModerationBlockedError as OpenAIModerationBlockedError } from '@bike4mind/utils';
+import { Logger } from '@bike4mind/observability';
 import type { ToolContext } from '../../base/types';
 import { PRICEABLE_IMAGE_SIZES } from '../../../imageCostCalculator/OpenAIImageCostCalculator';
 
@@ -487,5 +489,25 @@ describe('image_generation OpenAI model selection for transparent backgrounds', 
       'an inventory icon',
       expect.objectContaining({ model: ImageModels.GPT_IMAGE_2 })
     );
+  });
+});
+
+describe('image_generation OpenAI content-policy refusal logging', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('logs a policy block at warn, not console.error, and still returns the message', async () => {
+    mockOpenAIGenerate.mockReset();
+    mockOpenAIGenerate.mockRejectedValue(new OpenAIModerationBlockedError('blocked by policy', 'req-1'));
+    const warn = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => {});
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const { toolFn } = imageGenerationTool.implementation(createFakeContext(), {});
+    const result = await toolFn({ prompt: 'a red bike' });
+
+    expect(result).toBe('Error: blocked by policy');
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('blocked by content policy'), { requestId: 'req-1' });
+    expect(consoleError).not.toHaveBeenCalled();
   });
 });
