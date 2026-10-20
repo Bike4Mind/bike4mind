@@ -18,7 +18,9 @@ export interface ImageModerationIncidentMeta {
   fabFileId?: string;
   provider: string;
   model: string;
-  surface: IncidentSurface;
+  // Optional so adding it did not break external callers of this published type; in-repo callers
+  // always pass it. Absent on incidents recorded before the surface was tracked.
+  surface?: IncidentSurface;
 }
 
 export interface ModerateImageOrThrowParams {
