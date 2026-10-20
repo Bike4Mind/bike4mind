@@ -81,6 +81,19 @@ describe('POST /api/organizations/[id]/addUser', () => {
     expect(addMember).toHaveBeenCalledTimes(1);
   });
 
+  it('lets a rostered adminUserIds manager add a user', async () => {
+    findById.mockResolvedValue({
+      id: 'org1',
+      userId: 'owner1',
+      adminUserIds: ['appointed1'],
+      users: [{ userId: 'appointed1', permissions: ['read'] }],
+    });
+    const { req, res } = createMocks({ method: 'POST', query: { id: 'org1' }, body: { userId: 'u1' } });
+    (req as any).user = { id: 'appointed1', isAdmin: false };
+    await mockRefs.postHandler!(req, res);
+    expect(addMember).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects a non-owner, non-manager, non-admin before calling addMember', async () => {
     const { req, res } = createMocks({ method: 'POST', query: { id: 'org1' }, body: { userId: 'u1' } });
     (req as any).user = { id: 'intruder', isAdmin: false };
