@@ -88,15 +88,15 @@ export const describeDecisionFailure = (error: unknown): string => {
   return error instanceof Error ? error.name : 'unknown_error';
 };
 
-/** Writes the reply; returns false for an unexpected error so the caller rethrows it to errorHandler. */ export const sendDecisionError =
-  (res: Response, error: unknown): boolean => {
-    const reply = toDecisionErrorReply(error);
-    if (!reply) return false;
-    if (reply.errorCode === 'provider_overloaded') {
-      const seconds = error instanceof DecisionOverloadedError ? error.retryAfterSeconds : 1;
-      res.setHeader('Retry-After', String(seconds));
-    }
-    const { status, ...body } = reply;
-    res.status(status).json(body);
-    return true;
-  };
+/** Writes the reply; returns false for an unexpected error so the caller rethrows it to errorHandler. */
+export const sendDecisionError = (res: Response, error: unknown): boolean => {
+  const reply = toDecisionErrorReply(error);
+  if (!reply) return false;
+  if (reply.errorCode === 'provider_overloaded') {
+    const seconds = error instanceof DecisionOverloadedError ? error.retryAfterSeconds : 1;
+    res.setHeader('Retry-After', String(seconds));
+  }
+  const { status, ...body } = reply;
+  res.status(status).json(body);
+  return true;
+};
