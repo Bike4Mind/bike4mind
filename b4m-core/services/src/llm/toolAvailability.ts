@@ -27,7 +27,7 @@ import {
   type GetEffectiveLLMApiKeysAdapters,
 } from '../apiKeyService';
 import { resolveWebSearchProvider } from './tools/implementation/websearch';
-import { hasUsableDecisionProvider } from './decisionProviders';
+import { getDecisionProviderRegistry, hasCallableDecisionModel } from './decisionProviders';
 
 /**
  * Presence-only availability for tools that need an external API key/config.
@@ -273,9 +273,10 @@ export async function resolveToolAvailability(
         hasEmbeddingKey || isLocalEmbedderAvailable() || hasKeylessCloudEmbedder(),
         taint.llmKeys
       ),
-      // Same rule the decision routes apply to their own key lookup, so a model the picker offers
-      // is one the runner can actually reach - the tools are withheld when nothing is callable.
-      decide: maybeFailOpen(hasUsableDecisionProvider(llmKeys), taint.llmKeys),
+      // The registry-plus-keys rule the runner and GET /api/v1/decision-models apply, so a model this
+      // gate offers is one the runner can actually reach - including the case where a provider has a
+      // usable key but registers no model for this deployment.
+      decide: maybeFailOpen(hasCallableDecisionModel(getDecisionProviderRegistry().models(), llmKeys), taint.llmKeys),
     };
   } catch (err) {
     // Last-resort safety net for anything outside the per-lookup Promise.allSettled above (this

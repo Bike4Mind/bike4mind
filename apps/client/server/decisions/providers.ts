@@ -1,67 +1,20 @@
-import { z } from 'zod';
 import type { DecisionProviderId } from '@bike4mind/common';
 import { adminSettingsRepository, apiKeyRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { apiKeyService } from '@bike4mind/services';
 import { usableDecisionProviderKey, type DecisionProviderKeys } from '@bike4mind/services/llm';
 import { getSettingsByNames } from '@bike4mind/utils';
-import {
-  createDecisionProviderRegistry,
-  OpenAiDecisionProvider,
-  SystemOneDecisionProvider,
-  TestDecisionProvider,
-  type DecisionProvider,
-  type DecisionProviderRegistry,
-} from '@bike4mind/utils/decisionProviders';
+
+// The provider set and its registration rules live in b4m-core/services, so tool availability (also
+// b4m-core) reads the same registry the runner and the model list do. Re-exported here to keep the
+// routes and their tests on one import site.
+export {
+  buildDecisionProviders,
+  getDecisionProviderRegistry,
+  selectDecisionProviderKey,
+} from '@bike4mind/services/llm';
 
 type EffectiveKeys = DecisionProviderKeys;
-
-// Re-exported so the decision routes and their tests keep one import site for the key rule.
-export { selectDecisionProviderKey } from '@bike4mind/services/llm';
-
-const SystemOneBaseUrlSchema = z
-  .string()
-  .url()
-  .refine(value => {
-    // refine also runs when .url() has already failed, so the string may not parse.
-    const url = URL.canParse(value) ? new URL(value) : null;
-    return (
-      url !== null &&
-      (url.protocol === 'http:' || url.protocol === 'https:') &&
-      url.host !== '' &&
-      url.search === '' &&
-      url.hash === ''
-    );
-  });
-
-/** TypeSafe's hosted API unless SYSTEMONE_BASE_URL points at a self-hosted deployment. */
-const systemOneProviders = (env: NodeJS.ProcessEnv, logger: Logger): DecisionProvider[] => {
-  const configured = env.SYSTEMONE_BASE_URL?.trim();
-  if (!configured) return [new SystemOneDecisionProvider()];
-  const parsed = SystemOneBaseUrlSchema.safeParse(configured);
-  // Drop only the Jev models (they answer model_unavailable) so one bad self-host setting cannot take down every decisions model.
-  if (!parsed.success) {
-    logger.error(
-      'SYSTEMONE_BASE_URL must be a valid absolute URL (e.g. https://laya.example.com); Jev models are disabled'
-    );
-    return [];
-  }
-  return [new SystemOneDecisionProvider(parsed.data.replace(/\/+$/, ''))];
-};
-
-/** The test provider is deterministic and free, so it is registered only on an explicit opt-in (never production). */
-export const buildDecisionProviders = (
-  env: NodeJS.ProcessEnv = process.env,
-  logger: Logger = new Logger()
-): DecisionProvider[] => [
-  new OpenAiDecisionProvider(),
-  ...systemOneProviders(env, logger),
-  ...(env.ENABLE_TEST_DECISION_PROVIDER === 'true' ? [new TestDecisionProvider()] : []),
-];
-
-let registry: DecisionProviderRegistry | undefined;
-export const getDecisionProviderRegistry = (): DecisionProviderRegistry =>
-  (registry ??= createDecisionProviderRegistry(buildDecisionProviders()));
 
 const loadEffectiveKeys = (userId: string, logger: Logger): Promise<EffectiveKeys> =>
   apiKeyService.getEffectiveLLMApiKeys(

@@ -389,6 +389,7 @@ describe('isToolOfferable (enforcement-only wrapper)', () => {
 describe('resolveToolAvailability - decide', () => {
   afterEach(() => {
     delete process.env.ENABLE_TEST_DECISION_PROVIDER;
+    delete process.env.SYSTEMONE_BASE_URL;
   });
 
   it('is unavailable when no decision provider key resolves', async () => {
@@ -415,6 +416,14 @@ describe('resolveToolAvailability - decide', () => {
     process.env.ENABLE_TEST_DECISION_PROVIDER = 'true';
     getEffectiveLLMApiKeys.mockResolvedValue({});
     expect((await resolveToolAvailability('user-1', { db })).decide).toBe(true);
+  });
+
+  // The gate and the runner must answer the same question: a provider with a usable key but no
+  // registered model (a malformed SYSTEMONE_BASE_URL drops both Jev models) would only 503.
+  it('is unavailable when the provider is key-present but registers no model', async () => {
+    process.env.SYSTEMONE_BASE_URL = 'not-a-url';
+    getEffectiveLLMApiKeys.mockResolvedValue({ typesafe: 'ts-key' });
+    expect((await resolveToolAvailability('user-1', { db })).decide).toBe(false);
   });
 
   it('is filtered out of the built list when unavailable', () => {
