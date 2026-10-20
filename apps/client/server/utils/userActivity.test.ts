@@ -200,6 +200,20 @@ describe('listUserActivity', () => {
 
     expect(page.nextCursor).toEqual({ occurredAt: only.occurredAt, id: only.id });
   });
+
+  it('fails the page when a security store errors instead of returning a partial timeline', async () => {
+    const failing = {
+      sort: () => failing,
+      limit: () => failing,
+      maxTimeMS: () => failing,
+      lean: () => Promise.reject(new Error('operation exceeded time limit')),
+    };
+    mocks.authFind.mockReturnValue(failing);
+
+    await expect(listUserActivity(subject, { direction: 'target', includeSecurity: true, limit: 10 })).rejects.toThrow(
+      'operation exceeded time limit'
+    );
+  });
 });
 
 describe('hasAdminHistory', () => {
@@ -286,7 +300,7 @@ describe('getUserCreditHistory', () => {
 
     const history = await getUserCreditHistory({ id: USER_ID, currentCredits: 125 }, now);
 
-    expect(mocks.findAdjustments).toHaveBeenCalledWith(USER_ID, new Date('2026-07-22T00:00:00Z'), 201);
+    expect(mocks.findAdjustments).toHaveBeenCalledWith(USER_ID, new Date('2026-07-22T00:00:00Z'), now, 201);
     expect(history.points).toHaveLength(91);
     expect(history.points.at(-1)).toEqual({ day: '2026-10-20', balance: 125 });
     expect(history.points.at(-2)).toEqual({ day: '2026-10-19', balance: 100 });

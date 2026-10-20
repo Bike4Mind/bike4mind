@@ -233,11 +233,12 @@ export const listUserActivity = async (
   const filters =
     direction === 'target' ? { targetKind: 'user' as const, targetId: subject.id } : { actorUserId: subject.id };
 
+  // A failing security store fails the whole page: a timeline that silently dropped its events
+  // would read as "nothing happened", so the admin gets an error and a retry instead.
   const [adminPage, securityEntries] = await Promise.all([
     adminAuditLogRepository.list(filters, { limit, cursor }),
     includeSecurity && direction === 'target' ? fetchSecurityEntries(subject, { limit, cursor }) : Promise.resolve([]),
   ]);
-
   // adminPage holds at most `limit` rows; its own nextCursor says whether more exist beyond them.
   const merged = [...adminPage.entries, ...securityEntries].sort(compareNewestFirst);
   const entries = merged.slice(0, limit);
@@ -306,10 +307,10 @@ export const getUserCreditHistory = async (
   const from = windowStart(now, windowDays);
 
   const [dailyNet, adjustmentRows, creditAuditPage] = await Promise.all([
-    creditTransactionRepository.dailyNetCreditsForOwner(user.id, CreditHolderType.User, from),
-    creditTransactionRepository.findAdminAdjustmentsForUser(user.id, from, MAX_ADJUSTMENT_MARKERS + 1),
+    creditTransactionRepository.dailyNetCreditsForOwner(user.id, CreditHolderType.User, from, now),
+    creditTransactionRepository.findAdminAdjustmentsForUser(user.id, from, now, MAX_ADJUSTMENT_MARKERS + 1),
     adminAuditLogRepository.list(
-      { targetKind: 'user', targetId: user.id, category: 'credits', from: from.toISOString() },
+      { targetKind: 'user', targetId: user.id, action: 'user.credits.adjusted', from: from.toISOString() },
       { limit: MAX_ADJUSTMENT_MARKERS }
     ),
   ]);

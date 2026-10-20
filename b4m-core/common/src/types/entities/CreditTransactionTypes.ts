@@ -488,15 +488,21 @@ export interface ICreditTransactionRepository extends IBaseRepository<ICreditTra
    */
   queryAdminAdjustmentsPage(options: { days?: number; limit: number; skip: number }): Promise<ILedgerPage>;
 
-  /** An owner's net credit delta per UTC day since `from`, oldest first; days without rows are omitted. */
+  /** An owner's net credit delta per UTC day in [from, to], oldest first; days without rows are omitted. */
   dailyNetCreditsForOwner(
     ownerId: string,
     ownerType: CreditHolderType,
-    from: Date
+    from: Date,
+    to: Date
   ): Promise<Array<{ day: string; netCredits: number }>>;
 
-  /** One user's admin adjustments (reason `admin_adjustment`) since `from`, newest first, at most `limit`. */
-  findAdminAdjustmentsForUser(userId: string, from: Date, limit: number): Promise<ICreditTransactionDocument[]>;
+  /** One user's admin adjustments (reason `admin_adjustment`) in [from, to], newest first, at most `limit`. */
+  findAdminAdjustmentsForUser(
+    userId: string,
+    from: Date,
+    to: Date,
+    limit: number
+  ): Promise<ICreditTransactionDocument[]>;
 
   /**
    * An owner's API-token spend over the trailing N days (default 30) grouped by

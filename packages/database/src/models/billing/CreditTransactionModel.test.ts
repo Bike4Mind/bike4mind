@@ -380,9 +380,16 @@ describe('CreditTransactionRepository.dailyNetCreditsForOwner', () => {
       { ownerId: 'user-1', ownerType: CreditHolderType.User, credits: -999, createdAt: day(1) },
       { ownerId: 'user-2', ownerType: CreditHolderType.User, credits: -999, createdAt: day(3) },
       { ownerId: 'user-1', ownerType: CreditHolderType.Organization, credits: -999, createdAt: day(3) },
+      // After the window closes: the sum must stop where the balance snapshot was taken.
+      { ownerId: 'user-1', ownerType: CreditHolderType.User, credits: -999, createdAt: day(7) },
     ]);
 
-    const rows = await creditTransactionRepository.dailyNetCreditsForOwner('user-1', CreditHolderType.User, day(2));
+    const rows = await creditTransactionRepository.dailyNetCreditsForOwner(
+      'user-1',
+      CreditHolderType.User,
+      day(2),
+      day(6)
+    );
 
     expect(rows).toEqual([
       { day: '2026-01-02', netCredits: 70 },
@@ -401,9 +408,10 @@ describe('CreditTransactionRepository.findAdminAdjustmentsForUser', () => {
       { ...adjustment, type: 'generic_add', credits: 10, createdAt: day(1) },
       { ...adjustment, ownerId: 'user-2', type: 'generic_add', createdAt: day(5) },
       { ownerId: 'user-1', ownerType: CreditHolderType.User, type: 'generic_add', reason: 'otc', createdAt: day(5) },
+      { ...adjustment, type: 'generic_add', credits: 999, createdAt: day(7) },
     ]);
 
-    const rows = await creditTransactionRepository.findAdminAdjustmentsForUser('user-1', day(2), 2);
+    const rows = await creditTransactionRepository.findAdminAdjustmentsForUser('user-1', day(2), day(6), 2);
 
     expect(rows.map(row => row.credits)).toEqual([-20, 10]);
   });

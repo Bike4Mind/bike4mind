@@ -61,7 +61,7 @@ describe('GET /api/admin/users/[userId]/credit-history', () => {
     const { res, promise } = call();
     await promise;
 
-    expect(mocks.getUserCreditHistory).toHaveBeenCalledWith({ id: USER_ID, currentCredits: 42 });
+    expect(mocks.getUserCreditHistory).toHaveBeenCalledWith({ id: USER_ID, currentCredits: 42 }, expect.any(Date));
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ windowDays: 90, points: [] });
   });

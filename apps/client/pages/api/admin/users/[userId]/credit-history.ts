@@ -13,10 +13,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req,
   const { userId } = req.query;
   if (typeof userId !== 'string' || !OBJECT_ID_PATTERN.test(userId)) throw new BadRequestError('Invalid user id');
 
+  // The ledger sum is bounded at the instant the balance is read, so rows written between the two
+  // reads cannot land in a day's net without also being in the balance it is walked back from.
+  const balanceAsOf = new Date();
   const user = await userRepository.findById(userId);
   if (!user) throw new NotFoundError('User not found');
 
-  return res.json(await getUserCreditHistory({ id: user.id, currentCredits: user.currentCredits ?? 0 }));
+  return res.json(await getUserCreditHistory({ id: user.id, currentCredits: user.currentCredits ?? 0 }, balanceAsOf));
 });
 
 export const config = {
