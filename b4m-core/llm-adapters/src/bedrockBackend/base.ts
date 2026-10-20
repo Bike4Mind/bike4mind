@@ -322,7 +322,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     // the reactive ValidationException catches below remain the safety net for those cases.
     const contextWindow = this.getModelContextWindow(model);
     if (contextWindow > 0) {
-      const baseOutputTokens = typeof options.maxTokens === 'number' ? options.maxTokens : 4096;
+      const baseOutputTokens = this.getEffectiveMaxOutputTokens(options);
       // Extended thinking reserves additional tokens on top of max_tokens in the actual payload.
       const thinkingBudget = options.thinking?.budget_tokens ?? 0;
       const reservedOutputTokens = baseOutputTokens + thinkingBudget;
@@ -1114,6 +1114,11 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
    */
   protected getModelContextWindow(_model: string): number {
     return 0;
+  }
+
+  /** Output reservation must match any provider-specific limit applied to the payload. */
+  protected getEffectiveMaxOutputTokens(options: Partial<ICompletionOptions>): number {
+    return typeof options.maxTokens === 'number' ? options.maxTokens : 4096;
   }
 
   /**

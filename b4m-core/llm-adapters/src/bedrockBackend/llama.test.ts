@@ -107,3 +107,47 @@ describe('LlamaBedrockBackend max_gen_len', () => {
     expect(warn).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('LlamaBedrockBackend preflight output reservation', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    { model: ChatModels.LLAMA3_INSTRUCT_8B_V1, stream: false },
+    { model: ChatModels.LLAMA3_INSTRUCT_8B_V1, stream: true },
+    { model: ChatModels.LLAMA3_INSTRUCT_70B_V1, stream: false },
+    { model: ChatModels.LLAMA3_INSTRUCT_70B_V1, stream: true },
+  ])('preserves a fitting prompt for $model (stream: $stream)', async ({ model, stream }) => {
+    vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => {});
+    const content = ' word'.repeat(4000);
+    const response = {
+      generation: 'Hello',
+      prompt_token_count: 4000,
+      generation_token_count: 1,
+      stop_reason: 'stop',
+    };
+
+    for (const maxTokens of [undefined, 4096, 8192]) {
+      const backend = new TestLlamaBackend();
+      const send = vi.fn(async (_command: unknown) => ({
+        body: stream ? asBedrockBody([response]) : new TextEncoder().encode(JSON.stringify(response)),
+      }));
+      (backend as unknown as { _bedrockRuntime: unknown })._bedrockRuntime = { send };
+
+      await backend.complete(model, [{ role: 'user', content }], { stream, maxTokens, tools: [] }, async () => {});
+
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(send.mock.calls[0]?.[0]).toEqual(
+        expect.objectContaining({
+          input: expect.objectContaining({ body: expect.stringContaining('"max_gen_len":2048') }),
+        })
+      );
+      expect(send.mock.calls[0]?.[0]).toEqual(
+        expect.objectContaining({
+          input: expect.objectContaining({ body: expect.stringContaining(content) }),
+        })
+      );
+    }
+  });
+});

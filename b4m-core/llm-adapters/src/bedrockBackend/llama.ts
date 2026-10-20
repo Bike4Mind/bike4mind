@@ -22,6 +22,10 @@ export default class LlamaBedrockBackend extends BaseBedrockBackend {
     return isLlama3 ? 8000 : 0;
   }
 
+  protected override getEffectiveMaxOutputTokens(options: Partial<ICompletionOptions>): number {
+    return Math.min(Math.max(options.maxTokens || MAX_GEN_LEN, 1), MAX_GEN_LEN);
+  }
+
   async getModelInfo(): Promise<ModelInfo[]> {
     return [
       {
@@ -128,7 +132,7 @@ export default class LlamaBedrockBackend extends BaseBedrockBackend {
     // Add stop sequences to prevent the model from continuing the conversation artificially
     const stopSequences = ['Human:', '\nHuman:', '\n\nHuman:', 'Assistant:', '\nAssistant:'];
 
-    const maxGenLen = Math.min(Math.max(options.maxTokens || MAX_GEN_LEN, 1), MAX_GEN_LEN);
+    const maxGenLen = this.getEffectiveMaxOutputTokens(options);
     if (options.maxTokens && options.maxTokens !== maxGenLen && !clampWarned.has(options)) {
       clampWarned.add(options);
       Logger.globalInstance.warn('[LlamaBedrockBackend] maxTokens outside Bedrock max_gen_len range, clamping', {
