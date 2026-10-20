@@ -80,7 +80,7 @@ describe('scrubStaleProjectFiles', () => {
     );
 
     expect(removed).toEqual([GONE, DELETED]);
-    expect(projects.pullFileReferences).toHaveBeenCalledWith([GONE, DELETED], PROJECT);
+    expect(projects.pullFileReferences).toHaveBeenCalledWith([GONE, DELETED], { projectId: PROJECT });
   });
 
   it('keeps a project file that is live but unreadable by the collaborator whose turn this is', async () => {

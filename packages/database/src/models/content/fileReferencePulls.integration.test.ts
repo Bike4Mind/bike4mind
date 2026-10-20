@@ -41,11 +41,16 @@ const seedUser = (systemFiles: { fileId: string; enabled: boolean }[]) => {
 const systemFileIdsOf = async (id: string) =>
   ((await User.findById(id).lean())?.systemFiles ?? []).map(entry => entry.fileId);
 
-const seedProject = (fileIds: string[], systemPrompts: string[]) => {
+const seedProject = (
+  fileIds: string[],
+  systemPrompts: string[],
+  { userId = 'owner', sharedWith = [] as string[] } = {}
+) => {
   seq += 1;
   return Project.create({
     name: `p${seq}`,
-    userId: 'owner',
+    userId,
+    users: sharedWith.map(id => ({ userId: id, permissions: ['read'] })),
     fileIds,
     systemPrompts: systemPrompts.map(fileId => ({ fileId, enabled: true })),
   });
@@ -53,6 +58,15 @@ const seedProject = (fileIds: string[], systemPrompts: string[]) => {
 const projectRefsOf = async (id: string) => {
   const project = await Project.findById(id).lean();
   return { fileIds: project?.fileIds, systemPrompts: project?.systemPrompts?.map(prompt => prompt.fileId) };
+};
+
+const stagesOf = (plan: unknown): string[] => {
+  if (!plan || typeof plan !== 'object') return [];
+  const node = plan as Record<string, unknown>;
+  return [
+    ...(typeof node.stage === 'string' ? [node.stage] : []),
+    ...Object.values(node).flatMap(value => (Array.isArray(value) ? value.flatMap(stagesOf) : stagesOf(value))),
+  ];
 };
 
 describe('UserRepository.pullSystemFiles', () => {
@@ -71,18 +85,30 @@ describe('UserRepository.pullSystemFiles', () => {
   });
 });
 
-describe('UserRepository.pullSystemFilesFromAllUsers', () => {
-  it('removes the ids from every user holding them', async () => {
-    const a = await seedUser([
+describe('UserRepository.pullSystemFilesForUsers', () => {
+  it('removes the ids from the named users only, never from a user who merely holds the same id', async () => {
+    const owner = await seedUser([
       { fileId: 'f1', enabled: true },
       { fileId: 'keep', enabled: true },
     ]);
-    const b = await seedUser([{ fileId: 'f1', enabled: false }]);
+    const recipient = await seedUser([{ fileId: 'f1', enabled: false }]);
+    const neverShared = await seedUser([{ fileId: 'f1', enabled: true }]);
 
-    await userRepository.pullSystemFilesFromAllUsers(['f1']);
+    await userRepository.pullSystemFilesForUsers([owner.id, recipient.id], ['f1']);
 
-    expect(await systemFileIdsOf(a.id)).toEqual(['keep']);
-    expect(await systemFileIdsOf(b.id)).toEqual([]);
+    expect(await systemFileIdsOf(owner.id)).toEqual(['keep']);
+    expect(await systemFileIdsOf(recipient.id)).toEqual([]);
+    expect(await systemFileIdsOf(neverShared.id)).toEqual(['f1']);
+  });
+
+  it('is a no-op for no users, no files, or malformed user ids', async () => {
+    const user = await seedUser([{ fileId: 'f1', enabled: true }]);
+
+    await userRepository.pullSystemFilesForUsers([], ['f1']);
+    await userRepository.pullSystemFilesForUsers([user.id], []);
+    await userRepository.pullSystemFilesForUsers(['not-an-id'], ['f1']);
+
+    expect(await systemFileIdsOf(user.id)).toEqual(['f1']);
   });
 });
 
@@ -91,20 +117,42 @@ describe('ProjectRepository.pullFileReferences', () => {
     const target = await seedProject(['f1', 'keep'], ['f1', 'sp-keep']);
     const other = await seedProject(['f1'], ['f1']);
 
-    await projectRepository.pullFileReferences(['f1'], target.id);
+    await projectRepository.pullFileReferences(['f1'], { projectId: target.id });
 
     expect(await projectRefsOf(target.id)).toEqual({ fileIds: ['keep'], systemPrompts: ['sp-keep'] });
     expect(await projectRefsOf(other.id)).toEqual({ fileIds: ['f1'], systemPrompts: ['f1'] });
   });
 
-  it('removes the ids from every project when no project is named', async () => {
-    const a = await seedProject(['f1', 'keep'], []);
-    const b = await seedProject([], ['f1']);
+  it('removes the ids from projects owned by or shared with the named users, and no others', async () => {
+    const owned = await seedProject(['f1', 'keep'], [], { userId: 'holder' });
+    const shared = await seedProject([], ['f1'], { userId: 'someone', sharedWith: ['holder'] });
+    const unrelated = await seedProject(['f1'], ['f1'], { userId: 'stranger' });
 
-    await projectRepository.pullFileReferences(['f1']);
+    await projectRepository.pullFileReferences(['f1'], { userIds: ['holder'] });
 
-    expect(await projectRefsOf(a.id)).toEqual({ fileIds: ['keep'], systemPrompts: [] });
-    expect(await projectRefsOf(b.id)).toEqual({ fileIds: [], systemPrompts: [] });
+    expect(await projectRefsOf(owned.id)).toEqual({ fileIds: ['keep'], systemPrompts: [] });
+    expect(await projectRefsOf(shared.id)).toEqual({ fileIds: [], systemPrompts: [] });
+    expect(await projectRefsOf(unrelated.id)).toEqual({ fileIds: ['f1'], systemPrompts: ['f1'] });
+  });
+
+  it('scopes the user-scoped write with indexes, never a collection scan', async () => {
+    await Project.syncIndexes();
+    await seedProject(['f1'], [], { userId: 'holder' });
+    const updateMany = vi.spyOn(Project, 'updateMany');
+
+    await projectRepository.pullFileReferences(['f1'], { userIds: ['holder'] });
+
+    const filter = updateMany.mock.calls[0]?.[0];
+    updateMany.mockRestore();
+    expect(filter).toBeDefined();
+    // The raw collection, not Project.find: the soft-delete plugin would add `deletedAt` to a model
+    // query and mask a filter that only an explicit `deletedAt: null` makes index-eligible.
+    const explained = (await Project.collection.find(filter!).explain('queryPlanner')) as unknown as {
+      queryPlanner: { winningPlan: unknown };
+    };
+    const stages = stagesOf(explained.queryPlanner.winningPlan);
+    expect(stages).toContain('IXSCAN');
+    expect(stages).not.toContain('COLLSCAN');
   });
 });
 
@@ -122,9 +170,9 @@ describe('reference pulls leave file documents alone', () => {
     const project = await seedProject([file.id], [file.id]);
 
     await userRepository.pullSystemFiles(user.id, [file.id]);
-    await userRepository.pullSystemFilesFromAllUsers([file.id]);
-    await projectRepository.pullFileReferences([file.id], project.id);
-    await projectRepository.pullFileReferences([file.id]);
+    await userRepository.pullSystemFilesForUsers([user.id], [file.id]);
+    await projectRepository.pullFileReferences([file.id], { projectId: project.id });
+    await projectRepository.pullFileReferences([file.id], { userIds: ['owner'] });
 
     expect(await FabFile.findById(file.id).lean()).toEqual(before);
   });

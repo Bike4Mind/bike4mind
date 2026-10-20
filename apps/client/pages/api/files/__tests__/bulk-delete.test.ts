@@ -19,6 +19,8 @@ const h = vi.hoisted(() => ({
   incrementCurrentStorage: vi.fn(),
   changeStorageSize: vi.fn(),
   userForRefund: vi.fn(),
+  pullSystemFilesForUsers: vi.fn(),
+  pullFileReferences: vi.fn(),
   baseApiOptions: undefined as unknown,
 }));
 
@@ -68,8 +70,12 @@ vi.mock('@bike4mind/database', async importOriginal => ({
   },
   fileTagRepository: { touchLastActivityBy: h.touchLastActivityBy },
   sessionRepository: { findAllWithKnowledgeId: h.findAllWithKnowledgeId, update: h.sessionUpdate },
-  userRepository: { findById: h.userFindById, pullSystemFiles: vi.fn(), pullSystemFilesFromAllUsers: vi.fn() },
-  projectRepository: { pullFileReferences: vi.fn() },
+  userRepository: {
+    findById: h.userFindById,
+    pullSystemFiles: vi.fn(),
+    pullSystemFilesForUsers: h.pullSystemFilesForUsers,
+  },
+  projectRepository: { pullFileReferences: h.pullFileReferences },
   withTransaction: (fn: (session?: unknown) => Promise<unknown>) => fn(undefined),
   User: { findById: (id: string) => ({ session: async () => h.userForRefund(id) }) },
 }));
@@ -138,6 +144,25 @@ describe('bulk-delete - data-lake stats', () => {
     // Three member files, one lake: the meta-tags are deduped, so one aggregation, not three.
     expect(h.computeDataLakeStats).toHaveBeenCalledTimes(1);
     expect(h.setStats).toHaveBeenCalledTimes(1);
+  });
+
+  it("unlinks system files and projects once for the batch, over every deleted file's owner and recipients", async () => {
+    const files = new Map([
+      ['507f1f77bcf86cd799439011', { ...memberFile('507f1f77bcf86cd799439011'), users: [{ userId: 'recipient-1' }] }],
+      ['507f1f77bcf86cd799439012', { ...memberFile('507f1f77bcf86cd799439012'), users: [{ userId: 'recipient-2' }] }],
+    ]);
+    h.findById.mockImplementation(async (id: string) => files.get(id) ?? null);
+    h.findByIdAndUserId.mockImplementation(async (id: string) => files.get(id) ?? null);
+    const { res } = makeRes();
+
+    await run([...files.keys()], res);
+
+    const fileIds = [...files.keys()];
+    const holders = [OWNER, 'recipient-1', 'recipient-2'];
+    expect(h.pullSystemFilesForUsers).toHaveBeenCalledTimes(1);
+    expect(h.pullSystemFilesForUsers).toHaveBeenCalledWith(holders, fileIds);
+    expect(h.pullFileReferences).toHaveBeenCalledTimes(1);
+    expect(h.pullFileReferences).toHaveBeenCalledWith(fileIds, { userIds: holders });
   });
 
   it('does not recompute for a batch that only unshares', async () => {

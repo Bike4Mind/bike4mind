@@ -299,7 +299,7 @@ export const createMockUserRepository = (): MockedObject<IUserRepository> =>
     findOrCreateByEmail: vi.fn(),
     recordModerationHit: vi.fn(),
     pullSystemFiles: vi.fn(),
-    pullSystemFilesFromAllUsers: vi.fn(),
+    pullSystemFilesForUsers: vi.fn(),
     setModerationStatus: vi.fn(),
     recordModerationAppeal: vi.fn(),
   });

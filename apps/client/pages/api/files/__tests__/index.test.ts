@@ -25,7 +25,7 @@ const mockRefs = vi.hoisted(() => ({
   deleteUser: undefined as undefined | { currentStorageSize: number; save: () => Promise<void> },
   incrementCurrentStorage: undefined as unknown as ReturnType<typeof vi.fn>,
   pullKnowledgeIds: undefined as unknown as ReturnType<typeof vi.fn>,
-  pullSystemFilesFromAllUsers: undefined as unknown as ReturnType<typeof vi.fn>,
+  pullSystemFilesForUsers: undefined as unknown as ReturnType<typeof vi.fn>,
   pullFileReferences: undefined as unknown as ReturnType<typeof vi.fn>,
 }));
 
@@ -46,9 +46,10 @@ vi.mock('@server/middlewares/baseApi', () => {
 
 const fabFileDocs = vi.hoisted(
   () =>
-    [{ filePath: 'a/one.png' }, { filePath: 'b/two.mp3', sourceMetadata: { generatedCopyKey: 'two.mp3' } }] as Array<
-      Record<string, unknown>
-    >
+    [
+      { filePath: 'a/one.png', userId: 'user-1', users: [{ userId: 'recipient-1' }] },
+      { filePath: 'b/two.mp3', userId: 'user-1', sourceMetadata: { generatedCopyKey: 'two.mp3' } },
+    ] as Array<Record<string, unknown>>
 );
 
 vi.mock('@bike4mind/database', () => {
@@ -101,7 +102,7 @@ vi.mock('@bike4mind/database', () => {
     fabFileRepository: { __repo: 'fabFiles' },
     userRepository: {
       __repo: 'users',
-      pullSystemFilesFromAllUsers: (...args: unknown[]) => mockRefs.pullSystemFilesFromAllUsers(...args),
+      pullSystemFilesForUsers: (...args: unknown[]) => mockRefs.pullSystemFilesForUsers(...args),
     },
     sessionRepository: { pullKnowledgeIds: (...args: unknown[]) => mockRefs.pullKnowledgeIds(...args) },
     organizationRepository: {
@@ -116,18 +117,24 @@ vi.mock('@bike4mind/database', () => {
   };
 });
 
-vi.mock('@bike4mind/services', () => ({
-  fabFilesService: {
-    search: (...args: unknown[]) => {
-      mockRefs.searchArgs = args;
-      return Promise.resolve({ data: [], total: 0, hasMore: false });
+vi.mock('@bike4mind/services', async () => {
+  // The reference cleanup runs for real so the test pins which users and projects it is scoped to.
+  const actual = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
+  return {
+    fabFilesService: {
+      referenceHolderIds: actual.fabFilesService.referenceHolderIds,
+      cleanUpDeletedFileReferences: actual.fabFilesService.cleanUpDeletedFileReferences,
+      search: (...args: unknown[]) => {
+        mockRefs.searchArgs = args;
+        return Promise.resolve({ data: [], total: 0, hasMore: false });
+      },
+      deleteStoredObjects: (...args: unknown[]) => {
+        mockRefs.storedObjectArgs = args;
+        return Promise.resolve();
+      },
     },
-    deleteStoredObjects: (...args: unknown[]) => {
-      mockRefs.storedObjectArgs = args;
-      return Promise.resolve();
-    },
-  },
-}));
+  };
+});
 
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ bucket: 'files', getSignedUrl: browserSigner, delete: vi.fn() }),
@@ -264,7 +271,7 @@ describe('DELETE /api/files', () => {
     mockRefs.updateManyOptions = undefined;
     mockRefs.incrementCurrentStorage = vi.fn().mockResolvedValue(undefined);
     mockRefs.pullKnowledgeIds = vi.fn().mockResolvedValue(0);
-    mockRefs.pullSystemFilesFromAllUsers = vi.fn().mockResolvedValue(undefined);
+    mockRefs.pullSystemFilesForUsers = vi.fn().mockResolvedValue(undefined);
     mockRefs.pullFileReferences = vi.fn().mockResolvedValue(undefined);
   });
 
@@ -379,16 +386,16 @@ describe('DELETE /api/files', () => {
     expect(res._getStatusCode()).toBe(204);
   });
 
-  it('drops session, system-file and project references to every deleted file', async () => {
+  it('drops references to every deleted file, scoped to the owner and direct-share recipients', async () => {
     const { req, res } = invokeDelete();
 
     await mockRefs.deleteHandler!(req, res);
 
     const deletedIds = fabFileDocs.map((_doc, i) => `file-${i}`);
-    expect(deletedIds.length).toBeGreaterThan(0);
+    const holders = ['user-1', 'recipient-1'];
     expect(mockRefs.pullKnowledgeIds).toHaveBeenCalledWith(deletedIds);
-    expect(mockRefs.pullSystemFilesFromAllUsers).toHaveBeenCalledWith(deletedIds);
-    expect(mockRefs.pullFileReferences).toHaveBeenCalledWith(deletedIds);
+    expect(mockRefs.pullSystemFilesForUsers).toHaveBeenCalledWith(holders, deletedIds);
+    expect(mockRefs.pullFileReferences).toHaveBeenCalledWith(deletedIds, { userIds: holders });
   });
 
   it('still completes when dropping references fails', async () => {

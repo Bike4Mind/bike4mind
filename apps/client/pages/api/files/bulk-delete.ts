@@ -51,6 +51,8 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
 
     // Per owner: a batch can span personal files and files owned by an org.
     const refunds: Array<{ owner: StorageOwner; bytes: number }> = [];
+    const cleanupFileIds = new Set<string>();
+    const cleanupUserIds = new Set<string>();
     // Collected across the whole batch and recomputed once at the end, so deleting N files out of
     // one lake costs one aggregation rather than N identical ones.
     const deletedFileTagNames: (string | undefined)[] = [];
@@ -100,6 +102,10 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
               searchIndex: selfHostOpenSearchEnabled() ? FabFileChunkSearchIndex : undefined,
               logger: req.logger,
               auditPrincipal: lakeConfigAuditPrincipal(req.user, req.apiKeyInfo),
+              deferReferenceCleanup: references => {
+                references.fileIds.forEach(id => cleanupFileIds.add(id));
+                references.userIds.forEach(id => cleanupUserIds.add(id));
+              },
             }
           );
 
@@ -134,6 +140,14 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
         results.failed.push({ id: fileId, error: errorMessage });
       }
     }
+
+    // One system-file/project unlink for the whole batch, over the union of every deleted file's
+    // owner and direct-share recipients (see deleteFabFile's deferReferenceCleanup).
+    await fabFilesService.cleanUpDeletedFileReferences(
+      { fileIds: [...cleanupFileIds], userIds: [...cleanupUserIds] },
+      { users: userRepository, projects: projectRepository },
+      req.logger
+    );
 
     // One refund per owner after all deletions; one owner's failure does not skip the others.
     for (const { owner, bytes } of sumStorageDeltaByOwner(refunds)) {

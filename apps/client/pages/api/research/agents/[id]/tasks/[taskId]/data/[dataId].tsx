@@ -61,7 +61,8 @@ const handler = baseApi({ auth: true }).delete(
               await userRepository.incrementCurrentStorage(userId, count);
             },
             pullSystemFiles: (userId: string, fileIds: string[]) => userRepository.pullSystemFiles(userId, fileIds),
-            pullSystemFilesFromAllUsers: (fileIds: string[]) => userRepository.pullSystemFilesFromAllUsers(fileIds),
+            pullSystemFilesForUsers: (userIds: string[], fileIds: string[]) =>
+              userRepository.pullSystemFilesForUsers(userIds, fileIds),
           },
           organizations: {
             incrementCurrentStorage: async (organizationId: string, count: number) => {

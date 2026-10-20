@@ -524,8 +524,10 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
   }
   async pullKnowledgeIdsFromSession(sessionId: string, fabFileIds: string[]) {
     if (fabFileIds.length === 0 || !mongoose.isObjectIdOrHexString(sessionId)) return false;
+    // Matching on the ids too means a session holding none of them is not written at all, so its
+    // timestamps are not bumped (which would reorder it in the session list).
     const result = await this.sessionModel.updateOne(
-      { _id: sessionId },
+      { _id: sessionId, knowledgeIds: { $in: fabFileIds } },
       { $pull: { knowledgeIds: { $in: fabFileIds } } }
     );
     return result.modifiedCount > 0;

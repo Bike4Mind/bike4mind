@@ -72,10 +72,13 @@ describe('SessionRepository.pullKnowledgeIdsFromSession', () => {
 
   it('reports false when the session held none of the ids, and for an empty list or malformed id', async () => {
     const session = await seed(['keep']);
+    const before = await Session.findById(session.id).lean();
+    await new Promise(resolve => setTimeout(resolve, 5));
 
     expect(await sessionRepository.pullKnowledgeIdsFromSession(session.id, ['f1'])).toBe(false);
     expect(await sessionRepository.pullKnowledgeIdsFromSession(session.id, [])).toBe(false);
     expect(await sessionRepository.pullKnowledgeIdsFromSession('not-an-id', ['keep'])).toBe(false);
-    expect(await knowledgeIdsOf(session.id)).toEqual(['keep']);
+    // Not written at all - timestamps included, so the session does not jump in the list.
+    expect(await Session.findById(session.id).lean()).toEqual(before);
   });
 });

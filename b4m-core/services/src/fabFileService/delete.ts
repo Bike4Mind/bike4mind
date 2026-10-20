@@ -19,6 +19,11 @@ import type { ManageActor } from '../dataLakeService/manageRule';
 import { registryCandidateLakes } from '../dataLakeService/registryCandidateLakes';
 import { deleteStoredObjects, type GeneratedCopyStore, type ObjectStorage } from './deleteStoredObjects';
 import {
+  cleanUpDeletedFileReferences,
+  referenceHolderIds,
+  type DeletedFileReferences,
+} from './cleanUpDeletedFileReferences';
+import {
   recordLakeMembershipChange,
   type LakeMembershipAuditAdapters,
 } from '../dataLakeService/recordLakeMembershipChange';
@@ -55,7 +60,7 @@ export interface DeleteFabFileAdapter extends LakeMembershipAuditAdapters {
       'findByIdAndUserId' | 'findById' | 'findAllInIds' | 'update' | 'deleteManyInIds'
     >;
     fabFileChunks: Pick<IFabFileChunkRepository, 'deleteManyByFabFileId' | 'distinctRetrievalIndexModelsByFabFileIds'>;
-    users: Pick<IUserRepository, 'findById' | 'update' | 'pullSystemFiles' | 'pullSystemFilesFromAllUsers'>;
+    users: Pick<IUserRepository, 'findById' | 'update' | 'pullSystemFiles' | 'pullSystemFilesForUsers'>;
     sessions: Pick<ISessionRepository, 'findAllWithKnowledgeId' | 'update'>;
     // Optional so a caller with no project repo still compiles; absent -> project references are
     // left for the per-turn prune (scrubStaleProjectFiles) to drop when the project is next used.
@@ -88,6 +93,11 @@ export interface DeleteFabFileAdapter extends LakeMembershipAuditAdapters {
    * the resulting `removed` rows to the key, not the human it acts for - see `ManageActor.auditPrincipal`.
    */
   auditPrincipal?: ManageActor['auditPrincipal'];
+  /**
+   * A batch caller (bulk delete) takes the system-file/project unlink for this file instead of it
+   * running here, unions it across the batch and runs it once via cleanUpDeletedFileReferences.
+   */
+  deferReferenceCleanup?: (references: DeletedFileReferences) => void;
 }
 
 export const deleteFabFile = async (
@@ -179,14 +189,11 @@ export const deleteFabFile = async (
       await db.sessions.update({ id: notebook.id, knowledgeIds: updatedKnowledgeIds });
     }
 
-    // The file is gone for everyone, so so are the system-file and project references to it.
-    // Best-effort: the delete itself has already happened and must still report as done.
-    await unlinkFileReferences(ownedFile.id, () =>
-      Promise.all([
-        db.users.pullSystemFilesFromAllUsers([ownedFile.id]),
-        db.projects?.pullFileReferences([ownedFile.id]),
-      ])
-    );
+    // The file is gone for everyone: unlink it from its owner's and direct-share recipients' system
+    // files and projects. Group- or lake-held references are left to the turn-time scrub.
+    const references = { fileIds: [ownedFile.id], userIds: referenceHolderIds(ownedFile) };
+    if (adapter.deferReferenceCleanup) adapter.deferReferenceCleanup(references);
+    else await cleanUpDeletedFileReferences(references, db);
 
     await deleteStoredObjects([ownedFile], { files: storage, generated: generatedCopies });
 

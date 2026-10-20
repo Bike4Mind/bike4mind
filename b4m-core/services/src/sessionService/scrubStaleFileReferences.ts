@@ -60,7 +60,7 @@ export const scrubStaleProjectFiles = async (
     const { gone, softDeleted } = await classifyUnresolvedFileIds(referenced, notices, adapters.db.fabFiles);
     const stale = [...gone, ...softDeleted];
     if (stale.length === 0) return [];
-    await adapters.db.projects.pullFileReferences(stale, project.id);
+    await adapters.db.projects.pullFileReferences(stale, { projectId: project.id });
     logger.info('sessionService.scrubStaleProjectFiles: removed project files whose file no longer exists', {
       projectId: project.id,
       removed: stale,
