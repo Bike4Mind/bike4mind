@@ -74,6 +74,7 @@ import {
   materializePromptMetaSession,
   ModelBackend,
   type WorkspaceDeniedToolsTable,
+  type WorkspaceSessionSettingsTable,
   type SupportedEmbeddingModel,
   PersistedSessionSummaryTrigger,
   SessionSummaryTrigger,
@@ -381,6 +382,11 @@ export interface IChatCompletionServiceOptions {
    * value is the generated empty table.
    */
   workspaceDeniedTools: WorkspaceDeniedToolsTable;
+  /**
+   * `{ surface id: settings }` resolved over the loaded session before any reader sees it. Required for
+   * the same reason as `workspaceDeniedTools`; the open-core value is the generated empty table.
+   */
+  workspaceSessionSettings: WorkspaceSessionSettingsTable;
   autoNameSession: (sessionId: string, logger: Logger) => Promise<string | null>;
   invokeCreateMemento: (
     questId: string,

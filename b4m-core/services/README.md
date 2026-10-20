@@ -4,6 +4,15 @@
 
 This directory contains the core business logic services for the B4M application. Each service is organized into its own module and follows specific patterns for consistency and maintainability.
 
+## Workspace session settings migration
+
+`IChatCompletionServiceOptions` and the adapters for `forkSession`, `snipSession`,
+`cloneSession`, and `moveSession` now require `workspaceSessionSettings`. Pass the
+host's contributed `WorkspaceSessionSettingsTable`, or `{}` when the host has no
+contributions. Omitting the table is a configuration error rather than an opt-out.
+
+`createSession` keeps this adapter optional for existing workspace-specific callers.
+
 ## Directory Structure
 
 ```

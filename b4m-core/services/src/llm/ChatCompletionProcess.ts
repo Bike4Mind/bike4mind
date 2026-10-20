@@ -53,6 +53,7 @@ import {
   isClaudeModelId,
   questGenerationJobs,
   resolveWorkspaceDeniedTools,
+  applyWorkspaceSessionSettings,
 } from '@bike4mind/common';
 import {
   BadRequestError,
@@ -1065,6 +1066,7 @@ export class ChatCompletionProcess {
   private wsHttpsUrl: string;
   private abilityGetter: IChatCompletionServiceOptions['abilityGetter'];
   private workspaceDeniedTools: IChatCompletionServiceOptions['workspaceDeniedTools'];
+  private workspaceSessionSettings: IChatCompletionServiceOptions['workspaceSessionSettings'];
   private getScopeFilter: IChatCompletionServiceOptions['getScopeFilter'];
   private getMcpClient: IChatCompletionServiceOptions['getMcpClient'];
   private statusManager: StatusManager | null = null;
@@ -1129,6 +1131,7 @@ export class ChatCompletionProcess {
     this.wsHttpsUrl = options.wsHttpsUrl;
     this.abilityGetter = options.abilityGetter;
     this.workspaceDeniedTools = options.workspaceDeniedTools;
+    this.workspaceSessionSettings = options.workspaceSessionSettings;
     this.getScopeFilter = options.getScopeFilter;
     this.getEntitlements = options.getEntitlements;
     this.getMcpClient = options.getMcpClient;
@@ -2113,7 +2116,7 @@ export class ChatCompletionProcess {
         );
       };
 
-      const [session, organization, apiKeyTable, toolAvailability] = await Promise.all([
+      const [loadedSession, organization, apiKeyTable, toolAvailability] = await Promise.all([
         timeCall('session', Promise.resolve(prefetchedSession ?? this.db.sessions.findById(sessionId))),
         timeCall(
           'organization',
@@ -2134,13 +2137,18 @@ export class ChatCompletionProcess {
         ),
       ]);
 
-      if (!session) {
+      if (!loadedSession) {
         // Try to clean up the quest if session doesn't exist
         quest.status = 'stopped';
         quest.replies = ['Session not found. Please create a new session or refresh the page.'];
         await saveQuest(quest);
         return;
       }
+      const session = await applyWorkspaceSessionSettings(
+        loadedSession,
+        { user: this.user, logger },
+        this.workspaceSessionSettings
+      );
       // A stop can land between invoke creating the quest and this point (the client defers a
       // first-turn Stop until the quest exists). The save below would write 'running' back over
       // it and the cancel watcher would never see it, so honour it here. The finally block sends
