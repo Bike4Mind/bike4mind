@@ -36,6 +36,12 @@ export const ADMIN_AUDIT_CATALOGUE = {
     write: 'strict',
     escalatesAboveGrantThreshold: true,
   },
+  'org.credits.refunded': {
+    category: 'credits',
+    severity: 'notice',
+    write: 'strict',
+    escalatesAboveGrantThreshold: true,
+  },
   'user.subscription.granted': { category: 'credits', severity: 'notice', write: 'strict' },
   'user.credits.adjusted': {
     category: 'credits',
