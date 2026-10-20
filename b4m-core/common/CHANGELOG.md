@@ -1,5 +1,11 @@
 # @bike4mind/common
 
+## 17.0.0
+
+### Major Changes
+
+- [#4997](https://github.com/Bike4Mind/bike4mind/pull/4997) [`5598195`](https://github.com/Bike4Mind/bike4mind/commit/5598195554d31841e2a01afb4c1bb877bd315a58) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - resolve contributed per-surface session settings at read time
+
 ## 16.2.0
 
 ### Minor Changes

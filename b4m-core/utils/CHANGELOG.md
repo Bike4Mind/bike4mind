@@ -1,5 +1,14 @@
 # @bike4mind/utils
 
+## 8.1.1
+
+### Patch Changes
+
+- Updated dependencies [[`5598195`](https://github.com/Bike4Mind/bike4mind/commit/5598195554d31841e2a01afb4c1bb877bd315a58), [`ee518f5`](https://github.com/Bike4Mind/bike4mind/commit/ee518f5a07404395871bb0824b2038c842f51167)]:
+  - @bike4mind/common@17.0.0
+  - @bike4mind/llm-adapters@1.4.0
+  - @bike4mind/fab-pipeline@2.1.6
+
 ## 8.1.0
 
 ### Minor Changes
