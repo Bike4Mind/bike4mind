@@ -865,7 +865,7 @@ describe('useAgentExecutionSubscriptions -- confidence gate wire', () => {
       }
     });
 
-    it('does not arm the re-ask for a stop', () => {
+    it('re-asks the server when a stop is never answered', () => {
       vi.useFakeTimers();
       try {
         mountPausedRun('exec-gate-6', 'sess-6');
@@ -874,11 +874,19 @@ describe('useAgentExecutionSubscriptions -- confidence gate wire', () => {
         result.current.respondToGate('exec-gate-6', 'stop');
         ws.sendJsonMessage.mockClear();
 
+        // No `completed` frame: the pause was swept, so the server drops the
+        // stop and the run still reads paused.
         act(() => {
           vi.advanceTimersByTime(GATE_CONTINUE_ACK_MS);
         });
 
-        expect(ws.sendJsonMessage).not.toHaveBeenCalled();
+        expect(ws.sendJsonMessage).toHaveBeenCalledTimes(1);
+        expect(ws.sendJsonMessage).toHaveBeenCalledWith({
+          action: 'agent_execute',
+          command: 'reconnect',
+          sessionId: 'sess-6',
+          executionId: 'exec-gate-6',
+        });
       } finally {
         vi.useRealTimers();
       }

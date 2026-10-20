@@ -819,11 +819,10 @@ export function useAgentExecutionDispatch() {
           executionId,
           decision,
         } as unknown as Parameters<typeof sendJsonMessage>[0]);
-        if (decision !== 'continue') return;
-        // A `continue` that never lands (the pause was swept to `aborted`, or
-        // the resume was rejected) leaves the run painting "Paused" forever.
-        // Re-ask once the ack window passes; a `reconnect_result` then restores
-        // the gate or the run's real terminal status.
+        // A decision the server never answers (the pause was swept to
+        // `aborted`, so `handleGateResponse` drops it silently) leaves the run
+        // painting "Paused" forever. Re-ask once the ack window passes; a
+        // `reconnect_result` then restores the gate or the real status.
         setTimeout(() => {
           const execution = useAgentExecutionStore.getState().executions[executionId];
           if (execution?.status !== 'paused') return;
