@@ -2069,6 +2069,15 @@ describe('ChatCompletionProcess', () => {
 
         expect(statuses).toContain('Gathering data sources...');
       });
+
+      it('sends the data-source copy when the session has knowledge attached', async () => {
+        // No file ids: session knowledge is the only source signal, so this pins the call site's
+        // knowledgeIds wiring - passing [] there would flip the status with every other test green.
+        mockSession.knowledgeIds = ['knowledge-a'];
+        const statuses = await processHelloTurn();
+
+        expect(statuses).toContain('Gathering data sources...');
+      });
     });
 
     it('skips a prefetched quest that invoke already saved as an error', async () => {

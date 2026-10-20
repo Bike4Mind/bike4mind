@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { hasURLs } from '@bike4mind/fab-pipeline';
+import { URL_REGEX } from '@bike4mind/fab-pipeline';
 import {
   GATHERING_DATA_SOURCES_STATUS,
   PREPARING_CONTEXT_STATUS,
@@ -26,9 +26,11 @@ describe('turnGathersDataSources', () => {
   // URL_REGEX is /g, so implementing this with hasURLs' .test() would leave lastIndex advanced and the
   // later hasURLs guard in processUrlsFromPrompt would return false, silently skipping the fetch.
   it('leaves the shared URL regex clean for the downstream fetch guard', () => {
-    const message = 'See https://example.com/page for context';
-    turnGathersDataSources({ message });
-    expect(hasURLs(message)).toBe(true);
+    // Asserted on lastIndex directly, not via a second hasURLs(): a failed .test() resets lastIndex
+    // to 0, so the order-dependent assertion would pass under the very mutant it exists to catch.
+    URL_REGEX.lastIndex = 0;
+    turnGathersDataSources({ message: 'See https://example.com/page for context' });
+    expect(URL_REGEX.lastIndex).toBe(0);
   });
 });
 
