@@ -11,6 +11,9 @@ const SECTION_ENTRIES = Object.entries(SETTING_TABS) as Array<
 
 const DEFAULT_SETTING_SECTION: SettingSectionKey = SECTION_ENTRIES[0][0];
 
+// ms of typing idle before the search term is written to the URL.
+export const SEARCH_TERM_URL_DEBOUNCE_MS = 250;
+
 // The URL carries each section's `id` ('aiConfiguration'), the slug-shaped field, not its object key.
 const sectionFromId = (id: string | undefined): SettingSectionKey =>
   SECTION_ENTRIES.find(([, section]) => section.id === id)?.[0] ?? DEFAULT_SETTING_SECTION;
@@ -20,9 +23,10 @@ const sectionFromId = (id: string | undefined): SettingSectionKey =>
  * shared link reopens the same view. Setting values never go in the URL.
  *
  * The section reads straight from the URL. The search box keeps its own state, seeded from the URL,
- * because binding a text input to the router would re-render it a navigation behind each keystroke.
+ * because binding a text input to the router would re-render it a navigation behind each keystroke;
+ * the term is written back once typing pauses.
  * Leaving the tab needs no cleanup here: the tab-sync hook rebuilds the search from the param
- * registry and drops these keys.
+ * registry and drops these keys, and a pending write is cancelled on unmount.
  */
 export const useAdminSettingsSearchParams = () => {
   const search = useSearch({ strict: false }) as AdminSearch;
@@ -31,14 +35,18 @@ export const useAdminSettingsSearchParams = () => {
   const [searchTerm, setSearchTermState] = useState(() => urlSearchTerm);
   // The last term this hook pushed to the URL, so its own echo does not re-seed the box.
   const writtenTermRef = useRef(urlSearchTerm);
+  const pendingWriteRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   // Follow a `q` that changed from outside while the tab stayed mounted (back/forward, a
   // navigation from another surface): the box and the URL must not disagree.
   useEffect(() => {
     if (urlSearchTerm === writtenTermRef.current) return;
+    clearTimeout(pendingWriteRef.current);
     writtenTermRef.current = urlSearchTerm;
     setSearchTermState(urlSearchTerm);
   }, [urlSearchTerm]);
+
+  useEffect(() => () => clearTimeout(pendingWriteRef.current), []);
 
   const section = sectionFromId(search[ADMIN_SETTINGS_SECTION_PARAM]);
 
@@ -58,7 +66,11 @@ export const useAdminSettingsSearchParams = () => {
     (term: string) => {
       writtenTermRef.current = term;
       setSearchTermState(term);
-      writeSearch({ [ADMIN_SETTINGS_SEARCH_PARAM]: term || undefined });
+      clearTimeout(pendingWriteRef.current);
+      pendingWriteRef.current = setTimeout(
+        () => writeSearch({ [ADMIN_SETTINGS_SEARCH_PARAM]: term || undefined }),
+        SEARCH_TERM_URL_DEBOUNCE_MS
+      );
     },
     [writeSearch]
   );

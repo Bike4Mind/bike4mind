@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { SETTING_TABS, settingsMap, type SettingKey } from '@bike4mind/common';
@@ -39,6 +39,7 @@ vi.mock('@tanstack/react-router', () => ({
 }));
 
 import AdminSettingsTab from './AdminSettingsTab';
+import { SEARCH_TERM_URL_DEBOUNCE_MS } from './useAdminSettingsSearchParams';
 
 /** The search the component's most recent navigate would produce from `previous`. */
 const lastWrittenSearch = (previous: SearchRecord) => {
@@ -52,6 +53,8 @@ const lastWrittenSearch = (previous: SearchRecord) => {
   return call.search(previous);
 };
 
+const appTheme = extendTheme({ ...getThemeConfig() });
+
 const settingsView = () => (
   <CssVarsProvider theme={appTheme}>
     <AdminSettingsTab />
@@ -59,8 +62,6 @@ const settingsView = () => (
 );
 
 const renderSettings = () => render(settingsView());
-
-const appTheme = extendTheme({ ...getThemeConfig() });
 
 const findTab = (category: string) =>
   Object.values(SETTING_TABS).find(tab => (tab.categories as readonly string[]).includes(category));
@@ -118,21 +119,65 @@ describe('AdminSettingsTab URL state', () => {
     });
   });
 
-  it('seeds the search box from ?q= and writes edits back, removing q once cleared', () => {
-    router.search = { tab: 'admin-settings', q: 'slack' };
-    renderSettings();
-    const input = screen.getByTestId('admin-settings-search-input') as HTMLInputElement;
-    expect(input.value).toBe('slack');
+  it('seeds the search box from ?q= and writes edits back once typing pauses, removing q once cleared', () => {
+    vi.useFakeTimers();
+    try {
+      router.search = { tab: 'admin-settings', q: 'slack' };
+      renderSettings();
+      const input = screen.getByTestId('admin-settings-search-input') as HTMLInputElement;
+      expect(input.value).toBe('slack');
 
-    fireEvent.change(input, { target: { value: 'slack bot' } });
-    expect(input.value).toBe('slack bot');
-    expect(lastWrittenSearch({ tab: 'admin-settings', q: 'slack' })).toEqual({ tab: 'admin-settings', q: 'slack bot' });
+      fireEvent.change(input, { target: { value: 'slack b' } });
+      fireEvent.change(input, { target: { value: 'slack bot' } });
+      expect(input.value).toBe('slack bot');
+      expect(router.navigate).not.toHaveBeenCalled();
+      act(() => vi.advanceTimersByTime(SEARCH_TERM_URL_DEBOUNCE_MS));
+      expect(router.navigate).toHaveBeenCalledTimes(1);
+      expect(lastWrittenSearch({ tab: 'admin-settings', q: 'slack' })).toEqual({
+        tab: 'admin-settings',
+        q: 'slack bot',
+      });
 
-    fireEvent.change(input, { target: { value: '' } });
-    expect(lastWrittenSearch({ tab: 'admin-settings', q: 'slack bot' })).toEqual({
-      tab: 'admin-settings',
-      q: undefined,
-    });
+      fireEvent.change(input, { target: { value: '' } });
+      act(() => vi.advanceTimersByTime(SEARCH_TERM_URL_DEBOUNCE_MS));
+      expect(lastWrittenSearch({ tab: 'admin-settings', q: 'slack bot' })).toEqual({
+        tab: 'admin-settings',
+        q: undefined,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('drops a pending search write when the tab unmounts', () => {
+    vi.useFakeTimers();
+    try {
+      const { unmount } = renderSettings();
+      fireEvent.change(screen.getByTestId('admin-settings-search-input'), { target: { value: 'slack' } });
+      unmount();
+      act(() => vi.advanceTimersByTime(SEARCH_TERM_URL_DEBOUNCE_MS));
+      expect(router.navigate).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('drops a pending search write when ?q= changes from outside first', () => {
+    vi.useFakeTimers();
+    try {
+      router.search = { tab: 'admin-settings', q: 'slack' };
+      const { rerender } = renderSettings();
+      const input = screen.getByTestId('admin-settings-search-input') as HTMLInputElement;
+      fireEvent.change(input, { target: { value: 'slack bot' } });
+
+      router.search = { tab: 'admin-settings', q: 'billing' };
+      rerender(settingsView());
+      act(() => vi.advanceTimersByTime(SEARCH_TERM_URL_DEBOUNCE_MS));
+      expect(input.value).toBe('billing');
+      expect(router.navigate).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('re-seeds the search box when ?q= changes from outside while mounted', () => {
