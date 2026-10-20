@@ -3,13 +3,13 @@ import { Button, Stack, Typography } from '@mui/joy';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import KeyIcon from '@mui/icons-material/Key';
 import { toast } from 'sonner';
-import { ApiKeyScope, claudeMarketplaceNameFor, claudePluginNameFor, toAbsoluteUrl } from '@bike4mind/common';
+import { ApiKeyScope, claudeMarketplaceNameFor, toAbsoluteUrl } from '@bike4mind/common';
 import { useCreateUserApiKey } from '@client/app/hooks/data/userApiKeys';
 
 export interface ClaudeCodeMarketplaceTabProps {
   org: { id: string; name: string };
-  listingId: string;
-  skillName: string;
+  /** The listing's stored `claudePluginName`, exactly as the feed serves it. */
+  pluginName?: string;
 }
 
 const KEY_PLACEHOLDER = 'b4m_<your skills:read key>';
@@ -19,11 +19,11 @@ const KEY_PLACEHOLDER = 'b4m_<your skills:read key>';
  * org's plugin feed (pages/api/v1/skills/market/claude-marketplace.json.ts). `skills:read` is a
  * confined scope, so the New-Key modals don't offer it and the key is minted here instead.
  */
-const ClaudeCodeMarketplaceTab: FC<ClaudeCodeMarketplaceTabProps> = ({ org, listingId, skillName }) => {
+const ClaudeCodeMarketplaceTab: FC<ClaudeCodeMarketplaceTabProps> = ({ org, pluginName }) => {
   const [key, setKey] = useState<string | null>(null);
   const createKey = useCreateUserApiKey({ onSuccess: result => setKey(result.key) });
 
-  const marketplace = claudeMarketplaceNameFor(org);
+  const marketplace = claudeMarketplaceNameFor(org.id);
   const feedUrl = toAbsoluteUrl(
     window.location.origin,
     `/api/v1/skills/market/claude-marketplace.json?orgId=${encodeURIComponent(org.id)}`
@@ -101,11 +101,13 @@ const ClaudeCodeMarketplaceTab: FC<ClaudeCodeMarketplaceTabProps> = ({ org, list
 
       <Stack spacing={1}>
         <Typography level="title-sm">2. Start claude once, then install</Typography>
-        <Typography component="pre" level="body-xs" sx={{ m: 0 }} data-testid="skill-claude-code-marketplace-install">
-          /plugin install {claudePluginNameFor(skillName, listingId)}@{marketplace}
-        </Typography>
+        {pluginName ? (
+          <Typography component="pre" level="body-xs" sx={{ m: 0 }} data-testid="skill-claude-code-marketplace-install">
+            /plugin install {pluginName}@{marketplace}
+          </Typography>
+        ) : null}
         <Typography level="body-xs" textColor="text.tertiary">
-          Or run <code>/plugin</code> to browse every skill in the marketplace.
+          {pluginName ? 'Or run' : 'Run'} <code>/plugin</code> to browse every skill in the marketplace.
         </Typography>
       </Stack>
     </Stack>

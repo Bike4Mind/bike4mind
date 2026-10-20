@@ -1,9 +1,8 @@
 import { createHash } from 'crypto';
 import archiver from 'archiver';
-import { SkillListing, SkillListingVersion } from '@bike4mind/database';
+import { SkillListing, SkillListingVersion, assignClaudePluginName } from '@bike4mind/database';
 import {
   claudeMarketplaceNameFor,
-  claudePluginNameFor,
   claudeSkillNameFor,
   requireEnv,
   toAbsoluteUrl,
@@ -74,7 +73,8 @@ async function approvedVersionOf(listing: ISkillListing): Promise<ISkillListingV
 const servable = (version: ISkillListingVersion | undefined): ISkillListingVersion | null =>
   version && ['approved', 'auto_approved'].includes(version.reviewStatus) ? version : null;
 
-// The bare skill name, not the plugin name, so the skill reads as /review-pr inside the plugin.
+// The bare skill name, not the stored plugin name, so the skill reads as /review-pr inside the plugin
+// and the zip depends on no other listing.
 const skillDirName = (version: ISkillListingVersion) => claudeSkillNameFor(version.snapshot.name);
 
 /** The marketplace.json for one org: its approved Organization listings, oldest first. */
@@ -98,14 +98,24 @@ export async function buildClaudeMarketplace(
     })
   );
 
+  // Names a listing approved before names were assigned at approval (or whose assignment failed). A
+  // write on a GET, but an idempotent CAS that never renames; sequential so the older of two
+  // same-named listings keeps the bare slug.
+  for (const listing of listings) {
+    const version = servable(versions.get(String(listing.currentApprovedVersionId)));
+    if (listing.claudePluginName || !version) continue;
+    await assignClaudePluginName(String(listing.id), version.snapshot.name);
+    listing.claudePluginName = (await SkillListing.findById(listing.id).select('claudePluginName'))?.claudePluginName;
+  }
+
   // ponytail: builds every zip per fetch; cache the sha on the version doc if an org has hundreds of listings.
   const plugins = await Promise.all(
     listings.map(async listing => {
       const version = servable(versions.get(String(listing.currentApprovedVersionId)));
-      if (!version) return null;
+      if (!version || !listing.claudePluginName) return null;
       const zip = await zipOf(listing, version);
       return {
-        name: claudePluginNameFor(version.snapshot.name, String(listing.id)),
+        name: listing.claudePluginName,
         description: version.snapshot.description,
         version: String(version.version),
         source: { source: 'archive' as const, url: pluginZipUrl(String(listing.id)), sha256: sha256(zip) },
@@ -114,7 +124,7 @@ export async function buildClaudeMarketplace(
   );
 
   return {
-    name: claudeMarketplaceNameFor(org),
+    name: claudeMarketplaceNameFor(org.id),
     owner: { name: org.name || 'Bike4Mind' },
     forceRemoveDeletedPlugins: true,
     plugins: plugins.filter(p => p !== null),

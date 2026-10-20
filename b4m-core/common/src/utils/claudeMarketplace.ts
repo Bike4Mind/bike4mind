@@ -15,21 +15,7 @@ export const claudeNameSlug = (value: string): string =>
 export const claudeSkillNameFor = (skillName: string): string => claudeNameSlug(skillName) || 'skill';
 
 /**
- * `b4m-<org-name-slug>`. The `b4m-` prefix keeps clear of Claude Code's reserved marketplace names.
- * Renaming the org renames the marketplace, so users then have to add it again.
+ * `b4m-org-<org id tail>`. Id-based rather than name-based because an install is keyed
+ * `<plugin>@<marketplace>`, so renaming the org must never rename the marketplace.
  */
-export function claudeMarketplaceNameFor(org: { id: string; name?: string }): string {
-  const name = claudeNameSlug(org.name ?? '')
-    .slice(0, 40)
-    .replace(/-+$/, '');
-  return name ? `b4m-${name}` : `b4m-org-${org.id.slice(-8)}`;
-}
-
-/**
- * `<skill-name-slug>-<listing id tail>`. Depends on the listing alone, so the dialog can show it
- * without knowing the other listings, and delisting one listing never renames another's plugin
- * (which the feed's `forceRemoveDeletedPlugins` would uninstall). 8 hex chars reach past the
- * ObjectId counter into its per-process random bytes, so a clash between same-named listings is negligible.
- */
-export const claudePluginNameFor = (listingName: string, listingId: string): string =>
-  `${claudeSkillNameFor(listingName)}-${listingId.slice(-8)}`;
+export const claudeMarketplaceNameFor = (orgId: string): string => `b4m-org-${orgId.slice(-8)}`;

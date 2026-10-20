@@ -9,16 +9,27 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'crypto';
 import { createMocks } from 'node-mocks-http';
 
-const { mockFind, mockFindOne, mockFindVersion, mockFindVersions, mockMemberOrgs, mockAdminOrgs, mockFindOrg } =
-  vi.hoisted(() => ({
-    mockFind: vi.fn(),
-    mockFindOne: vi.fn(),
-    mockFindVersion: vi.fn(),
-    mockFindVersions: vi.fn(),
-    mockMemberOrgs: vi.fn(),
-    mockAdminOrgs: vi.fn(),
-    mockFindOrg: vi.fn(),
-  }));
+const {
+  mockFind,
+  mockFindOne,
+  mockFindById,
+  mockAssignName,
+  mockFindVersion,
+  mockFindVersions,
+  mockMemberOrgs,
+  mockAdminOrgs,
+  mockFindOrg,
+} = vi.hoisted(() => ({
+  mockFind: vi.fn(),
+  mockFindOne: vi.fn(),
+  mockFindById: vi.fn(),
+  mockAssignName: vi.fn(),
+  mockFindVersion: vi.fn(),
+  mockFindVersions: vi.fn(),
+  mockMemberOrgs: vi.fn(),
+  mockAdminOrgs: vi.fn(),
+  mockFindOrg: vi.fn(),
+}));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   methodNotAllowedHandler: () => (_req: unknown, res: { status: (n: number) => { end: () => void } }) =>
@@ -43,7 +54,8 @@ vi.mock('@server/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 vi.mock('@bike4mind/database', () => ({
-  SkillListing: { find: mockFind, findOne: mockFindOne },
+  SkillListing: { find: mockFind, findOne: mockFindOne, findById: mockFindById },
+  assignClaudePluginName: mockAssignName,
   SkillListingVersion: { findById: mockFindVersion, find: mockFindVersions },
   adminSettingsRepository: {},
   inboxRepository: {},
@@ -80,15 +92,16 @@ const listing = (id: string, overrides: object = {}) => ({
   shareToken: 'tok',
   currentApprovedVersionId: `v-${id}`,
   currentVersion: 3,
+  claudePluginName: id === LISTING_A ? 'review-pr' : `review-pr-${id.slice(-6)}`,
   ...overrides,
 });
 
-const version = (id: string) => ({
+const version = (id: string, name = 'review-pr') => ({
   id: `v-${id}`,
   version: 3,
   reviewStatus: 'approved',
   snapshot: {
-    name: 'review-pr',
+    name,
     description: 'Review a PR',
     body: 'Check the diff.',
     allowedTools: ['web_search'],
@@ -136,9 +149,9 @@ describe('GET /api/v1/skills/market/claude-marketplace.json', () => {
     expect(filter).toMatchObject({ status: 'approved', visibility: 'organization', organizationId: ORG_ID });
 
     const body = res._getJSONData();
-    expect(body.name).toBe('b4m-acme-labs');
+    expect(body.name).toBe('b4m-org-000000aa');
     expect(body.forceRemoveDeletedPlugins).toBe(true);
-    expect(body.plugins.map((p: { name: string }) => p.name)).toEqual(['review-pr-00000001', 'review-pr-00000002']);
+    expect(body.plugins.map((p: { name: string }) => p.name)).toEqual(['review-pr', 'review-pr-000002']);
     expect(body.plugins[0]).toMatchObject({
       version: '3',
       description: 'Review a PR',
@@ -170,7 +183,38 @@ describe('GET /api/v1/skills/market/claude-marketplace.json', () => {
       )
     );
     const { res } = await call(feedHandler, { orgId: ORG_ID });
-    expect(res._getJSONData().plugins.map((p: { name: string }) => p.name)).toEqual(['review-pr-00000002']);
+    expect(res._getJSONData().plugins.map((p: { name: string }) => p.name)).toEqual(['review-pr-000002']);
+  });
+
+  it('serves the stored plugin name after a version renames the skill', async () => {
+    mockFind.mockReturnValue({ sort: async () => [doc(listing(LISTING_A, { name: 'Code Critic' }))] });
+    mockFindVersions.mockResolvedValue([doc(version(LISTING_A, 'Code Critic'))]);
+    const { res } = await call(feedHandler, { orgId: ORG_ID });
+    expect(res._getJSONData().plugins.map((p: { name: string }) => p.name)).toEqual(['review-pr']);
+  });
+
+  it('keeps the marketplace name when the org is renamed', async () => {
+    const { res: before } = await call(feedHandler, { orgId: ORG_ID });
+    mockFindOrg.mockResolvedValue({ id: ORG_ID, name: 'Acme Robotics' });
+    const { res: after } = await call(feedHandler, { orgId: ORG_ID });
+    expect(after._getJSONData().name).toBe(before._getJSONData().name);
+    expect(after._getJSONData().name).toBe(`b4m-org-${ORG_ID.slice(-8)}`);
+    expect(after._getJSONData().owner.name).toBe('Acme Robotics');
+  });
+
+  it('names a listing approved before names were stored, then serves the stored name', async () => {
+    mockFind.mockReturnValue({ sort: async () => [doc(listing(LISTING_A, { claudePluginName: undefined }))] });
+    mockFindById.mockReturnValue({ select: async () => ({ claudePluginName: 'review-pr' }) });
+    const { res } = await call(feedHandler, { orgId: ORG_ID });
+    expect(mockAssignName).toHaveBeenCalledWith(LISTING_A, 'review-pr');
+    expect(res._getJSONData().plugins.map((p: { name: string }) => p.name)).toEqual(['review-pr']);
+  });
+
+  it('omits a listing that still has no stored name rather than serve an unstable one', async () => {
+    mockFind.mockReturnValue({ sort: async () => [doc(listing(LISTING_A, { claudePluginName: undefined }))] });
+    mockFindById.mockReturnValue({ select: async () => null });
+    const { res } = await call(feedHandler, { orgId: ORG_ID });
+    expect(res._getJSONData().plugins).toEqual([]);
   });
 });
 
