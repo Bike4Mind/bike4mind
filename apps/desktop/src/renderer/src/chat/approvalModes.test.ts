@@ -52,6 +52,7 @@ describe('approval mode copy', () => {
   it('admits that approve-for-me runs most commands unasked', () => {
     const notes = APPROVAL_MODE_FOOTNOTES.join(' ');
     expect(notes).toMatch(/every other command and edit without asking/i);
+    expect(notes).toMatch(/does not guard against a web page/i);
   });
 
   it('falls back to asking for a mode it does not recognise', () => {

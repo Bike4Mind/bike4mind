@@ -304,8 +304,8 @@ export const webFetch: ToolDefinition = {
     },
   },
   // The same policy as browser_navigate to a real site: asked per origin in 'ask', run in 'auto'.
-  // The URL is the model's choice, and a query string is how an injected page would ask for
-  // something to be sent out; web_search has no such destination, so it is not gated.
+  // The URL and its query string are the model's choice, so 'auto' accepts that an injected page
+  // can have data sent out this way; web_search has no such destination, so it is not gated.
   needsApproval: () => true,
   approval(input) {
     const url = parseFetchUrl(requireString(input, 'url'));

@@ -52,7 +52,7 @@ export const APPROVAL_MODE_OPTIONS: readonly ApprovalModeOption[] = [
  * user picks, and hanging them off the orange row would read as reassurance attached to the one
  * option that has none to offer.
  *
- * The first two 'auto' lines are the ones that are not a limit, and they are here for the
+ * The first three 'auto' lines are the ones that are not a limit, and they are here for the
  * opposite reason: 'auto' runs nearly everything, and the path check only sees paths written in
  * the command. Stating the gap where the reassurance is read is the only place stating it is any
  * use.
@@ -60,6 +60,7 @@ export const APPROVAL_MODE_OPTIONS: readonly ApprovalModeOption[] = [
 export const APPROVAL_MODE_FOOTNOTES: readonly string[] = [
   'Commands run as you and are not confined to the folders you have shared; file edits are. "Approve for me" asks about the paths it can see a command name, which a script can still build at run time.',
   '"Approve for me" runs every other command and edit without asking, including builds, installs and network calls, as you.',
+  '"Approve for me" does not guard against a web page, tool result or skill the agent reads telling it what to run next: those commands and network calls run unasked too.',
   '"Approve for me" asks before a command names a path outside your folders, before a .env file is read, and when the same call is made three times in a row.',
   'Image, speech and music generation always ask, in every mode, because they spend credits.',
   'Deleting a conversation always asks, in every mode, because it cannot be undone.',
