@@ -5,8 +5,6 @@ import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import {
   dataLakeRepository,
   dataLakeAccessGrantRepository,
-  fabFileRepository,
-  userRepository,
   adminSettingsRepository,
   scopedSettingsRepository,
 } from '@bike4mind/database';
@@ -61,11 +59,8 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(
     const result = await fabFilesService.toggleTags(req.user.id, req.body, {
       db: {
         ...storageOwnerTransferDb,
-        fabFiles: fabFileRepository,
         fileTags: fileTagRepository,
-        dataLakes: dataLakeRepository,
         dataLakeAccessGrants: dataLakeAccessGrantRepository,
-        users: userRepository,
         ...lakeConfigAuditDb,
         ...lakeMembershipAuditDb,
         ...settingsStores,
