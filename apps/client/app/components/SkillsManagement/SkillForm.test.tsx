@@ -88,6 +88,16 @@ describe('SkillForm SKILL.md import', () => {
     expect(value('skill-name-input')).toBe('');
   });
 
+  it('rejects a file over the size cap without reading it', () => {
+    renderForm();
+    const big = new File([new Uint8Array(200_001)], 'big.md', { type: 'text/markdown' });
+    const read = vi.fn();
+    big.text = read;
+    fireEvent.change(screen.getByTestId('skill-form-import-file'), { target: { files: [big] } });
+    expect(screen.getByTestId('skill-form-import-error')).toHaveTextContent('too large');
+    expect(read).not.toHaveBeenCalled();
+  });
+
   it('does not render a non-http source as a link', () => {
     renderForm();
     paste('---\n# Bike4Mind-Source: javascript:alert(1)\nname: x\n---\nb');
