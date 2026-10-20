@@ -44,7 +44,7 @@ function mockResourceWithUnlinked(premiumOverrides: Record<string, { value: stri
   vi.doMock('sst', () => ({
     Resource: new Proxy(linked, {
       get(target, prop: string) {
-        if (prop in target) return target[prop];
+        if (prop in target) return (target as Record<string, unknown>)[prop];
         throw new Error(`${prop} is not linked`);
       },
     }),
@@ -101,7 +101,7 @@ describe('Config eager-read hardening', () => {
         { App: { stage: 'test' } },
         {
           get(target: Record<string, unknown>, prop: string) {
-            if (prop in target) return target[prop];
+            if (prop in target) return (target as Record<string, unknown>)[prop];
             throw new Error(`${prop} is not linked`);
           },
         }

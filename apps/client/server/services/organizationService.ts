@@ -4,7 +4,7 @@ import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import {
   ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
   ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
-} from '@client/lib/subscriptions/constants';
+} from '@bike4mind/server-utils/lib/subscriptions/constants';
 import {
   ISubscription,
   SubscriptionOwnerType,

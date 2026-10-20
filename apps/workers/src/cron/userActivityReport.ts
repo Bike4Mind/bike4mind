@@ -9,7 +9,7 @@ import dayjs from 'dayjs';
 import isoWeek from 'dayjs/plugin/isoWeek';
 import { getEffectiveApiKeyByBackend, OperationsModelService } from '@client/services/operationsModelService';
 import { resolveSlackWebhookUrl } from '@server/integrations/slack/slack';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
 
 dayjs.extend(isoWeek);

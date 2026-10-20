@@ -8,7 +8,7 @@ import {
   type IPlatformUsageDashboardResponse,
   type NamedPlatformConsumerUsage,
 } from '@bike4mind/common';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { resolveApiKeyOwnerType } from '@server/utils/resolveApiKeyOwnerType';
 import { resolveUserNames } from '@server/utils/resolveUserNames';
 import { z } from 'zod';

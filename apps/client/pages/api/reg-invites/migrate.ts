@@ -5,9 +5,9 @@ import { organizationRepository } from '@bike4mind/database/infra';
 import { userRepository } from '@bike4mind/database/auth';
 import { logEvent } from '@server/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { EmailEvents } from '@server/utils/eventBus';
-import { getLogoUrl, buildEmailLogoImg, escapeHtml } from '@server/utils/mailer/emailHelpers';
+import { getLogoUrl, buildEmailLogoImg, escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
 

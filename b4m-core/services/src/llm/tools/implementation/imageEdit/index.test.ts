@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ImageModerationBlockedError } from '@bike4mind/utils/imageModeration';
 import { ImageModels, IMAGES_PER_EDIT_REQUEST, type GenerateImageToolCall } from '@bike4mind/common';
+import { ImageModerationBlockedError as OpenAIModerationBlockedError } from '@bike4mind/utils';
+import { Logger } from '@bike4mind/observability';
 import type { ToolContext } from '../../base/types';
 import { PRICEABLE_IMAGE_SIZES } from '../../../imageCostCalculator/OpenAIImageCostCalculator';
 
@@ -733,5 +735,26 @@ describe('imageEditTool - size', () => {
     const { properties } = toolSchema.parameters as { properties: Record<string, { enum?: string[] }> };
 
     expect(properties.size.enum).toEqual([...PRICEABLE_IMAGE_SIZES]);
+  });
+});
+
+describe('imageEditTool - OpenAI content-policy refusal logging', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('logs a policy block at warn, not error', async () => {
+    mockEditSpy.mockReset();
+    mockEditSpy.mockRejectedValue(new OpenAIModerationBlockedError('blocked by policy', 'req-1'));
+    const warn = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => {});
+    const error = vi.spyOn(Logger.globalInstance, 'error').mockImplementation(() => {});
+    const context = createFakeContext();
+    context.onStart = vi.fn();
+
+    const { toolFn } = imageEditTool.implementation(context, {} as GenerateImageToolCall);
+    await toolFn({ image: PNG_DATA_URL, prompt: 'make it blue' });
+
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('blocked by content policy'), { requestId: 'req-1' });
+    expect(error).not.toHaveBeenCalled();
   });
 });

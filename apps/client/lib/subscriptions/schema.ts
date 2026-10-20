@@ -1,6 +1,6 @@
 import { TEAM_PLAN_SEATS_HARD_LIMIT } from '@bike4mind/common';
 import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
-import { checkoutSurfaceSchema } from '@client/lib/userSubscriptions/schemas';
+import { checkoutSurfaceSchema } from '@bike4mind/server-utils/lib/userSubscriptions/schemas';
 import { z } from 'zod';
 
 export const BaseStripeSubscriptionMetadata = z.object({

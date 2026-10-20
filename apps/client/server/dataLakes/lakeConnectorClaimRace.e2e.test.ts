@@ -10,7 +10,7 @@ import {
   orgGitHubLakeConnectionRepository,
   orgGoogleDriveConnectionRepository,
 } from '@bike4mind/database';
-import { ConflictError } from '@server/utils/errors';
+import { ConflictError } from '@bike4mind/server-utils/utils/errors';
 import { withConnectionId, withLakeConnectorClaim } from './assertLakeConnectorFree';
 
 /**

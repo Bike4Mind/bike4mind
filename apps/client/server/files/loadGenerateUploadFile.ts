@@ -3,7 +3,7 @@ import { fabFilesService } from '@bike4mind/services';
 import { NotFoundError } from '@bike4mind/utils';
 import { buildFabFileAdapter } from '@server/files/loadAccessibleFabFile';
 import { GENERATE_UPLOAD_MARKER } from '@server/files/fileScopes';
-import { isValidObjectId } from '@server/utils/objectId';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import type { Request } from 'express';
 
 /**

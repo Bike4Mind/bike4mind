@@ -20,7 +20,7 @@ import {
 import { loadGenerateUploadFile } from '@server/files/loadGenerateUploadFile';
 import { holdsApiKeyScope } from '@server/middlewares/apiKeyScopeGate';
 import { Request } from 'express';
-import { isValidObjectId } from '@server/utils/objectId';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
 

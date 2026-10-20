@@ -17,8 +17,8 @@ import { decryptAtRest } from '@bike4mind/utils/security';
 
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { Config } from '@server/utils/config';
-import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { Config } from '@bike4mind/server-utils/utils/config';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { encryptSecret, isEncrypted, isValidEncryptionKey } from '@bike4mind/server-utils/security/secretEncryption';
 import { materializePublicSettingsArtifactSafe } from '@server/utils/publicSettingsArtifact';
 import { refuseFloorAboveMeasured } from '@server/utils/refuseFloorAboveMeasured';

@@ -5,7 +5,7 @@
  */
 import { connectDB } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { runSkillMarketReviewSla } from '@server/skillMarket/reviewSla';
 import { Resource } from 'sst';
 

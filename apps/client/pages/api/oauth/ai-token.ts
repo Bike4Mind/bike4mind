@@ -37,7 +37,7 @@ import { ApiKeyScope, ApiKeyStatus, BadRequestError } from '@bike4mind/common';
 import { hasAcceptedPolicy } from '@bike4mind/server-utils/auth/consentGate';
 import { checkFederatedGrant } from '@server/auth/federatedGrantGate';
 import { verifyFederatedIdToken, FederatedIdTokenError } from '@server/auth/verifyFederatedIdToken';
-import { getClientIp } from '@server/utils/ip';
+import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { logOAuthError } from '@server/auth/oauthErrorLog';
 
 /** Minted key lifetime. The app caches the key per-user and re-exchanges only when it expires. */

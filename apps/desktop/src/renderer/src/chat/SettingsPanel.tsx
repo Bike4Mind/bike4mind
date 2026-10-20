@@ -12,7 +12,8 @@ import { EnvironmentPicker } from '../auth/EnvironmentPicker';
 import { EntrySection, type ConfigEntry } from './ConfigEntry';
 import { CloseIcon, ContrastIcon, DownloadIcon, ServerIcon, SparkIcon } from './icons';
 import { columnStackSx, contentColumnSx, scrollingColumnHostSx } from './layout';
-import { promptSuggestionsSummary, usePromptSuggestions } from './promptSuggestions';
+import { promptSuggestionsSummary, usePromptSuggestionModel, usePromptSuggestions } from './promptSuggestions';
+import { SuggestionModelPicker } from './SuggestionModelPicker';
 import { THEME_MODES, currentThemeMode, themeModeSummary, type ResolvedThemeMode, type ThemeMode } from './themeMode';
 import { UpdateSettings } from './UpdateSettings';
 import { useAppUpdate, type AppUpdateController } from './useAppUpdate';
@@ -51,21 +52,25 @@ function appearanceEntry(
   };
 }
 
-function suggestionsEntry(enabled: boolean, toggle: () => void): ConfigEntry {
+function suggestionsEntry(enabled: boolean, toggle: () => void, model: string | null): ConfigEntry {
   return {
     id: 'prompt-suggestions',
     icon: <SparkIcon />,
     label: 'Suggested next prompt',
-    summary: promptSuggestionsSummary(enabled),
+    summary: promptSuggestionsSummary(enabled, model),
     control: (
-      <Switch
-        size="sm"
-        checked={enabled}
-        onChange={toggle}
-        slotProps={{
-          input: { 'aria-label': 'Suggested next prompt', 'data-testid': 'settings-suggestions-switch' },
-        }}
-      />
+      <Stack spacing={1.25}>
+        <Switch
+          size="sm"
+          checked={enabled}
+          onChange={toggle}
+          sx={{ alignSelf: 'flex-start' }}
+          slotProps={{
+            input: { 'aria-label': 'Suggested next prompt', 'data-testid': 'settings-suggestions-switch' },
+          }}
+        />
+        {enabled && <SuggestionModelPicker />}
+      </Stack>
     ),
   };
 }
@@ -125,10 +130,11 @@ function useSettingsEntries(auth: AuthState | null): ConfigEntry[] {
   const { mode, setMode } = useColorScheme();
   const theme = useTheme();
   const [suggestions, toggleSuggestions] = usePromptSuggestions();
+  const [suggestionModel] = usePromptSuggestionModel();
 
   const preferences = [
     appearanceEntry(mode, setMode, theme.palette.mode),
-    suggestionsEntry(suggestions, toggleSuggestions),
+    suggestionsEntry(suggestions, toggleSuggestions, suggestionModel),
   ];
   return auth ? [...preferences, serverEntry(auth), updatesEntry(update)] : [...preferences, updatesEntry(update)];
 }

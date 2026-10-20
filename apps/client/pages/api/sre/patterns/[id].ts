@@ -13,10 +13,10 @@
  * of the recurrence escalation.
  */
 
-import { isValidObjectId } from '@server/utils/objectId';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { sreErrorPatternRepository } from '@bike4mind/database';
 import { z } from 'zod';
 import { Logger } from '@bike4mind/observability';

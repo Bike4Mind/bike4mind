@@ -1,9 +1,9 @@
 import { Request, Response } from 'express';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { MailService, type EmailConfigStatus } from '@server/utils/mailer';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import mongoose from 'mongoose';
 import { getOktaConfigStatus } from '@server/auth/oktaOidcClient';
 import { validateEncryptionKey, validateJwtSecret } from '@server/security/tier1SecretValidators';

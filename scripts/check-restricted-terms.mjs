@@ -219,14 +219,26 @@ async function scanFiles({ files, matcher, gh, repo, ref, hit, note, label = '' 
 }
 
 // Net diffs miss additions later removed, including merge resolutions. Scan
-// every commit; merge first-parent diffs can include base changes, so fail closed.
-async function scanCommitDiffs({ commits, matcher, gh, repo, hit, incomplete }) {
+// every commit's own diff. For merges, compare from the PR/push baseline so
+// GitHub diffs its merge base with the commit. Either parent can carry inherited
+// base-branch content; choosing a parent would charge that content to the PR.
+async function scanCommitDiffs({ commits, base, matcher, gh, repo, hit, incomplete }) {
   if (commits.length < 2) return;
   for (const c of commits) {
     const sha = c.sha.slice(0, 12);
-    const files = await gh.paginate(`/repos/${repo}/commits/${c.sha}`, body => body.files ?? []);
-    if (files.length >= MAX_PR_FILES) {
-      incomplete(`commit ${sha} changes ${MAX_PR_FILES}+ files; the API lists only ${MAX_PR_FILES}.`);
+    let files;
+    if (c.parents?.length > 1) {
+      files = (await gh.json(`/repos/${repo}/compare/${base}...${c.sha}`)).files ?? [];
+      if (files.length >= MAX_COMPARE_FILES) {
+        incomplete(
+          `merge ${sha} changes ${MAX_COMPARE_FILES}+ files; only the first ${MAX_COMPARE_FILES} were checked.`
+        );
+      }
+    } else {
+      files = await gh.paginate(`/repos/${repo}/commits/${c.sha}`, body => body.files ?? []);
+      if (files.length >= MAX_PR_FILES) {
+        incomplete(`commit ${sha} changes ${MAX_PR_FILES}+ files; the API lists only ${MAX_PR_FILES}.`);
+      }
     }
     await scanFiles({ files, matcher, gh, repo, ref: c.sha, hit, note: incomplete, label: `commit ${sha} ` });
   }
@@ -251,7 +263,7 @@ async function scanPullRequest({ event, matcher, gh, repo, hit, incomplete }) {
   }
   const files = await gh.paginate(`/repos/${repo}/pulls/${pr.number}/files`);
   await scanFiles({ files, matcher, gh, repo, ref: pr.head.sha, hit, note: incomplete });
-  await scanCommitDiffs({ commits, matcher, gh, repo, hit, incomplete });
+  await scanCommitDiffs({ commits, base: pr.base.sha, matcher, gh, repo, hit, incomplete });
   return `PR #${pr.number}: title, body, branch name, ${commits.length} commit(s), ${files.length} file(s)`;
 }
 
@@ -286,7 +298,7 @@ async function scanPush({ event, matcher, gh, repo, hit, incomplete }) {
     if (matches(matcher, c.commit.message ?? '')) hit(`commit ${c.sha.slice(0, 12)} message`);
   }
   await scanFiles({ files, matcher, gh, repo, ref: event.after, hit, note: incomplete });
-  await scanCommitDiffs({ commits, matcher, gh, repo, hit, incomplete });
+  await scanCommitDiffs({ commits, base: event.before, matcher, gh, repo, hit, incomplete });
   return `push to ${event.ref}: ${commits.length} commit(s), ${files.length} file(s)`;
 }
 

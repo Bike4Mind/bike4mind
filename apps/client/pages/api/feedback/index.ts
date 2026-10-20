@@ -24,14 +24,18 @@ import { adminSettingsRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { EmailEvents } from '@server/utils/eventBus';
 import { postFeedbackToSlack } from '@server/integrations/slack/slack';
-import { NotFoundError } from '@server/utils/errors';
-import { isValidObjectId } from '@server/utils/objectId';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { hydrateFeedbackText, toRedactedFeedback } from '@server/utils/redactedFeedback';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { resolveFeedbackContext } from '@server/utils/feedbackContext';
 import { resolveFeedbackOrganization } from '@server/utils/feedbackOrganization';
 import { saveFeedbackOrRollbackText, writeFeedbackText } from '@server/utils/feedbackText';
-import { buildFeedbackDeepLinks, FEEDBACK_LINK_LABELS, type FeedbackDeepLinks } from '@server/utils/feedbackDeepLinks';
+import {
+  buildFeedbackDeepLinks,
+  FEEDBACK_LINK_LABELS,
+  type FeedbackDeepLinks,
+} from '@bike4mind/server-utils/utils/feedbackDeepLinks';
 import {
   recordFeedbackDeliverySuccess,
   recordFeedbackDeliveryFailure,
@@ -39,7 +43,7 @@ import {
   buildFeedbackDeliverySkippedMetrics,
   emitFeedbackDeliveryMetrics,
   ALARM_WORTHY_SKIP_REASONS,
-} from '@server/utils/cloudwatch';
+} from '@bike4mind/server-utils/utils/cloudwatch';
 import { accessibleBy } from '@casl/mongoose';
 import mongoose from 'mongoose';
 import qs from 'qs';

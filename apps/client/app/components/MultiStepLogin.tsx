@@ -324,15 +324,14 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
       // we collect a username + policy/age acceptance and re-submit to create the
       // account. No second email.
       if ('registrationRequired' in response && response.registrationRequired) {
-        // No account for this email. If open registration is disabled, don't advance to the
-        // username step - registerUser would reject with "invite code required" and strand the
-        // user with no way forward. Surface a clear message instead. (The code-holder already
-        // proved inbox ownership, so this leaks no account-existence info to an attacker.)
-        if (!enableRegister) {
+        // The nonce rotated even when admission is denied; retries need the fresh token.
+        setPendingToken(response.pendingToken);
+        // The verified email may qualify for a partner bypass even on an invite-only instance.
+        // Fall back to public config for responses from servers predating this decision field.
+        if (!(response.registrationAllowed ?? enableRegister)) {
           toast.error(t('auth.registrationClosed'));
           return;
         }
-        setPendingToken(response.pendingToken);
         setCurrentStep('register-username');
         return;
       }

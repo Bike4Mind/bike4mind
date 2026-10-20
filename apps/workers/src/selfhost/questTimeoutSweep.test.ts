@@ -4,7 +4,7 @@ import type { Logger } from '@bike4mind/observability';
 const { mockRunQuestTimeoutSweep } = vi.hoisted(() => ({ mockRunQuestTimeoutSweep: vi.fn() }));
 
 vi.mock('@workers/cron/questTimeoutSweep', () => ({ runQuestTimeoutSweep: mockRunQuestTimeoutSweep }));
-vi.mock('@server/utils/sqs', () => ({ receiveFromQueue: vi.fn(), deleteFromQueue: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ receiveFromQueue: vi.fn(), deleteFromQueue: vi.fn() }));
 
 const { SelfHostWorker } = await import('./selfHostWorker');
 const { registerQuestTimeoutSweep, QUEST_TIMEOUT_SWEEP_INTERVAL_MS } = await import('./questTimeoutSweep');

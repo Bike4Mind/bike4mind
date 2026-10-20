@@ -58,8 +58,10 @@ const verifyOrgAccess = vi.hoisted(() => vi.fn(async () => ({ id: 'org1' })));
 vi.mock('@server/utils/orgAccess', () => ({ verifyOrgAccess }));
 
 const sendToQueue = vi.hoisted(() => vi.fn(async () => 'message-id'));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue }));
-vi.mock('@server/utils/dlqRegistry', () => ({ getSourceQueueUrl: () => 'https://queue.invalid/quest-export' }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue }));
+vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({
+  getSourceQueueUrl: () => 'https://queue.invalid/quest-export',
+}));
 
 const jobCreate = vi.hoisted(() => vi.fn(async () => ({})));
 const jobFindOne = vi.hoisted(() => vi.fn(() => ({ lean: async () => null as unknown })));

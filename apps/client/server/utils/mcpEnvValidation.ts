@@ -1,5 +1,5 @@
 import { findForbiddenMcpEnvKeys } from '@bike4mind/mcp';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 /**
  * Reject an inbound MCP server write whose `envVariables` name a runtime-controlling key.

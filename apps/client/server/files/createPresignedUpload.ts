@@ -27,8 +27,8 @@ import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { createFabFile } from '@server/managers/fabFileManager';
 import { logEvent } from '@server/utils/analyticsLog';
-import { BadRequestError, ForbiddenError } from '@server/utils/errors';
-import { MAX_FILE_SIZE_DEFAULT_MB } from '@server/utils/maxFileSizeDefault';
+import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { MAX_FILE_SIZE_DEFAULT_MB } from '@bike4mind/server-utils/utils/maxFileSizeDefault';
 import type { Request } from 'express';
 import mime from 'mime-types';
 import { Resource } from 'sst';
@@ -150,17 +150,14 @@ export async function createPresignedUpload<Params, ResBody, ReqBody, Query>(
   const ext = mime.extension(mimeType);
   const fileKey = `${uuidv4()}${ext ? `.${ext}` : ''}`;
 
+  // Bound to the declared size the size and storage checks above ran on: S3 refuses any other length.
   const command = new PutObjectCommand({
     Bucket: Resource.fabFileBucket.name,
     Key: fileKey,
-    // Bound only for the narrow ai:generate upload: S3 then rejects a PUT whose type or length
-    // differs from what was validated. Every other caller keeps the unbound presign.
-    ...(provenance && {
-      ContentType: provenance.contentType,
-      ContentLength: data.fileSize,
-      // Create-only: the PUT fails if the key exists, so a scanned object cannot be overwritten.
-      IfNoneMatch: '*',
-    }),
+    ContentLength: data.fileSize,
+    // The narrow ai:generate upload also binds its validated type, and is create-only: the PUT fails
+    // if the key exists, so a scanned object cannot be overwritten.
+    ...(provenance && { ContentType: provenance.contentType, IfNoneMatch: '*' }),
   });
 
   // Create File metadata, status will be set to `pending` by default
@@ -175,6 +172,7 @@ export async function createPresignedUpload<Params, ResBody, ReqBody, Query>(
       // Admission provenance (#1679): stamp the door - the web upload path the lake previously
       // could not identify. Mirrors the batch door and the connector/chat-platform doors.
       sourceType: FabFileSourceType.MANUAL_UPLOAD,
+      clientUpload: true,
       ...(ownerOrganizationId && { organizationId: ownerOrganizationId }),
       ...(provenance && { sourceMetadata: provenance.sourceMetadata }),
       ...(data.contentHash && { contentHash: data.contentHash }),
@@ -188,13 +186,12 @@ export async function createPresignedUpload<Params, ResBody, ReqBody, Query>(
   );
 
   const expiresIn = provenance ? BARE_PRESIGNED_UPLOAD_EXPIRES_IN : PRESIGNED_UPLOAD_EXPIRES_IN;
-  // The presigner leaves content-type unsigned by default, so it must be opted in for the bound
-  // type above to hold.
-  const url = await getSignedUrl(
-    s3Client,
-    command,
-    provenance ? { expiresIn, signableHeaders: new Set(['content-type']) } : { expiresIn }
-  );
+  // The presigner leaves these headers unsigned by default, so they must be opted in for the bound
+  // length (and type) above to hold.
+  const url = await getSignedUrl(s3Client, command, {
+    expiresIn,
+    signableHeaders: new Set(provenance ? ['content-length', 'content-type'] : ['content-length']),
+  });
 
   await logEvent(
     {

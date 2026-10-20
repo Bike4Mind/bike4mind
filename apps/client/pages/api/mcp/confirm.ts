@@ -7,7 +7,7 @@ import { MCP_ACTION_REPLACED_ERROR_CODE } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { baseApi } from '@server/middlewares/baseApi';
 import { assertMcpServerEnabled } from '@server/utils/mcpServerFlag';
-import { isValidObjectId } from '@server/utils/objectId';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
 import { claimPendingAction } from '@server/utils/pendingActionExecutor';
 import { loadFabFileAttachment, resolvePendingActionTarget } from '@server/utils/pendingActionTarget';

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 
 const { mockRefs, mockRevoke, mockLogAuthAudit } = vi.hoisted(() => ({
   mockRefs: {

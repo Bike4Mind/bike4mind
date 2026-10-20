@@ -18,7 +18,7 @@ import { randomUUID } from 'crypto';
 import { connectDB, spendReconciliationRepository, usageEventRepository } from '@bike4mind/database';
 import { ISpendReconciliationInput } from '@bike4mind/common';
 import { spendReconciliationService } from '@bike4mind/services';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
 
 const contextToLogs = (context: Context) => ({

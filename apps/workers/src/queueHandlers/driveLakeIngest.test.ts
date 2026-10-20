@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { BadRequestError } from '@bike4mind/utils';
-import { BadRequestError as ServerBadRequestError } from '@server/utils/errors';
+import { BadRequestError as ServerBadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { DATA_LAKE_STATUSES, DocumentDateSource, StorageLimitError } from '@bike4mind/common';
 
 const storageRefusal = () =>
@@ -179,7 +179,7 @@ vi.mock('@bike4mind/fab-pipeline', async importOriginal => ({
 vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: () => false }));
 vi.mock('@server/managers/fabFileManager', () => ({ createFabFile: h.createFabFile }));
 vi.mock('@server/auth/ability', () => ({ default: () => ({}) }));
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ upload: h.upload }) }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({ upload: h.upload }) }));
 // common.ts reads Config at import (needs a real SST Resource), so importOriginal crashes: take the real
 // isTerminalDriveGrantError from its Config-free module instead.
 vi.mock('@server/integrations/google/drive/common', async () => ({
@@ -223,7 +223,7 @@ vi.mock('@server/integrations/google/drive/driveContent', async () => {
 vi.mock('@server/dataLakes/dataLakeBatchProgress', () => ({
   finalizeBatchIfComplete: h.finalizeBatchIfComplete,
 }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('sst', () => ({ Resource: { driveLakeIngestQueue: { url: 'ingest-queue-url' } } }));
 
 import {

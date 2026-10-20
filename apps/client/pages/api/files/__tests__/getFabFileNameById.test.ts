@@ -31,9 +31,9 @@ vi.mock('@bike4mind/services', () => ({ fabFilesService: { assertFabFileAccessBy
 
 // The handler imports NotFoundError from the server error module; the guard's rejection uses the
 // same class here so the "not yours" assertion matches what the route actually throws.
-vi.mock('@server/utils/errors', () => ({ NotFoundError: class NotFoundError extends Error {} }));
+vi.mock('@bike4mind/server-utils/utils/errors', () => ({ NotFoundError: class NotFoundError extends Error {} }));
 
-import { NotFoundError } from '@server/utils/errors';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import '@pages/api/files/getFabFileNameById';
 
 function mocks(userId: string, fabFileId?: string) {

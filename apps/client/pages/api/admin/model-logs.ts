@@ -4,7 +4,7 @@ import { Quest } from '@bike4mind/database';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { ApiKeyScope, IChatHistoryItemDocument, redactPromptMetaForViewer } from '@bike4mind/common';
 import { z } from 'zod';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { dateParam } from '@server/utils/dateParam';
 
 // Query parameter schema

@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
   s3ClientConfigs: [] as unknown[],
-  putObjectInputs: [] as { ContentType?: string }[],
+  putObjectInputs: [] as { ContentType?: string; ContentLength?: number }[],
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -28,6 +28,7 @@ vi.mock('@server/utils/browserUploadUrl', () => ({
   resolveBrowserAppFileUploadUrl: (_id: string, url: string) => url,
 }));
 
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import handler from '../generate-presigned-url';
 
 const invoke = (body: unknown) => {
@@ -54,5 +55,13 @@ describe('POST /api/app-files/generate-presigned-url - ContentType binding', () 
     h.putObjectInputs.length = 0;
     await invoke({ fileName: 'logo.png', mimeType: 'image/png', fileSize: 10 });
     expect(h.putObjectInputs.at(-1)?.ContentType).toBe('image/png');
+  });
+
+  it('binds the declared fileSize into the signature, so S3 refuses a PUT of any other length', async () => {
+    h.putObjectInputs.length = 0;
+    await invoke({ fileName: 'logo.png', mimeType: 'image/png', fileSize: 10 });
+    expect(h.putObjectInputs.at(-1)?.ContentLength).toBe(10);
+    const options = vi.mocked(getSignedUrl).mock.calls.at(-1)?.[2];
+    expect(options?.signableHeaders?.has('content-length')).toBe(true);
   });
 });

@@ -1,8 +1,8 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ensureAdmin, BadRequestError } from '@server/utils/errors';
+import { ensureAdmin, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { agentExecutionRepository } from '@bike4mind/database';
-import { settleStrandedQuests } from '@server/utils/settleStrandedQuests';
+import { settleStrandedQuests } from '@bike4mind/server-utils/utils/settleStrandedQuests';
 import { Connection } from '@bike4mind/database/social';
 import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
 import { Resource } from 'sst';

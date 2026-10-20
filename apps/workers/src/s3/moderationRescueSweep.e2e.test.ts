@@ -18,7 +18,7 @@ const store = vi.hoisted(() => ({
 // FabFile model, the real claim/persist/release wiring in knowledgeModerationDeps, the real sweep,
 // and the real moderate catch branch - runs against a real mongod. That is the point: it exercises
 // the DB-level poison loop and starvation that the fully-mocked moderationRescueSweep.test.ts cannot.
-vi.mock('@server/utils/storage', () => {
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => {
   const noSuchKey = () =>
     Object.assign(new Error('The specified key does not exist.'), {
       name: 'NoSuchKey',

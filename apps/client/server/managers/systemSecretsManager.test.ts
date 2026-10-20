@@ -20,7 +20,7 @@ vi.mock('sst', () => ({
   Resource: {},
 }));
 
-vi.mock('../utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: {
     SECRET_ENCRYPTION_KEY: 'a'.repeat(64), // Valid 64 hex char key
   },

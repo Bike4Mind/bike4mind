@@ -11,9 +11,9 @@ import {
   WhatsNewGenerationPayloadSchema,
   WhatsNewGenerationPayload,
 } from '@bike4mind/server-utils/whatsNew/whatsNewGeneration.types';
-import { WhatsNewConfigService } from '@client/services/whatsNewConfigService';
+import { WhatsNewConfigService } from '@bike4mind/server-utils/services/whatsNewConfigService';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
-import { emitModalGenerationMetrics } from '@server/utils/cloudwatch';
+import { emitModalGenerationMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';

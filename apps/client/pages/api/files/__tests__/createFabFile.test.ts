@@ -32,7 +32,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@server/utils/browserUploadUrl', () => ({ resolveBrowserUploadUrl: (_id: string, url: string) => url }));
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ upload: vi.fn(), getSignedUrl: h.signUrl }),
 }));
 
@@ -400,6 +400,17 @@ describe('POST /api/files/createFabFile - signing boundaries', () => {
     expect(h.signUrl.mock.calls[0][1]).toBe('get');
   });
 
+  it.each(['tmp', 'temp', 'x/backups', 'text-edit-backups'])(
+    'ignores a caller-chosen %s prefix, so the object stays under a tracked key',
+    async prefix => {
+      const { res } = makeRes();
+      await run(body({ prefix }), res);
+      const persisted = h.fabFileCreate.mock.calls[0][0] as { filePath: string; prefix?: string };
+      expect(persisted.prefix).toBeUndefined();
+      expect(persisted.filePath).toMatch(/^[0-9a-f-]{36}\.txt$/);
+    }
+  );
+
   it('keeps URL-less uploads on private PUT signing without a browser GET', async () => {
     const { res, json } = makeRes();
     await run(body(), res);
@@ -407,5 +418,7 @@ describe('POST /api/files/createFabFile - signing boundaries', () => {
     expect(json.mock.calls[0][0].fileUrl).toBeUndefined();
     expect(h.signUrl).toHaveBeenCalledTimes(1);
     expect(h.signUrl.mock.calls[0][1]).toBe('put');
+    // Bound to the declared fileSize, so S3 refuses a PUT of any other length.
+    expect(h.signUrl.mock.calls[0][2]).toMatchObject({ ContentLength: 10 });
   });
 });

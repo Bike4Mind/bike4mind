@@ -10,14 +10,14 @@ const { mockEmit, mockGetSetting, mockLogEventSafe, mockUserUpdate, mockUpdateOn
 }));
 vi.mock('./emitActiveEvent', () => ({ HOST_PRODUCT_ID: 'bike4mind', emitProductEvent: mockEmit }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe: mockLogEventSafe }));
-vi.mock('@server/utils/config', () => ({ Config: { OVERWATCH_PSEUDONYM_SALT: 'test-salt' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { OVERWATCH_PSEUDONYM_SALT: 'test-salt' } }));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: mockGetSetting },
   userRepository: { update: mockUserUpdate },
   User: { updateOne: mockUpdateOne },
 }));
 
-import { APP_DECISION_COOKIE } from '@client/lib/consentCookies';
+import { APP_DECISION_COOKIE } from '@bike4mind/server-utils/lib/consentCookies';
 import { pseudonymize } from './pseudonymize';
 import { stableEventId } from './signupEvents';
 import {

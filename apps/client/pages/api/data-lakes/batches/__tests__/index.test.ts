@@ -42,7 +42,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
-vi.mock('@server/utils/cloudwatch', () => ({ recordReconcilerForcedTerminal: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
+  recordReconcilerForcedTerminal: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock('@server/dataLakes/dataLakeBatchProgress', () => ({
   enqueueTaxonomyAnalysisIfWanted: vi.fn().mockResolvedValue(undefined),
 }));

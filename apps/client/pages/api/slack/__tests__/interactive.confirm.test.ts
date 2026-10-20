@@ -3,10 +3,11 @@ import { Readable } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { WebClient } from '@slack/web-api';
 
 vi.mock('sst', () => ({ Resource: {} }));
 vi.mock('@server/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { MONGODB_URI: 'mongodb://test', STAGE: 'test' },
   isDevelopment: () => false,
 }));
@@ -111,10 +112,15 @@ async function postAction(
 }
 
 describe('POST /api/slack/interactive confirmation buttons', () => {
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // Modal updates use the SDK's HTTP client rather than global fetch.
+    vi.spyOn(WebClient.prototype, 'apiCall').mockResolvedValue({ ok: true });
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
     vi.mocked(User.findOne).mockResolvedValue({ id: 'user-1' } as never);
     vi.mocked(SlackDevWorkspace.findOne).mockReturnValue({

@@ -5,6 +5,7 @@ import {
   GenerateContentResponse,
   GoogleGenAI,
   Part,
+  ThinkingLevel,
   Tool,
 } from '@google/genai';
 import { DEFAULT_MAX_TOOL_CALLS, ICompletionBackend, type CompletionInfo, type ICompletionOptions } from './backend';
@@ -39,9 +40,16 @@ import { v4 as uuidv4 } from 'uuid';
 import { handleToolResultStreaming, createRecursiveArtifactGuard, declaredArtifactType } from './toolStreamingHelper';
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import { injectJsonSchemaInstruction, isBestEffortJsonSchema } from './responseFormatHelpers';
+import { usableTokenCount } from './thinkingParams';
 import { withAbortListener } from './withAbortListener';
 import { DispatchModel } from './dispatchModel';
 import { normalizeGeminiFinishReason } from './stopReason';
+
+// Headroom for thinking tokens, which count against maxOutputTokens.
+const GEMINI_THINKING_RESERVE_TOKENS = 16_000;
+
+// Matches gemini-3-pro-preview, gemini-3.1-pro-preview, gemini-3.5-flash, but not a future gemini-30 family.
+const isGemini3 = (modelId: string) => /^gemini-3(\D|$)/.test(modelId);
 
 type ToolCall = {
   id: string;
@@ -694,8 +702,6 @@ export class GeminiBackend implements ICompletionBackend {
         ...generationConfig,
       },
     };
-
-    this.logger.debug('[Gemini] Request config:', { request });
 
     const toolCalls: ToolCall[] = [];
 
@@ -1449,10 +1455,6 @@ export class GeminiBackend implements ICompletionBackend {
           // of which model the history was originally fetched for. Scoped to the gemini-3 family:
           // that is the one this repo has observed actually rejects a missing signature (see the
           // pre-existing warn below this branch), so a 2.x/1.x model isn't degraded for no reason.
-          // /^gemini-3(\D|$)/ rather than a plain substring match: matches gemini-3-pro-preview,
-          // gemini-3.1-pro-preview, gemini-3.5-flash (a non-digit or end follows "gemini-3" in
-          // every real id), but not a hypothetical future gemini-30/gemini-33 family, which this
-          // repo has never observed to need the guard.
           //
           // This formatter runs on every recursive round of a live tool-calling turn too, and a
           // live round's own just-minted tool_use block can ALSO lack a thought_signature (see the
@@ -1462,7 +1464,7 @@ export class GeminiBackend implements ICompletionBackend {
           // former so the guard cannot silently swallow a block this same completion chain just
           // generated.
           const isReplayed = !toolUseBlocks.some(t => liveToolUseIds.has(t.id));
-          if (isReplayed && /^gemini-3(\D|$)/.test(this.currentModel) && !toolUseBlocks[0]?.thought_signature) {
+          if (isReplayed && isGemini3(this.currentModel) && !toolUseBlocks[0]?.thought_signature) {
             this.logger.warn(
               '[Gemini] Dropping replayed tool_use block(s) with no thought_signature on the first call:',
               { names: toolUseBlocks.map(t => t.name), messageRole: message.role }
@@ -1630,15 +1632,26 @@ export class GeminiBackend implements ICompletionBackend {
   private getGenerationConfig(
     model: ModelInfo,
     options: Partial<ICompletionOptions>
-  ): Pick<GenerateContentConfig, 'temperature' | 'maxOutputTokens'> {
-    // Thinking models get neither setting. Google's default temperature of 1.0 avoids looping and
-    // degraded reasoning, and thinking counts against maxOutputTokens, which we send no budget for,
-    // so a caller's small cap would starve the visible reply.
-    if (model.can_think) return {};
-    return {
-      ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
-      maxOutputTokens: options.maxTokens ?? 8192,
-    };
+  ): Pick<GenerateContentConfig, 'temperature' | 'maxOutputTokens' | 'thinkingConfig'> {
+    const callerCap = options.maxTokens ?? 8192;
+    if (!model.can_think) {
+      return {
+        ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
+        maxOutputTokens: callerCap,
+      };
+    }
+    // Temperature stays at Google's default 1.0; Gemini 3 loops or degrades below it.
+    const wanted = callerCap + GEMINI_THINKING_RESERVE_TOKENS;
+    // Assumes no live can_think row has max_tokens below the reserve: it would get its catalog cap and no thinking bound.
+    const ceiling = (model.maxOutputTokensDerived ? undefined : usableTokenCount(model.max_tokens)) ?? Infinity;
+    const maxOutputTokens = Math.min(ceiling, wanted);
+    if (wanted >= ceiling) return { maxOutputTokens };
+    // Bound thinking only when the caller's cap binds; otherwise keep Google's default.
+    // Only 3.x and 4.x take thinkingLevel; the -latest aliases track Google's newest 3.x Flash / Flash-Lite.
+    // Other ids get the cap alone.
+    return isGemini3(model.id) || /^gemini-(4(\D|$)|flash(-lite)?-latest$)/.test(model.id)
+      ? { maxOutputTokens, thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
+      : { maxOutputTokens };
   }
 
   pushToolMessages(

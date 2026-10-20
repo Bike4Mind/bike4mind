@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { GenerateContentResponse } from '@google/genai';
 import { ChatModels, type ICompletionOptionTools, type IMessage, type ModelInfo } from '@bike4mind/common';
 import { GeminiBackend } from './geminiBackend';
+import { resolveOutputMaxTokens } from './thinkingParams';
 
 type Usage = NonNullable<GenerateContentResponse['usageMetadata']>;
 type CapturedRequest = { model: string; contents: unknown; config?: Record<string, unknown> } & Record<string, unknown>;
@@ -103,9 +104,25 @@ describe.each([
     expect(requests[0].config?.maxOutputTokens).toBe(1234);
   });
 
-  it('omits maxOutputTokens on a thinking model so thinking cannot starve the reply', async () => {
-    const { requests } = await run({ model: THINKING_MODEL, options: { maxTokens: 600 } });
-    expect(requests[0].config).not.toHaveProperty('maxOutputTokens');
+  describe('thinking models', () => {
+    const LOW = { thinkingLevel: 'LOW' };
+    it.each<{ model: ChatModels; maxTokens?: number; maxOutputTokens: number; thinkingConfig?: object }>([
+      { model: THINKING_MODEL, maxTokens: 50, maxOutputTokens: 16050, thinkingConfig: LOW },
+      { model: THINKING_MODEL, maxTokens: undefined, maxOutputTokens: 24192, thinkingConfig: LOW },
+      { model: THINKING_MODEL, maxTokens: 49535, maxOutputTokens: 65535, thinkingConfig: LOW },
+      { model: THINKING_MODEL, maxTokens: 49536, maxOutputTokens: 65536 },
+      { model: THINKING_MODEL, maxTokens: 65536, maxOutputTokens: 65536 },
+    ])(
+      '$model with cap $maxTokens sends maxOutputTokens $maxOutputTokens and thinkingConfig $thinkingConfig',
+      async ({ model, maxTokens, maxOutputTokens, thinkingConfig }) => {
+        const { requests } = await run({ model, options: { maxTokens, temperature: 0.9 } });
+        const config = requests[0].config;
+        expect(config?.maxOutputTokens).toBe(maxOutputTokens);
+        if (thinkingConfig) expect(config?.thinkingConfig).toEqual(thinkingConfig);
+        else expect(config).not.toHaveProperty('thinkingConfig');
+        expect(config).not.toHaveProperty('temperature');
+      }
+    );
   });
 
   it.each([{ temperature: 0.3 }, { temperature: 0 }])(
@@ -119,6 +136,11 @@ describe.each([
   it('omits temperature on a thinking model even when the caller sets one', async () => {
     const { requests } = await run({ model: THINKING_MODEL, options: { temperature: 0.9 } });
     expect(requests[0].config).not.toHaveProperty('temperature');
+  });
+
+  it('sends no thinkingConfig on a non-thinking model', async () => {
+    const { requests } = await run();
+    expect(requests[0].config).not.toHaveProperty('thinkingConfig');
   });
 
   it('omits temperature when none is given', async () => {
@@ -137,14 +159,69 @@ describe.each([
       return { ...base, id: DISCOVERED_MODEL, can_think: canThink };
     };
 
-    it('omits maxOutputTokens and temperature when the record says it thinks', async () => {
+    it('caps output with the thinking reserve and omits temperature when the record says it thinks', async () => {
       const { requests } = await run({
         model: DISCOVERED_MODEL,
         dispatchInfo: await discoveredRecord(true),
         options: { maxTokens: 600, temperature: 0.5 },
       });
-      expect(requests[0].config).not.toHaveProperty('maxOutputTokens');
+      expect(requests[0].config?.maxOutputTokens).toBe(16600);
       expect(requests[0].config).not.toHaveProperty('temperature');
+    });
+
+    it.each<{ name: string; overrides: Partial<ModelInfo>; thinkingConfig?: object }>([
+      { name: '2.5 id', overrides: { id: 'gemini-2.5-x' as ChatModels } },
+      { name: '3.x id', overrides: { id: 'gemini-3-x' as ChatModels }, thinkingConfig: { thinkingLevel: 'LOW' } },
+      { name: 'unrecognised id', overrides: { id: 'gemini-exp-1206' as ChatModels } },
+      { name: '4.x id', overrides: { id: 'gemini-4-argon' as ChatModels }, thinkingConfig: { thinkingLevel: 'LOW' } },
+      { name: '30 family', overrides: { id: 'gemini-30-pro' as ChatModels } },
+      { name: '40 family', overrides: { id: 'gemini-40-pro' as ChatModels } },
+      { name: 'suffixed Flash alias', overrides: { id: 'gemini-flash-latest-001' as ChatModels } },
+      { name: 'suffixed Flash-Lite alias', overrides: { id: 'gemini-flash-lite-latest-001' as ChatModels } },
+      {
+        name: 'gemini-flash-latest alias',
+        overrides: { id: 'gemini-flash-latest' as ChatModels },
+        thinkingConfig: { thinkingLevel: 'LOW' },
+      },
+      {
+        name: 'gemini-flash-lite-latest alias',
+        overrides: { id: 'gemini-flash-lite-latest' as ChatModels },
+        thinkingConfig: { thinkingLevel: 'LOW' },
+      },
+      {
+        name: 'missing max_tokens (no ceiling, so thinking is bounded)',
+        overrides: { id: 'gemini-3-x' as ChatModels, max_tokens: undefined as unknown as number },
+        thinkingConfig: { thinkingLevel: 'LOW' },
+      },
+      {
+        name: 'derived max_tokens stand-in (not a ceiling)',
+        overrides: { id: 'gemini-3-x' as ChatModels, max_tokens: 4096, maxOutputTokensDerived: true },
+        thinkingConfig: { thinkingLevel: 'LOW' },
+      },
+    ])('caps a thinking record with $name at cap + reserve', async ({ overrides, thinkingConfig }) => {
+      const record = { ...(await discoveredRecord(true)), ...overrides };
+      const { requests } = await run({
+        model: record.id as ChatModels,
+        dispatchInfo: record,
+        options: { maxTokens: 600 },
+      });
+      expect(requests[0].config?.maxOutputTokens).toBe(16600);
+      if (thinkingConfig) expect(requests[0].config?.thinkingConfig).toEqual(thinkingConfig);
+      else expect(requests[0].config).not.toHaveProperty('thinkingConfig');
+    });
+
+    it('preserves default thinking after resolving an omitted caller budget', async () => {
+      const record = { ...(await discoveredRecord(true)), id: 'gemini-3-x' as ChatModels, max_tokens: 65_536 };
+      const maxTokens = resolveOutputMaxTokens({
+        requested: undefined,
+        fallback: 4096,
+        modelInfo: record,
+        modelMaxOutputTokens: record.max_tokens,
+      });
+      const { requests } = await run({ model: record.id, dispatchInfo: record, options: { maxTokens } });
+
+      expect(requests[0].config?.maxOutputTokens).toBe(65_536);
+      expect(requests[0].config).not.toHaveProperty('thinkingConfig');
     });
 
     it('caps output when the record omits can_think', async () => {

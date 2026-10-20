@@ -3,14 +3,14 @@ import { User } from '@bike4mind/database';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { UnauthorizedError } from '@server/utils/errors';
+import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { resolveSecondFactor } from '@server/auth/signInSecondFactor';
 import { mfaService } from '@bike4mind/services';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { z } from 'zod';
 import { Resource } from 'sst';
-import { getClientIp } from '@server/utils/ip';
+import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 
 const EmergencyLoginSchema = z.object({
   username: z.string().min(1).max(200),

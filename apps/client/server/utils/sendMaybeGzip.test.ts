@@ -4,7 +4,7 @@ import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import type { Request, Response } from 'express';
 
 const mockEmitMetrics = vi.fn();
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   emitMetrics: (...args: unknown[]) => mockEmitMetrics(...args),
 }));
 

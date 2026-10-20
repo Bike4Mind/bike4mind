@@ -14,7 +14,7 @@ import {
 import { modelDiscoveryService } from '@bike4mind/services';
 import { builtInAgentModelReferences } from '@bike4mind/services/llm/agents/ServerAgentStore';
 import { ApiKeyScope, LIFECYCLE_STATUSES, toPerMTokRate, type IModelPrice, type PerMTokRate } from '@bike4mind/common';
-import { BadRequestError, ForbiddenError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 /**
  * Deprecation queue and lifecycle report (spec sec 5.10 / 7).

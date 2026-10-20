@@ -26,7 +26,7 @@ vi.mock('@bike4mind/observability', () => {
 
 vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
 
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: {
     MONGODB_URI: 'mongodb://test/%STAGE%',
     ANTHROPIC_ADMIN_API_KEY: 'sk-ant-admin01-test',
@@ -115,7 +115,7 @@ describe('spendReconciliation cron', () => {
 
   it('skips providers whose key is not configured', async () => {
     // Override config to have no keys.
-    const configMod = await import('@server/utils/config');
+    const configMod = await import('@bike4mind/server-utils/utils/config');
     (configMod.Config as Record<string, unknown>).ANTHROPIC_ADMIN_API_KEY = 'not-configured';
     (configMod.Config as Record<string, unknown>).OPENAI_ADMIN_API_KEY = undefined;
 

@@ -1,7 +1,7 @@
 import { emailJobRepository } from '@bike4mind/database';
 import { ApiKeyScope, EmailJobOverallStatus } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 
 // Reaches `BaseRepository.update` -> `$set`, so these cast before validators run. `isTestMode`

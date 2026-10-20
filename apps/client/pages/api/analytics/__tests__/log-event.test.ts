@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { CreditPurchaseEvents, FirstRunEvents } from '@bike4mind/common';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => ({ post: (fn: (req: unknown, res: unknown) => unknown) => fn }),

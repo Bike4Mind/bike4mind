@@ -11,7 +11,7 @@ import { AdminSettings } from '@bike4mind/database/infra';
 import { S3Storage } from '@bike4mind/fab-pipeline';
 import { baseApi } from '@server/middlewares/baseApi';
 import { resolveBrowserAppFileUploadUrl } from '@server/utils/browserUploadUrl';
-import { BadRequestError, ForbiddenError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
 import { Resource } from 'sst';
@@ -125,8 +125,10 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
         // Generate presigned URL and public URL
         // ACL not needed - bucket policy grants public read for admin/logos/* prefix
+        // Bound to the declared size: the same bytes are PUT, and a longer upload is refused.
         const presignedUrl = await storage.getSignedUrl(s3Key, 'put', {
           expiresIn: 600,
+          ContentLength: data.fileSize,
         });
 
         // Update logo settings

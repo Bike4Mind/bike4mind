@@ -1,12 +1,11 @@
 import { expect } from '@playwright/test';
 import { TIMEOUTS } from '../constants';
 import { BasePage } from './BasePage';
-import { StreamingTimeoutError } from '../ai-latency-budget';
+import { describeStall, isStreamComplete, StreamingTimeoutError, type StreamSnapshot } from '../ai-latency-budget';
 
 export class ChatPage extends BasePage {
   readonly chatInput = this.page.getByTestId('lexical-chat-input-container');
   readonly sendButton = this.page.getByTestId('send-message-btn');
-  readonly aiResponse = this.page.getByTestId('ai-response');
   readonly aiResponseRoot = this.page.getByTestId('ai-response-root-container');
 
   /**
@@ -21,17 +20,25 @@ export class ChatPage extends BasePage {
   /**
    * Text of the newest mounted reply, or '' when none is mounted.
    *
-   * The count() guard is load-bearing: the config sets no `actionTimeout`, so a bare
-   * `aiResponse.last().innerText()` on an empty chat auto-waits with NO timeout and blocks
-   * until the test times out. count() never waits; the bounded innerText then covers
-   * Virtuoso unmounting the reply between the two calls.
+   * Reads the reply body (`ai-response-body`), falling back to the whole root container when no
+   * body is mounted (syntax-highlight and image-only views). The body test id is what keeps
+   * reasoning text and the banner/accessory rows around it out of the returned text: the root
+   * wraps those too, and callers assert keywords against this string. The prompt-enhancement
+   * banner is the exception - it renders inside the body, so an enhanced prompt's banner text is
+   * included. Reading only `ai-response`, the id on the markdown <p> renderer, missed list-only
+   * replies entirely and stalled the completion wait until its budget ran out.
+   *
+   * The count() guards are load-bearing: the config sets no `actionTimeout`, so a bare
+   * `.innerText()` on an absent element auto-waits with NO timeout and blocks until the test
+   * times out. count() never waits; the bounded innerText then covers Virtuoso unmounting the
+   * reply between the two calls.
    */
   private async newestResponseText(): Promise<string> {
-    if ((await this.aiResponse.count()) === 0) return '';
-    return this.aiResponse
-      .last()
-      .innerText({ timeout: TIMEOUTS.ELEMENT_STATE })
-      .catch(() => '');
+    if ((await this.aiResponseRoot.count()) === 0) return '';
+    const root = this.aiResponseRoot.last();
+    const body = root.getByTestId('ai-response-body');
+    const target = (await body.count()) > 0 ? body.first() : root;
+    return target.innerText({ timeout: TIMEOUTS.ELEMENT_STATE }).catch(() => '');
   }
 
   async sendMessage(text: string) {
@@ -73,9 +80,11 @@ export class ChatPage extends BasePage {
       // `.nth(countBeforeSend)` waits forever on an index that can never mount. Anchor on
       // `.last()` (as waitForImageResponse does, for a different reason) and use the newest
       // reply's pre-send text as the baseline that proves what we read back is new.
-      const previousResponse = await this.newestResponseText();
-
       await this.typeAndWaitForSendReady(text);
+      // Captured after typing, immediately before Enter: from here until the stop button shows,
+      // the text-only completion path is live, so a prior reply that gains chrome while the turn
+      // is still being prepared must already be in the baseline.
+      const previousResponse = await this.newestResponseText();
       await this.page.keyboard.press('Enter');
 
       // Waits for the first container to mount in a fresh chat; in a resumed chat the prior
@@ -99,79 +108,37 @@ export class ChatPage extends BasePage {
   }
 
   /**
-   * Waits out the stop-generation lifecycle for the message just sent.
+   * Polls until the turn just sent has finished (see isStreamComplete), or fails with a
+   * StreamingTimeoutError once `timeout` runs out. `timeout` covers the whole turn, from send to the
+   * stop button hiding; there is no separate allowance for the button to appear.
    *
-   * `previousResponse` is the newest reply's text captured before sending. It exists only
-   * for the "stop button never appeared" fallback: chats are resumed across tests, so a
-   * prior turn's reply is normally already mounted and a bare `aiResponse.count() > 0`
-   * check would return immediately without this turn having produced anything.
+   * `previousResponse` is the newest reply's text captured before sending. It proves a new reply
+   * exists when the stop button flashed by between polls (a short reply can finish in one chunk);
+   * chats are resumed across tests, so a prior turn's reply is normally already mounted.
    */
   private async waitForStreamingComplete(timeout: number = TIMEOUTS.AI_RESPONSE, previousResponse = '') {
     const stopButton = this.page.getByTestId('stop-generation-btn');
+    let sawStopButton = false;
+    let snapshot: StreamSnapshot = { stopVisible: false, text: '' };
 
-    // First, wait for the stop button to appear (streaming started)
     try {
-      await expect(stopButton).toBeVisible({ timeout: TIMEOUTS.ACTION });
+      await expect
+        .poll(
+          async () => {
+            snapshot = {
+              stopVisible: await stopButton.isVisible().catch(() => false),
+              text: await this.newestResponseText(),
+            };
+            sawStopButton ||= snapshot.stopVisible;
+            return isStreamComplete(snapshot, previousResponse, sawStopButton);
+          },
+          { timeout, intervals: [250] }
+        )
+        .toBe(true);
     } catch {
-      // Stop button never appeared within ACTION timeout. This can happen when:
-      // 1. Response completed instantly (fast model, short answer)
-      // 2. Smart Tools processing takes longer than ACTION before streaming starts
-      // Guard the entire block - the page may have been closed by the time we get here
-      // (e.g. test timeout / context teardown), in which case all locator calls throw.
-      try {
-        const currentResponse = await this.newestResponseText();
-        if (currentResponse !== '' && currentResponse !== previousResponse) return;
-
-        // No new response yet - Smart Tools likely still processing. Wait for either
-        // the Stop button to eventually appear or an ai-response element to show up.
-        await Promise.race([
-          expect(stopButton)
-            .toBeVisible({ timeout })
-            .catch(() => {}),
-          expect(this.aiResponse.first())
-            .toBeVisible({ timeout })
-            .catch(() => {}),
-        ]);
-
-        // If the Stop button appeared during the race, wait for it to disappear
-        const isStopVisible = await stopButton.isVisible().catch(() => false);
-        if (!isStopVisible) return;
-      } catch {
-        // Page/context was closed - nothing left to wait for
-        return;
-      }
+      if (this.page.isClosed()) return;
+      throw new StreamingTimeoutError(timeout, describeStall(snapshot));
     }
-
-    // Wait for the stop button to disappear (streaming finished).
-    // Fallback: if the response content stabilises while the Stop button stays visible
-    // (e.g., server-side streaming stalls), treat it as complete.
-    try {
-      await expect(stopButton).toBeHidden({ timeout });
-    } catch {
-      // Stop button still visible - check if the response text has stabilised
-      const text1 = await this.newestResponseText();
-      if (text1.length > 0) {
-        await this.page.waitForTimeout(TIMEOUTS.POST_ACTION);
-        const text2 = await this.newestResponseText();
-        if (text1 === text2) {
-          // Response hasn't changed - streaming is effectively done
-          return;
-        }
-      }
-      // Still changing, or nothing streamed at all. Say which: an empty reply means the turn never
-      // reached token output (typically still running tools), which is a budget signal, whereas a
-      // growing reply means the stream itself is slow. The two have different fixes and the bare
-      // message sent triage down the wrong path.
-      const stage = text1.length === 0 ? 'no text streamed yet (tool work still in flight?)' : 'reply still growing';
-      throw new StreamingTimeoutError(timeout, stage);
-    }
-  }
-
-  async waitForAIResponse(timeout: number = TIMEOUTS.AI_RESPONSE) {
-    // Fallback: just wait for the ai-response element in DOM
-    const response = this.aiResponse.last();
-    await expect(response).toBeVisible({ timeout });
-    return await response.innerText().catch(() => '');
   }
 
   async sendAndVerify(
@@ -186,7 +153,7 @@ export class ChatPage extends BasePage {
     await this.sendMessageAndWaitForResponse(prompt, options.timeout);
     await options.verifyAnswers(answers, {
       logic: options.logic,
-      selector: '[data-testid="ai-response"]',
+      selector: '[data-testid="ai-response-body"]',
     });
   }
 
@@ -243,12 +210,13 @@ export class ChatPage extends BasePage {
    * deferred to {@link waitForImageResponse}, which holds the full IMAGE_GENERATION budget.
    */
   async sendImageMessageAndWaitForResponse(text: string, timeout: number = TIMEOUTS.IMAGE_GENERATION) {
-    // Baseline the newest reply before sending: waitForStreamingComplete's "stop button never
-    // appeared" fallback returns as soon as it sees any non-empty reply, so without this baseline
+    // Baseline the newest reply before sending: when the stop button flashes by unseen,
+    // waitForStreamingComplete accepts any reply that differs from this, so without it
     // a prior chat's leftover reply (navigateToNewChat does not await DOM clearing) could be
-    // mistaken for this turn's response.
-    const previousResponse = await this.newestResponseText();
+    // mistaken for this turn's response. Taken after typing so text the previous reply gains
+    // during preparation is part of the baseline, not read as this turn's reply.
     await this.typeAndWaitForSendReady(text);
+    const previousResponse = await this.newestResponseText();
     await this.page.keyboard.press('Enter');
     await this.waitForStreamingComplete(timeout, previousResponse);
   }
@@ -311,10 +279,10 @@ export class ChatPage extends BasePage {
    * neither placeholder is present, so it is safe on prompts that may not render an artifact.
    *
    * Caveat: this only guarantees no placeholder is currently pending, not that an artifact
-   * rendered. waitForStreamingComplete has early-return paths (stop button never appeared; text
-   * stabilised while it stayed visible) that can return before "<artifact" has streamed; in that
-   * narrow window the count is already 0 and this returns at once. Fine for these prompts, which
-   * do stream an artifact - revisit if a prompt relies on this as proof one mounted.
+   * rendered. waitForStreamingComplete can return before "<artifact" has streamed (the stop
+   * button flashed by unseen and any new reply text counted as done); in that narrow window the
+   * count is already 0 and this returns at once. Fine for these prompts, which do stream an
+   * artifact - revisit if a prompt relies on this as proof one mounted.
    */
   async waitForArtifactSettled(timeout: number = TIMEOUTS.IMAGE_GENERATION) {
     const root = this.aiResponseRoot.last();

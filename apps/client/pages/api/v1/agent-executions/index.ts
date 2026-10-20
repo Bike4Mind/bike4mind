@@ -11,7 +11,7 @@
  * Auth mode, scopes and body validation all come from `startAgentExecutionContract`.
  */
 
-import { BadRequestError, ConflictError, NotFoundError, BadGatewayError } from '@server/utils/errors';
+import { BadRequestError, ConflictError, NotFoundError, BadGatewayError } from '@bike4mind/server-utils/utils/errors';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { startAgentExecutionContract } from '@bike4mind/common';
@@ -20,7 +20,7 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
 import { isChatModelUsable, resolveDefaultChatModel } from '@server/utils/chatCompletionDefaults';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
-import { HEADLESS_CONNECTION_ID } from '@server/utils/headlessConnection';
+import { HEADLESS_CONNECTION_ID } from '@bike4mind/server-utils/utils/headlessConnection';
 
 const handler = nextRouteForContract(startAgentExecutionContract, {
   rateLimit: rateLimit({

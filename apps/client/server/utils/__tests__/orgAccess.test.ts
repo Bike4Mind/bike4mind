@@ -22,7 +22,7 @@ vi.mock('@bike4mind/database/infra', () => ({
 // suite verifies only the tri-state routing and that the gate is consulted (the gate itself has its
 // own tests in resolveActiveOrg.test.ts).
 const mockResolveActiveOrg = vi.fn();
-vi.mock('../resolveActiveOrg', () => ({
+vi.mock('@bike4mind/server-utils/utils/resolveActiveOrg', () => ({
   resolveActiveOrg: (...a: unknown[]) => mockResolveActiveOrg(...a),
 }));
 

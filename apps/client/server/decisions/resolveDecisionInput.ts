@@ -5,7 +5,7 @@ import type { ResolvedDecisionInput, ResolvedDecisionInputPart } from '@bike4min
 import { ensureImageWithinDimensionLimit } from '@bike4mind/utils/imageResize';
 import { assertFilesReadScope } from '@server/files/fileScopes';
 import { loadAccessibleFabFile } from '@server/files/loadAccessibleFabFile';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import type { Request } from 'express';
 import { isValidObjectId } from 'mongoose';
 

@@ -5,7 +5,7 @@ import { createTempFile, zipFiles } from '@server/utils/files';
 import { accessibleBy } from '@casl/mongoose';
 import * as fs from 'fs';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { getContentFromFabfile } from '@client/app/utils/fabFileUtils';
 import { FabFile } from '@bike4mind/database';
 import { isImageServeable } from '@bike4mind/common';

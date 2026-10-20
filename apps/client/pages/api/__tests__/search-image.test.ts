@@ -35,7 +35,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: any) => fn }));
 
-vi.mock('@server/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: TEST_SIGNING_SECRET } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: TEST_SIGNING_SECRET } }));
 
 const tryIncrement = vi.hoisted(() => vi.fn(async () => ({ success: true, expiresAt: new Date() })));
 vi.mock('@bike4mind/database', () => ({

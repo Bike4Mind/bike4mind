@@ -1,7 +1,7 @@
 import type { Request } from 'express';
 import { userAuthAuditLogRepository, type UserAuthAuditEvent } from '@bike4mind/database';
-import { getClientIp } from '@server/utils/ip';
-import { recordSessionReuseRevoked, recordSessionRecovered } from '@server/utils/cloudwatch';
+import { getClientIp } from '@bike4mind/server-utils/utils/ip';
+import { recordSessionReuseRevoked, recordSessionRecovered } from '@bike4mind/server-utils/utils/cloudwatch';
 
 /**
  * Write an account-level authentication event to the forensic audit log.

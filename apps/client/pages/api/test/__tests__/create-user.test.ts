@@ -28,7 +28,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (fn: (req: unknown, res: unknown) => unknown) => fn,
 }));
-vi.mock('@server/utils/config', () => ({ isE2EEnabled: h.isE2EEnabled }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ isE2EEnabled: h.isE2EEnabled }));
 vi.mock('@server/auth/issueSession', () => ({ issueSessionForRequest: h.issueSessionForRequest }));
 vi.mock('sst', () => ({
   Resource: {

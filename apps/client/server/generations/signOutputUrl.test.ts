@@ -7,7 +7,7 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({ fabFileRepository: { findById: h.findById } }));
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ getSignedUrl: h.filesSign }),
   getGeneratedImageStorage: () => ({ getSignedUrl: h.generatedSign }),
 }));

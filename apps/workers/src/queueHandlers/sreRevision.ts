@@ -12,7 +12,7 @@
 import { getSettingsByNames } from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
-import { sendToQueue } from '@server/utils/sqs';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import {
   adminSettingsRepository,
   apiKeyRepository,

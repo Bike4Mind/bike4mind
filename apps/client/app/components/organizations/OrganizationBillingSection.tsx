@@ -5,7 +5,10 @@ import {
   useSubscribeTeamPlan,
   useUpdateSubscriptionSeats,
 } from '@client/app/hooks/data/subscriptions';
-import { ORGANIZATION_SUBSCRIPTION_PRICE_ID, TEAM_PLAN_UNAVAILABLE_MESSAGE } from '@client/lib/subscriptions/constants';
+import {
+  ORGANIZATION_SUBSCRIPTION_PRICE_ID,
+  TEAM_PLAN_UNAVAILABLE_MESSAGE,
+} from '@bike4mind/server-utils/lib/subscriptions/constants';
 import { useTeamPlanAvailable, useTeamSeatLimits } from '@client/app/hooks/data/teamPlanSettings';
 import {
   SubscriptionOwnerType,

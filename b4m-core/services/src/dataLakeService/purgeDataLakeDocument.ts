@@ -10,7 +10,7 @@ import type {
   ILakeConfigChangeEventRepository,
   ISessionRepository,
 } from '@bike4mind/common';
-import { isLegalHoldError } from '@bike4mind/common';
+import { isLegalHoldError, isModerationEvidenceHold } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { assertLakeWritable } from './assertLakeAccess';
 import { loadActiveLakeGrants } from './authorizeLakeManage';
@@ -254,22 +254,31 @@ export const purgeDataLakeDocument = async (
     }
   };
 
-  for (const path of versionKeys) {
-    await deleteKey(path);
-  }
-  if (currentKey) {
-    if (storageKeysUnreached.length > 0) {
-      // Not attempted, on purpose - see the ordering note above. Still counted as unreached so
-      // `storageObjectsRemaining` keeps meaning "objects still stored", which is what the receipt
-      // and its dialog copy report.
-      storageKeysUnreached.push(currentKey);
-      logger?.info('[dataLake] permanent deletion skipped the current object to keep the kept row addressable', {
-        fabFileId: file.id,
-        filePath: currentKey,
-        unreachedVersionKeys: storageKeysUnreached.length - 1,
-      });
-    } else {
-      await deleteKey(currentKey);
+  const heldForModeration = isModerationEvidenceHold(file);
+  if (heldForModeration) {
+    // An evidence-held file keeps its bytes (same rule as fabFileService/deleteStoredObjects.ts),
+    // and its row delete would be refused anyway. Every key counts as unreached, so the receipt
+    // reports them as still stored and nothing destructive below runs.
+    storageKeysUnreached.push(...versionKeys, ...(currentKey ? [currentKey] : []));
+    logger?.warn('[dataLake] keeping the stored objects of a blocked file (legal hold)', { fabFileId: file.id });
+  } else {
+    for (const path of versionKeys) {
+      await deleteKey(path);
+    }
+    if (currentKey) {
+      if (storageKeysUnreached.length > 0) {
+        // Not attempted, on purpose - see the ordering note above. Still counted as unreached so
+        // `storageObjectsRemaining` keeps meaning "objects still stored", which is what the receipt
+        // and its dialog copy report.
+        storageKeysUnreached.push(currentKey);
+        logger?.info('[dataLake] permanent deletion skipped the current object to keep the kept row addressable', {
+          fabFileId: file.id,
+          filePath: currentKey,
+          unreachedVersionKeys: storageKeysUnreached.length - 1,
+        });
+      } else {
+        await deleteKey(currentKey);
+      }
     }
   }
   const storageObjectDeleted = storageKeysUnreached.length === 0;
@@ -278,7 +287,7 @@ export const purgeDataLakeDocument = async (
   // chunks and its rollups stay consistent and a retry converges.
   let deletedByThisCall = false;
   let sessionsUnlinked = true;
-  if (storageObjectDeleted) {
+  if (!heldForModeration && storageObjectDeleted) {
     // The row goes FIRST, its chunks after (#2583). Chunks-then-row used to leave an interruption
     // between the two stranding the ROW: a stale vectorizedChunkCount over zero real chunk rows -
     // unretrievable by either read path, while every counter-based health surface reported it
@@ -405,6 +414,7 @@ export const purgeDataLakeDocument = async (
     storageObjectDeleted,
     storageObjectsTotal: versionKeys.length + (currentKey ? 1 : 0),
     storageObjectsRemaining: storageKeysUnreached.length,
+    heldForModeration,
     retrievalIndexOutcome: retrievalIndex ? 'purged' : vectorsCollocated ? 'collocated' : 'unwired',
     verified,
     purgedAt: new Date().toISOString(),
@@ -414,6 +424,8 @@ export const purgeDataLakeDocument = async (
 
   if (verified) {
     logger?.info('[dataLake] permanently deleted a lake document', receipt);
+  } else if (heldForModeration) {
+    logger?.info('[dataLake] permanent deletion kept a document under moderation hold', receipt);
   } else {
     logger?.error('[dataLake] permanent deletion did not fully converge', receipt);
   }

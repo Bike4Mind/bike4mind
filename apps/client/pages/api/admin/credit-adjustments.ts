@@ -2,7 +2,7 @@ import { creditTransactionRepository, userRepository } from '@bike4mind/database
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { ApiKeyScope } from '@bike4mind/common';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 
 const QuerySchema = z.object({

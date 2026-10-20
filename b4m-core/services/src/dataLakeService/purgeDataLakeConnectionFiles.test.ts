@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { STORAGE_CHARGE_STAMP_CUTOFF } from '@bike4mind/common';
+import { LegalHoldError, STORAGE_CHARGE_STAMP_CUTOFF } from '@bike4mind/common';
 import { purgeDataLakeConnectionFiles, type PurgeableConnectionFile } from './purgeDataLakeConnectionFiles';
 import { lakeMembershipScope } from './lakeMembershipScope';
 
@@ -140,4 +140,100 @@ describe('purgeDataLakeConnectionFiles storage refund', () => {
     expect(second.filesPurged).toBe(0);
     expect(db.users.incrementCurrentStorage).toHaveBeenCalledTimes(1);
   });
+});
+
+describe('purgeDataLakeConnectionFiles evidence hold', () => {
+  it("keeps an evidence-held file's stored objects and charge while a non-held sibling is purged normally", async () => {
+    const files = [
+      file({
+        id: 'f-held',
+        userId: 'owner-held',
+        fileSize: 100,
+        storageChargedAt: CHARGED_AT,
+        filePath: 'uploads/evidence.png',
+        versions: [{ filePath: 'uploads/evidence-v1.png' }] as PurgeableConnectionFile['versions'],
+        moderationStatus: 'blocked',
+        blockReason: 'explicit',
+      }),
+      file({ id: 'f-clean', fileSize: 50, storageChargedAt: CHARGED_AT, filePath: 'uploads/clean.png' }),
+    ];
+    const db = makeDb();
+    db.fabFiles.hardDeleteOneById = vi.fn(async (id: string) => {
+      if (id === 'f-held') {
+        throw new LegalHoldError(`Cannot hard-delete FabFile ${id}: moderationStatus is 'blocked' (legal hold)`);
+      }
+      return true;
+    });
+    const storage = { delete: vi.fn(async () => {}) };
+    const logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn() };
+
+    const result = await purgeDataLakeConnectionFiles(SCOPE, files, { db, storage, logger });
+
+    expect(storage.delete.mock.calls).toEqual([['uploads/clean.png']]);
+    expect(result).toMatchObject({ filesPurged: 1, storageObjectsDeleted: 1 });
+    // The held file's bytes are still stored, so its owner keeps the charge.
+    expect(db.users.incrementCurrentStorage.mock.calls).toEqual([['owner-1', -50]]);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('keeping the stored objects'),
+      expect.objectContaining({ fabFileId: 'f-held' })
+    );
+  });
+
+  it('treats a block with no recorded reason as held', async () => {
+    const files = [file({ id: 'f-held', filePath: 'uploads/evidence.png', moderationStatus: 'blocked' })];
+    const db = makeDb();
+    db.fabFiles.hardDeleteOneById = vi.fn(async (id: string) => {
+      throw new LegalHoldError(`Cannot hard-delete FabFile ${id}: moderationStatus is 'blocked' (legal hold)`);
+    });
+    const storage = { delete: vi.fn(async () => {}) };
+
+    await purgeDataLakeConnectionFiles(SCOPE, files, { db, storage });
+
+    expect(storage.delete).not.toHaveBeenCalled();
+  });
+
+  it("still deletes an unsupported_format block's stored objects, matching the user-delete path", async () => {
+    const files = [
+      file({
+        id: 'f-unscannable',
+        filePath: 'uploads/photo.heic',
+        moderationStatus: 'blocked',
+        blockReason: 'unsupported_format',
+      }),
+    ];
+    const db = makeDb();
+    const storage = { delete: vi.fn(async () => {}) };
+
+    await purgeDataLakeConnectionFiles(SCOPE, files, { db, storage });
+
+    expect(storage.delete).toHaveBeenCalledWith('uploads/photo.heic');
+  });
+});
+
+describe('purgeDataLakeConnectionFiles - held snapshot safety', () => {
+  it.each([true, false])(
+    'keeps a held row even if its hold clears before the row delete (storage wired: %s)',
+    async storageWired => {
+      const db = makeDb();
+      const storage = { delete: vi.fn(async () => {}) };
+      const heldFile = file({
+        id: 'f-held',
+        filePath: 'uploads/evidence.png',
+        moderationStatus: 'blocked',
+        fileSize: 100,
+        storageChargedAt: CHARGED_AT,
+      });
+
+      const result = await purgeDataLakeConnectionFiles(SCOPE, [heldFile], {
+        db,
+        storage: storageWired ? storage : undefined,
+      });
+
+      expect(storage.delete).not.toHaveBeenCalled();
+      expect(db.fabFiles.hardDeleteOneById).not.toHaveBeenCalled();
+      expect(db.fabFileChunks.deleteManyByFabFileId).not.toHaveBeenCalled();
+      expect(db.users.incrementCurrentStorage).not.toHaveBeenCalled();
+      expect(result).toEqual({ filesPurged: 0, storageObjectsDeleted: 0 });
+    }
+  );
 });

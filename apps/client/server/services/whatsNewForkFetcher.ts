@@ -6,7 +6,7 @@ import { Logger } from '@bike4mind/observability';
 import { IModalDocument, WhatsNewSyncConfigSchema } from '@bike4mind/common';
 import { ModalModel, AdminSettings } from '@bike4mind/database';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
-import { emitModalGenerationMetrics } from '@server/utils/cloudwatch';
+import { emitModalGenerationMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
 import {
   WhatsNewModalPayloadSchema,
   WhatsNewModalPayload,

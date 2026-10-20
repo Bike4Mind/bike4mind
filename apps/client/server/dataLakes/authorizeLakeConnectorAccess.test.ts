@@ -8,7 +8,7 @@ vi.mock('@server/utils/orgAccess', () => ({
 }));
 
 import { authorizeLakeConnectorAccess, authorizeLakeConnectorRead } from './authorizeLakeConnectorAccess';
-import { NotFoundError } from '@server/utils/errors';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 
 const member = { id: 'u1', isAdmin: false };
 

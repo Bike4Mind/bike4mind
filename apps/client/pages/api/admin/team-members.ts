@@ -1,6 +1,6 @@
 import { internalTeamMemberRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { ApiKeyScope, InternalTeamMemberSchema } from '@bike4mind/common';
 import { z } from 'zod';
 

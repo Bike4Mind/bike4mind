@@ -2,8 +2,8 @@ import { Request, Response } from 'express';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { WhatsNewConfigService } from '@client/services/whatsNewConfigService';
-import { ForbiddenError } from '@server/utils/errors';
+import { WhatsNewConfigService } from '@bike4mind/server-utils/services/whatsNewConfigService';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 // Rate limiting constants
 const HISTORY_RATE_LIMIT = 30; // requests per minute
