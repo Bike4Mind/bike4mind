@@ -14,7 +14,12 @@ import { useStreamingState } from './useStreamingState';
 import { useStreamingQueryUpdates } from './useStreamingQueryUpdates';
 import { useStreamingMetrics } from './useStreamingMetrics';
 import { useStreamingArtifactPersistence } from './useStreamingArtifactPersistence';
-import { claimLiveDispatch, dispatchUiSideEffects, noteReplyInFlight } from '../utils/uiSideEffectDispatcher';
+import {
+  claimLiveDispatch,
+  dispatchUiSideEffects,
+  noteReplyInFlight,
+  settleReplyInFlight,
+} from '../utils/uiSideEffectDispatcher';
 import { fabFileKeys } from './data/fabFileKeys';
 import useSessionLayout from './useSessionLayout';
 import {
@@ -327,9 +332,10 @@ export function useSubscribeChatCompletion(sessionId: string | null) {
         }
 
         updateStreamingQuest(typedMsg.quest, isComplete, typedMsg.statusMessage);
-        // A frame over this socket means the reply is arriving in this client session, so its
-        // completion is a live arrival (see claimLiveDispatch).
-        if (typedMsg.quest.id) noteReplyInFlight(typedMsg.quest.id);
+        // A non-terminal frame means the reply is still arriving in this client session, so
+        // its completion is a live arrival (see claimLiveDispatch). A terminal frame with no
+        // earlier one (reconnect after the reply finished) is not: it settles instead.
+        if (typedMsg.quest.id && !isComplete) noteReplyInFlight(typedMsg.quest.id, typedMsg.quest.sessionId);
 
         // OPTIMIZED STREAMING: Real-time visual updates with performance optimizations
         if (isComplete) {
@@ -346,6 +352,8 @@ export function useSubscribeChatCompletion(sessionId: string | null) {
             if (typedMsg.quest.id && claimLiveDispatch(typedMsg.quest.id, typedMsg.quest.sessionId)) {
               dispatchUiSideEffects(typedMsg.quest.uiSideEffects, { live: true, dedupeKey: typedMsg.quest.id });
             }
+          } else if (typedMsg.quest.id) {
+            settleReplyInFlight(typedMsg.quest.id);
           }
 
           // PERFORMANCE PROTECTION: Mark streaming as complete

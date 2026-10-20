@@ -463,10 +463,29 @@ describe('reply UI side effects: live only on first arrival', () => {
     expect(replayCalls()).toHaveLength(1);
   });
 
+  it('replays, never live, a reply that finishes while its session view is away', async () => {
+    const { forgetSessionDispatches, noteReplyInFlight } = await import('@client/app/utils/uiSideEffectDispatcher');
+    const id = replyId();
+    noteReplyInFlight(id, sessionOf());
+    forgetSessionDispatches(sessionOf());
+    render(reply(id, 'done'));
+    expect(liveCalls()).toHaveLength(0);
+    expect(replayCalls()).toHaveLength(1);
+  });
+
+  it('replays, never live, effects that a refetch adds to a reply that finished without any', () => {
+    const id = replyId();
+    const { rerender } = render(reply(id, 'done', false));
+    expect(handler).not.toHaveBeenCalled();
+    rerender(reply(id, 'done', true));
+    expect(liveCalls()).toHaveLength(0);
+    expect(replayCalls()).toHaveLength(1);
+  });
+
   it('does not dispatch a reply the streaming completion already applied live', async () => {
     const { claimLiveDispatch, noteReplyInFlight } = await import('@client/app/utils/uiSideEffectDispatcher');
     const id = replyId();
-    noteReplyInFlight(id);
+    noteReplyInFlight(id, sessionOf());
     expect(claimLiveDispatch(id, sessionOf())).toBe(true);
     const { rerender } = render(reply(id, 'running'));
     rerender(reply(id, 'done'));

@@ -48,14 +48,23 @@ export interface DispatchOptions {
 // replayed at most once per view of its session. Deliberately not persisted: a reply
 // that finished before this page loaded was never seen in flight, so a reload can
 // only replay it.
-const inFlightKeys = new Set<string>();
+/** Reply key -> the session it was last seen streaming in, so leaving that session settles it. */
+const inFlightKeys = new Map<string, string>();
 const liveClaimedKeys = new Set<string>();
 /** Dispatched (live or replay) reply key -> the session it belongs to. */
 const dispatchedKeys = new Map<string, string>();
 
 /** Record that the reply with this key was seen unfinished (streaming) in this client session. */
-export function noteReplyInFlight(key: string): void {
-  if (!liveClaimedKeys.has(key)) inFlightKeys.add(key);
+export function noteReplyInFlight(key: string, sessionId = ''): void {
+  if (!liveClaimedKeys.has(key)) inFlightKeys.set(key, sessionId);
+}
+
+/**
+ * Stop treating a reply as in flight without dispatching: it finished with no effects, so
+ * a later refetch that brings some is a replay, not a live arrival.
+ */
+export function settleReplyInFlight(key: string): void {
+  inFlightKeys.delete(key);
 }
 
 /**
@@ -85,10 +94,15 @@ export function claimReplayDispatch(key: string, sessionId = ''): boolean {
 }
 
 /**
- * Release a session's dispatched replies so the next view of it replays them again
- * (live claims stay spent). Called when the session view is left (SessionMiddle).
+ * Release a session's replies so the next view of it replays them again (live claims stay
+ * spent). A reply still streaming when the session is left is settled too: its remaining
+ * frames are dropped, so without this a later view would mistake its completion for a live
+ * arrival. Called when the session view is left (SessionMiddle).
  */
 export function forgetSessionDispatches(sessionId: string): void {
+  for (const [key, owner] of inFlightKeys) {
+    if (owner === sessionId) inFlightKeys.delete(key);
+  }
   for (const [key, owner] of dispatchedKeys) {
     if (owner === sessionId) dispatchedKeys.delete(key);
   }

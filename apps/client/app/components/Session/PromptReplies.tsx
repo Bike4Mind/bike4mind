@@ -92,6 +92,7 @@ import {
   claimReplayDispatch,
   dispatchUiSideEffects,
   noteReplyInFlight,
+  settleReplyInFlight,
 } from '@client/app/utils/uiSideEffectDispatcher';
 import { getReplyTruncationState, repairTruncatedArtifact } from '@client/app/utils/replyTruncation';
 
@@ -1186,16 +1187,15 @@ const UiSideEffectDispatcher: FC<{
 }> = ({ effects, completed, dedupeKey, sessionId }) => {
   useEffect(() => {
     if (!completed) {
-      noteReplyInFlight(dedupeKey);
+      noteReplyInFlight(dedupeKey, sessionId);
       return;
     }
-    if (!effects?.length) return;
-    // Live only for the first dispatch of a reply this client watched finish. Otherwise a
-    // replay (no `live`), once per view of the session: handlers rebuild derived state from
-    // replays, but must never re-apply an old reply over newer user state. Both claims are
-    // keyed on the reply id, not this component instance, so a remount, a refetch that
-    // re-keys the reply, or a reload is never live. Shared with SessionMiddle and
-    // useSubscribeChatCompletion, so no reply is dispatched twice across the three paths.
+    if (!effects?.length) {
+      settleReplyInFlight(dedupeKey);
+      return;
+    }
+    // Live only for the first dispatch of a reply this client watched finish; anything else
+    // is a replay, once per view of the session. See claimLiveDispatch / claimReplayDispatch.
     if (claimLiveDispatch(dedupeKey, sessionId)) {
       dispatchUiSideEffects(effects, { live: true, dedupeKey });
     } else if (claimReplayDispatch(dedupeKey, sessionId)) {
