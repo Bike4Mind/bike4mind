@@ -109,7 +109,8 @@ export class ChatPage extends BasePage {
 
   /**
    * Polls until the turn just sent has finished (see isStreamComplete), or fails with a
-   * StreamingTimeoutError once `timeout` runs out.
+   * StreamingTimeoutError once `timeout` runs out. `timeout` covers the whole turn, from send to the
+   * stop button hiding; there is no separate allowance for the button to appear.
    *
    * `previousResponse` is the newest reply's text captured before sending. It proves a new reply
    * exists when the stop button flashed by between polls (a short reply can finish in one chunk);
@@ -138,12 +139,6 @@ export class ChatPage extends BasePage {
       if (this.page.isClosed()) return;
       throw new StreamingTimeoutError(timeout, describeStall(snapshot));
     }
-  }
-
-  async waitForAIResponse(timeout: number = TIMEOUTS.AI_RESPONSE) {
-    const response = this.aiResponseRoot.last();
-    await expect(response).toBeVisible({ timeout });
-    return await response.innerText().catch(() => '');
   }
 
   async sendAndVerify(
