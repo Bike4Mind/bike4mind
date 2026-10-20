@@ -11,7 +11,9 @@ const routerMock = vi.hoisted(() => ({
 }));
 
 vi.mock('@tanstack/react-router', () => ({
-  useSearch: () => routerMock.search,
+  // Mirrors TanStack's `select`: the hook narrows its subscription to `tab`.
+  useSearch: (options?: { select?: (search: Record<string, unknown>) => unknown }) =>
+    options?.select ? options.select(routerMock.search) : routerMock.search,
   useLocation: () => ({ pathname: routerMock.pathname }),
   useNavigate: () => routerMock.navigate,
 }));

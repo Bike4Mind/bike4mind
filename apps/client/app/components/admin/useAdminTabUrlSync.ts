@@ -31,7 +31,9 @@ export function useAdminTabUrlSync(
   setActiveTab: (tab: AdminTabValue) => void,
   isTabRenderable: IsAdminTabRenderable = ALL_TABS_RENDERABLE
 ): void {
-  const { tab: requestedTabSlug } = useSearch({ strict: false }) as { tab?: string };
+  // `select` keeps a keystroke in a tab's own search params (Admin Settings' `q`) from re-rendering
+  // the console through this hook.
+  const requestedTabSlug = useSearch({ strict: false, select: search => (search as { tab?: string }).tab });
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const isOnAdminRoute = pathname === '/admin';
