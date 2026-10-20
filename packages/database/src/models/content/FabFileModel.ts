@@ -3711,17 +3711,10 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     expected: Pick<IFabFileDocument, 'organizationId' | 'fileSize' | 'storageChargedAt' | 'status' | 'tags'>,
     nextOrganizationId: string | undefined
   ): Promise<boolean> {
-    // `null` matches a missing field, so a row read without one compares equal to the stored doc.
-    // Status is the exception: the schema defaults it to 'pending', so a hydrated read fills that
-    // value into a legacy row that stores no status at all. Match the missing field as the same
-    // charge state (chargedBytes reads it as not-complete), or every such row loses the CAS.
-    // No includeDeleted: a tombstone's bytes were already refunded, so it has nothing to move.
-    //
-    // The owner is derived from the tags, so the stored tag-name SET must also still equal the read.
-    // Without it a removal that read no lakes could unstamp a file a concurrent join just put into
-    // another lake of the same org, and reconciliation trusts the stamp. Every string name is
-    // compared (not just `datalake:` ones) so the lake-namespace fold stays in one place; a
-    // non-lake tag write only costs a retry. Non-string names are skipped, as storedTagNames does.
+    // `null` matches a missing field; status alone also accepts missing, since a hydrated read fills
+    // in the schema's 'pending' default for a legacy row. Tombstones are excluded (already refunded).
+    // The owner derives from the tags, so the stored tag-name set must still equal the read, or a
+    // removal could unstamp a file a concurrent join just put in another lake of the same org.
     const tagNames = [
       ...new Set(
         (expected.tags ?? []).map(tag => tag?.name).filter((name): name is string => typeof name === 'string')

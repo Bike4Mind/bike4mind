@@ -140,12 +140,8 @@ export const updateFabFile = async (
       ? { content: fileContent, size: Buffer.byteLength(fileContent, 'utf8') }
       : undefined;
 
-  // A tag replacement can join a data lake but can never leave one - see reconcileLakeTags for
-  // why. Resolved (and gated) BEFORE the write below, applied after it. This actor also widens
-  // what an org admin can do beyond the join gate itself: content tags under an org lake's prefix
-  // that were previously force-carried become droppable, and a manageable prefix-arm join now
-  // lands in `joins` rather than `statsOnlyJoins` - which can flip a draft lake to active. Both
-  // follow from the same fix and are wanted, but the activation is one-way.
+  // A tag replacement can join a data lake but never leave one (see reconcileLakeTags). Resolved
+  // and gated before any write, applied after; the org-admin rungs on this actor are intentional.
   const lakeTags =
     params.tags === undefined
       ? undefined
@@ -165,10 +161,8 @@ export const updateFabFile = async (
           }
         );
 
-  // A join can move the file's bytes onto an org's pool (reassignStorageOwner), so it is
-  // quota-gated before ANY write - against the rewrite's new size when this request also replaces
-  // the content, so a refused join cannot land after the upload and charge are committed. A pending,
-  // uncharged file moves no bytes and is not gated; its later upload charge lands on the new owner.
+  // A join moves the file's bytes onto the new owner, so it is gated before any upload or charge,
+  // on the rewrite's size when there is one (graded as charged even for a still-pending file).
   const ownerTransfer = lakeTags
     ? await assertStorageOwnerTransferFits(
         rewrite ? { ...fabFile, fileSize: rewrite.size, storageChargedAt: new Date() } : fabFile,

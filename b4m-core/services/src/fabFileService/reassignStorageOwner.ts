@@ -18,28 +18,12 @@ import { adjustOwnerStorage } from './ownerStorage';
 import { pickOwnerOrganizationId } from './resolveOwnerOrganization';
 
 /**
- * Keeps a file's storage owner in step with its lake membership after create. createFabFile stamps
- * `organizationId` from the org lakes the file is written into; when a later write adds or strips a
- * `datalake:` meta-tag, the owner is recomputed with the same rule (pickOwnerOrganizationId over the
- * lakes the file's meta-tags name, honoring `sourceLakeId` like the owner backfill) and the charged
- * bytes move with the stamp.
- *
- * Policy:
- * - A file that leaves every org lake goes back to its uploader (the stamp is unset), the same owner
- *   it would have had if it had been created outside any org lake.
- * - Only a JOIN is quota-gated (`assertStorageOwnerTransferFits`, before the tag write). A removal,
- *   including the lake-delete sweep, always lands its bytes on the new owner even past quota:
- *   refusing it would let a full pool pin a file to a lake it was taken out of. The owner is then
- *   blocked at their next upload, like any other over-quota state.
- *   A join that does not change the owner is not gated, so a later or same-batch leave of the owning
- *   lake can move the bytes onto a pool that join never checked.
- * - Only `datalake:` meta-tags count, as in createFabFile's tag gate; prefix-arm content tags never
- *   move ownership.
- *
- * Call sites (every door that changes a live file's meta-tags): addFileToLake / removeFileFromLake
- * (b4m-core/services/src/dataLakeService/lakeMembership.ts, which every add/remove/toggle/ingest
- * path funnels through), updateFabFile's reconcileLakeTags join, and cleanupDeletedDataLake's
- * survivor sweep.
+ * Keeps a file's storage owner (`organizationId` stamp + charged bytes) in step with its `datalake:`
+ * meta-tags after create, using createFabFile's rule (pickOwnerOrganizationId, honoring sourceLakeId).
+ * Only a join that changes the owner is quota-gated; a leave never is (a full pool must not pin a file
+ * to a lake it left), so a leave can land bytes on a pool an owner-preserving join never checked.
+ * A file in no org lake goes back to its uploader. Prefix-arm tags never count.
+ * Callers: lakeMembership.ts add/remove, updateFabFile, cleanupDeletedDataLake.
  */
 
 export type StorageOwnerTransferDb = {
