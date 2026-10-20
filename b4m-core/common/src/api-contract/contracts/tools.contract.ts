@@ -21,7 +21,7 @@ export const executeToolContract = defineEndpoint({
   operationId: 'executeTool',
   summary: 'Execute a server-side tool',
   description:
-    'Runs one of the built-in server-side tools (`weather_info`, `web_search`, `web_fetch`) and ' +
+    'Runs one of the built-in server-side tools (`weather_info`, `web_search`, `web_fetch`, `decide`) and ' +
     'returns its result as JSON. Authenticate with a JWT access token only - API keys are NOT ' +
     'accepted on this endpoint. Rate-limited to 100 requests/hour per user, counted separately from ' +
     'other endpoints. `request_id` echoes the ' +

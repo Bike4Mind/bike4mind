@@ -50,6 +50,7 @@ export const generateTools = (
     apiKeyId,
     questId,
     numberCitables,
+    decide,
     getAbortSignal,
   }: {
     db: ToolContext['db'];
@@ -70,6 +71,7 @@ export const generateTools = (
     apiKeyId?: ToolContext['apiKeyId'];
     questId?: ToolContext['questId'];
     numberCitables?: ToolContext['numberCitables'];
+    decide?: ToolContext['decide'];
     getAbortSignal?: ToolContext['getAbortSignal'];
   },
   storage: BaseStorage,
@@ -128,6 +130,7 @@ export const generateTools = (
     codeMinifier,
     availableModels,
     onToolLlmUsage,
+    decide,
     getAbortSignal,
     numberCitables,
   };

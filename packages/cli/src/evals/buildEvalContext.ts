@@ -9,7 +9,8 @@
  *  3. Bash and external network tools (web_search, web_fetch) are denied -
  *     they bypass `allowedDirectories`, are nondeterministic, and inflate
  *     token usage. Tasks that genuinely need them belong in a different
- *     suite.
+ *     suite. `decide` is denied with them: it spends credits per call and
+ *     its answer depends on a server-side model evals do not control.
  *  4. `ask_user_question` is denied - evals must run autonomously. If a
  *     task requires user input, it's testing the wrong thing.
  *
@@ -30,13 +31,14 @@ import { Logger } from '@bike4mind/observability';
 import { getPromptVariant, type PromptVariant } from './prompts.js';
 
 /** Tools that are denied in eval mode regardless of task. */
-const EVAL_MODE_DENIED_TOOLS: readonly string[] = [
+export const EVAL_MODE_DENIED_TOOLS: readonly string[] = [
   'bash_execute',
   'bash_execute_async',
   'write_shell_stdin',
   'kill_background_shell',
   'web_search',
   'web_fetch',
+  'decide',
   'ask_user_question',
 ];
 
@@ -205,10 +207,13 @@ export async function buildEvalContext(options: BuildEvalContextOptions): Promis
  * Trust list is a superset - extra entries are harmless because
  * `needsPermission` only consults this set when a tool is invoked.
  */
-async function listAllToolNames(): Promise<string[]> {
+export async function listAllToolNames(): Promise<string[]> {
   // Static list covers every tool plausibly enabled by generateCliTools
   // (b4mTools subset + cliOnlyTools). Adding tools here is safe; missing
   // tools just means the prompt callback throws if they're called.
+  // Every tool `generateCliTools` can offer must appear here or in
+  // EVAL_MODE_DENIED_TOOLS - buildEvalContext.test.ts enforces that for
+  // `decide`, which is otherwise the one enabled-by-default server tool.
   return [
     // Local b4m tools
     'dice_roll',
