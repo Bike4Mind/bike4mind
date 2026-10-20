@@ -711,3 +711,30 @@ describe('generateCliTools checkpoint wiring', () => {
     expect(createCheckpoint).toHaveBeenCalledWith('create_file', [target], 'before-create_file-made.txt');
   });
 });
+
+describe('generateCliTools decide availability', () => {
+  const modelProbeClient = (models: unknown[]) => ({ get: vi.fn(async () => ({ models })) }) as unknown as ApiClient;
+
+  const build = (apiClient: ApiClient) =>
+    generateCliTools(
+      'user-1',
+      {} as never, // llm: not exercised while tool schemas are built
+      'test-model',
+      new PermissionManager(new ToolCatalog(), [], []),
+      vi.fn(async () => ({ action: 'allow-once' as const })),
+      { currentAgent: null },
+      {} as ConfigStore,
+      apiClient,
+      undefined, // toolFilter
+      undefined // showUserQuestion
+    );
+
+  it('offers decide only when the deployment reports a callable decision model', async () => {
+    // The probe caches a yes for the process, so the empty-list case has to run first.
+    const none = await build(modelProbeClient([]));
+    expect(none.tools.map(t => t.toolSchema.name)).not.toContain('decide');
+
+    const some = await build(modelProbeClient([{ id: 'gpt-6-luna' }]));
+    expect(some.tools.map(t => t.toolSchema.name)).toContain('decide');
+  });
+});
