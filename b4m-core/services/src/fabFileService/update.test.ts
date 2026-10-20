@@ -432,6 +432,51 @@ describe('updateFabFile (lake-tag reconciliation wiring)', () => {
       expect(fabFiles.findChargeState).not.toHaveBeenCalled();
     });
 
+    it("charges a pending file's rewrite to the uploader, then moves the full new size onto the org", async () => {
+      const pendingRow = baseFile({
+        mimeType: 'text/plain',
+        fileSize: 10,
+        tags: [],
+        status: 'pending',
+        createdAt: new Date('2026-10-10'),
+      });
+      findUpdateAccessById.mockResolvedValue(pendingRow);
+      findByDatalakeTag.mockResolvedValue(orgLake);
+      mockAdapters.db.dataLakes.findByDatalakeTags.mockResolvedValue([orgLake]);
+      mockAdapters.db.users.findById.mockResolvedValue({ id: 'user-123', currentStorageSize: 0 });
+      // The gate grades the rewrite's 100 bytes as if already charged; this 1 MB pool has room for them.
+      mockAdapters.db.organizations.findById.mockResolvedValue({
+        id: 'org-acme',
+        currentStorageSize: 999_800,
+        storageLimit: 1,
+      });
+      const fabFiles = mockAdapters.db.fabFiles as typeof mockAdapters.db.fabFiles & Record<string, Mock>;
+      // The rewrite returns the uncharged pre-image and stamps the row; the reassign then re-reads it.
+      fabFiles.commitContentRewrite = vi.fn().mockResolvedValue(pendingRow);
+      mockAdapters.db.fabFiles.findById.mockResolvedValue({
+        ...pendingRow,
+        fileSize: 100,
+        storageChargedAt: new Date(),
+        tags: [{ name: 'datalake:acme', strength: 1 }],
+      });
+
+      await updateFabFile(
+        mockUser,
+        { id: 'file-1', fileContent: 'x'.repeat(100), tags: [{ name: 'datalake:acme', strength: 1 }] },
+        mockAdapters as any
+      );
+
+      const net = (mock: Mock, id: string) =>
+        mock.mock.calls.filter(([owner]) => owner === id).reduce((sum, [, bytes]) => sum + (bytes as number), 0);
+      expect(mockAdapters.db.users.incrementCurrentStorage.mock.calls).toEqual([
+        ['user-123', 100],
+        ['user-123', -100],
+      ]);
+      expect(net(mockAdapters.db.users.incrementCurrentStorage, 'user-123')).toBe(0);
+      expect(net(mockAdapters.db.organizations.incrementCurrentStorage, 'org-acme')).toBe(100);
+      expect(mockAdapters.db.organizations.findById).toHaveBeenCalledWith('org-acme');
+    });
+
     it('grades a join against the rewritten size before the upload commits', async () => {
       // A text file, so the content block runs; unstamped, so its current charged bytes are 0.
       findUpdateAccessById.mockResolvedValue(

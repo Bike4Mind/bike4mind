@@ -1,5 +1,11 @@
 import { beforeEach, describe, it, expect, vi } from 'vitest';
-import { SettingScopeLevel, type IDataLakeDocument, type IScopedSetting, type ScopeRef } from '@bike4mind/common';
+import {
+  ConflictError,
+  SettingScopeLevel,
+  type IDataLakeDocument,
+  type IScopedSetting,
+  type ScopeRef,
+} from '@bike4mind/common';
 import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mind/utils';
 import { toggleTags } from './toggleTags';
 import { withStorageOwnerFakes } from '../__tests__/utils/storageOwnerTransferFakes';
@@ -256,6 +262,63 @@ describe('toggleTags - data lake meta-tags', () => {
       );
     }
     expect(adapters.db.organizations.findById).not.toHaveBeenCalledWith('org-full');
+  });
+
+  it('moves the bytes from org A to org B when one batch leaves lake A and joins lake B (no gate runs)', async () => {
+    // The join alone keeps the older lake A's org as owner, so the batch gate grades nothing; the
+    // leave then lands the bytes on B's org unchecked (see reassignStorageOwner's header).
+    const lakeA = lake({ id: 'lake-a', datalakeTag: 'datalake:a', organizationId: 'org-a', createdAt: new Date(1) });
+    const lakeB = lake({ id: 'lake-b', datalakeTag: 'datalake:b', organizationId: 'org-b', createdAt: new Date(2) });
+    const adapters = makeAdapters([
+      {
+        ...file('f1', [{ name: 'datalake:a', strength: 1 }]),
+        organizationId: 'org-a',
+        fileSize: 400,
+        storageChargedAt: new Date(),
+      },
+    ]);
+    adapters.db.dataLakes.findByDatalakeTag.mockImplementation(
+      async (tag: string) => [lakeA, lakeB].find(l => l.datalakeTag === tag) ?? null
+    );
+    adapters.db.dataLakes.findByDatalakeTags.mockImplementation(async (tags: string[]) =>
+      [lakeA, lakeB].filter(l => tags.includes(l.datalakeTag))
+    );
+    adapters.db.fabFiles.setOwnerOrganizationIfUnchanged.mockImplementation(
+      async (id: string, _expected: unknown, next: string | undefined) => {
+        Object.assign(adapters.store.get(id)!, { organizationId: next });
+        return true;
+      }
+    );
+
+    await run(adapters, { ids: ['f1'], tags: ['datalake:a', 'datalake:b'] });
+
+    expect((adapters.store.get('f1') as { organizationId?: string }).organizationId).toBe('org-b');
+    const moved = (mock: { mock: { calls: unknown[][] } }) =>
+      mock.mock.calls.reduce<Record<string, number>>((acc, [id, bytes]) => {
+        acc[id as string] = (acc[id as string] ?? 0) + (bytes as number);
+        return acc;
+      }, {});
+    expect(moved(adapters.db.organizations.incrementCurrentStorage)).toEqual({ 'org-a': -400, 'org-b': 400 });
+    // The leave passes through the uploader on its way to org B, netting zero.
+    expect(moved(adapters.db.users.incrementCurrentStorage)).toEqual({ owner: 0 });
+    expect(adapters.db.organizations.findById).not.toHaveBeenCalled();
+  });
+
+  it('leaves the tag written and the owner unmoved when the reassign throws after a join', async () => {
+    // Service-level behavior only: the toggle route's withTransaction is what rolls the tag back.
+    const orgLake = lake({ organizationId: 'org1', createdAt: new Date(0) });
+    const adapters = makeAdapters([{ ...file('f1'), fileSize: 400, storageChargedAt: new Date() }]);
+    adapters.db.dataLakes.findByDatalakeTag.mockResolvedValue(orgLake);
+    adapters.db.dataLakes.findByDatalakeTags.mockResolvedValue([orgLake]);
+    adapters.db.organizations.findById.mockResolvedValue({ id: 'org1', currentStorageSize: 0, storageLimit: 1 });
+    adapters.db.fabFiles.setOwnerOrganizationIfUnchanged.mockResolvedValue(false);
+
+    await expect(run(adapters, { ids: ['f1'], tags: ['datalake:lake'] })).rejects.toBeInstanceOf(ConflictError);
+
+    expect(adapters.store.get('f1')?.tags.map(t => t.name)).toContain('datalake:lake');
+    expect((adapters.store.get('f1') as { organizationId?: string }).organizationId).toBeUndefined();
+    expect(adapters.db.users.incrementCurrentStorage).not.toHaveBeenCalled();
+    expect(adapters.db.organizations.incrementCurrentStorage).not.toHaveBeenCalled();
   });
 
   it('recomputes the lake stats in both directions', async () => {
