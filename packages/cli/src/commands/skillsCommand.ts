@@ -53,6 +53,8 @@ export interface PushDeps {
   isTTY: boolean;
   update: boolean;
   yes: boolean;
+  /** Base URL of the API, used to tell a same-origin source stamp from a foreign one. */
+  apiOrigin?: string;
   log: (line: string) => void;
 }
 
@@ -77,7 +79,7 @@ function descriptionFor(fields: SkillMdFields): string {
  */
 export function buildSkillPayload(fields: SkillMdFields, fallbackName: string): SkillPayload {
   return {
-    name: (fields.name ?? fallbackName).trim().toLowerCase(),
+    name: (fields.name?.trim() || fallbackName).trim().toLowerCase(),
     description: descriptionFor(fields),
     body: fields.body ?? '',
     ...(fields.argumentHint !== undefined && { argumentHint: fields.argumentHint }),
@@ -85,11 +87,7 @@ export function buildSkillPayload(fields: SkillMdFields, fallbackName: string): 
   };
 }
 
-/**
- * Resolves <dir>, <dir>/SKILL.md or any .md file and parses it.
- * Keep in step with desktop's readSkillSource (apps/desktop/src/main/chat/skills/readSkillSource.ts):
- * the same input must yield the same skill on both.
- */
+/** Resolves <dir>, <dir>/SKILL.md or any .md file and parses it. */
 export async function readSkillFile(input: string): Promise<SkillFile> {
   const expanded = input === '~' || input.startsWith('~/') ? path.join(os.homedir(), input.slice(1)) : input;
   const resolved = path.resolve(expanded);
@@ -109,7 +107,7 @@ export async function readSkillFile(input: string): Promise<SkillFile> {
   } else if (stat.isFile() && resolved.toLowerCase().endsWith('.md')) {
     filePath = resolved;
     fallbackName =
-      path.basename(resolved) === 'SKILL.md'
+      path.basename(resolved).toLowerCase() === 'skill.md'
         ? path.basename(path.dirname(resolved))
         : path.basename(resolved, path.extname(resolved));
   } else {
@@ -126,9 +124,10 @@ export async function readSkillFile(input: string): Promise<SkillFile> {
   const parsed = parseSkillMd(text);
   if (!parsed.ok) throw new Error(parsed.error);
 
+  const name = path.basename(filePath);
   const extraFiles =
-    path.basename(filePath) === 'SKILL.md'
-      ? (await fs.readdir(path.dirname(filePath))).filter(f => f !== 'SKILL.md' && !f.startsWith('.')).sort()
+    name.toLowerCase() === 'skill.md'
+      ? (await fs.readdir(path.dirname(filePath))).filter(f => f !== name && !f.startsWith('.')).sort()
       : [];
 
   return {
@@ -142,6 +141,15 @@ export async function readSkillFile(input: string): Promise<SkillFile> {
 function serverMessage(error: unknown): string {
   const err = error as { response?: { data?: { error?: string; message?: string } }; message?: string };
   return err?.response?.data?.error ?? err?.response?.data?.message ?? err?.message ?? String(error);
+}
+
+/** The stamp is plain comment text, so only a same-origin URL is presented as provenance. */
+function isSameOrigin(url: string, apiOrigin: string | undefined): boolean {
+  try {
+    return apiOrigin !== undefined && new URL(url).origin === new URL(apiOrigin).origin;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -164,7 +172,11 @@ export async function pushSkill(file: SkillFile, deps: PushDeps): Promise<'creat
   }
 
   if (source) {
-    log(`This skill came from Bike4Mind: ${source.url}`);
+    log(
+      isSameOrigin(source.url, deps.apiOrigin)
+        ? `This skill came from Bike4Mind: ${source.url}`
+        : `This file has a Bike4Mind source stamp from another site: ${source.url}`
+    );
     // A pushed copy is an own skill and runs trusted; a market import runs as untrusted.
     if (source.thirdParty) {
       log(
@@ -233,12 +245,10 @@ export async function handleSkillsCommand(subcommand: string | undefined, argv: 
   const configStore = new ConfigStore();
   const config = await configStore.load();
   const authTokens = await configStore.getAuthTokens();
+  // A stale access token is fine: ApiClient refreshes it on the first 401.
   if (!authTokens) throw new Error('Not authenticated. Run `b4m /login` to authenticate.');
-  if (new Date(authTokens.expiresAt) <= new Date()) {
-    await configStore.clearAuthTokens();
-    throw new Error('Authentication token expired. Run `b4m /login` to re-authenticate.');
-  }
-  const apiClient = new ApiClient(requireApiUrl(config.apiConfig), configStore);
+  const apiUrl = requireApiUrl(config.apiConfig);
+  const apiClient = new ApiClient(apiUrl, configStore);
 
   const result = await pushSkill(file, {
     api: apiClient,
@@ -246,6 +256,7 @@ export async function handleSkillsCommand(subcommand: string | undefined, argv: 
     isTTY: Boolean(process.stdin.isTTY),
     update: Boolean(argv.update),
     yes: Boolean(argv.yes),
+    apiOrigin: apiUrl,
     log: line => console.log(line),
   });
 
