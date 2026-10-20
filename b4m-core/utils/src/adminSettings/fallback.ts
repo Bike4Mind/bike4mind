@@ -57,7 +57,10 @@ function readHttpStatus(error: Error): number | undefined {
  * to the HTTP status check.
  */
 const TRANSIENT_AWS_SDK_ERROR_NAMES = new Set([
-  ...[...AWS_SDK_ERROR_NAME_STATUS].filter(([, status]) => [429, 500, 503].includes(status)).map(([name]) => name),
+  'ServiceUnavailableException', // 503 - Bedrock capacity/availability
+  'ThrottlingException', // 429 - account/model throttling
+  'TooManyRequestsException', // 429
+  'InternalServerException', // 500 - transient server-side error
   'ModelNotReadyException', // model still scaling up
   'ModelTimeoutException', // upstream model timeout
 ]);
