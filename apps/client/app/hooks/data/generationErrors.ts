@@ -24,9 +24,12 @@ export const readErrorCode = (data: unknown): unknown =>
 
 /**
  * The user-facing message for a failed generation request: the shared rate-limit text, else the message for the
- * kind's own errorCode, else `fallback`. With `billing`, insufficient_credits names the paying account, and a 403
- * says to switch accounts only while an organization account is billed (a personal selection sends no org, so a
- * 403 there is something else, such as CSRF, and falls through).
+ * kind's own errorCode, else `fallback`. With `billing`, insufficient_credits names the paying account.
+ *
+ * A 403 while an organization account is selected says to switch accounts. That is a heuristic on the selection,
+ * not on `errorCode`: the session-path refusal (`resolveActiveOrg`) carries no code, so it is indistinguishable
+ * from any other 403 (blocked IP, CSRF) shown during the same request. A personal selection sends no org, so a
+ * 403 there falls through to the kind's own messages.
  * The response's `error` text is never shown - messages come from the code.
  */
 export function describeGenerationError<TCode extends string>(
