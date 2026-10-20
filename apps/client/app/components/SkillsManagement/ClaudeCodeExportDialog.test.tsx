@@ -8,6 +8,9 @@ import ClaudeCodeExportDialog, { type ClaudeCodeExportDialogProps } from './Clau
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 vi.mock('sonner', () => ({ toast }));
 
+const downloadData = vi.hoisted(() => vi.fn());
+vi.mock('@client/app/utils/download', () => ({ downloadData }));
+
 const appTheme = extendTheme({ ...getThemeConfig() });
 
 const skill = { name: 'review-pr', description: 'Review a PR', body: 'Review $ARGUMENTS.' };
@@ -63,7 +66,26 @@ describe('ClaudeCodeExportDialog', () => {
   it('reports a name Claude Code cannot use instead of a clipboard failure', () => {
     renderDialog({ skill: { ...skill, name: 'Bad Name' } });
     fireEvent.click(screen.getByTestId('skill-claude-code-copy-cmd'));
-    expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('not a valid Claude Code skill name'));
+    expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('use Download'));
     expect(writeText).not.toHaveBeenCalled();
+  });
+
+  it('downloads the stamped SKILL.md', () => {
+    renderDialog({ sourcePath: '/skills/abc' });
+    fireEvent.click(screen.getByTestId('skill-claude-code-download'));
+    expect(downloadData).toHaveBeenCalledTimes(1);
+    const [content, filename, type] = downloadData.mock.calls[0];
+    expect(content).toContain(`# Bike4Mind-Source: ${window.location.origin}/skills/abc`);
+    expect(content).toContain('Review $ARGUMENTS.');
+    expect(filename).toBe('SKILL.md');
+    expect(type).toBe('text/markdown');
+  });
+
+  it('tells the user to download when the clipboard rejects', async () => {
+    writeText.mockRejectedValue(new Error('denied'));
+    renderDialog();
+    fireEvent.click(screen.getByTestId('skill-claude-code-copy-cmd'));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/Could not copy/)));
+    expect(toast.success).not.toHaveBeenCalled();
   });
 });
