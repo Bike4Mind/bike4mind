@@ -34,12 +34,19 @@ const asNumber = (value: unknown): number | undefined =>
 // The writers' summary wording ("granted 500 credits" / "deducted 200 credits"); last-resort source.
 const SUMMARY_PATTERN = /^(granted|deducted) (\d+) credits/;
 
-const creditsFromAdjustment = (row: CreditEntryRow, ledgerCredits: number | undefined): number | undefined => {
-  if (ledgerCredits !== undefined) return ledgerCredits;
+const TOP_UP_SUMMARY_PATTERN = /^topped up (\d+) credits/;
+
+const creditsFromBalanceChange = (row: CreditEntryRow): number | undefined => {
   const balance = row.changes?.find(change => change.field === 'currentCredits');
   const before = asNumber(balance?.before);
   const after = asNumber(balance?.after);
-  if (before !== undefined && after !== undefined) return after - before;
+  return before !== undefined && after !== undefined ? after - before : undefined;
+};
+
+const creditsFromAdjustment = (row: CreditEntryRow, ledgerCredits: number | undefined): number | undefined => {
+  if (ledgerCredits !== undefined) return ledgerCredits;
+  const fromChange = creditsFromBalanceChange(row);
+  if (fromChange !== undefined) return fromChange;
   const match = row.summary?.match(SUMMARY_PATTERN);
   if (!match) return undefined;
   return match[1] === 'deducted' ? -Number(match[2]) : Number(match[2]);
@@ -55,8 +62,16 @@ export const resolveSignedCredits = (row: CreditEntryRow, ledgerCredits?: number
       return creditsFromAdjustment(row, ledgerCredits);
     case 'org.credits.granted':
       return asNumber(row.details?.initialCredits);
+    case 'org.credits.topped_up': {
+      const stamped = asNumber(row.details?.credits);
+      if (stamped !== undefined) return stamped;
+      const match = row.summary?.match(TOP_UP_SUMMARY_PATTERN);
+      return creditsFromBalanceChange(row) ?? (match ? Number(match[1]) : undefined);
+    }
+    case 'org.credits.adjusted':
+      return asNumber(row.details?.credits) ?? creditsFromAdjustment(row, ledgerCredits);
     default:
-      // topped_up, org adjusted and subscription.granted already stamp `credits`; older rows may lack an amount.
+      // subscription.granted already stamps `credits`; older rows may lack an amount.
       return asNumber(row.details?.credits);
   }
 };

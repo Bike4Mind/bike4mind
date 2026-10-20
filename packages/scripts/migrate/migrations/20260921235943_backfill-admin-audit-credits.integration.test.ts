@@ -102,4 +102,41 @@ describe('resolveSignedCredits', () => {
   it('ignores a non-numeric amount', () => {
     expect(resolveSignedCredits(row('org.credits.topped_up', { details: { credits: '100' } }))).toBeUndefined();
   });
+
+  it.each([
+    ['granted 500 credits', 500],
+    ['deducted 200 credits', -200],
+    ['granted 12.5 credits', undefined],
+    ['granted 1,000 credits', undefined],
+  ])('reads the summary "%s" as %s', (summary, expected) => {
+    expect(resolveSignedCredits(row('user.credits.adjusted', { summary }))).toBe(expected);
+  });
+
+  describe('older org rows without details.credits', () => {
+    it('prefers a stamped details.credits', () => {
+      expect(
+        resolveSignedCredits(row('org.credits.adjusted', { details: { credits: -7 }, summary: 'granted 5 credits' }))
+      ).toBe(-7);
+    });
+
+    it('reads an org adjustment from the balance change, then the summary', () => {
+      const changes = [{ field: 'currentCredits', before: 100, after: 40 }];
+      expect(resolveSignedCredits(row('org.credits.adjusted', { changes, summary: 'granted 5 credits' }))).toBe(-60);
+      expect(resolveSignedCredits(row('org.credits.adjusted', { summary: 'deducted 25 credits' }))).toBe(-25);
+      expect(resolveSignedCredits(row('org.credits.adjusted', { summary: 'granted 12.5 credits' }))).toBeUndefined();
+    });
+
+    it('reads a top-up from the balance change, then the summary', () => {
+      const changes = [{ field: 'currentCredits', before: 10, after: 60 }];
+      expect(resolveSignedCredits(row('org.credits.topped_up', { changes, summary: 'topped up 5 credits' }))).toBe(50);
+      expect(resolveSignedCredits(row('org.credits.topped_up', { summary: 'topped up 300 credits' }))).toBe(300);
+      expect(
+        resolveSignedCredits(row('org.credits.topped_up', { summary: 'topped up 1,000 credits' }))
+      ).toBeUndefined();
+    });
+
+    it('keeps subscription grants on details.credits only', () => {
+      expect(resolveSignedCredits(row('user.subscription.granted', { summary: 'granted 5 credits' }))).toBeUndefined();
+    });
+  });
 });
