@@ -9477,6 +9477,43 @@ describe('ChatCompletionProcess', () => {
         expect(retryMessages.some(m => m.cache === true)).toBe(true);
       });
 
+      it('relocates only what the token budget kept', async () => {
+        const body = { ...wireTurn({ builderReturnsContext: true }), extraContextMessages: [identity, viewContext] };
+        // The builder sheds the memento under budget pressure, as the real one drops low-priority context.
+        mockedBuildAndSortMessages.mockImplementation(async (prev: any, context: any[], prompt: any[]) => ({
+          messages: [...context.filter(m => m !== memento), ...(prev ?? []), ...prompt],
+          currentTurnMessageCount: prompt.length,
+          messageTruncation: null,
+        }));
+        service.features.set('mementos', { getContextMessages: async () => [memento] } as any);
+        service.features.set('knowledgeRetrieval', { getContextMessages: async () => [retrieval] } as any);
+
+        await service.process({ body, logger: mockLogger });
+        const messages = lastComplete()[1] as IMessage[];
+
+        expect(JSON.stringify(messages)).not.toContain('MEMENTO-FACT');
+        const last = messages.at(-1)!.content as string;
+        expect(last.startsWith(TURN_CONTEXT_HEADER)).toBe(true);
+        expect(last).toContain('RETRIEVED-PASSAGE');
+      });
+
+      it('hands onComplete features the system-role form, not the relocated request', async () => {
+        const onComplete = vi.fn().mockResolvedValue(undefined);
+        mockSession.contextSummary = 'RUNNING-SUMMARY';
+        const body = { ...wireTurn({ builderReturnsContext: true }), extraContextMessages: [identity, viewContext] };
+        service.features.set('mementos', { getContextMessages: async () => [memento], onComplete } as any);
+
+        await service.process({ body, logger: mockLogger });
+
+        expect(onComplete).toHaveBeenCalled();
+        const persisted = onComplete.mock.calls[0][0].messages as IMessage[];
+        expect(persisted).toContainEqual(memento);
+        expect(persisted.some(m => typeof m.content === 'string' && m.content.includes(TURN_CONTEXT_HEADER))).toBe(
+          false
+        );
+        expect(persisted.at(-1)).toEqual({ role: 'user', content: 'Hello' });
+      });
+
       it('does not persist the injected context on the quest', async () => {
         await runWithContext();
 
