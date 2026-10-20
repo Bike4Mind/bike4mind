@@ -561,12 +561,18 @@ export async function generateSafeEmbedding(
 export const HISTORY_WINDOW_STEP = 10;
 
 /**
+ * The step a window may actually use. Capped at half the limit: at limit 10 and step 10 the window
+ * would collapse to a single quest right after each step, which is no history at all for a
+ * small-context model.
+ */
+export function historyWindowStep(limit: number, step: number = HISTORY_WINDOW_STEP): number {
+  return Math.min(step, Math.max(1, Math.floor(limit / 2)));
+}
+
+/**
  * Index (0-based, oldest first) of the first prior quest in the history window, given the number of
  * quests before the current turn and the window `limit`. The window is quests [start, priorQuestCount):
  * never longer than `limit`, and `start` only moves every `step` quests.
- *
- * `step` is capped at half the limit: at limit 10 and step 10 the window would collapse to a single
- * quest right after each step, which is no history at all for a small-context model.
  */
 export function resolveHistoryWindowStart(
   priorQuestCount: number,
@@ -574,7 +580,7 @@ export function resolveHistoryWindowStart(
   step: number = HISTORY_WINDOW_STEP
 ): number {
   if (priorQuestCount <= limit) return 0;
-  const effectiveStep = Math.min(step, Math.max(1, Math.floor(limit / 2)));
+  const effectiveStep = historyWindowStep(limit, step);
   return Math.ceil((priorQuestCount - limit) / effectiveStep) * effectiveStep;
 }
 
@@ -702,15 +708,36 @@ export async function fetchAndProcessPreviousMessages(
   // of the prompt each time and defeating the provider's prefix cache. Align its start to a step
   // boundary instead (see resolveHistoryWindowStart). The aligned window is never longer than `limit`,
   // so it lies inside the quests already fetched and costs no second fetch.
-  if (mayExceedWindow && db.quests.countBySessionId) {
-    const questCount = await db.quests.countBySessionId(session.id);
-    // The count includes the current turn's quest. Floored at what was fetched in case a concurrent
-    // write made the two reads disagree.
-    const priorQuestCount = Math.max(questCount - 1, chatHistoryItems.length);
-    const windowStart = resolveHistoryWindowStart(priorQuestCount, limit);
-    const fetchedStart = priorQuestCount - chatHistoryItems.length;
-    const dropCount = Math.min(Math.max(windowStart - fetchedStart, 0), chatHistoryItems.length - 1);
-    if (dropCount > 0) chatHistoryItems.splice(0, dropCount);
+  //
+  // A caller who asked for unlimited history wants every turn, so alignment is skipped for it - the
+  // fetch page would otherwise cap that choice at a fraction of itself. The token-budget trim below
+  // uses the same anchor, so it is skipped for unlimited history too.
+  let windowStartIndex: number | null = null;
+  if (!isUnlimitedHistory(historyCount) && (mayExceedWindow || verbatimTokenBudget) && db.quests.countBySessionId) {
+    // The count only improves cache locality; a transient failure must not fail the whole turn.
+    // Without it the window keeps the pre-alignment newest-N shape.
+    let questCount: number | null = null;
+    try {
+      questCount = await db.quests.countBySessionId(session.id);
+    } catch (error) {
+      Logger.globalInstance.warn('History quest count failed; keeping the unaligned window', {
+        sessionId: session.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    if (questCount !== null) {
+      // The count includes the current turn's quest. Floored at what was fetched in case a concurrent
+      // write made the two reads disagree.
+      const priorQuestCount = Math.max(questCount - 1, chatHistoryItems.length);
+      const windowStart = resolveHistoryWindowStart(priorQuestCount, limit);
+      windowStartIndex = priorQuestCount - chatHistoryItems.length;
+      const dropCount = Math.min(Math.max(windowStart - windowStartIndex, 0), chatHistoryItems.length - 1);
+      if (dropCount > 0) {
+        chatHistoryItems.splice(0, dropCount);
+        windowStartIndex += dropCount;
+      }
+    }
   }
 
   // Filter out messages already covered by contextSummary.
@@ -718,6 +745,7 @@ export async function fetchAndProcessPreviousMessages(
   if (session.contextSummaryUpToQuestId) {
     const boundary = session.contextSummaryUpToQuestId;
     const filtered = chatHistoryItems.filter(item => item.id > boundary);
+    if (windowStartIndex !== null) windowStartIndex += chatHistoryItems.length - filtered.length;
     chatHistoryItems.splice(0, chatHistoryItems.length, ...filtered);
   }
 
@@ -741,6 +769,16 @@ export async function fetchAndProcessPreviousMessages(
       }
     }
     if (keepFromIndex > 0) {
+      // Snap the window start to the same step grid the count window uses. The budget is sized from
+      // this turn's message and tool list, so it moves every turn; left unaligned, this trim slides
+      // the window start one quest per turn and busts the cache in exactly the long sessions the
+      // alignment above exists for. Snapped DOWN, so the window holds up to a step's worth of turns
+      // more than the budget estimated rather than dropping the turns the budget would keep - the
+      // end of the window is fixed at the newest quest, so rounding up can empty it outright.
+      if (windowStartIndex !== null) {
+        const step = historyWindowStep(limit);
+        keepFromIndex = Math.floor((windowStartIndex + keepFromIndex) / step) * step - windowStartIndex;
+      }
       excludedOlderQuestCount = keepFromIndex;
       chatHistoryItems.splice(0, keepFromIndex);
     }

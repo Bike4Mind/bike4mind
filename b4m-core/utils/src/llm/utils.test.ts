@@ -4544,6 +4544,44 @@ describe('history window alignment', () => {
       expect(meta.oldestIncludedQuestId).toBe(makeItem(4).id);
     });
 
+    it('keeps the newest-N window, and the turn, when the count query fails', async () => {
+      const { getMostRecentChatHistory } = repo(LIMIT + 3);
+      const countBySessionId = vi.fn(async () => {
+        throw new Error('count timeout');
+      });
+
+      const [, count, meta] = await fetchAndProcessPreviousMessages(makeSession(), LIMIT, {
+        db: { quests: { getMostRecentChatHistory, countBySessionId } },
+      });
+
+      expect(count).toBe(LIMIT);
+      expect(meta.oldestIncludedQuestId).toBe(makeItem(4).id);
+    });
+
+    it('rounds a binding token budget up to the same step grid as the count window', async () => {
+      // ~400 estimated tokens per quest, so a 1200-token budget keeps about three of them.
+      const longItem = (n: number) => ({ ...makeItem(n), prompt: 'p'.repeat(700), reply: 'r'.repeat(700) });
+      const starts: number[] = [];
+      for (let priorQuestCount = LIMIT + 1; priorQuestCount <= LIMIT + 2 * STEP; priorQuestCount++) {
+        const all = Array.from({ length: priorQuestCount + 1 }, (_, i) => longItem(i + 1));
+        const [, , meta] = await fetchAndProcessPreviousMessages(makeSession(), LIMIT, {
+          db: {
+            quests: {
+              getMostRecentChatHistory: async (_sessionId: string, limit: number) => all.slice(-limit).reverse(),
+              countBySessionId: async () => all.length,
+            },
+          },
+          verbatimTokenBudget: 1200,
+        });
+        starts.push(Number(meta.oldestIncludedQuestId) - 1);
+      }
+
+      // A budget that binds moves by one quest a turn, so an unaligned trim would slide the window
+      // (and rewrite the prompt prefix) on every turn. Rounded up, the start holds between boundaries.
+      for (const start of starts) expect(start % STEP).toBe(0);
+      expect(new Set(starts).size).toBeLessThan(starts.length);
+    });
+
     describe('with a context summary', () => {
       it('already covers the quests the window stepped past, so the filter changes nothing', async () => {
         // The summarizer covers up to the quest before the window start (see ContextSummarizationFeature).
