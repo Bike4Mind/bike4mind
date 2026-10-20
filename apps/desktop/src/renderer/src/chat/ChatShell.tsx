@@ -9,10 +9,12 @@ import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { AuthState } from '@shared/auth';
 import type { ChatProject, ChatSessionMode, ChatSessionSummary } from '@shared/chat';
+import type { SkillMarketListingRef } from '@shared/skillMarket';
 import { SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
 import { effectiveContextLimit } from '@shared/contextLimit';
 import { activeTodos } from '@shared/todos';
 import { ArtifactLibraryPanel } from './ArtifactLibraryPanel';
+import { SkillMarketPanel } from './SkillMarketPanel';
 import { BackgroundTaskChip, BackgroundTaskPanel } from './BackgroundTaskPanel';
 import { readPanelFlag, writePanelFlag } from './backgroundTasks';
 import { BrowserPane } from './BrowserPane';
@@ -130,7 +132,7 @@ function WorkingDirectoryLine({ project }: { project: ChatProject }) {
  * What the main pane is showing. One value rather than a flag per screen, so the screens
  * cannot both be up and nothing has to remember to shut the other one.
  */
-type ChatScreen = 'conversation' | 'artifacts' | 'customize' | 'settings';
+type ChatScreen = 'conversation' | 'artifacts' | 'customize' | 'settings' | 'skill-market';
 
 /**
  * The sidebar's account strip, given the dot that says whether a reply is running and the way
@@ -219,6 +221,12 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   // Stable, because the account strip is rebuilt on every turn of the conversation and this is
   // the one thing in it that has no reason to change.
   const openSettings = useCallback(() => setScreen('settings'), []);
+  // The listing the market opens onto, when it was opened for one (an update badge).
+  const [marketListing, setMarketListing] = useState<SkillMarketListingRef | null>(null);
+  const openSkillMarket = useCallback((listing?: SkillMarketListingRef) => {
+    setMarketListing(listing ?? null);
+    setScreen('skill-market');
+  }, []);
 
   const setTasksPanelOpen = useCallback((next: boolean) => {
     setTasksOpen(next);
@@ -584,8 +592,14 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
 
       {screen === 'artifacts' ? (
         <ArtifactLibraryPanel onClose={() => setScreen('conversation')} />
+      ) : screen === 'skill-market' ? (
+        <SkillMarketPanel initial={marketListing} onClose={() => setScreen('customize')} />
       ) : screen === 'customize' ? (
-        <CustomizeScreen sessionId={activeId} onClose={() => setScreen('conversation')} />
+        <CustomizeScreen
+          sessionId={activeId}
+          onClose={() => setScreen('conversation')}
+          onOpenSkillMarket={openSkillMarket}
+        />
       ) : screen === 'settings' ? (
         <SettingsScreen auth={auth ?? null} onClose={() => setScreen('conversation')} />
       ) : (
@@ -843,6 +857,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
             onSend={text => void onSend(text)}
             onStop={conversation.stop}
             onRunCommand={(name, args) => void conversation.runCommand(name, args)}
+            onBrowseSkillMarket={() => openSkillMarket()}
             sessionMode={conversation.session?.mode ?? 'chat'}
             suggestion={nextPrompt.suggestion}
             onSuggestionDismissed={nextPrompt.dismiss}

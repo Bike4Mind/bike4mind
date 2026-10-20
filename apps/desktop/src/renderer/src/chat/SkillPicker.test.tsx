@@ -3,7 +3,7 @@ import { CssVarsProvider } from '@mui/joy/styles';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { SkillSummary } from '@shared/skills';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SkillPicker } from './SkillPicker';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -84,5 +84,34 @@ describe('the skill picker rows', () => {
     const chip = rowFor('lint')?.querySelector<HTMLElement>('[data-testid="skill-picker-chip"]');
     expect(chip?.textContent).toBe('Global');
     expect(chip?.getAttribute('title')).toBe('/home/.claude/skills/lint/SKILL.md');
+  });
+
+  it('points an empty menu at the Skill Market, and only when it is empty', () => {
+    const onBrowseMarket = vi.fn();
+    const renderWith = (skills: SkillSummary[]) =>
+      act(() =>
+        root.render(
+          <CssVarsProvider>
+            <SkillPicker
+              skills={skills}
+              activeIndex={0}
+              untrustedProject={null}
+              onPick={() => {}}
+              onTrustProject={() => {}}
+              onBrowseMarket={onBrowseMarket}
+            />
+          </CssVarsProvider>
+        )
+      );
+
+    renderWith([GLOBAL]);
+    expect(container.querySelector('[data-testid="skill-picker-market-btn"]')).toBeNull();
+
+    renderWith([]);
+    const button = container.querySelector<HTMLElement>('[data-testid="skill-picker-market-btn"]');
+    act(() => {
+      button?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    });
+    expect(onBrowseMarket).toHaveBeenCalledTimes(1);
   });
 });

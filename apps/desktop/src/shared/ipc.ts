@@ -178,13 +178,13 @@ export const IPC_CHANNELS = {
    * nothing the MODEL can reach may widen this - the same rule as toolsGrantAccess.
    */
   chatSetProjectSkillsTrusted: 'chat:set-project-skills-trusted',
-  skillMarketBrowse: 'skill-market:browse',
-  skillMarketRecommended: 'skill-market:recommended',
-  skillMarketListing: 'skill-market:listing',
+  skillMarketBrowse: 'skills:market-browse',
+  skillMarketRecommended: 'skills:market-recommended',
+  skillMarketListing: 'skills:market-listing',
   /** Only from the Import / Update buttons: it writes a skill to the user's account. */
-  skillMarketImport: 'skill-market:import',
-  skillMarketImports: 'skill-market:imports',
-  skillMarketOpenOnWeb: 'skill-market:open-on-web',
+  skillMarketImport: 'skills:market-import',
+  skillMarketImports: 'skills:market-imports',
+  skillMarketOpenOnWeb: 'skills:market-open-on-web',
   mcpGetServers: 'mcp:get-servers',
   mcpAddServer: 'mcp:add-server',
   mcpUpdateServer: 'mcp:update-server',
