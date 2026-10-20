@@ -12,6 +12,7 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
 import { api } from '@client/app/contexts/ApiContext';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useUser } from '@client/app/contexts/UserContext';
+import { useCreditSyncSignal } from '@client/app/hooks/useEffectiveCredits';
 import { useStreamingState } from '@client/app/hooks/useStreamingState';
 import CreditBalanceSyncListener, { BALANCE_SYNC_DELAYS_MS } from './CreditBalanceSyncListener';
 
@@ -73,6 +74,38 @@ describe('CreditBalanceSyncListener', () => {
 
     expect(api.get).toHaveBeenCalledTimes(2);
     expect(useUser.getState().currentUser?.currentCredits).toBe(9_880);
+  });
+
+  it('signals only after the last pull, even when the balance did not change', async () => {
+    h.balance = 10_000;
+    const before = useCreditSyncSignal.getState().syncCount;
+    renderListener();
+    runTurn();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(BALANCE_SYNC_DELAYS_MS[0]);
+    });
+    expect(useCreditSyncSignal.getState().syncCount).toBe(before);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(BALANCE_SYNC_DELAYS_MS[1] - BALANCE_SYNC_DELAYS_MS[0]);
+    });
+
+    expect(useUser.getState().currentUser?.currentCredits).toBe(10_000);
+    expect(useCreditSyncSignal.getState().syncCount).toBe(before + 1);
+  });
+
+  it('signals after the last pull when the request fails', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.mocked(api.get).mockRejectedValueOnce(new Error('network')).mockRejectedValueOnce(new Error('network'));
+    const before = useCreditSyncSignal.getState().syncCount;
+    renderListener();
+    runTurn();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(BALANCE_SYNC_DELAYS_MS[1]);
+    });
+
+    expect(useCreditSyncSignal.getState().syncCount).toBe(before + 1);
+    warn.mockRestore();
   });
 
   it('does nothing while no turn has ended', async () => {
