@@ -944,7 +944,14 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
     // makes the flag a silent no-op. Gated on the same two checks as applyCaching below so a model
     // that rejects cache_control never sees one. Must stay in sync with anthropicBackend, which
     // makes the same string-vs-blocks choice.
-    const cacheStrategy = options.cacheStrategy;
+    // A tool round appends the previous round's tool_use/tool_result, which the next round re-sends
+    // verbatim, so the end of the array is history again - unlike the first call, where it is the
+    // volatile current turn the caller anchors ahead of itself. See the same override in
+    // anthropicBackend.
+    const cacheStrategy =
+      (options._internal?.toolCallCount ?? 0) > 0 && options.cacheStrategy
+        ? { ...options.cacheStrategy, cacheConversationHistory: true }
+        : options.cacheStrategy;
     const modelSupportsCaching = !BEDROCK_NO_PROMPT_CACHING_MODELS.has(modelId);
     const emitCaching = Boolean(cacheStrategy?.enableCaching) && modelSupportsCaching;
     const emitSystemCacheBreakpoint = emitCaching && systemBlocks.some(block => block.cache);
