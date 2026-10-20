@@ -700,11 +700,14 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger,
             <Box
               data-testid="whats-new-slide-video-slot"
               sx={{
-                // desktop: the video gives up height before the text does
-                flexShrink: isMobile ? 0 : 1,
-                minHeight: 0,
+                flexShrink: 0,
                 width: '100%',
                 ...(isLandscapeVideo ? { aspectRatio: '16 / 9' } : { height: '50vh', minHeight: '240px' }),
+                // Desktop sheet height minus its insets and ~200px kept for the date, title and first lines
+                ...(!isMobile && {
+                  width: 'min(100%, calc((min(760px, 100vh - 48px) - 292px) * 16 / 9))',
+                  alignSelf: 'center',
+                }),
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
