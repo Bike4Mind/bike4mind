@@ -13,6 +13,12 @@ import { type ManageActor } from './manageRule';
 import { resolveCanManageLake } from './authorizeLakeManage';
 import { lakeMembershipScope } from './lakeMembershipScope';
 import { recordLakeMembershipChange, type LakeMembershipAuditAdapters } from './recordLakeMembershipChange';
+import { storedTagNames } from '../tagService/bulkTagNames';
+import {
+  assertStorageOwnerTransferFits,
+  reassignStorageOwner,
+  type StorageOwnerTransferDb,
+} from '../fabFileService/reassignStorageOwner';
 
 /**
  * Who drove this membership write - see `LakeMembershipChangeOrigin`'s own doc comment for why
@@ -22,6 +28,15 @@ import { recordLakeMembershipChange, type LakeMembershipAuditAdapters } from './
  */
 export interface MembershipOriginOptions {
   origin?: LakeMembershipChangeOrigin;
+}
+
+export interface AddMembershipOptions extends MembershipOriginOptions {
+  /**
+   * The caller already quota-gated this join against the file's FINAL owner (toggleTags' batch
+   * gate). Skips the per-file gate, which sees one lake at a time and so can grade an intermediate
+   * owner the file only passes through.
+   */
+  ownerTransferPreCleared?: boolean;
 }
 
 /** The acting principal for a membership write - resolved from auth, never from the body. */
@@ -39,19 +54,23 @@ export type MembershipLake = Pick<
   'id' | 'name' | 'datalakeTag' | 'fileTagPrefix' | 'createdByUserId' | 'organizationId' | 'requiredPassageTokenTarget'
 >;
 
+// Membership decides who a file's bytes are billed to (reassignStorageOwner), so both doors take the
+// storage-owner repositories as required adapters: a caller cannot wire the tag write without them.
 interface RemoveMembershipAdapters extends LakeMembershipAuditAdapters {
-  db: LakeMembershipAuditAdapters['db'] & {
-    fabFiles: Pick<IFabFileRepository, 'findById' | 'pullTagsByFabFileId'>;
-    // Optional: absent -> manage falls back to createdByUserId + org rung (see loadActiveLakeGrants).
-    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
-  };
+  db: LakeMembershipAuditAdapters['db'] &
+    StorageOwnerTransferDb & {
+      fabFiles: Pick<IFabFileRepository, 'findById' | 'pullTagsByFabFileId'>;
+      // Optional: absent -> manage falls back to createdByUserId + org rung (see loadActiveLakeGrants).
+      dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
+    };
 }
 
 interface AddMembershipAdapters extends LakeMembershipAuditAdapters {
-  db: LakeMembershipAuditAdapters['db'] & {
-    fabFiles: Pick<IFabFileRepository, 'pushTagReturningPriorState'>;
-    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
-  };
+  db: LakeMembershipAuditAdapters['db'] &
+    StorageOwnerTransferDb & {
+      fabFiles: Pick<IFabFileRepository, 'findById' | 'pushTagReturningPriorState'>;
+      dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
+    };
 }
 
 /** The file fields a membership signal is read from - always the persisted document. */
@@ -190,6 +209,9 @@ export const removeFileFromLake = async (
     // ever softened (e.g. to make a retry "quietly" tolerate a non-member), the restore path's
     // absent ownership test becomes an unbounded add door. Do not soften it without re-deriving
     // that authorization from scratch.
+    // Restamps so a by-id remove retry repairs a post-pull reassign throw (rolled back on transactional
+    // routes); costs a findById + findByDatalakeTags per expected NotFound in finalizePrefixArmLeaves.
+    if (file) await reassignStorageOwner(file.id, db);
     throw new NotFoundError('File not found in this data lake');
   }
 
@@ -206,6 +228,10 @@ export const removeFileFromLake = async (
   if (pulled > 0) {
     await recordLakeMembershipChange({ actor, lake, fabFileId: file.id, action: 'removed', origin }, { db, logger });
   }
+  // Unconditional, unlike the event above: the losing half of two concurrent removals has already
+  // pulled the tags and would otherwise never recompute the owner. A throw here is repaired only by a retry
+  // that targets this file id again (the refusal above restamps); a connector or toggle retry does not.
+  await reassignStorageOwner(file.id, db);
   return { contentTags };
 };
 
@@ -227,12 +253,20 @@ export const addFileToLake = async (
   lake: MembershipLake,
   fabFileId: string,
   { db, logger }: AddMembershipAdapters,
-  { origin = 'person' }: MembershipOriginOptions = {}
+  { origin = 'person', ownerTransferPreCleared = false }: AddMembershipOptions = {}
 ): Promise<void> => {
   if (!(await resolveCanManageLake(lake, actor, { db }))) {
     throw new BadRequestError('You do not have permission to add files to this data lake');
   }
   assertLakeWritable(lake);
+
+  // Gated before the push so a join refused for quota writes nothing, even outside a transaction.
+  // Check-then-write, so concurrent joins can overflow a pool, as concurrent uploads can. A pending,
+  // uncharged file moves no bytes and is not gated; its later upload charge lands on the new owner.
+  const file = ownerTransferPreCleared ? null : await db.fabFiles.findById(fabFileId);
+  if (file) {
+    await assertStorageOwnerTransferFits(file, [...storedTagNames(file), lake.datalakeTag], db);
+  }
 
   const priorState = await db.fabFiles.pushTagReturningPriorState(fabFileId, lake.datalakeTag, DATALAKE_TAG_STRENGTH);
   // Idempotent by construction (the push is filtered on the name being absent), so a no-op re-add
@@ -248,4 +282,8 @@ export const addFileToLake = async (
   if (priorState && !satisfiesMembershipScope(lakeMembershipScope(lake), priorState)) {
     await recordLakeMembershipChange({ actor, lake, fabFileId, action: 'added', origin }, { db, logger });
   }
+  // After the event, so a reassign that throws cannot lose it (a retry sees a null pre-image). And
+  // unconditional: `priorState === null` is also the state an add-door retry finds. A toggle retry
+  // removes instead, so that door relies on its route's transaction to undo the push.
+  await reassignStorageOwner(fabFileId, db);
 };

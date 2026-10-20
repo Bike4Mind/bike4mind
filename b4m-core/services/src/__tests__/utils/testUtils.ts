@@ -111,6 +111,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   updateTagsByUserId: vi.fn(),
   dedupeTagByUserId: vi.fn(),
   pullTagsByFabFileId: vi.fn(),
+  setOwnerOrganizationIfUnchanged: vi.fn(),
   pushTagsByFabFileId: vi.fn(),
   pushTagReturningPriorState: vi.fn().mockResolvedValue(null),
   bulkUpdateTags: vi.fn(),

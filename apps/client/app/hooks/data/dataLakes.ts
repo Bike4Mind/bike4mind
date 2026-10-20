@@ -42,6 +42,7 @@ import {
   BATCH_NON_TERMINAL_STATUSES,
   DATA_LAKES,
   isResearchRunInFlight,
+  MAX_TOGGLE_TAGS_FILE_IDS,
   normalizeTagPrefix,
   tagPrefixesOverlap,
   TAXONOMY_NON_TERMINAL_STATUSES,
@@ -64,6 +65,7 @@ import { invalidateGearsStatusWhileLocked } from '@client/app/hooks/useGearsStat
 import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
 import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 import { orgIdOfAccount } from '@client/app/components/datalake/lakeSourceShared';
+import chunk from 'lodash/chunk';
 
 /**
  * The server's own refusal text, if it sent one. The body key is `error`, per
@@ -2089,11 +2091,16 @@ export function useAddFilesToLake() {
       lake: { id: string; datalakeTag: string };
       skippedCount?: number;
     }) => {
-      const res = await api.post<IFabFileDocument[]>('/api/files/tags/toggle', {
-        ids: fileIds,
-        tags: [lake.datalakeTag],
-      });
-      return { files: res.data, lake, skippedCount };
+      // Sequential, one transaction per chunk: the server caps a toggle at MAX_TOGGLE_TAGS_FILE_IDS.
+      const files: IFabFileDocument[] = [];
+      for (const ids of chunk(fileIds, MAX_TOGGLE_TAGS_FILE_IDS)) {
+        const res = await api.post<IFabFileDocument[]>('/api/files/tags/toggle', {
+          ids,
+          tags: [lake.datalakeTag],
+        });
+        files.push(...res.data);
+      }
+      return { files, lake, skippedCount };
     },
     onSuccess: ({ files, skippedCount }) => {
       toast.success(
@@ -2110,8 +2117,8 @@ export function useAddFilesToLake() {
       }
       toast.error(error.message || 'Failed to add files to the data lake');
     },
-    // A mid-batch failure can still leave some of the batch's files written (toggleTags is not
-    // transactional across files - see its docblock), so invalidation must run on every outcome,
+    // A failed chunk rolls back only itself, so earlier chunks' files stay written and invalidation
+    // must run on every outcome,
     // not only success: an onSuccess-only invalidation left the cache reporting the pre-add state
     // after a partial failure, and the client's own non-member filter (Content.tsx) reads from
     // that same cache before the next attempt.
