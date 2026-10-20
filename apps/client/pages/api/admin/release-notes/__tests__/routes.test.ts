@@ -70,7 +70,7 @@ const note = (overrides: Record<string, unknown> = {}) => ({
 type Handler = (req: unknown, res: unknown) => Promise<unknown>;
 async function call(
   handler: unknown,
-  opts: { method: string; isAdmin?: boolean; query?: Record<string, string>; body?: unknown }
+  opts: { method: string; isAdmin?: boolean; query?: Record<string, string>; body?: unknown; keyScopes?: string[] }
 ) {
   const { req, res } = createMocks({
     method: opts.method as 'GET',
@@ -78,6 +78,7 @@ async function call(
     body: opts.body as object,
   });
   Object.assign(req, { user: { id: 'admin-1', isAdmin: opts.isAdmin ?? true }, logger: { warn: vi.fn() } });
+  if (opts.keyScopes) Object.assign(req, { apiKeyInfo: { scopes: opts.keyScopes } });
   const error = await (handler as Handler)(req, res).then(
     () => undefined,
     (e: { statusCode: number; message: string }) => e
@@ -249,6 +250,45 @@ describe('PATCH /api/admin/release-notes/[id]', () => {
     expect(
       (await call(editHandler, { method: 'PATCH', query: { id: ID }, body: { items: [] } })).error?.statusCode
     ).toBe(400);
+  });
+});
+
+describe('PATCH /api/admin/release-notes/[id] with a release-notes:write key', () => {
+  it('refuses any field but video with 403 and edits nothing', async () => {
+    const { error } = await call(editHandler, {
+      method: 'PATCH',
+      query: { id: ID },
+      body: { headline: 'New headline', video: null },
+      keyScopes: ['release-notes:write'],
+    });
+    expect(error?.statusCode).toBe(403);
+    expect(error?.message).toContain('headline');
+    expect(m.edit).not.toHaveBeenCalled();
+  });
+
+  it('sets the video', async () => {
+    m.edit.mockResolvedValue({ kind: 'ok', note: note({ video: null }) });
+    const { error, status } = await call(editHandler, {
+      method: 'PATCH',
+      query: { id: ID },
+      body: { video: null },
+      keyScopes: ['release-notes:write'],
+    });
+    expect(error).toBeUndefined();
+    expect(status).toBe(200);
+    expect(m.edit).toHaveBeenCalledWith(ID, { video: null });
+  });
+
+  it('leaves an admin:* key free to edit the text', async () => {
+    m.edit.mockResolvedValue({ kind: 'ok', note: note() });
+    const { error } = await call(editHandler, {
+      method: 'PATCH',
+      query: { id: ID },
+      body: { headline: 'New headline' },
+      keyScopes: ['admin:*'],
+    });
+    expect(error).toBeUndefined();
+    expect(m.edit).toHaveBeenCalled();
   });
 });
 

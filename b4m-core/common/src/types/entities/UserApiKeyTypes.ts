@@ -138,8 +138,8 @@ export enum ApiKeyScope {
    */
   SKILLS_READ = 'skills:read',
   /**
-   * Release-note automation: list a note (or find one by tag), set its video and other edits,
-   * and upload What's New media. Admin-provisioned and confined so the job needs no `admin:*`
+   * Release-note automation: find a release note and set its video, and upload the What's New
+   * media for it. Admin-provisioned and confined so the job needs no `admin:*`
    * key: it reaches only the routes that name it, and those still require a platform-admin owner.
    */
   RELEASE_NOTES_WRITE = 'release-notes:write',

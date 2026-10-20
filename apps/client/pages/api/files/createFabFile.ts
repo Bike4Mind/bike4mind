@@ -46,6 +46,7 @@ const createFabFileSchema = fabFilesService.createFabFileSchema
 // The admin What's New media upload (AdminModalVideoFields) lands under the shared modal prefix, chosen
 // here, not by the caller. mp4 stays off the global allowlist (non-image uploads skip the content
 // scan), so only that admin upload admits it.
+const RELEASE_NOTES_MEDIA_TYPES: ReadonlySet<string> = new Set(['video/mp4', 'image/jpeg', 'image/png', 'image/webp']);
 const isModalVideo = (params: { mimeType?: string | null; fileName: string }) =>
   params.mimeType === 'video/mp4' && getFileExtension(params.fileName) === 'mp4';
 
@@ -62,12 +63,26 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_OR_RELEASE_NOTES_SCOPES })
 
       const parsed = createFabFileSchema.parse(req.body);
       const adminModalMedia = !!user.isAdmin && parsed.purpose === 'modal-media';
-      if (!adminModalMedia && isReleaseNotesOnlyUpload(req)) {
+      const releaseNotesOnly = isReleaseNotesOnlyUpload(req);
+      if (!adminModalMedia && releaseNotesOnly) {
         throw new ForbiddenError("This API key may only upload What's New media; files:write is required", {
           required_scopes: FILES_WRITE_SCOPES,
         });
       }
-      const params = adminModalMedia ? { ...parsed, prefix: MODAL_MEDIA_PREFIX } : parsed;
+      if (releaseNotesOnly && !RELEASE_NOTES_MEDIA_TYPES.has(parsed.mimeType)) {
+        throw new ForbiddenError(`This API key may only upload ${[...RELEASE_NOTES_MEDIA_TYPES].join(', ')}`);
+      }
+      // A release-notes key gets only the fields a What's New video or poster needs.
+      const base = releaseNotesOnly
+        ? {
+            fileName: parsed.fileName,
+            mimeType: parsed.mimeType,
+            fileSize: parsed.fileSize,
+            type: parsed.type,
+            ...(parsed.public !== undefined && { public: parsed.public }),
+          }
+        : parsed;
+      const params = adminModalMedia ? { ...base, prefix: MODAL_MEDIA_PREFIX } : base;
 
       // NOTE: unlike the presign siblings (generate-presigned-url.ts) we do NOT reject executable
       // upload types (html/xhtml/svg) here. Those siblings write to appFilesBucket, which IS routed

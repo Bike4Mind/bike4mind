@@ -8,6 +8,7 @@ import {
   scrubCustomerText,
 } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
+import { holdsApiKeyScope } from '@server/middlewares/apiKeyScopeGate';
 import { deploymentMediaOrigins } from '@server/utils/deploymentMediaOrigins';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
@@ -36,6 +37,15 @@ const handler = api.patch(async (req, res) => {
   const parsed = EditSchema.safeParse(req.body);
   if (!parsed.success) {
     throw new BadRequestError(parsed.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; '));
+  }
+  // An API key without admin:* got here through release-notes:write, which may only set the video.
+  if (req.apiKeyInfo && !holdsApiKeyScope(req, [ApiKeyScope.ADMIN])) {
+    const other = Object.entries(parsed.data)
+      .filter(([field, value]) => field !== 'video' && value !== undefined)
+      .map(([field]) => field);
+    if (other.length > 0) {
+      throw new ForbiddenError(`${ApiKeyScope.RELEASE_NOTES_WRITE} may only set video, not ${other.join(', ')}`);
+    }
   }
 
   // Same scrub and denylist the generator applies (workers releaseNotes/finalize.ts), so an edit cannot

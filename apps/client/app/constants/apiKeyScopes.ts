@@ -416,10 +416,10 @@ export const ADMIN_ONLY_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     value: ApiKeyScope.RELEASE_NOTES_WRITE,
     label: 'Release Notes: Write',
     description:
-      "Release-note automation: find and edit a note and upload its What's New media. The key's user must be a platform admin",
+      "Release-note automation: find a release note and set its video, and upload its What's New media. The key's user must be a platform admin",
     endpoints: [
       'GET /api/admin/release-notes',
-      'PATCH /api/admin/release-notes/:id',
+      'PATCH /api/admin/release-notes/:id (video only)',
       'POST /api/files/createFabFile (purpose: modal-media only)',
     ],
   },

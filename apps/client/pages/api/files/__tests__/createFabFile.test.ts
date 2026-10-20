@@ -533,6 +533,39 @@ describe('POST /api/files/createFabFile - release-notes:write key', () => {
     expect(h.fabFileCreate).not.toHaveBeenCalled();
   });
 
+  it("refuses a type outside the What's New media types", async () => {
+    const { res } = makeRes();
+    await expect(
+      run(mp4({ fileName: 'page.html', mimeType: 'text/html' }), res, {
+        ...releaseKey,
+        user: { id: 'u1', isAdmin: true },
+      })
+    ).rejects.toMatchObject({ statusCode: 403 });
+    expect(h.fabFileCreate).not.toHaveBeenCalled();
+  });
+
+  it("persists none of the fields a What's New upload has no use for", async () => {
+    const { res } = makeRes();
+    await run(
+      mp4({
+        system: true,
+        systemPriority: 9,
+        sessionId: 'session-1',
+        tags: [{ name: 'x', strength: 1 }],
+        content: 'inline',
+        batchId: 'batch-1',
+      }),
+      res,
+      { ...releaseKey, user: { id: 'u1', isAdmin: true } }
+    );
+
+    const persisted = h.fabFileCreate.mock.calls[0][0] as Record<string, unknown>;
+    for (const field of ['system', 'systemPriority', 'sessionId', 'tags', 'content', 'batchId']) {
+      expect(persisted[field], field).toBeUndefined();
+    }
+    expect(h.batchFindById).not.toHaveBeenCalled();
+  });
+
   it('leaves a files:write key free to upload an ordinary file', async () => {
     const { res } = makeRes();
     await run(body(), res, { apiKeyInfo: { scopes: ['files:write'] }, user: { id: 'u1', isAdmin: true } });
