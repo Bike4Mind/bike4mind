@@ -1,9 +1,9 @@
-import BillingModal from './BillingModal';
+import BillingModal, { type BillingEntry } from './BillingModal';
 
 interface CreditsModalProps {
   open: boolean;
   onClose: () => void;
-  entry?: string;
+  entry?: BillingEntry;
 }
 
 /** Billing modal opened at the credit packs, for "buy credits" entry points outside the app shell's `?billing=`. */

@@ -47,7 +47,13 @@ vi.mock('@client/app/components/Credits/AccountSelector', () => ({
 }));
 vi.mock('@client/app/hooks/useEffectiveCredits', () => ({ useEffectiveCredits: () => state.credits }));
 vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: logEvent }) }));
-vi.mock('./CreditsSection', () => ({ CreditsSection: () => <div data-testid="credits-section-body" /> }));
+vi.mock('./CreditsSection', () => ({
+  CreditsSection: ({ onClose }: { onClose: () => void }) => (
+    <div data-testid="credits-section-body">
+      <button type="button" data-testid="credits-section-see-usage" onClick={onClose} />
+    </div>
+  ),
+}));
 vi.mock('./PlansSection', () => ({
   PlansSection: () => <div data-testid="plans-section-body" />,
   PlansSectionSkeleton: () => <div data-testid="plans-section-skeleton" />,
@@ -107,7 +113,7 @@ describe('BillingModal', () => {
 
   it('logs the open context and a close without purchase', () => {
     const onClose = vi.fn();
-    render(
+    const { rerender } = render(
       <TestWrapper>
         <BillingModal open focus="credits" entry="credits_chip" onClose={onClose} />
       </TestWrapper>
@@ -117,11 +123,33 @@ describe('BillingModal', () => {
       metadata: { entry: 'credits_chip', focus: 'credits' },
     });
     fireEvent.click(screen.getByTestId('billing-modal-close'));
+    expect(onClose).toHaveBeenCalled();
+    rerender(
+      <TestWrapper>
+        <BillingModal open={false} entry="credits_chip" onClose={onClose} />
+      </TestWrapper>
+    );
     expect(logEvent).toHaveBeenCalledWith({
       type: 'billing_closed_without_purchase',
       metadata: { entry: 'credits_chip', focus: 'credits' },
     });
+  });
+
+  it('does not count leaving for the usage page as a close without purchase', () => {
+    const onClose = vi.fn();
+    const { rerender } = render(
+      <TestWrapper>
+        <BillingModal open focus="credits" entry="credits_chip" onClose={onClose} />
+      </TestWrapper>
+    );
+    fireEvent.click(screen.getByTestId('credits-section-see-usage'));
     expect(onClose).toHaveBeenCalled();
+    rerender(
+      <TestWrapper>
+        <BillingModal open={false} entry="credits_chip" onClose={onClose} />
+      </TestWrapper>
+    );
+    expect(logEvent).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'billing_closed_without_purchase' }));
   });
 
   it('says the plan is unavailable, not Free, when the subscriptions read fails, and retries on demand', () => {

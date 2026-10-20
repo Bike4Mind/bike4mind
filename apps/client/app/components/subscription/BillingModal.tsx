@@ -18,6 +18,8 @@ import { PlansSection, PlansSectionSkeleton } from './PlansSection';
 import { FirstRunEvents } from '@bike4mind/common';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
 
+export type BillingEntry = 'credits_chip' | 'credits_cta' | 'deep_link' | 'profile_menu' | 'unknown';
+
 interface BillingModalProps {
   open: boolean;
   /**
@@ -26,7 +28,7 @@ interface BillingModalProps {
    * the dialog and the body at the top.
    */
   focus?: BillingView;
-  entry?: string;
+  entry?: BillingEntry;
   onClose: () => void;
 }
 
@@ -120,32 +122,28 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
   const { selectedAccount } = useSelectedAccount();
   const isOrgAccount = !!selectedAccount && !selectedAccount.personal;
   const { mutate: logEvent } = useLogEvent();
-  const openedRef = useRef(false);
+  const openedMetadataRef = useRef<{ entry: BillingEntry; focus: string } | null>(null);
   const purchasedRef = useRef(false);
+  const leftForUsageRef = useRef(false);
 
+  // Abandonment is logged on the open -> closed transition, not in a close handler, so closes made
+  // outside the modal (the `?billing=` host's Back/URL change) count too. The metadata is the one
+  // captured at open, since the deep-link host clears `focus` as it closes.
   useEffect(() => {
     if (!open) {
-      openedRef.current = false;
+      const opened = openedMetadataRef.current;
+      if (opened && !purchasedRef.current && !leftForUsageRef.current) {
+        logEvent({ type: FirstRunEvents.BILLING_CLOSED_WITHOUT_PURCHASE, metadata: opened });
+      }
+      openedMetadataRef.current = null;
       purchasedRef.current = false;
+      leftForUsageRef.current = false;
       return;
     }
-    if (openedRef.current) return;
-    openedRef.current = true;
-    logEvent({
-      type: FirstRunEvents.BILLING_OPENED,
-      metadata: { entry, focus: focus ?? 'overview' },
-    });
+    if (openedMetadataRef.current) return;
+    openedMetadataRef.current = { entry, focus: focus ?? 'overview' };
+    logEvent({ type: FirstRunEvents.BILLING_OPENED, metadata: openedMetadataRef.current });
   }, [open, entry, focus, logEvent]);
-
-  const handleClose = () => {
-    if (!purchasedRef.current) {
-      logEvent({
-        type: FirstRunEvents.BILLING_CLOSED_WITHOUT_PURCHASE,
-        metadata: { entry, focus: focus ?? 'overview' },
-      });
-    }
-    onClose();
-  };
 
   // The shared display rule (lib/subscriptions/types), so this header and the plan card agree on the row.
   const currentSubscription = useMemo(() => pickDisplayedSubscription(subscriptions.data ?? []), [subscriptions.data]);
@@ -224,7 +222,10 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
       <CreditsSection
         transactions={transactions.data ?? []}
         transactionsLoading={transactions.isPending}
-        onClose={handleClose}
+        onClose={() => {
+          leftForUsageRef.current = true;
+          onClose();
+        }}
         onPurchase={() => {
           purchasedRef.current = true;
         }}
@@ -233,7 +234,7 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
   );
 
   return (
-    <Modal open={open} onClose={handleClose} data-testid="billing-modal">
+    <Modal open={open} onClose={onClose} data-testid="billing-modal">
       <ModalDialog
         data-testid="billing-modal-dialog"
         sx={{
