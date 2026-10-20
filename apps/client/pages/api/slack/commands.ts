@@ -10,7 +10,7 @@ import { slackDevWorkspaceRepository } from '@bike4mind/database/infra';
 import { createSession } from '@server/managers/sessionManager';
 import { Logger } from '@bike4mind/observability';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { decryptToken } from '@server/security/tokenEncryption';
 import {
   SlackAuditLogger,
@@ -27,7 +27,7 @@ import {
 } from '@bike4mind/slack';
 import { Quest } from '@bike4mind/database/content';
 import { triggerImageGeneration } from '@bike4mind/slack';
-import { getClientIp } from '@server/utils/ip';
+import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 
 // Slack slash command schema
 const SlackCommandSchema = z.object({

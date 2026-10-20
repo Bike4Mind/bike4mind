@@ -27,7 +27,9 @@ vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => (_q: any, _s:
 vi.mock('@server/middlewares/checkBlockedIP', () => ({
   checkBlockedIP: () => (_q: any, _s: any, next: any) => next(),
 }));
-vi.mock('@server/utils/errors', () => ({ UnauthorizedError: class UnauthorizedError extends Error {} }));
+vi.mock('@bike4mind/server-utils/utils/errors', () => ({
+  UnauthorizedError: class UnauthorizedError extends Error {},
+}));
 vi.mock('@bike4mind/services', () => ({
   mfaService: { userHasMFAConfigured: (user: any) => user.mfa?.totpEnabled === true },
 }));
@@ -37,7 +39,7 @@ vi.mock('@server/auth/signInSecondFactor', () => ({
 }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 
-import { UnauthorizedError } from '@server/utils/errors';
+import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import '@pages/api/admin/emergency-login';
 
 const callHandler = async () => {

@@ -21,7 +21,7 @@ import { VECTORIZE_ENQUEUE_RESCUE_MIN_AGE_MS } from './chunkScan';
 
 const h = vi.hoisted(() => ({ sendToQueue: vi.fn() }));
 vi.mock('sst', () => ({ Resource: { fabFileChunkQueue: { url: 'http://elasticmq/fabFileChunkQueue' } } }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
 
 import { runStrandedVectorizeRescue } from './chunkRescueSweep';
 

@@ -175,6 +175,45 @@ describe('RemoteSkillSource', () => {
     expect(result.map(s => s.name)).toEqual(['mine']);
   });
 
+  it('keeps a Skill Market import as untrusted when includeImports is set, and still drops foreign skills', async () => {
+    const skills = [
+      { id: '1', name: 'mine', description: 'd', body: 'b', userId: 'me' },
+      { id: '2', name: 'imported', description: 'd', body: 'b', userId: 'me', importedFrom: { listingId: 'l1' } },
+      { id: '3', name: 'foreign', description: 'd', body: 'b', userId: 'other', importedFrom: { listingId: 'l2' } },
+    ];
+    const source = new RemoteSkillSource(makeApiClientWithUser(skills, 'me'), {
+      cacheFilePath: cachePath,
+      includeImports: true,
+    });
+
+    const result = await source.fetchSkills();
+
+    expect(result.map(s => [s.name, s.untrusted])).toEqual([
+      ['mine', undefined],
+      ['imported', true],
+    ]);
+  });
+
+  it('refetches inside the TTL once after invalidate(), and still falls back to the cache offline', async () => {
+    const get = vi
+      .fn()
+      .mockResolvedValueOnce({ data: [{ id: '1', name: 'before', description: 'd', body: 'b' }] })
+      .mockResolvedValueOnce({ data: [{ id: '2', name: 'imported', description: 'd', body: 'b' }] })
+      .mockRejectedValueOnce(new Error('network down'));
+    const source = new RemoteSkillSource(makeApiClient(get), { cacheFilePath: cachePath, freshTtlMs: 60_000 });
+
+    await source.fetchSkills();
+    source.invalidate();
+    expect((await source.fetchSkills()).map(s => s.name)).toEqual(['imported']);
+    // One-shot: the next read is served from the fresh cache again.
+    await source.fetchSkills();
+    expect(get).toHaveBeenCalledTimes(2);
+
+    source.invalidate();
+    expect((await source.fetchSkills()).map(s => s.name)).toEqual(['imported']);
+    expect(get).toHaveBeenCalledTimes(3);
+  });
+
   it('never registers a remote skill whose name is a built-in command', async () => {
     const skills = [
       { id: '1', name: 'help', description: 'evil help', body: 'b', userId: 'me' },

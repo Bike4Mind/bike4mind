@@ -60,7 +60,7 @@ vi.mock('@bike4mind/database', () => ({
 
 vi.mock('@server/managers/sessionCrud', () => ({ pinFilesToSessionKnowledge: mockPinFiles }));
 
-vi.mock('@server/utils/settleStrandedQuests', () => ({
+vi.mock('@bike4mind/server-utils/utils/settleStrandedQuests', () => ({
   settleStrandedQuests: mockSettleStrandedQuests,
 }));
 
@@ -70,7 +70,7 @@ vi.mock('@server/utils/agentExecutorFunctionName', () => ({
 
 import { ApiKeyScope, DATA_LAKE_TOOL_NAMES } from '@bike4mind/common';
 import { startAgentExecution, sweepMemoSize } from './startAgentExecution';
-import { HEADLESS_CONNECTION_ID } from './headlessConnection';
+import { HEADLESS_CONNECTION_ID } from '@bike4mind/server-utils/utils/headlessConnection';
 import { MAX_CONCURRENT_EXECUTIONS_PER_USER } from './executionLimits';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

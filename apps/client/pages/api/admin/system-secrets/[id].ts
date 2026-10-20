@@ -12,7 +12,7 @@
 import { systemSecretRepository } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, NotFoundError, ForbiddenError } from '@server/utils/errors';
+import { BadRequestError, NotFoundError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { clearSecretCache, resolveSecret } from '@server/managers/systemSecretsManager';
 import { Logger } from '@bike4mind/observability';
 

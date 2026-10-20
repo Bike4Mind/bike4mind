@@ -10,7 +10,7 @@ import {
 import { adminSettingsRepository, scopedSettingsRepository } from '@bike4mind/database/infra';
 import { scopedSettingsService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ensureAdmin, parseOrBadRequest } from '@server/utils/errors';
+import { ensureAdmin, parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
 
 /**
  * Admin read surface for the EFFECTIVE value of a scoped setting - sibling to `./index.ts`, which only

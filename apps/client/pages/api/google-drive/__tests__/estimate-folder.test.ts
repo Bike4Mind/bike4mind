@@ -77,7 +77,7 @@ vi.mock('@server/auth/auth', async orig => {
   };
 });
 
-import { BadRequestError, TooManyRequestsError } from '@server/utils/errors';
+import { BadRequestError, TooManyRequestsError } from '@bike4mind/server-utils/utils/errors';
 import handler from '../estimate-folder';
 
 const ESTIMATE = {

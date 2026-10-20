@@ -2,7 +2,7 @@ import { ApiKeyScope, ReleaseNotesConfigSchema } from '@bike4mind/common';
 import { AdminSettings } from '@bike4mind/database/infra';
 import { invalidateSettingsCache } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ConflictError, ForbiddenError } from '@server/utils/errors';
+import { BadRequestError, ConflictError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { loadReleaseNotesConfig, RELEASE_NOTES_SETTING } from '@server/releaseNotes/adminReleaseNotes';
 
 // Validates only the keys sent; omitted keys keep their stored value (see the merge in PUT).

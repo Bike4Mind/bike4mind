@@ -35,6 +35,7 @@ const SCAN_ROOTS = [
   'packages/cli',
   'packages/database',
   'packages/scripts',
+  'packages/server-utils/src',
 ];
 
 /** Reads off `Resource`, including through a cast of any width and across a line break. */

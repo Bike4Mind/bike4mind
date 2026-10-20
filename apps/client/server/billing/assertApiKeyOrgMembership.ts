@@ -1,6 +1,6 @@
 import type { IOrganizationDocument, IUserDocument } from '@bike4mind/common';
 import { organizationService } from '@bike4mind/services';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 /**
  * Fail closed when an org-billed API key's holder is no longer on the org it bills.

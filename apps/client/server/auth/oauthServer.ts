@@ -9,7 +9,7 @@
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import { requireEnv } from '@bike4mind/common';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { oauthClientRepository, oauthAuthorizationCodeRepository, IOAuthClientDocument } from '@bike4mind/database';
 import { PKCE_CODE_VERIFIER_RE, PKCE_S256_CHALLENGE_RE } from './pkce';
 

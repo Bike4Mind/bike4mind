@@ -12,8 +12,8 @@ import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { decodeCursor, encodeCursor } from '@server/utils/cursorPagination';
-import { isValidObjectId } from '@server/utils/objectId';
-import { UnprocessableEntityError } from '@server/utils/errors';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
+import { UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
 import { createPresignedUpload, PRESIGNED_UPLOAD_EXPIRES_IN } from '@server/files/createPresignedUpload';
 import { toPublicFileSummary } from '@server/files/toPublicFile';
 

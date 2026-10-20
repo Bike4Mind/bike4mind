@@ -30,7 +30,7 @@ import { Resource } from 'sst';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { queueResearchRun } from '@server/dataLakes/queueResearchRun';
 import { isSettingEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 
 const logger = new Logger({ metadata: { service: 'dataLakeResearchSchedule' } });
 

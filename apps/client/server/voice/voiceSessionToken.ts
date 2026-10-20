@@ -1,7 +1,7 @@
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 import { AuthOriginSchema, type AuthOrigin } from '@bike4mind/common';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 
 // Voice v2 session token - a short-lived signed JWT that binds an ElevenLabs
 // voice call to a specific B4M user/session. It is minted by POST /sessions and

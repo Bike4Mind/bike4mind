@@ -51,7 +51,7 @@ vi.mock('@server/utils/childExecutionSnapshot', () => ({
 vi.mock('@server/utils/persistRunAsQuest', () => ({
   persistRunAsQuest: vi.fn(),
 }));
-vi.mock('@server/utils/extractFinalAnswer', () => ({
+vi.mock('@bike4mind/server-utils/utils/extractFinalAnswer', () => ({
   extractFinalAnswer: vi.fn(),
 }));
 vi.mock('@server/utils/startAgentExecution', () => ({

@@ -1,9 +1,9 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { getNotionOAuthConfig, NOTION_OAUTH_AUTHORIZE_URL } from '@server/integrations/notion';
 import { userRepository } from '@bike4mind/database';
 import crypto from 'crypto';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 
 /**
  * Initiates the Notion OAuth flow.

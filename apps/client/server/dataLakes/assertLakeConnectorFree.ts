@@ -5,7 +5,7 @@ import {
   orgGoogleDriveConnectionRepository,
 } from '@bike4mind/database';
 import { Types } from 'mongoose';
-import { ConflictError } from '@server/utils/errors';
+import { ConflictError } from '@bike4mind/server-utils/utils/errors';
 
 export type LakeConnectorKind = 'github' | 'googleDrive';
 

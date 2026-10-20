@@ -3,7 +3,7 @@ import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { logEventSafe } from '@server/utils/analyticsLog';
 import { ApiKeyScope, UserApiKeyEvents } from '@bike4mind/common';

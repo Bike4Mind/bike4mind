@@ -40,7 +40,7 @@ vi.mock('@googleapis/drive', () => ({
 }));
 
 import { User } from '@bike4mind/database';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { getValidConnectionDriveAccessToken, getValidUserDriveAccessToken } from './common';
 
 const personalOwner = { kind: 'user' as const, userId: 'user-1' };

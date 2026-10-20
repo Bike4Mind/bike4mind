@@ -22,7 +22,7 @@ import { Resource } from 'sst';
 import { sendToConnection } from '@server/websocket/utils';
 import { Connection } from '@bike4mind/database/social';
 import { Quest } from '@bike4mind/database/content';
-import { isValidObjectId } from '@server/utils/objectId';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
 

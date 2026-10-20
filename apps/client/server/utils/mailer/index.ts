@@ -2,7 +2,7 @@ import nodemailer, { type Transporter } from 'nodemailer';
 import type SMTPTransport from 'nodemailer/lib/smtp-transport';
 import { isPlaceholderValue } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { postEmailMirrorToSlack } from '@server/integrations/slack/slack';
 import { extractBodyPreview, inferEmailType } from '@bike4mind/server-utils/integrations/slack/emailMirror';
 

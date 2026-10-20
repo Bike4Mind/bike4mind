@@ -34,7 +34,7 @@ const storage = {
     objects.delete(key);
   },
 };
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => storage }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => storage }));
 vi.mock('@server/integrations/google/drive/common', () => ({ releaseDriveConnectionForLake: async () => false }));
 vi.mock('@server/integrations/github/dataLake/githubLakeConnection', () => ({
   releaseGitHubLakeConnectionForLake: async () => null,

@@ -12,7 +12,7 @@ vi.mock('@bike4mind/services', async importOriginal => {
   };
 });
 
-import { UnauthorizedError, ForbiddenError } from '@server/utils/errors';
+import { UnauthorizedError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { refuseBlockedRotatedSession } from './refreshAccountGate';
 
 const USABLE = { isBanned: false, disputePending: false };

@@ -8,7 +8,7 @@ import { admitLandedUpload, rejectLandedUpload } from './uploadSizeGate';
 import { recordRejectedUploadBatch } from './recordRejectedUploadBatch';
 
 const h = vi.hoisted(() => ({ deleteObject: vi.fn(), sendToClient: vi.fn(), finalize: vi.fn() }));
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ delete: h.deleteObject }) }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({ delete: h.deleteObject }) }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: h.sendToClient }));
 vi.mock('@server/dataLakes/dataLakeBatchProgress', async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),

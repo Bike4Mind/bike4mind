@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { userRepository } from '@bike4mind/database';
 
 /**

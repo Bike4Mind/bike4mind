@@ -25,7 +25,7 @@ import { verifyOrgAccess } from '@server/utils/orgAccess';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { assertLakeConnectorFree } from '@server/dataLakes/assertLakeConnectorFree';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
-import { serializeError } from '@server/utils/serializeError';
+import { serializeError } from '@bike4mind/server-utils/utils/serializeError';
 
 // No organizationId creates a personal lake, owned by the caller alone.
 const Body = z.object({ organizationId: z.string().trim().min(1).optional() });

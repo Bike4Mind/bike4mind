@@ -2,7 +2,7 @@ import { activeCodeAgentRepository } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/utils';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ensureTavernAccess } from '@server/utils/errors';
+import { ensureTavernAccess } from '@bike4mind/server-utils/utils/errors';
 
 /**
  * GET /api/cc-bridge/agents

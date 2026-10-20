@@ -6,7 +6,7 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 
-vi.mock('@server/utils/errors', () => ({
+vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   ForbiddenError: class ForbiddenError extends Error {},
   UnauthorizedError: class UnauthorizedError extends Error {},
 }));

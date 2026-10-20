@@ -37,7 +37,7 @@ vi.mock('@server/websocket/utils', () => ({
 }));
 
 import { checkApiKeyRateLimitOrThrow, checkRateLimit, verifyApiKey, verifyJwtToken } from '@server/cli/auth';
-import { TooManyRequestsError } from '@server/utils/errors';
+import { TooManyRequestsError } from '@bike4mind/server-utils/utils/errors';
 import { sendToConnection } from '@server/websocket/utils';
 import { func } from './cliCompletion';
 

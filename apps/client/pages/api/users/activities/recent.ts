@@ -1,7 +1,7 @@
 import { userService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
 import { CounterLog } from '@bike4mind/database';
-import { UnauthorizedError } from '@server/utils/errors';
+import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 
 const handler = baseApi().get(async (req, res) => {
   const coverage = req.query.coverage as 'all' | 'important' | undefined;

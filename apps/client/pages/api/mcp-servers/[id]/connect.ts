@@ -4,9 +4,9 @@ import { assertMcpServerEnabled } from '@server/utils/mcpServerFlag';
 import { NotFoundError } from '@bike4mind/utils';
 import { MCPClient } from '@bike4mind/mcp';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { decryptEnvVariables } from '@server/security/tokenEncryption';
-import { isValidObjectId } from '@server/utils/objectId';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { buildMcpToolCacheUpdate } from '@bike4mind/services/llm';
 
 const handler = baseApi().post(async (req, res) => {

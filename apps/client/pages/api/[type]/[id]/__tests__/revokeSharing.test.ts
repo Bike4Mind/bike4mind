@@ -24,7 +24,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   }),
 }));
 
-vi.mock('@server/utils/errors', () => ({
+vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   BadRequestError: class BadRequestError extends Error {},
 }));
 
@@ -42,7 +42,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 import '../revokeSharing';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 function request(query: Record<string, unknown>, body: Record<string, unknown> = {}) {
   const { req, res } = createMocks({ method: 'DELETE', query, body });

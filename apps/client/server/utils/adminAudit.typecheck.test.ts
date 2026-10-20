@@ -66,7 +66,7 @@ declare module '@bike4mind/services' {
     ): Promise<import('@bike4mind/common').AuditEntry | null>;
   }
 }
-declare module '@server/utils/ip' {
+declare module '@bike4mind/server-utils/utils/ip' {
   export function getClientIp(req: import('express').Request): string;
 }
 `;

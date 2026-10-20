@@ -1,4 +1,4 @@
-import { APP_DECISION_COOKIE, DECISION_COOKIE, REGION_COOKIE } from '@client/lib/consentCookies';
+import { APP_DECISION_COOKIE, DECISION_COOKIE, REGION_COOKIE } from '@bike4mind/server-utils/lib/consentCookies';
 
 // This app resolves no region of its own - proxy.ts runs on every route but gets no
 // viewer-country header, and a second lookup there would only produce an answer that can

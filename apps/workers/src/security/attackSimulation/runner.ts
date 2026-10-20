@@ -15,7 +15,7 @@ import { Resource } from 'sst';
 import { Logger } from '@bike4mind/observability';
 import { connectDB, securityFindingRunRepository } from '@bike4mind/database';
 import { isPlaceholderValue } from '@bike4mind/common';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
 import { getTargetUrlForStage } from '@bike4mind/server-utils/integrations/github/githubWorkflowTrigger';
 import { e2eExposureProbe } from './probes/e2eExposure';

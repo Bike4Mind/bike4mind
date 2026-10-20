@@ -30,8 +30,8 @@ import {
   getSettingsValue,
   resolveSupportedMimeType,
 } from '@bike4mind/utils';
-import { MAX_FILE_SIZE_DEFAULT_MB } from '@server/utils/maxFileSizeDefault';
-import { BadRequestError } from '@server/utils/errors';
+import { MAX_FILE_SIZE_DEFAULT_MB } from '@bike4mind/server-utils/utils/maxFileSizeDefault';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
 import { Request } from 'express';

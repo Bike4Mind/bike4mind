@@ -1,7 +1,7 @@
 import { userRepository, authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import { authSessionService } from '@bike4mind/services';
 import { redactUserSecretsForSelf } from '@bike4mind/common';
-import { UnauthorizedError } from '@server/utils/errors';
+import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { requireNonSystemUser } from '@server/auth/requireNonSystemUser';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';

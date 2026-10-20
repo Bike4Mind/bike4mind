@@ -3,8 +3,8 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { User, Session, Agent, Project } from '@bike4mind/database';
 import { z } from 'zod';
 import { Logger } from '@bike4mind/observability';
-import { isValidObjectId } from '@server/utils/objectId';
-import { BadRequestError } from '@server/utils/errors';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 const KeywordRoutingRuleSchema = z.object({
   keywords: z

@@ -75,7 +75,7 @@ vi.mock('@server/middlewares/defineNextRoute', () => ({
   },
 }));
 
-vi.mock('@server/utils/errors', () => ({
+vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   BadRequestError: class BadRequestError extends Error {
     statusCode = 400;
   },
@@ -152,7 +152,7 @@ vi.mock('@server/utils/saveGeneratedAssetToFiles', () => ({
 
 const { upload, getSignedUrl } = vi.hoisted(() => ({ upload: vi.fn(), getSignedUrl: vi.fn() }));
 // Only the oversized-audio offload touches storage; the delivery module itself is real.
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ upload, getSignedUrl }),
 }));
 

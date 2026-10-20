@@ -11,7 +11,7 @@ import {
   userRepository,
   withTransaction,
 } from '@bike4mind/database';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { logEvent } from '@server/utils/analyticsLog';
 import { SessionEvents, redactSessionForClient, sessionCloneContract } from '@bike4mind/common';
 import { copySurfaceAccessForRequest } from '@server/entitlements/surfaceAccess';

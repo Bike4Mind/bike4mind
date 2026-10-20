@@ -10,7 +10,7 @@ import {
   resolveSubscriptionSource,
   SubscriptionSource,
 } from '@client/lib/subscriptions/types';
-import { ORGANIZATION_SUBSCRIPTION_PRICE_ID, TEAM_PLAN_UNAVAILABLE_MESSAGE } from '@client/lib/subscriptions/constants';
+import { ORGANIZATION_SUBSCRIPTION_PRICE_ID, TEAM_PLAN_UNAVAILABLE_MESSAGE } from '@bike4mind/server-utils/lib/subscriptions/constants';
 import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
 import { SubscriptionPlanDetail } from '@client/lib/userSubscriptions/types';
 import { Box, Button, Skeleton, Stack, Tab, tabClasses, TabList, Tabs, Tooltip, Typography } from '@mui/joy';

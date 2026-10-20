@@ -35,7 +35,10 @@ vi.mock('@server/analytics/funnel', () => ({
   emitFunnelEvent: (...a: any[]) => mockEmitFunnelEvent(...a),
 }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn(() => Promise.resolve()) }));
-vi.mock('@server/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' }, isE2EEnabled: () => false }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
+  Config: { JWT_SECRET: 'test-secret' },
+  isE2EEnabled: () => false,
+}));
 vi.mock('@server/auth/tokenGenerator', () => ({
   authTokenGenerator: { createAccessToken: () => ({ accessToken: 'a', refreshToken: 'r' }) },
 }));

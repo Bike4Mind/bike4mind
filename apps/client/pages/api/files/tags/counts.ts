@@ -1,6 +1,6 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { buildRequestFileScope } from '@server/utils/userFileScope';
 import { fabFileRepository } from '@bike4mind/database';
 import { FILES_READ_SCOPES } from '@server/files/fileScopes';

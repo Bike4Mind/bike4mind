@@ -2,7 +2,7 @@ import { mcpServerRepository, userRepository } from '@bike4mind/database';
 import { McpServerName } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { NotFoundError } from '@server/utils/errors';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 
 // Security fix: this used to be a raw NextApiRequest with no auth - any
 // unauthenticated caller could probe whether a given userId had GitHub

@@ -12,7 +12,7 @@ export async function register() {
   if (process.env.NEXT_RUNTIME === 'nodejs') {
     // Fail the server at boot on a malformed TRUSTED_PROXY_HOPS; otherwise getClientIp throws inside
     // the logging middleware and every baseApi route serves a 500.
-    const { readTrustedProxyHops } = await import('./server/utils/trustedClientIpHeaders');
+    const { readTrustedProxyHops } = await import('@bike4mind/server-utils/utils/trustedClientIpHeaders');
     readTrustedProxyHops();
 
     const { register: registerNode } = await import('./instrumentation.node');

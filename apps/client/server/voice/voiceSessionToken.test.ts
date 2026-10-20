@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import jwt from 'jsonwebtoken';
 import { signVoiceSessionToken, verifyVoiceSessionToken } from './voiceSessionToken';
 
-vi.mock('@server/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' } }));
 
 const claims = { userId: 'u1', organizationId: '', sessionId: 's1', reasoningModelId: 'm1' };
 

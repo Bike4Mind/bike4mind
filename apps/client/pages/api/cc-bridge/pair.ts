@@ -4,7 +4,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { CcBridgeDeviceLabelSchema } from '@server/utils/ccBridgeDeviceLabel';
-import { ensureTavernAccess } from '@server/utils/errors';
+import { ensureTavernAccess } from '@bike4mind/server-utils/utils/errors';
 import bcrypt from 'bcryptjs';
 import { randomBytes } from 'crypto';
 import { z } from 'zod';

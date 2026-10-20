@@ -4,7 +4,7 @@ import { fabFileRepository } from '@bike4mind/database';
 import { ConfluenceResource, GitHubResource, JiraResource } from '@bike4mind/slack';
 import { ATLASSIAN_CONFIRMABLE_TOOLS } from '@bike4mind/mcp/atlassian/constants';
 import { GITHUB_CONFIRMABLE_TOOLS } from '@bike4mind/mcp/github/constants';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 
 /**
  * Shared by the two pending-action executors - the web confirm route (pages/api/mcp/confirm.ts) and

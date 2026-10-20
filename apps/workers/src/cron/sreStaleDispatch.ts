@@ -20,7 +20,7 @@ import {
   getConfiguredRepoSlugs,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
 import { postSreTimeoutSummaryMessage } from '@server/integrations/slack/sreSlackApproval';
 

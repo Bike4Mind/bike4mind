@@ -69,7 +69,7 @@ import { useAgentExecutionStore } from '@client/app/stores/useAgentExecutionStor
 import { classifyQueryComplexity, expandChoiceKey, isImageAttachment, routeQuery } from '@bike4mind/common';
 import { useReplyChoices } from '@client/app/hooks/useReplyChoices';
 import { recordReplyChoice } from '@client/app/hooks/data/quests';
-import { pickOrchestrationAgent } from '@client/lib/agentOrchestration';
+import { pickOrchestrationAgent } from '@bike4mind/server-utils/lib/agentOrchestration';
 import { evaluateShortCircuits, hasExplicitAgentLiteral } from '@client/app/utils/intentClassifierShortCircuits';
 import { useIntentClassifier } from '@client/app/hooks/useIntentClassifier';
 import { useAdminSettings } from '@client/app/contexts/AdminSettingsContext';

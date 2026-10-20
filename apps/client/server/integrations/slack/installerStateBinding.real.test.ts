@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, vi } from 'vitest';
 import { configureSlackPackage, createInstallProvider } from '@bike4mind/slack';
 import type { ISlackServerDependencies, ISlackDatabaseDependencies } from '@bike4mind/slack';
 
-vi.mock('@server/utils/config', () => ({ Config: { JWT_SECRET: 'test-jwt-secret-for-state-store' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { JWT_SECRET: 'test-jwt-secret-for-state-store' } }));
 
 import { createStateToken, verifyStateToken, validateJwtSecret } from '@server/auth/jwtStateStore';
 

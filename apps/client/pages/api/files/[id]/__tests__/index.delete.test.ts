@@ -40,7 +40,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ delete: h.storageDelete, upload: vi.fn(), getSignedUrl: vi.fn() }),
   getGeneratedImageStorage: () => ({ delete: h.generatedStorageDelete }),
 }));

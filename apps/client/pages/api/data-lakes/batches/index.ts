@@ -14,7 +14,7 @@ import { dataLakeService } from '@bike4mind/services';
 import { CreateBatchRequestInput, isLakeIngestable } from '@bike4mind/common';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
-import { recordReconcilerForcedTerminal } from '@server/utils/cloudwatch';
+import { recordReconcilerForcedTerminal } from '@bike4mind/server-utils/utils/cloudwatch';
 import { enqueueTaxonomyAnalysisIfWanted } from '@server/dataLakes/dataLakeBatchProgress';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 

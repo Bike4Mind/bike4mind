@@ -18,8 +18,8 @@ import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { releaseDriveConnection } from '@server/integrations/google/drive/common';
 import { deleteDriveOrphans, listDeletableDriveOrphans } from '@server/integrations/google/drive/connectorOrphanFiles';
 import { shredMemoryForLakeTags } from '@server/dataLakes/shredMemoryForLakeTags';
-import { getFilesStorage } from '@server/utils/storage';
-import { sendToQueue } from '@server/utils/sqs';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { ZodError } from 'zod';
 import { DriveDisconnectPurgePayload } from '@bike4mind/server-utils/dataLakes/driveDisconnectPurgePayload';
 

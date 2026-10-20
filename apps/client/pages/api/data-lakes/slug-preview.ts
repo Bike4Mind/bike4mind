@@ -13,7 +13,7 @@ import {
   tagPrefixIssue,
 } from '@bike4mind/common';
 import { Request } from 'express';
-import { resolveActiveOrg } from '@server/utils/resolveActiveOrg';
+import { resolveActiveOrg } from '@bike4mind/server-utils/utils/resolveActiveOrg';
 
 // GET /api/data-lakes/slug-preview?name=&organizationId=&tagPrefix= - the slug a create with this
 // name would get right now (the wizard's Config step), and the first free tag prefix starting from

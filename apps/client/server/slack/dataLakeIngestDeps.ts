@@ -11,7 +11,7 @@ import { User } from '@bike4mind/database/auth';
 import { FabFile } from '@bike4mind/database/content';
 import { fabFilesService } from '@bike4mind/services';
 import { getUserEntitlements } from '@server/entitlements';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import type { DataLakeCommandRepo } from './handleDataLakeCommand';
 import type { SlackLakeIngestDeps } from './dataLakeFileIngest';
 import type { SlackLinkIngestDeps } from './dataLakeLinkIngest';

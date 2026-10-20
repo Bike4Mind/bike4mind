@@ -31,12 +31,12 @@ vi.mock('@bike4mind/database', () => ({
   TERMINAL_QUEST_STATUSES: ['done', 'stopped'],
 }));
 
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getGeneratedImageStorage: () => ({ getSignedUrl: async (key: string) => `https://signed.example.invalid/${key}` }),
 }));
 
-vi.mock('@server/utils/ssrfProtection', async importOriginal => {
-  const actual = await importOriginal<typeof import('@server/utils/ssrfProtection')>();
+vi.mock('@bike4mind/server-utils/utils/ssrfProtection', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/server-utils/utils/ssrfProtection')>();
   return {
     ...actual,
     assertUrlAllowed: h.assertUrlAllowed,
@@ -44,8 +44,8 @@ vi.mock('@server/utils/ssrfProtection', async importOriginal => {
 });
 
 import { dispatch } from './generationCallback';
-import { GENERATION_CALLBACK_MAX_RECEIVE_COUNT } from '@server/utils/sqsDelivery';
-import { SsrfError } from '@server/utils/ssrfProtection';
+import { GENERATION_CALLBACK_MAX_RECEIVE_COUNT } from '@bike4mind/server-utils/utils/sqsDelivery';
+import { SsrfError } from '@bike4mind/server-utils/utils/ssrfProtection';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() } as never;
 

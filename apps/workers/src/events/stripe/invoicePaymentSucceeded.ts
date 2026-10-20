@@ -7,8 +7,8 @@ import {
 } from '@workers/lib/userSubscriptions/serverUtils';
 import { StripeEvents } from '@server/utils/eventBus';
 import { stripe } from '@server/integrations/stripe/stripe';
-import { Config } from '@server/utils/config';
-import { emitMetric } from '@server/utils/cloudwatch';
+import { Config } from '@bike4mind/server-utils/utils/config';
+import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { withEventContext } from '@workers/utils/eventContext';
 import { postNewSubscriptionToSlack } from '@server/integrations/slack/slack';
 import { emitPurchaseForSourceProducts } from '@server/analytics/signupEvents';
