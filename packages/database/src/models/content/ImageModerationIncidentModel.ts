@@ -1,6 +1,6 @@
 import mongoose, { Schema, model, Document, Model } from 'mongoose';
 import type { ImageModerationIncident as ImageModerationIncidentData, IncidentReviewStatus } from '@bike4mind/common';
-import { INCIDENT_REPORT_CHANNELS, INCIDENT_REVIEW_STATUSES } from '@bike4mind/common';
+import { INCIDENT_REPORT_CHANNELS, INCIDENT_REVIEW_STATUSES, INCIDENT_SURFACES } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 
 /**
@@ -31,6 +31,7 @@ const ImageModerationIncidentSchema = new Schema(
     fabFileId: { type: String, required: false },
     provider: { type: String, required: true },
     model: { type: String, required: true },
+    surface: { type: String, enum: INCIDENT_SURFACES, required: false },
     labels: [
       {
         _id: false,

@@ -93,6 +93,7 @@ async function moderateToolImage(
       sessionId: context.sessionId,
       provider,
       model,
+      surface: 'generation',
     },
     logger: context.logger,
   });

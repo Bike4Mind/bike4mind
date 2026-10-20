@@ -39,12 +39,12 @@ import {
   latticeModelRepository,
   skillRepository,
   usageEventRepository,
-  imageModerationIncidentRepository,
   lakeAccessEventRepository,
   mcpServerRepository,
   scopedSettingsRepository,
   cacheRepository,
 } from '@bike4mind/database';
+import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
 import {
   registerLambdaErrorHandlers,
   getSettingsByNames,
@@ -1683,7 +1683,7 @@ async function processExecution(
         // Audit trail for images blocked by the image_generation/edit_image tools'
         // moderation gate. The gate itself is unconditional (constructed
         // inline in the tool) - this only wires the incident record, not the block.
-        imageModerationIncidents: imageModerationIncidentRepository,
+        imageModerationIncidents,
         organizations: organizationRepository,
         lakeAccessEvents: lakeAccessEventRepository,
         scopedSettings: scopedSettingsRepository,
@@ -3562,7 +3562,7 @@ async function processSubagentDispatch(
         // Audit trail for images blocked by the image_generation/edit_image tools'
         // moderation gate. The gate itself is unconditional (constructed
         // inline in the tool) - this only wires the incident record, not the block.
-        imageModerationIncidents: imageModerationIncidentRepository,
+        imageModerationIncidents,
         organizations: organizationRepository,
         lakeAccessEvents: lakeAccessEventRepository,
         scopedSettings: scopedSettingsRepository,

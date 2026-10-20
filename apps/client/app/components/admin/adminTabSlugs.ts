@@ -1,4 +1,4 @@
-import { ADMIN_AUDIT_LOG_TAB_SLUG, ADMIN_FEEDBACK_TAB_SLUG } from '@bike4mind/common';
+import { ADMIN_AUDIT_LOG_TAB_SLUG, ADMIN_FEEDBACK_TAB_SLUG, ADMIN_USERS_TAB_SLUG } from '@bike4mind/common';
 import { AdminTab } from './adminSidebarConfig';
 
 /**
@@ -16,6 +16,7 @@ import { AdminTab } from './adminSidebarConfig';
 const SLUG_TO_ADMIN_TAB: ReadonlyMap<string, AdminTab> = new Map([
   [ADMIN_FEEDBACK_TAB_SLUG, AdminTab.Feedback],
   [ADMIN_AUDIT_LOG_TAB_SLUG, AdminTab.AuditLog],
+  [ADMIN_USERS_TAB_SLUG, AdminTab.Users],
 ]);
 
 /** Resolves a `?tab=` slug, or undefined when it is absent or not a linkable tab. */

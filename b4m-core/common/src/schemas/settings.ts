@@ -341,6 +341,7 @@ export const SettingKeySchema = z.enum([
   'BedrockGuardrailId',
   'BedrockGuardrailVersion',
   'ImageModerationEnabled',
+  'ImageModerationReviewerEmails',
   'tagLineMain',
   'tagLineSub',
   'defaultTags',
@@ -2864,6 +2865,15 @@ export const settingsMap = {
     description:
       'Whether to run generated images through content moderation (Rekognition) and block explicit content. Legal-safety control (#9776) — default ON.',
     category: 'AI Moderation',
+  }),
+  ImageModerationReviewerEmails: makeObjectSetting<string[]>({
+    key: 'ImageModerationReviewerEmails',
+    name: 'Image Moderation Reviewer Emails',
+    defaultValue: [],
+    description:
+      'Email addresses alerted when an image moderation incident needs review. The alert carries incident metadata and an admin link only, never the image or user content. Empty sends no alert.',
+    category: 'AI Moderation',
+    schema: z.array(z.string().trim().email()),
   }),
   SkillMarketHighRiskTools: makeStringSetting({
     key: 'SkillMarketHighRiskTools',

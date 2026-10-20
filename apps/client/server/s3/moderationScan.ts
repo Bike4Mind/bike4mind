@@ -1,4 +1,4 @@
-import { adminSettingsRepository, FabFile, imageModerationIncidentRepository } from '@bike4mind/database';
+import { adminSettingsRepository, FabFile } from '@bike4mind/database';
 import { moderateImageOrThrow } from '@bike4mind/services/llm/imageModerationGate';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { RekognitionImageModerationService } from '@bike4mind/utils/imageModeration';
@@ -6,6 +6,7 @@ import { getFilesStorage } from '@server/utils/storage';
 import { generateUploadConstraintFor } from '@bike4mind/server-utils/files/generateUploadMarker';
 import { moderateUploadedFile } from '@bike4mind/server-utils/s3/moderateUploadedFile';
 import type { ClientSession, Types } from 'mongoose';
+import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
 
 // Scan-ownership primitives for the hosted-upload doors: the S3 ObjectCreated handler
 // (objectCreated.ts) and the on-demand scan route (pages/api/files/[id]/moderate.ts). One
@@ -91,7 +92,7 @@ export const scanUploadedObject = async (args: {
     mimeType: fabFile.mimeType ?? undefined,
     enabled: getSettingsValue('ImageModerationEnabled', settings) ?? true,
     service: new RekognitionImageModerationService(logger),
-    incidents: imageModerationIncidentRepository,
+    incidents: imageModerationIncidents,
     generateUpload: generateUploadConstraintFor(fabFile.sourceMetadata, async () => {
       const { size } = await getFilesStorage().getMetadata(objectKey);
       return size ?? Number.POSITIVE_INFINITY;

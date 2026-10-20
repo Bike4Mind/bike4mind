@@ -1,4 +1,4 @@
-import { ImageModerationIncident as ImageModerationIncidentInput } from '@bike4mind/common';
+import { ImageModerationIncident as ImageModerationIncidentInput, IncidentSurface } from '@bike4mind/common';
 import { ImageModerationBlockedError, ImageModerationService } from '@bike4mind/utils/imageModeration';
 import { Logger } from '@bike4mind/observability';
 
@@ -18,6 +18,7 @@ export interface ImageModerationIncidentMeta {
   fabFileId?: string;
   provider: string;
   model: string;
+  surface: IncidentSurface;
 }
 
 export interface ModerateImageOrThrowParams {
