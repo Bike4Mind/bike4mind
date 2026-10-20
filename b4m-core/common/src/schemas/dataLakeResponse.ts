@@ -4,9 +4,11 @@ import type { RetrievabilityLabeledDataLake } from '../constants/dataLakes';
 import { passthroughShape } from './responseShape';
 
 // Held to IDataLakeDocument: a new lake field fails the build here until it is listed. This is the
-// key boundary only. What a NON-editor may see is decided upstream by redactLakeForActor
-// (b4m-core/services/src/dataLakeService/redactLakeForActor.ts, LAKE_FIELD_VISIBILITY), whose
-// reader projection is a subset of these keys, so one schema serves both arms.
+// key boundary only - it strips keys it does not list, it never withholds one. What a NON-editor may
+// see is decided upstream by redactLakeForActor (b4m-core/services/src/dataLakeService/
+// redactLakeForActor.ts), whose reader allow-list (READER_LAKE_FIELDS) is a subset of these keys, so
+// one schema serves both arms. Skipping redactLakeForActor on a read path would still serve
+// systemPrompt to a reader: this schema declares it.
 const DATA_LAKE_RESPONSE_FIELDS = {
   id: true,
   createdAt: true,
