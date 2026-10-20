@@ -10,8 +10,9 @@ import CreditsModal from '../subscription/CreditsModal';
 import { useEffectiveCredits } from '@client/app/hooks/useEffectiveCredits';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { formatCreditBalance } from '@client/app/utils/formatCredits';
-import { LOW_CREDITS_THRESHOLD_DEFAULT } from '@bike4mind/common';
+import { FirstRunEvents, LOW_CREDITS_THRESHOLD_DEFAULT } from '@bike4mind/common';
 import { useLowCreditsThreshold } from '@client/app/hooks/data/teamPlanSettings';
+import { useLogEvent } from '@client/app/hooks/data/analytics';
 
 /**
  * Default threshold below which credits are considered "low". The live value is the
@@ -111,6 +112,7 @@ const CreditBalanceChip: FC<{ session?: ISessionDocument | null }> = ({ session 
   const credits = useEffectiveCredits();
   const lowCreditsThreshold = useLowCreditsThreshold();
   const [isOpen, setIsOpen] = useState(false);
+  const logEvent = useLogEvent();
 
   if (!enforceCredits) return null;
 
@@ -119,10 +121,13 @@ const CreditBalanceChip: FC<{ session?: ISessionDocument | null }> = ({ session 
       <CreditBalanceChipView
         credits={credits}
         lowCreditsThreshold={lowCreditsThreshold}
-        onClick={() => setIsOpen(true)}
+        onClick={() => {
+          logEvent.mutate({ type: FirstRunEvents.CREDITS_CHIP_CLICKED });
+          setIsOpen(true);
+        }}
         payerNote={payerNote}
       />
-      <CreditsModal open={isOpen} onClose={() => setIsOpen(false)} />
+      <CreditsModal open={isOpen} onClose={() => setIsOpen(false)} entry="credits_chip" />
     </>
   );
 };

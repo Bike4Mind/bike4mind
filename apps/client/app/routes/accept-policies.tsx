@@ -3,7 +3,7 @@ import { useNavigate, useSearch, useRouter } from '@tanstack/react-router';
 import { Box, Button, Checkbox, Container, Sheet, Stack, Typography, Link } from '@mui/joy';
 import GppGoodIcon from '@mui/icons-material/GppGood';
 import Image from 'next/image';
-import { withRetry } from '@bike4mind/common';
+import { FirstRunEvents, withRetry } from '@bike4mind/common';
 
 import { useUser } from '@client/app/contexts/UserContext';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
@@ -17,6 +17,7 @@ import { useGetIdentify } from '@client/app/hooks/data/user';
 import useGetLogo from '@client/app/hooks/useGetLogo';
 import { ExternalLinks, CHECKBOX_LABEL_LINK_SX } from '@client/app/utils/externalLinks';
 import { applyRedirect } from '@client/app/utils/authRedirect';
+import { useLogEvent } from '@client/app/hooks/data/analytics';
 
 // One backoff retry before giving up on a submit 401 - see the isRetryable predicate below.
 const SUBMIT_RETRY_DELAY_MS = 1000;
@@ -37,6 +38,8 @@ const AcceptPoliciesPage = () => {
   const { accessToken, mfaPending } = useAccessToken();
   const identity = useGetIdentify();
   const logoUrl = useGetLogo();
+  const { mutate: logEvent } = useLogEvent();
+  const shownRef = useRef(false);
 
   const [acceptPolicies, setAcceptPolicies] = useState(false);
   const [confirmAdult, setConfirmAdult] = useState(false);
@@ -55,6 +58,11 @@ const AcceptPoliciesPage = () => {
   }, []);
 
   const redirectTo = (search as { redirectTo?: string }).redirectTo;
+  useEffect(() => {
+    if (shownRef.current) return;
+    shownRef.current = true;
+    logEvent({ type: FirstRunEvents.POLICIES_SHOWN, metadata: { path: 'interstitial' } });
+  }, [logEvent]);
 
   // True only once identify has both a confirmed 401 (not mfaPending, which both ApiContext's
   // interceptor and UserContext's bootstrap effect also exempt - no refresh token is issued
@@ -121,6 +129,7 @@ const AcceptPoliciesPage = () => {
         }
       );
       // Update currentUser so the consent gate clears (both the server field and this client state).
+      logEvent({ type: FirstRunEvents.POLICIES_ACCEPTED, metadata: { path: 'interstitial' } });
       setCurrentUser(response.data.user);
       applyRedirect(router.history, redirectTo, '/', true);
     } catch (err: unknown) {

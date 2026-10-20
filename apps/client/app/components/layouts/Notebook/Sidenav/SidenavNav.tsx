@@ -2,7 +2,7 @@ import { Box, Chip, Divider, Stack, Typography } from '@mui/joy';
 import { useTheme, type Theme } from '@mui/joy/styles';
 import { useNavigate, useLocation } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
-import { Fragment, ReactNode } from 'react';
+import { Fragment, ReactNode, useEffect, useRef } from 'react';
 import AddIcon from '@mui/icons-material/Add';
 import FolderSharedIcon from '@mui/icons-material/FolderSharedOutlined';
 import SmartToyOutlinedIcon from '@mui/icons-material/SmartToyOutlined';
@@ -17,7 +17,7 @@ import StorefrontOutlinedIcon from '@mui/icons-material/StorefrontOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import PermMediaOutlinedIcon from '@mui/icons-material/PermMediaOutlined';
 import ExtensionOutlinedIcon from '@mui/icons-material/ExtensionOutlined';
-import { canAccessTavern } from '@bike4mind/common';
+import { canAccessTavern, FirstRunEvents } from '@bike4mind/common';
 import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.generated';
 import { premiumNavItems } from '@client/app/premium-generated/premiumNavItems.generated';
 import { filterVisiblePremiumNavItems } from '@client/app/utils/premiumNav';
@@ -36,6 +36,7 @@ import { useVideoModels } from '@client/app/hooks/data/videoGenerations';
 import { neutralFrame, rewardGreen } from '@client/app/components/common/gearRewardStyles';
 import { gray } from '@client/app/utils/themes/colors';
 import { useNotebookLayout } from '..';
+import { useLogEvent } from '@client/app/hooks/data/analytics';
 
 const NAV_ROW_HEIGHT = 32;
 const NAV_TAG_HEIGHT = 24;
@@ -95,6 +96,8 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   const { open: fileBrowserOpen, setOpen: setFileBrowserOpen } = useFileBrowser();
   const isMobile = useIsMobile();
   const setOpenSideNav = useNotebookLayout(s => s.setOpenSideNav);
+  const { mutate: logEvent } = useLogEvent();
+  const startHereShownRef = useRef(false);
 
   const isAgentsEnabled = isFeatureEnabled('enableAgents');
   // Mirror the footer gating: entitlement-aware opti access (admin/developer/OptiHashi Pro, plus
@@ -134,6 +137,13 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   // Gears page, so its row could never appear on its own.
 
   const gearsSignal = useGearsNavSignal();
+  useEffect(() => {
+    if (section === 'pinned' || !gearsSignal.startHere || gearsSignal.claimableCount > 0 || startHereShownRef.current) {
+      return;
+    }
+    startHereShownRef.current = true;
+    logEvent({ type: FirstRunEvents.START_HERE_CHIP_SHOWN });
+  }, [section, gearsSignal.startHere, gearsSignal.claimableCount, logEvent]);
   // Shown only when a modality's endpoint (GET /api/v1/video-models, /music-models, /api/ai/audio-providers) lists a
   // model or provider this user can run, and it opens on that modality's tab, so it never dead-ends.
   const videoModels = useVideoModels();
@@ -426,6 +436,9 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
           </Chip>
         ) : undefined,
       onClick: () => {
+        if (gearsSignal.startHere && gearsSignal.claimableCount === 0) {
+          logEvent({ type: FirstRunEvents.START_HERE_CHIP_CLICKED });
+        }
         closeOnMobile();
         navigate({ to: '/gears' });
       },

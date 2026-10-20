@@ -6,13 +6,14 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { GearStatus } from '@client/app/hooks/useGearsStatus';
 
-const { state } = vi.hoisted(() => ({
+const { state, logEvent } = vi.hoisted(() => ({
   state: {
     gears: [] as GearStatus[],
     mutate: vi.fn(),
     navigate: vi.fn(),
     isMobile: false,
   },
+  logEvent: vi.fn(),
 }));
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => state.navigate }));
@@ -26,6 +27,7 @@ vi.mock('@client/app/hooks/useVisibleGears', () => ({
 }));
 vi.mock('@client/app/components/Files/Browser', () => ({ useFileBrowser: () => ({ setOpen: vi.fn() }) }));
 vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsMobile: () => state.isMobile }));
+vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: logEvent }) }));
 
 import GearsPage from './index';
 
@@ -75,9 +77,15 @@ beforeEach(() => {
   state.mutate.mockReset();
   state.navigate.mockReset();
   state.isMobile = false;
+  logEvent.mockClear();
 });
 
 describe('GearsPage reward markers', () => {
+  it('logs that the Gears page opened', () => {
+    renderPage();
+    expect(logEvent).toHaveBeenCalledWith({ type: 'gears_page_opened' });
+  });
+
   it('draws each reward state with its own marker', () => {
     renderPage();
     // Claimed: the grey check, nothing to claim.

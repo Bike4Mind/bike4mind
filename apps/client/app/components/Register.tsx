@@ -42,8 +42,9 @@ import { applyRedirect, appendRedirectTo } from '@client/app/utils/authRedirect'
 import { isSubmittableOtcCode, OTC_CODE_PLACEHOLDER, sanitizeOtcInput } from '@client/app/utils/otcCode';
 import { resetRefreshCoordinator } from '@client/app/utils/refreshCoordinator';
 import { resetSessionBootstrap } from '@client/app/utils/sessionBootstrap';
-import { CURRENT_POLICY_VERSION, usernameSchema } from '@bike4mind/common';
+import { CURRENT_POLICY_VERSION, FirstRunEvents, usernameSchema } from '@bike4mind/common';
 import { ExternalLinks, CHECKBOX_LABEL_LINK_SX } from '@client/app/utils/externalLinks';
+import { useLogEvent } from '@client/app/hooks/data/analytics';
 
 const registerSchema = z.object({
   // Same rules the server enforces in registerUser.
@@ -67,6 +68,7 @@ const Register: React.FC = () => {
   const router = useRouter();
   const theme = useTheme();
   const { t } = useTranslation();
+  const { mutate: logEvent } = useLogEvent();
 
   const { mutateAsync: sendOTC, isPending: isSendingOTC } = useSendOTC();
   const rateLimit = useOtcRateLimit();
@@ -310,6 +312,10 @@ const Register: React.FC = () => {
 
       useAccessToken.getState().setVerifiedSession(accessToken);
       setCurrentUser(user as Parameters<typeof setCurrentUser>[0]);
+      if (result.user) {
+        logEvent({ type: FirstRunEvents.POLICIES_SHOWN, metadata: { path: 'registration' } });
+        logEvent({ type: FirstRunEvents.POLICIES_ACCEPTED, metadata: { path: 'registration' } });
+      }
 
       const searchParams = new URLSearchParams(window.location.search);
       applyRedirect(router.history, searchParams.get('redirectTo'), '/');

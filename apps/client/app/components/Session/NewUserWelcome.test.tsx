@@ -5,7 +5,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { AnswerCostReference } from '@client/app/utils/creditEstimate';
 
-const { state, sendPrompt, setChatInputValue } = vi.hoisted(() => ({
+const { state, sendPrompt, setChatInputValue, logEvent } = vi.hoisted(() => ({
   state: {
     sessions: [] as unknown[],
     isSuccess: true,
@@ -20,6 +20,7 @@ const { state, sendPrompt, setChatInputValue } = vi.hoisted(() => ({
   },
   sendPrompt: vi.fn(() => Promise.resolve(true)),
   setChatInputValue: vi.fn(),
+  logEvent: vi.fn(),
 }));
 
 vi.mock('@client/app/contexts/UserContext', () => ({
@@ -39,6 +40,7 @@ vi.mock('@client/app/hooks/useEffectiveCredits', () => ({ useEffectiveCredits: (
 vi.mock('@client/app/hooks/useAnswerCostReference', () => ({
   useAnswerCostReference: () => state.answerCostReference,
 }));
+vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: logEvent }) }));
 vi.mock('@client/app/hooks/useChatActions', () => ({
   default: (selector: (s: { sendPrompt: unknown }) => unknown) =>
     selector({ sendPrompt: state.hasComposer ? sendPrompt : null }),
@@ -73,6 +75,7 @@ describe('NewUserWelcome', () => {
     };
     sendPrompt.mockClear();
     setChatInputValue.mockClear();
+    logEvent.mockClear();
     localStorage.clear();
   });
 
@@ -81,6 +84,8 @@ describe('NewUserWelcome', () => {
     expect(screen.getByTestId('new-user-welcome')).toBeInTheDocument();
     expect(screen.getByTestId('new-user-welcome-credits')).toHaveTextContent("You're starting with 9,982 credits.");
     expect(screen.getAllByTestId(/^new-user-welcome-prompt-/)).toHaveLength(3);
+    expect(logEvent).toHaveBeenCalledWith({ type: 'welcome_card_shown' });
+    expect(logEvent).toHaveBeenCalledWith({ type: 'zero_state_shown', metadata: { surface: 'new_chat' } });
   });
 
   it('estimates how many answers the starting credits cover across models, labelled as an estimate', () => {
@@ -110,6 +115,8 @@ describe('NewUserWelcome', () => {
       expect(sendPrompt).toHaveBeenCalledWith(STARTER_PROMPTS[0].prompt, { respectBlockedState: true })
     );
     expect(setChatInputValue).not.toHaveBeenCalled();
+    expect(logEvent).toHaveBeenCalledWith({ type: 'welcome_card_clicked', metadata: { action: 'starter' } });
+    expect(logEvent).toHaveBeenCalledWith({ type: 'starter_used', metadata: { starter: 0 } });
   });
 
   it('leaves the prompt in the composer when the send is refused', async () => {
@@ -117,12 +124,14 @@ describe('NewUserWelcome', () => {
     renderWelcome();
     fireEvent.click(screen.getByTestId('new-user-welcome-prompt-1'));
     await waitFor(() => expect(setChatInputValue).toHaveBeenCalledWith(STARTER_PROMPTS[1].prompt));
+    expect(logEvent).not.toHaveBeenCalledWith({ type: 'starter_used', metadata: { starter: 1 } });
   });
 
   it('stays dismissed after the close button', () => {
     const { unmount } = renderWelcome();
     fireEvent.click(screen.getByTestId('new-user-welcome-dismiss'));
     expect(screen.queryByTestId('new-user-welcome')).not.toBeInTheDocument();
+    expect(logEvent).toHaveBeenCalledWith({ type: 'welcome_card_dismissed' });
     unmount();
     renderWelcome();
     expect(screen.queryByTestId('new-user-welcome')).not.toBeInTheDocument();

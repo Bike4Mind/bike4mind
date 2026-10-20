@@ -18,6 +18,7 @@ const state = vi.hoisted(() => ({
   credits: 5000,
   account: undefined as { personal: boolean } | undefined,
 }));
+const logEvent = vi.hoisted(() => vi.fn());
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -45,6 +46,7 @@ vi.mock('@client/app/components/Credits/AccountSelector', () => ({
   useSelectedAccount: () => ({ selectedAccount: state.account }),
 }));
 vi.mock('@client/app/hooks/useEffectiveCredits', () => ({ useEffectiveCredits: () => state.credits }));
+vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: logEvent }) }));
 vi.mock('./CreditsSection', () => ({ CreditsSection: () => <div data-testid="credits-section-body" /> }));
 vi.mock('./PlansSection', () => ({
   PlansSection: () => <div data-testid="plans-section-body" />,
@@ -100,6 +102,26 @@ describe('BillingModal', () => {
     })) as unknown as typeof window.matchMedia;
     state.credits = 5000;
     state.account = undefined;
+    logEvent.mockClear();
+  });
+
+  it('logs the open context and a close without purchase', () => {
+    const onClose = vi.fn();
+    render(
+      <TestWrapper>
+        <BillingModal open focus="credits" entry="credits_chip" onClose={onClose} />
+      </TestWrapper>
+    );
+    expect(logEvent).toHaveBeenCalledWith({
+      type: 'billing_opened',
+      metadata: { entry: 'credits_chip', focus: 'credits' },
+    });
+    fireEvent.click(screen.getByTestId('billing-modal-close'));
+    expect(logEvent).toHaveBeenCalledWith({
+      type: 'billing_closed_without_purchase',
+      metadata: { entry: 'credits_chip', focus: 'credits' },
+    });
+    expect(onClose).toHaveBeenCalled();
   });
 
   it('says the plan is unavailable, not Free, when the subscriptions read fails, and retries on demand', () => {

@@ -6,6 +6,9 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { ExternalLinks } from '@client/app/utils/externalLinks';
 
+const mockLogEvent = vi.hoisted(() => vi.fn());
+vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: mockLogEvent }) }));
+
 // Data/context deps are stubbed; the real @mui/joy Checkbox + Link and react-hook-form render so we
 // can assert the anchors the registration consent checkbox exposes. Open registration is enabled
 // (allowOpenRegistration: true, not loading) so the form renders instead of the config gate.

@@ -146,6 +146,8 @@ export function useBatchUpload() {
         throw new Error(OFFLINE_MESSAGE);
       }
 
+      updateUploadProgress({ startedAt: Date.now() });
+
       return runBatchUpload({
         updateUploadProgress,
         setStep,
@@ -252,6 +254,7 @@ export function useCreateLakeFromDrive() {
       updateUploadProgress({
         ...zeroProgressCounts(),
         status: 'uploading',
+        startedAt: Date.now(),
         // Carried onto this path too: the fileless Drive create has its own Complete screen, and a
         // lake born draft serves nothing whether its files arrive by upload or by Drive (#3222).
         lakeStatus,

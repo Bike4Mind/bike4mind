@@ -65,6 +65,8 @@ import HelpCenterButton from '@client/app/components/common/HelpCenterButton';
 import { PageTab, pageTabListSx } from '@client/app/components/common/pageTabs';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { useMobileHeader } from '@client/app/hooks/useMobileHeader';
+import { FirstRunEvents } from '@bike4mind/common';
+import { useLogEvent } from '@client/app/hooks/data/analytics';
 
 /**
  * Gears - the feature tour, where each feature's one-time reward is claimed.
@@ -408,6 +410,10 @@ const panelSx = {
 } as const;
 
 const GearsPage = () => {
+  const { mutate: logEvent } = useLogEvent();
+  useEffect(() => {
+    logEvent({ type: FirstRunEvents.GEARS_PAGE_OPENED });
+  }, [logEvent]);
   const [tab, setTab] = useState<GearsTabKey>('getting-started');
   // Which card is expanded, per tab. Cleared on tab change so switching away and
   // back lands on the list rather than reopening whatever was last read.

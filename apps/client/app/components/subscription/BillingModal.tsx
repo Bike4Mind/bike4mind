@@ -15,6 +15,8 @@ import { isDelinquentSubscriptionStatus, pickDisplayedSubscription } from '@clie
 import { SUBSCRIPTION_PLANS_MAP } from '@client/lib/userSubscriptions/constants';
 import { CreditsSection } from './CreditsSection';
 import { PlansSection, PlansSectionSkeleton } from './PlansSection';
+import { FirstRunEvents } from '@bike4mind/common';
+import { useLogEvent } from '@client/app/hooks/data/analytics';
 
 interface BillingModalProps {
   open: boolean;
@@ -24,6 +26,7 @@ interface BillingModalProps {
    * the dialog and the body at the top.
    */
   focus?: BillingView;
+  entry?: string;
   onClose: () => void;
 }
 
@@ -104,7 +107,7 @@ const Section = ({
  * The dialog has a fixed size (full-screen sheet on phones) and only the body scrolls, so loading
  * states and section order never resize it.
  */
-const BillingModal = ({ open, focus, onClose }: BillingModalProps) => {
+const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalProps) => {
   const { t } = useTranslation();
   const transactions = useGetCreditTransactions({ enabled: open });
   const subscriptions = useGetSubscriptions({ enabled: open });
@@ -116,6 +119,33 @@ const BillingModal = ({ open, focus, onClose }: BillingModalProps) => {
   // An org balance is topped up by the org, not from these personal packs, so its banner has no action.
   const { selectedAccount } = useSelectedAccount();
   const isOrgAccount = !!selectedAccount && !selectedAccount.personal;
+  const { mutate: logEvent } = useLogEvent();
+  const openedRef = useRef(false);
+  const purchasedRef = useRef(false);
+
+  useEffect(() => {
+    if (!open) {
+      openedRef.current = false;
+      purchasedRef.current = false;
+      return;
+    }
+    if (openedRef.current) return;
+    openedRef.current = true;
+    logEvent({
+      type: FirstRunEvents.BILLING_OPENED,
+      metadata: { entry, focus: focus ?? 'overview' },
+    });
+  }, [open, entry, focus, logEvent]);
+
+  const handleClose = () => {
+    if (!purchasedRef.current) {
+      logEvent({
+        type: FirstRunEvents.BILLING_CLOSED_WITHOUT_PURCHASE,
+        metadata: { entry, focus: focus ?? 'overview' },
+      });
+    }
+    onClose();
+  };
 
   // The shared display rule (lib/subscriptions/types), so this header and the plan card agree on the row.
   const currentSubscription = useMemo(() => pickDisplayedSubscription(subscriptions.data ?? []), [subscriptions.data]);
@@ -194,13 +224,16 @@ const BillingModal = ({ open, focus, onClose }: BillingModalProps) => {
       <CreditsSection
         transactions={transactions.data ?? []}
         transactionsLoading={transactions.isPending}
-        onClose={onClose}
+        onClose={handleClose}
+        onPurchase={() => {
+          purchasedRef.current = true;
+        }}
       />
     </Section>
   );
 
   return (
-    <Modal open={open} onClose={onClose} data-testid="billing-modal">
+    <Modal open={open} onClose={handleClose} data-testid="billing-modal">
       <ModalDialog
         data-testid="billing-modal-dialog"
         sx={{

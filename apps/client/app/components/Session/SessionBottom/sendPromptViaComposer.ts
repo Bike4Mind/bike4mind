@@ -12,6 +12,7 @@ interface SendPromptViaComposerParams {
     prompt?: string,
     options?: { onRefused?: () => void }
   ) => Promise<IChatHistoryItemDocument | undefined>;
+  onBlocked?: (reason: SendBlockedReason) => void;
 }
 
 /**
@@ -34,8 +35,10 @@ export async function sendPromptViaComposer({
   toastInfo,
   t,
   handleSendClick,
+  onBlocked,
 }: SendPromptViaComposerParams): Promise<boolean> {
   if (sendBlockedReason) {
+    onBlocked?.(sendBlockedReason);
     if (shouldToastBlockedSend(sendBlockedReason)) toastInfo(getBlockedSendToastLabel(sendBlockedReason, t));
     return false;
   }

@@ -1,7 +1,7 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Box, Button, IconButton, Link, Sheet, Stack, Typography } from '@mui/joy';
 import CloseIcon from '@mui/icons-material/Close';
-import { PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
+import { FirstRunEvents, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useGetOwnSessions } from '@client/app/hooks/data/sessions';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
@@ -12,6 +12,7 @@ import useChatActions from '@client/app/hooks/useChatActions';
 import { useChatInput } from '@client/app/hooks/useChatInput';
 import { APP_NAME, getBrandName } from '@client/config/general';
 import { ExternalLinks } from '@client/app/utils/externalLinks';
+import { useLogEvent } from '@client/app/hooks/data/analytics';
 import { STARTER_PROMPTS, shouldShowNewUserWelcome, welcomeCreditsLine } from './newUserWelcomeModel';
 
 const dismissKey = (userId: string) => `newUserWelcomeDismissed:${userId}`;
@@ -43,8 +44,11 @@ const NewUserWelcome = () => {
   const requestFocus = useChatInput(s => s.requestFocus);
   const [dismissed, setDismissed] = useState(() => readDismissed(userId));
   const [sending, setSending] = useState(false);
+  const { mutate: logEvent } = useLogEvent();
+  const shownRef = useRef(false);
 
   const dismiss = useCallback(() => {
+    logEvent({ type: FirstRunEvents.WELCOME_CARD_DISMISSED });
     setDismissed(true);
     if (!userId) return;
     try {
@@ -52,10 +56,12 @@ const NewUserWelcome = () => {
     } catch {
       // Private mode / full storage: the card still hides for this visit.
     }
-  }, [userId]);
+  }, [userId, logEvent]);
 
   const start = useCallback(
     async (prompt: string) => {
+      const starter = STARTER_PROMPTS.findIndex(item => item.prompt === prompt);
+      logEvent({ type: FirstRunEvents.WELCOME_CARD_CLICKED, metadata: { action: 'starter' } });
       // No composer mounted to send through (should not happen on /new): prefill instead.
       if (!sendPrompt) {
         setChatInputValue(prompt);
@@ -65,12 +71,13 @@ const NewUserWelcome = () => {
       setSending(true);
       try {
         const sent = await sendPrompt(prompt, { respectBlockedState: true });
-        if (!sent) setChatInputValue(prompt);
+        if (sent) logEvent({ type: FirstRunEvents.STARTER_USED, metadata: { starter } });
+        else setChatInputValue(prompt);
       } finally {
         setSending(false);
       }
     },
-    [sendPrompt, setChatInputValue, requestFocus]
+    [sendPrompt, setChatInputValue, requestFocus, logEvent]
   );
 
   const show = shouldShowNewUserWelcome({
@@ -78,6 +85,12 @@ const NewUserWelcome = () => {
     sessionCount: sessions?.pages?.[0]?.data?.length ?? 0,
     dismissed,
   });
+  useEffect(() => {
+    if (!show || shownRef.current) return;
+    shownRef.current = true;
+    logEvent({ type: FirstRunEvents.WELCOME_CARD_SHOWN });
+    logEvent({ type: FirstRunEvents.ZERO_STATE_SHOWN, metadata: { surface: 'new_chat' } });
+  }, [show, logEvent]);
   if (!show) return null;
 
   const awaitingVerification =
@@ -171,6 +184,7 @@ const NewUserWelcome = () => {
         target="_blank"
         rel="noopener noreferrer"
         data-testid="new-user-welcome-privacy-link"
+        onClick={() => logEvent({ type: FirstRunEvents.WELCOME_CARD_CLICKED, metadata: { action: 'data_handling' } })}
         sx={{ alignSelf: 'flex-start', color: 'text.tertiary' }}
       >
         How your data is handled

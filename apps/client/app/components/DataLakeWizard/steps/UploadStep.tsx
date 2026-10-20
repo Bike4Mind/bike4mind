@@ -7,8 +7,10 @@ import { useDataLakeWizardStore, type UploadProgress } from '@client/app/stores/
 import { DATA_LAKE, DATA_LAKES } from '@client/app/components/datalake/dataLakeBranding';
 import { useBatchProgressListener } from '@client/app/hooks/data/dataLakeWizard';
 import { usePromoteDataLake } from '@client/app/hooks/data/dataLakes';
-import { deriveLakeServingState, MIN_DATA_LAKE_SLUG_LENGTH } from '@bike4mind/common';
+import { FirstRunEvents, deriveLakeServingState, MIN_DATA_LAKE_SLUG_LENGTH } from '@bike4mind/common';
+import { useLogEvent } from '@client/app/hooks/data/analytics';
 import type { DataLakeStatus } from '@bike4mind/common';
+import { useEffect, useRef } from 'react';
 
 /**
  * Background AI-tag suggestion status, shown only while the wizard's Complete screen
@@ -258,6 +260,8 @@ function ProgressRow({ label, current, total }: { label: string; current: number
 
 export default function UploadStep() {
   const progress = useDataLakeWizardStore(s => s.uploadProgress);
+  const { mutate: logEvent } = useLogEvent();
+  const readyLoggedRef = useRef(false);
   const closeWizard = useDataLakeWizardStore(s => s.closeWizard);
   const resetWizard = useDataLakeWizardStore(s => s.resetWizard);
   const setStep = useDataLakeWizardStore(s => s.setStep);
@@ -273,6 +277,17 @@ export default function UploadStep() {
   const driveFolderLabel = pendingDriveFolder?.folderName || 'your Drive folder';
   // AI tagging is never offered in append mode (the source step hides the toggle there too).
   const wantsTaxonomy = useDataLakeWizardStore(s => s.optionalSteps.taxonomy) && !isAppendMode;
+  const { uploadedFiles, chunkedFiles, vectorizedFiles } = progress;
+  const fullyProcessed = uploadedFiles > 0 && chunkedFiles >= uploadedFiles && vectorizedFiles >= uploadedFiles;
+
+  useEffect(() => {
+    if (!fullyProcessed || readyLoggedRef.current || progress.startedAt === undefined) return;
+    readyLoggedRef.current = true;
+    logEvent({
+      type: FirstRunEvents.FILE_READY_MS,
+      metadata: { milliseconds: Math.max(0, Date.now() - progress.startedAt), files: uploadedFiles },
+    });
+  }, [fullyProcessed, progress.startedAt, uploadedFiles, logEvent]);
 
   // Subscribe to real-time chunk/vectorize progress from WebSocket
   useBatchProgressListener();
@@ -304,9 +319,7 @@ export default function UploadStep() {
   // from the real counts so we never claim work that hasn't happened. The
   // WebSocket listener keeps these counts flowing after status flips to
   // 'complete', so this line updates live as processing catches up.
-  const { uploadedFiles, chunkedFiles, vectorizedFiles } = progress;
   const fileWord = uploadedFiles === 1 ? 'file' : 'files';
-  const fullyProcessed = uploadedFiles > 0 && chunkedFiles >= uploadedFiles && vectorizedFiles >= uploadedFiles;
   const processingStarted = chunkedFiles > 0 || vectorizedFiles > 0;
   let completionSummary: string;
   if (fullyProcessed) {

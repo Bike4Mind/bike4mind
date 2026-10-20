@@ -41,7 +41,7 @@ import { useBrandingSettings, usePublicConfig } from '@client/app/hooks/data/set
 import { gray, brand } from '@client/app/utils/themes/colors';
 import { visuallyHidden } from '@client/app/utils/a11yStyles';
 import { getWebsiteUrl, WEBSITE_URL } from '@client/config/general';
-import { CURRENT_POLICY_VERSION, USERNAME_RULES_MESSAGE, usernameSchema } from '@bike4mind/common';
+import { CURRENT_POLICY_VERSION, FirstRunEvents, USERNAME_RULES_MESSAGE, usernameSchema } from '@bike4mind/common';
 import { ExternalLinks, CHECKBOX_LABEL_LINK_SX } from '@client/app/utils/externalLinks';
 import { trackSignupConversion } from '@client/app/utils/signupConversion';
 import {
@@ -51,6 +51,7 @@ import {
   sanitizeOtcInput,
 } from '@client/app/utils/otcCode';
 import { useCookieSettings } from '@client/app/components/CookieConsentBanner';
+import { useLogEvent } from '@client/app/hooks/data/analytics';
 
 /**
  * Reads the SPA's current `?redirectTo=` and merges it onto a provider auth
@@ -86,6 +87,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   enableOktaAuth = true,
 }) => {
   const { setCurrentUser, currentUser } = useUser();
+  const { mutate: logEvent } = useLogEvent();
   // Only a live session (token present) counts as "already logged in". A stale persisted
   // `currentUser` with no access token must fall through to the login form rather than be
   // bounced back into the app shell - otherwise a broken session is trapped in a /login <->
@@ -449,6 +451,10 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
         trackSignupConversion('password');
       }
       finishLogin(flat as Record<string, unknown> & { accessToken: string });
+      if ('user' in response) {
+        logEvent({ type: FirstRunEvents.POLICIES_SHOWN, metadata: { path: 'inline_registration' } });
+        logEvent({ type: FirstRunEvents.POLICIES_ACCEPTED, metadata: { path: 'inline_registration' } });
+      }
     } catch (error: unknown) {
       const errorMessage = (error as Error).message || 'Registration failed';
       // useVerifyOTC surfaces any re-issued pending token (rotated nonce) at the error

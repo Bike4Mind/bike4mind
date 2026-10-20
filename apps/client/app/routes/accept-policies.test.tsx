@@ -26,6 +26,7 @@ vi.mock('@client/app/hooks/useAccessToken', () => {
   return { useAccessToken };
 });
 const mockApiPost = vi.fn();
+const mockLogEvent = vi.hoisted(() => vi.fn());
 const mockForceSessionExpiredRedirect = vi.fn().mockResolvedValue(undefined);
 vi.mock('@client/app/contexts/ApiContext', () => ({
   api: { post: (...args: unknown[]) => mockApiPost(...args) },
@@ -40,6 +41,7 @@ const mockUseGetIdentify = vi.fn();
 vi.mock('@client/app/hooks/data/user', () => ({
   useGetIdentify: () => mockUseGetIdentify(),
 }));
+vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: mockLogEvent }) }));
 vi.mock('@client/app/hooks/useGetLogo', () => ({ default: () => '/logo.png' }));
 vi.mock('@client/app/utils/authRedirect', () => ({ applyRedirect: vi.fn() }));
 vi.mock('next/image', () => ({ default: () => null }));
@@ -96,6 +98,11 @@ describe('AcceptPoliciesPage', () => {
     mockAccessTokenState.accessToken = 'atk';
     mockAccessTokenState.mfaPending = false;
     mockUseGetIdentify.mockReturnValue({ isError: false, error: null });
+  });
+
+  it('logs the policy interstitial when shown', () => {
+    renderPage();
+    expect(mockLogEvent).toHaveBeenCalledWith({ type: 'policies_shown', metadata: { path: 'interstitial' } });
   });
 
   // Regression guard for #59: the ToS/AUP/Privacy links in the acceptance-checkbox label must

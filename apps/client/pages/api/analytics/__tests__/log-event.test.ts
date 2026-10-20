@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { CreditPurchaseEvents } from '@bike4mind/common';
+import { CreditPurchaseEvents, FirstRunEvents } from '@bike4mind/common';
 import { ForbiddenError } from '@server/utils/errors';
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -39,6 +39,17 @@ describe('POST /api/analytics/log-event', () => {
       expect.anything()
     );
     expect(res.statusCode).toBe(204);
+  });
+
+  it('writes a first-run event with its metadata', async () => {
+    const { run } = call({ type: FirstRunEvents.SEND_BLOCKED, metadata: { reason: 'uploading' } });
+
+    await run();
+
+    expect(mockLogEvent).toHaveBeenCalledWith(
+      { type: FirstRunEvents.SEND_BLOCKED, metadata: { reason: 'uploading' }, userId: 'user_1' },
+      expect.anything()
+    );
   });
 
   it.each([

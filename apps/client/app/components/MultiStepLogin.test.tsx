@@ -8,6 +8,9 @@ import { CURRENT_POLICY_VERSION, USERNAME_RULES_MESSAGE } from '@bike4mind/commo
 import en from '@client/app/locales/en.json';
 import { ExternalLinks } from '@client/app/utils/externalLinks';
 import { useCookieSettings } from '@client/app/components/CookieConsentBanner';
+
+const mockLogEvent = vi.hoisted(() => vi.fn());
+vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: mockLogEvent }) }));
 import MultiStepLogin from './MultiStepLogin';
 
 type MfaHookOptions = {

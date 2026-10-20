@@ -24,6 +24,7 @@ const {
   navItems,
   entitlements,
   userState,
+  logEvent,
 } = vi.hoisted(() => ({
   useFeatureEnabledMock: vi.fn(),
   useGearsNavSignalMock: vi.fn(),
@@ -46,6 +47,7 @@ const {
     isAdmin: false,
     currentUser: undefined as { preferences?: { hiddenSurfaces?: string[] } } | undefined,
   },
+  logEvent: vi.fn(),
 }));
 
 vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
@@ -60,6 +62,7 @@ vi.mock('@client/app/hooks/data/audioProviders', () => ({ useAudioProviders: use
 vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
   useAdminSettingsCache: () => ({ isFeatureEnabled: () => false }),
 }));
+vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: logEvent }) }));
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: (selector: (state: typeof userState) => unknown) => selector(userState),
 }));
@@ -206,6 +209,15 @@ describe('SidenavNav Gears row tag', () => {
     useGearsNavSignalMock.mockReturnValue({ startHere: true, startHereCredits: 6500, claimableCount: 0 });
     renderNav();
     expect(startHere()).toHaveTextContent(`Start here, +${(6500).toLocaleString('en')} credits`);
+    expect(logEvent).toHaveBeenCalledWith({ type: 'start_here_chip_shown' });
+    fireEvent.click(screen.getByTestId('sidenav-nav-gears'));
+    expect(logEvent).toHaveBeenCalledWith({ type: 'start_here_chip_clicked' });
+  });
+
+  it('does not log Start here from the pinned nav instance that does not render Gears', () => {
+    useGearsNavSignalMock.mockReturnValue({ startHere: true, startHereCredits: 6500, claimableCount: 0 });
+    renderNav('pinned');
+    expect(logEvent).not.toHaveBeenCalledWith({ type: 'start_here_chip_shown' });
   });
 
   it('says credit, not credits, for a single one', () => {

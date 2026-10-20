@@ -84,6 +84,8 @@ import ResearchModeIndicator from '@client/app/components/Session/AISettings/Res
 import { pickerAttachedAgents } from './resolveDispatchAgent';
 import { SlashCommandSuggestions } from '@client/app/components/common/CommandSuggestions';
 import { useContentTransformDetector } from '@client/app/hooks/useContentTransformDetector';
+import { FirstRunEvents } from '@bike4mind/common';
+import { useLogEvent } from '@client/app/hooks/data/analytics';
 
 type Props = {
   /**
@@ -95,6 +97,7 @@ type Props = {
 
 const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments = true }, ref) => {
   const { t } = useTranslation();
+  const logEvent = useLogEvent();
   const { currentSession, currentSessionId, setCurrentSession, workBenchAgents } = useSessions();
   // While a new session is being confirmed by the server (optimistic pre-navigation),
   // pass null to all hooks that make real API calls so they don't fire against the
@@ -362,8 +365,9 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
       toastInfo: toast.info,
       t,
       handleSendClick,
+      onBlocked: reason => logEvent.mutate({ type: FirstRunEvents.SEND_BLOCKED, metadata: { reason } }),
     });
-  }, [sendBlockedReason, shouldToastBlockedSend, t, handleSendClick]);
+  }, [sendBlockedReason, shouldToastBlockedSend, t, handleSendClick, logEvent]);
 
   // Expose handleSendClick for programmatic use (e.g., InteractiveChessBoard, reply-choice
   // buttons); resolves false when the send was refused before dispatch so a caller can undo
@@ -380,8 +384,9 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
         toastInfo: toast.info,
         t,
         handleSendClick,
+        onBlocked: reason => logEvent.mutate({ type: FirstRunEvents.SEND_BLOCKED, metadata: { reason } }),
       }),
-    [sendBlockedReason, shouldToastBlockedClick, t, handleSendClick]
+    [sendBlockedReason, shouldToastBlockedClick, t, handleSendClick, logEvent]
   );
   useEffect(() => {
     registerSendPrompt(sendPromptCallback);

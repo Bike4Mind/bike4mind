@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { IntegrationsEvents } from '@bike4mind/common';
+import { FirstRunEvents, IntegrationsEvents } from '@bike4mind/common';
 import { isValidEnumValue } from '@bike4mind/utils';
 import { ANALYTICS_EVENTS } from './index';
 
@@ -8,6 +8,12 @@ describe('ANALYTICS_EVENTS', () => {
   // key collides with another's is silently overwritten by the spread that builds it.
   it('registers every integrations gallery event', () => {
     for (const event of Object.values(IntegrationsEvents)) {
+      expect(isValidEnumValue(event, ANALYTICS_EVENTS), event).toBe(true);
+    }
+  });
+
+  it('registers every first-run funnel event', () => {
+    for (const event of Object.values(FirstRunEvents)) {
       expect(isValidEnumValue(event, ANALYTICS_EVENTS), event).toBe(true);
     }
   });
