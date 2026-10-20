@@ -96,6 +96,8 @@ describe('parseSkillMd', () => {
     ['[pr]', '[pr]'],
     ['[pr-number] [priority] [assignee]', '[pr-number] [priority] [assignee]'],
     ['[a, b]  ', '[a, b]'],
+    ['<optional: title>', '<optional: title>'],
+    ['[pr] # note', '[pr]'],
   ])('keeps an unquoted Claude Code argument-hint %j verbatim', (raw, hint) => {
     const result = parseSkillMd(`---\nname: review\nargument-hint: ${raw}\n---\nDo it.\n`);
     expect(result).toEqual({ ok: true, fields: { name: 'review', argumentHint: hint, body: 'Do it.' }, dropped: [] });
@@ -143,6 +145,7 @@ describe('frontmatterHasSourceStamp', () => {
   it('only matches the stamp inside the frontmatter fence', () => {
     expect(frontmatterHasSourceStamp('---\n# Bike4Mind-Source: https://x/skills/1\nname: a\n---\nbody')).toBe(true);
     expect(frontmatterHasSourceStamp('\uFEFF---\n# Bike4Mind-Source: https://x\n---\nbody')).toBe(true);
+    expect(frontmatterHasSourceStamp('---\r\n# Bike4Mind-Source: https://x\r\nname: a\r\n---\r\nbody')).toBe(true);
     expect(frontmatterHasSourceStamp('---\nname: a\n---\n# Bike4Mind-Source: https://x\n')).toBe(false);
     expect(frontmatterHasSourceStamp('# Bike4Mind-Source: https://x\n')).toBe(false);
   });
@@ -188,6 +191,17 @@ describe('buildClaudeCodeInstallCommand', () => {
   it('rejects a name that is not path-safe', () => {
     expect(() => buildClaudeCodeInstallCommand('../evil', content)).toThrow();
     expect(() => buildClaudeCodeInstallCommand('a b', content)).toThrow();
+  });
+
+  it.each([['\u0003'], ['\r'], ['\u001b'], ['\u007f'], ['\u009b']])(
+    'rejects content with the control byte %j',
+    byte => {
+      expect(() => buildClaudeCodeInstallCommand('tricky', `${content}${byte}`)).toThrow();
+    }
+  );
+
+  it('accepts tabs and newlines', () => {
+    expect(() => buildClaudeCodeInstallCommand('tricky', 'a\tb\nc')).not.toThrow();
   });
 
   let hasBash = true;
