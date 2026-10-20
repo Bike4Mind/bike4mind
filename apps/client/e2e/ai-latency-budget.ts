@@ -40,6 +40,38 @@ export function isLatencyObservation(err: unknown): err is StreamingTimeoutError
   return err instanceof StreamingTimeoutError;
 }
 
+/** One poll of the chat UI while waiting for a reply to finish. */
+export type StreamSnapshot = {
+  stopVisible: boolean;
+  /** innerText of the newest reply's root container; '' when none is mounted. */
+  text: string;
+};
+
+/**
+ * Whether the turn just sent has finished, given the latest poll.
+ *
+ * Done means the stop button is gone AND this turn demonstrably happened: either the stop button
+ * was seen at some point (it can flash by too fast to catch on a short reply) or the newest reply
+ * differs from the pre-send baseline. A stop button that never hides is never done - the caller
+ * fails it as a StreamingTimeoutError instead of guessing from stable text, so a real server stall
+ * is recorded as incomplete rather than as a slow success.
+ */
+export function isStreamComplete(snapshot: StreamSnapshot, previousResponse: string, sawStopButton: boolean): boolean {
+  if (snapshot.stopVisible) return false;
+  if (sawStopButton) return true;
+  return snapshot.text !== '' && snapshot.text !== previousResponse;
+}
+
+/** Why a streaming wait ran out, for the StreamingTimeoutError message. */
+export function describeStall(snapshot: StreamSnapshot): string {
+  if (!snapshot.stopVisible) return 'no new reply and the stop button never appeared';
+  // An empty reply means the turn never reached token output; a non-empty one means the stream
+  // (or its completion signal) stalled. Different fixes, so say which.
+  return snapshot.text === ''
+    ? 'no text streamed yet (tool work still in flight?)'
+    : 'reply streamed but stop button never hid';
+}
+
 /** ms -> s at 1 ms granularity. One helper so every duration field rounds the same way. */
 export function msToSec(ms: number): number {
   return Math.round(ms) / 1000;
