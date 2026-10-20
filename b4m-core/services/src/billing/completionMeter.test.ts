@@ -86,6 +86,22 @@ describe('meterCompletionBackend', () => {
     expect(meter.mock.calls[0][2]).toBe(18_000);
   });
 
+  it('defaults an unset Gemini thinking budget to the declared cap and holds that', async () => {
+    const thinking = { id: 'g', backend: 'gemini', can_think: true, max_tokens: 65_536 } as ModelInfo;
+    const { meter, metered } = setup(async () => {}, [thinking]);
+    await metered.complete('g', [], {}, async () => {});
+    expect(meter.mock.calls[0][2]).toBe(65_536);
+  });
+
+  it('keys the Gemini thinking hold on the adapter family, not the backend', async () => {
+    const viaFamily = { id: 'a', backend: 'openai', adapterFamily: 'gemini', can_think: true } as ModelInfo;
+    const otherFamily = { id: 'b', backend: 'gemini', adapterFamily: 'openai', can_think: true } as ModelInfo;
+    const { meter, metered } = setup(async () => {}, [viaFamily, otherFamily]);
+    await metered.complete('a', [], { maxTokens: 2000 }, async () => {});
+    await metered.complete('b', [], { maxTokens: 2000 }, async () => {});
+    expect(meter.mock.calls.map(call => call[2])).toEqual([18_000, 2000]);
+  });
+
   it('keeps the requested budget for a Gemini model that honors the cap', async () => {
     const flash = { id: 'f', backend: 'gemini', can_think: false, max_tokens: 8192 } as ModelInfo;
     const { meter, metered } = setup(async () => {}, [flash]);
