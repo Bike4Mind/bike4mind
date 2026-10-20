@@ -68,7 +68,8 @@ vi.mock('@bike4mind/database', async importOriginal => ({
   },
   fileTagRepository: { touchLastActivityBy: h.touchLastActivityBy },
   sessionRepository: { findAllWithKnowledgeId: h.findAllWithKnowledgeId, update: h.sessionUpdate },
-  userRepository: { findById: h.userFindById },
+  userRepository: { findById: h.userFindById, pullSystemFiles: vi.fn(), pullSystemFilesFromAllUsers: vi.fn() },
+  projectRepository: { pullFileReferences: vi.fn() },
   withTransaction: (fn: (session?: unknown) => Promise<unknown>) => fn(undefined),
   User: { findById: (id: string) => ({ session: async () => h.userForRefund(id) }) },
 }));

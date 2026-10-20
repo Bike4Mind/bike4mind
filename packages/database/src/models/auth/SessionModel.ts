@@ -522,6 +522,14 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     );
     return result.modifiedCount;
   }
+  async pullKnowledgeIdsFromSession(sessionId: string, fabFileIds: string[]) {
+    if (fabFileIds.length === 0 || !mongoose.isObjectIdOrHexString(sessionId)) return false;
+    const result = await this.sessionModel.updateOne(
+      { _id: sessionId },
+      { $pull: { knowledgeIds: { $in: fabFileIds } } }
+    );
+    return result.modifiedCount > 0;
+  }
   /** Ids come from `project.sessionIds`, declared `[{ type: String }]` - see usableObjectIds. */
   async findAllByIds(ids: string[], options?: { includeDeleted?: boolean }) {
     const query = this.sessionModel.find({ _id: { $in: usableObjectIds(ids, 'SessionModel.findAllByIds') } });

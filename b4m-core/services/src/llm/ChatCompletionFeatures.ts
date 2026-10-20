@@ -151,6 +151,7 @@ import {
   computeCosineSimilarity,
   computeVerbatimTokenBudget,
   EmbeddingFactory,
+  type FabFileNotice,
   fetchAndProcessPreviousMessages,
   getProviderFromModel,
   getSettingsByNames,
@@ -176,16 +177,21 @@ import { MCPClient } from '@bike4mind/mcp';
 import uniq from 'lodash/uniq.js';
 import { mergeRetrievalSummary, type RetrievalSummary } from './tools/retrievalSummaryMerge';
 import { isObjectIdShaped } from './tools/base/objectId';
+import { scrubStaleProjectFiles } from '../sessionService/scrubStaleFileReferences';
 
 interface DatabaseAdapters {
-  // `pullKnowledgeIds` backs the stale-attachment detach in scrubMissingKnowledgeIds - a $pull, so
-  // it cannot clobber a file attached concurrently the way rewriting the array through `update` would.
+  // The `pull*` methods back the stale-attachment detach (scrubMissingKnowledgeIds and
+  // scrubStaleSystemFiles) - $pulls, so they cannot clobber a file attached concurrently the way
+  // rewriting the array through `update` would.
   // incrementImageCount is optional: only the image tools use it, via ToolContext (recordGeneratedImages).
-  sessions: Pick<ISessionRepository, 'findById' | 'findAllByIds' | 'update' | 'attachAgent' | 'pullKnowledgeIds'> &
+  sessions: Pick<
+    ISessionRepository,
+    'findById' | 'findAllByIds' | 'update' | 'attachAgent' | 'pullKnowledgeIds' | 'pullKnowledgeIdsFromSession'
+  > &
     Partial<Pick<ISessionRepository, 'incrementImageCount'>>;
   users: Pick<
     IUserRepository,
-    'findById' | 'update' | 'incrementCredits' | 'recordModerationHit' | 'setModerationStatus'
+    'findById' | 'update' | 'incrementCredits' | 'recordModerationHit' | 'setModerationStatus' | 'pullSystemFiles'
   >;
   quests: IChatHistoryItemRepository;
   questMasterPlans: IQuestMasterPlanRepository;
@@ -567,7 +573,7 @@ export type ChatCompletionContext = Pick<
     message: string,
     attachedFileTokenBudget: number,
     modelInfo: ModelInfo
-  ) => Promise<{ promptMessages: IMessage[]; convertedFabFiles: any[] }>;
+  ) => Promise<{ promptMessages: IMessage[]; convertedFabFiles: any[]; fileNotices: FabFileNotice[] }>;
 };
 
 export interface ChatCompletionFeature {
@@ -1550,6 +1556,16 @@ export class ProjectFeature implements ChatCompletionFeature {
       attachedFileTokenBudget,
       modelInfo
     );
+
+    const scrubbed = await scrubStaleProjectFiles(this.project, projectFabMessages.fileNotices, {
+      db: { fabFiles: this.chatCompletion.db.fabfiles, projects: this.chatCompletion.db.projects },
+      logger: this.logger,
+    });
+    if (scrubbed.length > 0) {
+      const removed = new Set(scrubbed);
+      this.project.fileIds = this.project.fileIds.filter(id => !removed.has(id));
+      this.project.systemPrompts = this.project.systemPrompts.filter(prompt => !removed.has(prompt.fileId));
+    }
 
     return projectFabMessages.promptMessages;
   }

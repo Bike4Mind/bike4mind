@@ -59,3 +59,23 @@ describe('SessionRepository.pullKnowledgeIds', () => {
     expect(await knowledgeIdsOf(session.id)).toEqual(['f1']);
   });
 });
+
+describe('SessionRepository.pullKnowledgeIdsFromSession', () => {
+  it('removes the ids from the named session only', async () => {
+    const target = await seed(['f1', 'keep']);
+    const other = await seed(['f1']);
+
+    expect(await sessionRepository.pullKnowledgeIdsFromSession(target.id, ['f1'])).toBe(true);
+    expect(await knowledgeIdsOf(target.id)).toEqual(['keep']);
+    expect(await knowledgeIdsOf(other.id)).toEqual(['f1']);
+  });
+
+  it('reports false when the session held none of the ids, and for an empty list or malformed id', async () => {
+    const session = await seed(['keep']);
+
+    expect(await sessionRepository.pullKnowledgeIdsFromSession(session.id, ['f1'])).toBe(false);
+    expect(await sessionRepository.pullKnowledgeIdsFromSession(session.id, [])).toBe(false);
+    expect(await sessionRepository.pullKnowledgeIdsFromSession('not-an-id', ['keep'])).toBe(false);
+    expect(await knowledgeIdsOf(session.id)).toEqual(['keep']);
+  });
+});

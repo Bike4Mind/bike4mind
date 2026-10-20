@@ -46,11 +46,14 @@ describe('deleteFabFile', () => {
       users: {
         findById: Mock;
         update: Mock;
+        pullSystemFiles: Mock;
+        pullSystemFilesFromAllUsers: Mock;
       };
       sessions: {
         findAllWithKnowledgeId: Mock;
         update: Mock;
       };
+      projects?: { pullFileReferences: Mock };
       dataLakes?: { find: Mock; findByDatalakeTag: Mock };
       lakeMembershipChangeEvents?: { record: Mock };
     };
@@ -83,11 +86,14 @@ describe('deleteFabFile', () => {
         users: {
           findById: vi.fn().mockResolvedValue({ id: mockUserId }),
           update: vi.fn(),
+          pullSystemFiles: vi.fn(),
+          pullSystemFilesFromAllUsers: vi.fn(),
         },
         sessions: {
           findAllWithKnowledgeId: vi.fn().mockResolvedValue([]),
           update: vi.fn(),
         },
+        projects: { pullFileReferences: vi.fn() },
       },
       storage: {
         delete: vi.fn().mockResolvedValue(undefined),
@@ -349,6 +355,34 @@ describe('deleteFabFile', () => {
         knowledgeIds: [],
       });
     });
+
+    it('removes the file from every system-file list and every project that references it', async () => {
+      mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(mockFabFile);
+
+      await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
+
+      expect(mockAdapter.db.users.pullSystemFilesFromAllUsers).toHaveBeenCalledWith([mockFileId]);
+      expect(mockAdapter.db.projects?.pullFileReferences).toHaveBeenCalledWith([mockFileId]);
+    });
+
+    it('still reports the delete when unlinking system-file or project references fails', async () => {
+      mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(mockFabFile);
+      mockAdapter.db.projects?.pullFileReferences.mockRejectedValueOnce(new Error('write failed'));
+
+      const result = await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
+
+      expect(result.action).toBe('deleted');
+    });
+
+    it('deletes without a project repository, leaving project references to the per-turn prune', async () => {
+      mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(mockFabFile);
+      delete mockAdapter.db.projects;
+
+      const result = await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
+
+      expect(result.action).toBe('deleted');
+      expect(mockAdapter.db.users.pullSystemFilesFromAllUsers).toHaveBeenCalledWith([mockFileId]);
+    });
   });
 
   describe('searchIndex (self-host OpenSearch mirror)', () => {
@@ -429,6 +463,17 @@ describe('deleteFabFile', () => {
         id: 'session-1',
         knowledgeIds: ['other-file'],
       });
+    });
+
+    it("removes the file from only the unsharing user's system files, and leaves projects alone", async () => {
+      mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(null);
+      mockAdapter.db.fabFiles.findById.mockResolvedValue(createMockSharedFile());
+
+      await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
+
+      expect(mockAdapter.db.users.pullSystemFiles).toHaveBeenCalledWith(mockUserId, [mockFileId]);
+      expect(mockAdapter.db.users.pullSystemFilesFromAllUsers).not.toHaveBeenCalled();
+      expect(mockAdapter.db.projects?.pullFileReferences).not.toHaveBeenCalled();
     });
   });
 

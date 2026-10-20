@@ -4,6 +4,7 @@ import {
   FabFile,
   fabFileRepository,
   projectRepository,
+  sessionRepository,
   User,
   userRepository,
   withTransaction,
@@ -157,6 +158,21 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
           throw error;
         }
       });
+
+      // Every one of these files is gone for everyone now, so drop the references that would
+      // otherwise keep re-attaching them - the same unlink a single delete does (deleteFabFile).
+      // After the commit and best-effort: the files are deleted either way.
+      if (fabFileIds.length > 0) {
+        try {
+          await Promise.all([
+            sessionRepository.pullKnowledgeIds(fabFileIds),
+            userRepository.pullSystemFilesFromAllUsers(fabFileIds),
+            projectRepository.pullFileReferences(fabFileIds),
+          ]);
+        } catch (error) {
+          req.logger.warn('DELETE /api/files: failed to unlink references to deleted files', { error, userId });
+        }
+      }
 
       return res.status(204).send();
     } catch (error) {

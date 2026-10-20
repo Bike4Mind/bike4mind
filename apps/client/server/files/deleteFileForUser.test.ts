@@ -27,6 +27,7 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: { findById: mockFindById },
   fileTagRepository: { touchLastActivityBy: vi.fn() },
   sessionRepository: {},
+  projectRepository: {},
   userRepository: {},
   withTransaction: (fn: (session: unknown) => unknown) => fn('session'),
   User: { findById: (id: string) => ({ session: () => mockFindUser(id) }) },

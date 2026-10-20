@@ -24,6 +24,9 @@ const mockRefs = vi.hoisted(() => ({
   baseApiOptions: undefined as unknown,
   deleteUser: undefined as undefined | { currentStorageSize: number; save: () => Promise<void> },
   incrementCurrentStorage: undefined as unknown as ReturnType<typeof vi.fn>,
+  pullKnowledgeIds: undefined as unknown as ReturnType<typeof vi.fn>,
+  pullSystemFilesFromAllUsers: undefined as unknown as ReturnType<typeof vi.fn>,
+  pullFileReferences: undefined as unknown as ReturnType<typeof vi.fn>,
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -96,11 +99,18 @@ vi.mock('@bike4mind/database', () => {
     FabFile,
     User,
     fabFileRepository: { __repo: 'fabFiles' },
-    userRepository: { __repo: 'users' },
+    userRepository: {
+      __repo: 'users',
+      pullSystemFilesFromAllUsers: (...args: unknown[]) => mockRefs.pullSystemFilesFromAllUsers(...args),
+    },
+    sessionRepository: { pullKnowledgeIds: (...args: unknown[]) => mockRefs.pullKnowledgeIds(...args) },
     organizationRepository: {
       incrementCurrentStorage: (...args: unknown[]) => mockRefs.incrementCurrentStorage(...args),
     },
-    projectRepository: { __repo: 'projects' },
+    projectRepository: {
+      __repo: 'projects',
+      pullFileReferences: (...args: unknown[]) => mockRefs.pullFileReferences(...args),
+    },
     adminSettingsRepository: { __repo: 'adminSettings' },
     withTransaction: vi.fn((fn: (session: unknown) => unknown) => fn({ __fakeSession: true })),
   };
@@ -239,7 +249,7 @@ function invokeDelete() {
   const { req, res } = createMocks({ method: 'DELETE', url: '/api/files' });
   (req as any).user = { id: 'user-1' };
   (req as any).ability = { can: () => true };
-  (req as any).logger = { error: vi.fn() };
+  (req as any).logger = { error: vi.fn(), warn: vi.fn() };
   return { req, res };
 }
 
@@ -253,6 +263,9 @@ describe('DELETE /api/files', () => {
     mockRefs.updateManyArgs = undefined;
     mockRefs.updateManyOptions = undefined;
     mockRefs.incrementCurrentStorage = vi.fn().mockResolvedValue(undefined);
+    mockRefs.pullKnowledgeIds = vi.fn().mockResolvedValue(0);
+    mockRefs.pullSystemFilesFromAllUsers = vi.fn().mockResolvedValue(undefined);
+    mockRefs.pullFileReferences = vi.fn().mockResolvedValue(undefined);
   });
 
   // Regression for the TypeError that fired in production: FabFile.deleteMany() comes from the
@@ -364,6 +377,28 @@ describe('DELETE /api/files', () => {
     await mockRefs.deleteHandler!(req, res);
 
     expect(res._getStatusCode()).toBe(204);
+  });
+
+  it('drops session, system-file and project references to every deleted file', async () => {
+    const { req, res } = invokeDelete();
+
+    await mockRefs.deleteHandler!(req, res);
+
+    const deletedIds = fabFileDocs.map((_doc, i) => `file-${i}`);
+    expect(deletedIds.length).toBeGreaterThan(0);
+    expect(mockRefs.pullKnowledgeIds).toHaveBeenCalledWith(deletedIds);
+    expect(mockRefs.pullSystemFilesFromAllUsers).toHaveBeenCalledWith(deletedIds);
+    expect(mockRefs.pullFileReferences).toHaveBeenCalledWith(deletedIds);
+  });
+
+  it('still completes when dropping references fails', async () => {
+    mockRefs.pullFileReferences.mockRejectedValueOnce(new Error('write failed'));
+    const { req, res } = invokeDelete();
+
+    await mockRefs.deleteHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(204);
+    expect((req as any).logger.warn).toHaveBeenCalled();
   });
 
   it('rejects a files:read-only key with a 403 before touching deleteMany', async () => {

@@ -1040,6 +1040,11 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
   pullKnowledgeIds: (fabFileIds: string[]) => Promise<number>;
 
   /**
+   * As `pullKnowledgeIds`, but for ONE session only. Resolves to whether that session was modified.
+   */
+  pullKnowledgeIdsFromSession: (sessionId: string, fabFileIds: string[]) => Promise<boolean>;
+
+  /**
    * Search for sessions by user ID
    *
    * @param search - The search query

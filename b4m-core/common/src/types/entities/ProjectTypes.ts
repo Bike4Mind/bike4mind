@@ -53,6 +53,13 @@ export interface IProjectRepository extends IBaseRepository<IProjectDocument> {
   removeSession: (sessionId: string) => Promise<void>;
 
   /**
+   * Remove the given file ids from `fileIds` and `systemPrompts` (idempotent $pull). Scoped to one
+   * project when `projectId` is given; otherwise EVERY project holding them, which is only right
+   * when the files are gone for everyone (an owner delete).
+   */
+  pullFileReferences: (fileIds: string[], projectId?: string) => Promise<void>;
+
+  /**
    * Find all projects by session ID
    *
    * @param sessionId - The session ID

@@ -5,6 +5,7 @@ import {
   IFabFileChunkRepository,
   IFabFileDocument,
   IFabFileRepository,
+  IProjectRepository,
   ISessionRepository,
   IUserRepository,
   LakeMembershipChangeOrigin,
@@ -54,8 +55,11 @@ export interface DeleteFabFileAdapter extends LakeMembershipAuditAdapters {
       'findByIdAndUserId' | 'findById' | 'findAllInIds' | 'update' | 'deleteManyInIds'
     >;
     fabFileChunks: Pick<IFabFileChunkRepository, 'deleteManyByFabFileId' | 'distinctRetrievalIndexModelsByFabFileIds'>;
-    users: Pick<IUserRepository, 'findById' | 'update'>;
+    users: Pick<IUserRepository, 'findById' | 'update' | 'pullSystemFiles' | 'pullSystemFilesFromAllUsers'>;
     sessions: Pick<ISessionRepository, 'findAllWithKnowledgeId' | 'update'>;
+    // Optional so a caller with no project repo still compiles; absent -> project references are
+    // left for the per-turn prune (scrubStaleProjectFiles) to drop when the project is next used.
+    projects?: Pick<IProjectRepository, 'pullFileReferences'>;
     // Optional, matching every other membership-write door: absent -> the removed-event recording
     // below is skipped entirely rather than failing to compile (see LakeMembershipAuditAdapters).
     dataLakes?: Pick<IDataLakeRepository, 'find' | 'findByDatalakeTag'>;
@@ -175,6 +179,15 @@ export const deleteFabFile = async (
       await db.sessions.update({ id: notebook.id, knowledgeIds: updatedKnowledgeIds });
     }
 
+    // The file is gone for everyone, so so are the system-file and project references to it.
+    // Best-effort: the delete itself has already happened and must still report as done.
+    await unlinkFileReferences(ownedFile.id, () =>
+      Promise.all([
+        db.users.pullSystemFilesFromAllUsers([ownedFile.id]),
+        db.projects?.pullFileReferences([ownedFile.id]),
+      ])
+    );
+
     await deleteStoredObjects([ownedFile], { files: storage, generated: generatedCopies });
 
     // sizeToDeduct is the bytes this row was charged (see chargedBytes), so 0 for a never-charged row
@@ -219,6 +232,16 @@ export const deleteFabFile = async (
       await db.sessions.update({ id: session.id, knowledgeIds: updatedKnowledgeIds });
     }
   }
+  // Projects are shared, so their references stay; only this user's own system files let go.
+  await unlinkFileReferences(sharedFile.id, () => db.users.pullSystemFiles(userId, [sharedFile.id]));
 
   return { action: 'unshared', fabFile: sharedFile };
+};
+
+const unlinkFileReferences = async (fileId: string, unlink: () => Promise<unknown>) => {
+  try {
+    await unlink();
+  } catch (err) {
+    Logger.globalInstance.warn('[deleteFabFile] failed to unlink system-file/project references', { fileId, err });
+  }
 };

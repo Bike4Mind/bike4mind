@@ -53,6 +53,18 @@ export class ProjectRepository extends BaseRepository<IProjectDocument> implemen
     await this.projectModel.updateMany({ sessionIds: sessionId }, { $pull: { sessionIds: sessionId } });
   }
 
+  async pullFileReferences(fileIds: string[], projectId?: string) {
+    if (fileIds.length === 0) return;
+    const holdsAny = { $or: [{ fileIds: { $in: fileIds } }, { 'systemPrompts.fileId': { $in: fileIds } }] };
+    const pull = { $pull: { fileIds: { $in: fileIds }, systemPrompts: { fileId: { $in: fileIds } } } };
+    if (projectId === undefined) {
+      await this.projectModel.updateMany(holdsAny, pull);
+      return;
+    }
+    if (!mongoose.isObjectIdOrHexString(projectId)) return;
+    await this.projectModel.updateOne({ _id: projectId, ...holdsAny }, pull);
+  }
+
   async searchAccessible(
     userId: string,
     search: string,

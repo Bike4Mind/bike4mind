@@ -747,6 +747,7 @@ export function attachedFileIdsForRun(
 async function materializeAttachmentsForRun(args: {
   execution: {
     userId: string;
+    sessionId?: string;
     query: string;
     messageFileIds?: string[];
     sessionFabFileIds?: string[];
@@ -864,10 +865,12 @@ async function materializeAttachmentsForRun(args: {
     // every later run - the chat path does the same, through the same helper and the same two
     // gates. `materialized.delivery.droppedIds` is deliberately NOT the input: it also names live
     // files this run simply could not inline, and detaching those would destroy notebook contents.
-    await sessionService.scrubMissingKnowledgeIds(sessionKnowledgeIds, materialized.notices, {
-      db: { fabFiles: fabFileRepository, sessions: sessionRepository },
-      logger,
-    });
+    await sessionService.scrubMissingKnowledgeIds(
+      sessionKnowledgeIds,
+      materialized.notices,
+      { db: { fabFiles: fabFileRepository, sessions: sessionRepository }, logger },
+      execution.sessionId
+    );
 
     return materialized;
   } catch (err) {

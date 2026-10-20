@@ -274,6 +274,19 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     await this.model.updateOne({ _id: userId }, { $addToSet: { tags: { $each: tags } } });
   }
 
+  async pullSystemFiles(userId: string, fileIds: string[]): Promise<void> {
+    if (fileIds.length === 0) return;
+    await this.model.updateOne({ _id: userId }, { $pull: { systemFiles: { fileId: { $in: fileIds } } } });
+  }
+
+  async pullSystemFilesFromAllUsers(fileIds: string[]): Promise<void> {
+    if (fileIds.length === 0) return;
+    await this.model.updateMany(
+      { 'systemFiles.fileId': { $in: fileIds } },
+      { $pull: { systemFiles: { fileId: { $in: fileIds } } } }
+    );
+  }
+
   /** Remove one group id from one user. */
   async removeGroupFromUser(userId: string, groupId: string): Promise<void> {
     await this.model.updateOne({ _id: userId }, { $pull: { groups: groupId } });
