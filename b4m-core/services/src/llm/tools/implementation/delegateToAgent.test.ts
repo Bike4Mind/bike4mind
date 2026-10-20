@@ -477,6 +477,35 @@ describe('createDelegateToAgentTool — usage-event cost basis (#151)', () => {
     expect(captured!.usdCost).toBeLessThan(getTextModelCost(tiered, 301_000, 1_200));
   });
 
+  it('prices a cached long prompt in the totals fallback on the tier its whole prompt falls in', async () => {
+    mockDelegation(
+      makeResult({
+        totalInputTokens: 20_000,
+        totalOutputTokens: 100,
+        totalCacheReadTokens: 190_000,
+        totalCacheWriteTokens: 0,
+      })
+    );
+
+    let captured: SubagentUsageMeta | undefined;
+    const tool = createDelegateToAgentTool({
+      userId: 'u1',
+      llm: makeLlm(),
+      logger: makeLogger(),
+      parentTools: [],
+      agentStore: makeStore(),
+      availableModels: [tiered],
+      onCredits: (_credits, meta) => {
+        captured = meta;
+      },
+    });
+
+    await tool.toolFn({ task: 'research', agent: 'researcher' });
+
+    // 210K prompt: the >200K rates, though the uncached 20K alone sits under the threshold.
+    expect(captured!.usdCost).toBeCloseTo(20_000 * 0.000006 + 190_000 * 0.000006 * 0.1 + 100 * 0.0000225, 12);
+  });
+
   it('threads subagent cache tokens into the usage meta and computes cost on the cache-aware basis', async () => {
     const inputTokens = 12_000;
     const outputTokens = 3_000;

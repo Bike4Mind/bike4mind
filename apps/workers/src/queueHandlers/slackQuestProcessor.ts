@@ -34,10 +34,10 @@ import {
   latticeModelRepository,
   slackDevWorkspaceRepository,
   usageEventRepository,
-  imageModerationIncidentRepository,
   lakeAccessEventRepository,
   scopedSettingsRepository,
 } from '@bike4mind/database';
+import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
 import { lakeWriteToolDb } from '@server/dataLakes/lakeWriteToolDb';
 import { NotFoundError, registerLambdaErrorHandlers } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
@@ -151,7 +151,7 @@ export const getStaticOptions = () => {
       // Audit trail for images blocked by the image_generation/edit_image tools'
       // moderation gate. The gate itself is unconditional (constructed inline
       // in the tool) - this only wires the incident record, not the block.
-      imageModerationIncidents: imageModerationIncidentRepository,
+      imageModerationIncidents,
       lakeAccessEvents: lakeAccessEventRepository,
       scopedSettings: scopedSettingsRepository,
       ...lakeWriteToolDb,

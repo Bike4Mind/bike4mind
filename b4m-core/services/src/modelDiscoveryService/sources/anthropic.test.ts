@@ -195,6 +195,18 @@ describe('anthropic pricing parser', () => {
     expect(standard).toMatchObject({ inputPerMTok: 3, outputPerMTok: 15, validFrom: '2026-09-01' });
   });
 
+  it('reads a single undated row whose rate cells carry a footnote marker', () => {
+    // Later capture: the introductory rate became standard and the two dated rows collapsed into one.
+    const current = parseAnthropicPricing(read('pricing-sonnet-5-standard.md'));
+    if (!current.ok) throw new Error('parser failed');
+
+    expect(current.rows.filter(row => row.slug === 'claude-sonnet-5')).toHaveLength(1);
+    expect(priceInForce(current.rows, 'claude-sonnet-5', new Date('2026-10-19T00:00:00Z'))).toMatchObject({
+      inputPerMTok: 2,
+      outputPerMTok: 10,
+    });
+  });
+
   it('maps a dated model id onto the undated docs slug', () => {
     expect(pricingSlugFor('claude-opus-4-5-20251101')).toBe('claude-opus-4-5');
     expect(pricingSlugFor('claude-opus-5')).toBe('claude-opus-5');

@@ -190,7 +190,14 @@ export async function reportSubagentCredits(
       ? {
           usdCost: turnUsage?.length
             ? getTurnsCost(modelInfo, turnUsage)
-            : getTextModelCost(modelInfo, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens),
+            : getTextModelCost(
+                modelInfo,
+                inputTokens,
+                outputTokens,
+                cacheReadTokens,
+                cacheWriteTokens,
+                inputTokens + cacheReadTokens + cacheWriteTokens
+              ),
           provider: modelInfo.backend,
           model: result.model,
           inputTokens,

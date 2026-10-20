@@ -10,7 +10,14 @@ import { moderateImageOrThrow } from './imageModerationGate';
 const labels: ModerationLabelHit[] = [{ name: 'Explicit Nudity', parentName: '', confidence: 97.5 }];
 
 function makeMeta() {
-  return { userId: 'u1', sessionId: 's1', questId: 'q1', provider: 'openai', model: 'gpt-image-1' };
+  return {
+    userId: 'u1',
+    sessionId: 's1',
+    questId: 'q1',
+    provider: 'openai',
+    model: 'gpt-image-1',
+    surface: 'generation' as const,
+  };
 }
 
 describe('moderateImageOrThrow (moderation gate)', () => {

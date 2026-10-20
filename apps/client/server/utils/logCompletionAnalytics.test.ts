@@ -125,7 +125,8 @@ describe('logCompletionAnalytics - per-request pricing', () => {
       baseParams.finalInputTokens,
       baseParams.finalOutputTokens,
       150_000,
-      2_000
+      2_000,
+      baseParams.finalInputTokens + 150_000 + 2_000
     );
   });
 });

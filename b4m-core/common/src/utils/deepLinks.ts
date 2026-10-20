@@ -52,6 +52,22 @@ export function adminAuditLogPath(filters: AuditLogFilters = {}, entryId?: strin
   return `/admin?${params.toString()}`;
 }
 
+/**
+ * Admin console Users tab slug; same stability rule as ADMIN_FEEDBACK_TAB_SLUG. Moderation incidents
+ * have no review tab of their own yet, so incident links land here, next to the per-user compliance view.
+ */
+export const ADMIN_USERS_TAB_SLUG = 'users';
+export const MODERATION_INCIDENT_ID_PARAM = 'incidentId';
+
+/** Deep link to the admin console for one image moderation incident. */
+export function adminModerationIncidentPath(incidentId: string): string {
+  const params = new URLSearchParams({
+    [ADMIN_TAB_PARAM]: ADMIN_USERS_TAB_SLUG,
+    [MODERATION_INCIDENT_ID_PARAM]: incidentId,
+  });
+  return `/admin?${params.toString()}`;
+}
+
 /** Deep link to a chat session. */
 export function sessionPath(sessionId: string): string {
   return `/notebooks/${encodeURIComponent(sessionId)}`;

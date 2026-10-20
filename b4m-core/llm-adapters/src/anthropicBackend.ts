@@ -611,8 +611,8 @@ export class AnthropicBackend implements ICompletionBackend {
         thinkingStyle: 'adaptive',
         pricing: {
           1_000_000: {
-            input: 3 / 1_000_000, // $3 per 1M input tokens
-            output: 15 / 1_000_000, // $15 per 1M output tokens
+            input: 2 / 1_000_000, // $2 per 1M input tokens
+            output: 10 / 1_000_000, // $10 per 1M output tokens
           },
         },
         supportsVision: true,

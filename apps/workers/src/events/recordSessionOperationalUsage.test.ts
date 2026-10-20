@@ -62,4 +62,14 @@ describe('recordSessionOperationalUsage', () => {
       12
     );
   });
+
+  it('prices a cached long prompt in the totals on the tier its whole prompt falls in', async () => {
+    await run({ inputTokens: 20_000, outputTokens: 100, cacheReadInputTokens: 190_000 });
+
+    // 210K prompt: the >200K rates, though the uncached 20K alone sits under the threshold.
+    expect(recordOperationalUsage.mock.calls[0][0].costUsd).toBeCloseTo(
+      20_000 * 0.000006 + 190_000 * 0.000006 * 0.1 + 100 * 0.0000225,
+      12
+    );
+  });
 });

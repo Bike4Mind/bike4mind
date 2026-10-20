@@ -5,7 +5,6 @@ import {
   creditTransactionRepository,
   defineAbilitiesFor,
   fabFileRepository,
-  imageModerationIncidentRepository,
   organizationRepository,
   questRepository,
   Session,
@@ -26,6 +25,7 @@ import { SessionEvents } from '@server/utils/eventBus';
 import { createAttachmentLakeAccess } from '@server/dataLakes/attachmentLakeAccess';
 import type { IUserDocument } from '@bike4mind/common';
 import { Resource } from 'sst';
+import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
 
 let _imageGeneration: ImageGenerationService | undefined;
 export const getImageGeneration = (): ImageGenerationService => {
@@ -46,7 +46,7 @@ export const getImageGeneration = (): ImageGenerationService => {
         creditTransactions: creditTransactionRepository,
         usageEvents: usageEventRepository,
         organizations: organizationRepository,
-        imageModerationIncidents: imageModerationIncidentRepository,
+        imageModerationIncidents,
       },
       imageProcessorLambdaName: Resource.ImageProcessor.name,
       imageModerationService: new RekognitionImageModerationService(Logger.globalInstance),
