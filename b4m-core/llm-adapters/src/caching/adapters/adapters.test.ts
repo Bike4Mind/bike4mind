@@ -258,6 +258,27 @@ describe('AnthropicCachingAdapter', () => {
       expect(anchorContent[0].cache_control).toEqual(cacheControl);
     });
 
+    it('anchors the history breakpoint before a trailing tool change message, which takes no cache_control', () => {
+      const toolChange = {
+        role: 'system',
+        content: [{ type: 'tool_addition', tool: { type: 'tool_reference', name: 'get_weather' } }],
+      };
+      const params = {
+        messages: [
+          { role: 'user', content: 'turn 1' },
+          { role: 'assistant', content: 'reply 1' },
+          { role: 'user', content: 'turn 2' },
+          toolChange,
+        ],
+      };
+      const result = adapter.applyCaching(params, { enableCaching: true, cacheConversationHistory: true });
+
+      const messages = result.messages as Record<string, unknown>[];
+      expect(messages[3]).toEqual(toolChange);
+      const anchorContent = messages[2].content as Record<string, unknown>[];
+      expect(anchorContent[0].cache_control).toEqual(cacheControl);
+    });
+
     it('skips history caching entirely when historyCacheExcludeTrailingCount covers the whole array', () => {
       const params = { messages: [{ role: 'user', content: 'only message' }] };
       const result = adapter.applyCaching(params, {
