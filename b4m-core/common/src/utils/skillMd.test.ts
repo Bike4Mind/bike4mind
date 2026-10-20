@@ -92,6 +92,15 @@ describe('parseSkillMd', () => {
     });
   });
 
+  it.each([
+    ['[pr]', '[pr]'],
+    ['[pr-number] [priority] [assignee]', '[pr-number] [priority] [assignee]'],
+    ['[a, b]  ', '[a, b]'],
+  ])('keeps an unquoted Claude Code argument-hint %j verbatim', (raw, hint) => {
+    const result = parseSkillMd(`---\nname: review\nargument-hint: ${raw}\n---\nDo it.\n`);
+    expect(result).toEqual({ ok: true, fields: { name: 'review', argumentHint: hint, body: 'Do it.' }, dropped: [] });
+  });
+
   it('treats a file without frontmatter as all body', () => {
     expect(parseSkillMd('Just instructions\n')).toEqual({
       ok: true,
