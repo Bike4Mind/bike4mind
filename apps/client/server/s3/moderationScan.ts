@@ -28,15 +28,65 @@ export const toVerdictPatch = (result: Awaited<ReturnType<typeof moderateUploade
   ...(result.blockReason ? { blockReason: result.blockReason } : {}),
 });
 
+/** S3 event ETags are bare, HeadObject's are quoted; compare them in one form. */
+export const normalizeETag = (eTag: string | null | undefined): string | undefined =>
+  eTag?.replace(/^"|"$/g, '') || undefined;
+
+/**
+ * Reconciles moderation with the object currently in storage, never a notification's historical
+ * ETag. A delayed event for A must not reopen a terminal verdict for the unchanged current B.
+ * Read the row before HEAD and compare-and-set that snapshot: a delayed HEAD must not rewind a
+ * newer reconciliation, even when the ETag has cycled back to an older value. Lookup failures
+ * and lost update races retry the landing instead of rescanning bytes under an unknown or stale version.
+ */
+export const recordLandedObject = async (fabFileId: FabFileKey, objectKey: string): Promise<void> => {
+  const observed = await FabFile.findById(fabFileId).select('moderationETag moderationRevision').lean();
+  if (!observed) return;
+
+  const eTag = normalizeETag((await getFilesStorage().getMetadata(objectKey)).etag);
+  if (!eTag) throw new Error(`No ETag for ${objectKey}; moderation version not reconciled`);
+  // An unchanged version needs no write: even a delayed HEAD here cannot reset a successor.
+  if (observed.moderationETag === eTag) return;
+
+  const snapshot = {
+    _id: fabFileId,
+    moderationETag: observed.moderationETag ?? null,
+    moderationRevision: observed.moderationRevision ?? null,
+  };
+  const judged = { $in: ['$moderationStatus', ['clean', 'blocked', 'scanning']] };
+  const result = await FabFile.updateOne(snapshot, [
+    {
+      $set: {
+        moderationETag: eTag,
+        moderationRevision: { $add: [{ $ifNull: ['$moderationRevision', 0] }, 1] },
+        moderationStatus: { $cond: [judged, 'pending', '$moderationStatus'] },
+        blockReason: { $cond: [judged, '$$REMOVE', '$blockReason'] },
+        moderationClaimedAt: { $cond: [judged, '$$REMOVE', '$moderationClaimedAt'] },
+      },
+    },
+  ]);
+  if (!result.matchedCount) {
+    const current = await FabFile.findById(fabFileId).select('moderationETag').lean();
+    if (current?.moderationETag === eTag) return;
+    throw new Error(`Moderation version changed for ${objectKey}; retry the landing`);
+  }
+};
+
 /**
  * Atomically claims the right to scan: only ONE concurrent caller can move 'pending'/unset to
  * 'scanning'. Returns the claimed document, or null when another caller already owns (or finished)
  * the scan. `claimedAt` is the claim's identity - writeModerationVerdict and the rescue sweep match on it.
+ * Version writes belong to recordLandedObject; claiming never rewinds that version snapshot.
  */
 export const claimModerationScan = (fabFileId: FabFileKey, claimedAt: Date) =>
   FabFile.findOneAndUpdate(
     { _id: fabFileId, moderationStatus: { $in: ['pending', null] } },
-    { $set: { moderationStatus: 'scanning', moderationClaimedAt: claimedAt } },
+    {
+      $set: {
+        moderationStatus: 'scanning',
+        moderationClaimedAt: claimedAt,
+      },
+    },
     { new: true }
   );
 

@@ -125,8 +125,10 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
         // Generate presigned URL and public URL
         // ACL not needed - bucket policy grants public read for admin/logos/* prefix
+        // Bound to the declared size: the same bytes are PUT, and a longer upload is refused.
         const presignedUrl = await storage.getSignedUrl(s3Key, 'put', {
           expiresIn: 600,
+          ContentLength: data.fileSize,
         });
 
         // Update logo settings

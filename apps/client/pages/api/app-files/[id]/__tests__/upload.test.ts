@@ -45,10 +45,11 @@ const makeReq = (opts: { id?: string; userId?: string; body?: Buffer[] }) => {
   } as unknown as Request;
 };
 
-const makePendingFile = () => ({
+const makePendingFile = (size = 5) => ({
   id: '507f1f77bcf86cd7994390a1',
   userId: 'u1',
   status: 'pending' as string,
+  size,
   path: 'organizations/org1/logo.png',
   mimeType: 'image/png',
   save: vi.fn(async function (this: { status: string }) {
@@ -100,7 +101,28 @@ describe('PUT /api/app-files/[id]/upload (self-host proxy)', () => {
     expect(uploadMock).not.toHaveBeenCalled();
   });
 
+  // Hosted S3 refuses any length but the presign's bound one with 403; the proxy matches it both ways.
+  it('returns 403 and aborts mid-stream when the body outgrows the declared size', async () => {
+    const req = makeReq({ body: [Buffer.from('hello'), Buffer.from('!')] });
+    const res = makeRes();
+    await handler(req, res);
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect((req as unknown as { destroy: ReturnType<typeof vi.fn> }).destroy).toHaveBeenCalled();
+    expect(uploadMock).not.toHaveBeenCalled();
+  });
+
+  it('returns 403 when the body is shorter than the declared size', async () => {
+    const appFile = makePendingFile(6);
+    findByIdMock.mockResolvedValue(appFile);
+    const res = makeRes();
+    await handler(makeReq({}), res);
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(uploadMock).not.toHaveBeenCalled();
+    expect(appFile.status).toBe('pending');
+  });
+
   it('returns 413 and aborts mid-stream when the body exceeds the size cap', async () => {
+    findByIdMock.mockResolvedValue(makePendingFile(100));
     getSettingsValueMock.mockReturnValue(0.00001); // ~10 bytes cap
     const req = makeReq({ body: [Buffer.alloc(50), Buffer.alloc(50)] });
     const res = makeRes();
@@ -123,6 +145,7 @@ describe('PUT /api/app-files/[id]/upload (self-host proxy)', () => {
   });
 
   it("writes the body to the app file's own storage key and returns 200 on success", async () => {
+    findByIdMock.mockResolvedValue(makePendingFile(11));
     const res = makeRes();
     await handler(makeReq({ body: [Buffer.from('hello '), Buffer.from('world')] }), res);
 

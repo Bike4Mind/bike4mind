@@ -9,6 +9,8 @@ export abstract class BaseStorage {
     options?: {
       expiresIn?: number;
       ACL?: any;
+      /** PUT only: the exact byte length the upload must have (see S3Storage.getSignedUrl). */
+      ContentLength?: number;
     }
   ): Promise<string>;
   abstract getPublicUrl(path: string): string;

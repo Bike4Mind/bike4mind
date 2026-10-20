@@ -38,7 +38,7 @@ const handler = baseApi().post(
 
     // Get presigned URL before transaction since it's not a DB operation
     // ACL not needed - bucket policy grants public read for profile-photos/* prefix
-    const presignedUrl = await storage.getSignedUrl(fileKey, 'put', { expiresIn: 600 });
+    const presignedUrl = await storage.getSignedUrl(fileKey, 'put', { expiresIn: 600, ContentLength: data.fileSize });
 
     // Handle DB operations in transaction
     const { fileId } = await withTransaction(async session => {
