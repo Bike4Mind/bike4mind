@@ -20,21 +20,24 @@ export class ChatPage extends BasePage {
   /**
    * Text of the newest mounted reply, or '' when none is mounted.
    *
-   * Reads the reply's root container, not `ai-response`: that test id sits only on the markdown
-   * <p> renderer, so a reply that is just a list has none and read as '' - which stalled the
-   * completion wait until its budget ran out.
+   * Reads the reply body (`ai-response-body`), falling back to the whole root container when no
+   * body is mounted (syntax-highlight and image-only views). The body test id is what keeps
+   * reasoning text, banners and accessories out of the returned text: the root wraps those too,
+   * and callers assert keywords against this string. Reading only `ai-response`, the id on the
+   * markdown <p> renderer, missed list-only replies entirely and stalled the completion wait
+   * until its budget ran out.
    *
-   * The count() guard is load-bearing: the config sets no `actionTimeout`, so a bare
-   * `last().innerText()` on an empty chat auto-waits with NO timeout and blocks until the test
+   * The count() guards are load-bearing: the config sets no `actionTimeout`, so a bare
+   * `.innerText()` on an absent element auto-waits with NO timeout and blocks until the test
    * times out. count() never waits; the bounded innerText then covers Virtuoso unmounting the
    * reply between the two calls.
    */
   private async newestResponseText(): Promise<string> {
     if ((await this.aiResponseRoot.count()) === 0) return '';
-    return this.aiResponseRoot
-      .last()
-      .innerText({ timeout: TIMEOUTS.ELEMENT_STATE })
-      .catch(() => '');
+    const root = this.aiResponseRoot.last();
+    const body = root.getByTestId('ai-response-body');
+    const target = (await body.count()) > 0 ? body.first() : root;
+    return target.innerText({ timeout: TIMEOUTS.ELEMENT_STATE }).catch(() => '');
   }
 
   async sendMessage(text: string) {

@@ -1643,6 +1643,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                   }}
                 >
                   <Typography
+                    data-testid="ai-response-body"
                     // plain, not soft: the reply body is unframed, and Joy's soft
                     // variant would paint its own background once the explicit one
                     // below is gone. The user's prompt keeps its bubble.
