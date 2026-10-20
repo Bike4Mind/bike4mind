@@ -409,6 +409,14 @@ describe('run', () => {
     expect(code).toBe(0);
   });
 
+  it('fetches an entry with no counted changes whose status is not a rename', async () => {
+    const routes = prRoutes({ files: [file('run.sh', undefined, { status: 'modified', changes: 0 })] });
+    routes['/repos/acme/widgets/contents/run.sh'] = response('zorblax');
+    const { code, output } = await check({ routes });
+    expect(code).toBe(1);
+    expect(output).toContain('file run.sh line 1');
+  });
+
   it('fails a push whose commits the compare API could not all list', async () => {
     const event = { ref: 'refs/heads/main', before: '1'.repeat(40), after: '2'.repeat(40) };
     const routes = {
@@ -467,25 +475,32 @@ describe('run', () => {
     const event = { ref: 'refs/heads/main', before: '1'.repeat(40), after: '2'.repeat(40) };
     const routes = {
       [`/repos/acme/widgets/commits/${event.after}`]: response({
-        ...commit('chore: ok', event.after),
-        files: [file('src/a.ts', '@@ -0,0 +1 @@\n+ok')],
+        ...commit('fix: zorblax', event.after),
+        files: [file('src/a.ts', '@@ -0,0 +1 @@\n+zorblax')],
       }),
     };
     const { code, output } = await check({ eventName: 'push', event, routes });
     expect(code).toBe(1);
     expect(output).toContain('Incomplete check: the push base is not comparable');
+    expect(output).toContain('Restricted term found in file src/a.ts line 1.');
+    expect(output).toContain(`Restricted term found in commit ${event.after.slice(0, 12)} message.`);
+    expect(output).toContain('already on the branch');
   });
 
-  it('checks the head commit of a new ref without reporting a gap', async () => {
+  it('checks the head commit of a new ref without calling compare or reporting a gap', async () => {
     const event = { ref: 'refs/heads/main', before: '0'.repeat(40), after: '2'.repeat(40) };
     const routes = {
+      [`/repos/acme/widgets/compare/${event.before}...${event.after}`]: response({}, { status: 500 }),
       [`/repos/acme/widgets/commits/${event.after}`]: response({
-        ...commit('chore: ok', event.after),
-        files: [file('src/a.ts', '@@ -0,0 +1 @@\n+ok')],
+        ...commit('fix: zorblax', event.after),
+        files: [file('src/a.ts', '@@ -0,0 +1 @@\n+zorblax')],
       }),
     };
     const { code, output } = await check({ eventName: 'push', event, routes });
-    expect(code).toBe(0);
-    expect(output).toContain('No restricted terms found.');
+    expect(code).toBe(1);
+    expect(output).toContain('Restricted term found in file src/a.ts line 1.');
+    expect(output).toContain(`Restricted term found in commit ${event.after.slice(0, 12)} message.`);
+    expect(output).not.toContain('Incomplete check');
+    expect(output).not.toContain('GitHub API 500');
   });
 });
