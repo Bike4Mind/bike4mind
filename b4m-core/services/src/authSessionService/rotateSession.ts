@@ -181,8 +181,9 @@ const slideExpiresAt = (session: IAuthSessionDocument, now: Date): Date => {
  *         this an idle victim's session could be pushed to the absolute cap by the attacker's own
  *         traffic.
  *     Recoveries and revocations are RECORDED through `audit`. That is a forensic trail, not a
- *     detection control: nothing currently alerts on it, so do not treat "it would show up in the
- *     audit log" as a reason to widen anything here.
+ *     detection control: the only alarms are on volume (a burst of revocations, a high recovery
+ *     rate - infra/alarms.ts), so do not treat "it would show up in the audit log" as a reason to
+ *     widen anything here.
  *  4. Anything else -> an already-rotated or forged token was replayed. Treated as theft: the
  *     session is revoked and the caller rejected.
  *
@@ -227,16 +228,17 @@ export const rotateSession = async (
   };
 
   const revokeAsTheft = async (reason: ReuseRevokeReason): Promise<never> => {
-    // A token matching neither the current nor the previous hash was presented: forged, or at
-    // least two generations stale. Revoke the whole session: if it is theft the attacker is
-    // locked out; the (rare) benign holder of such a token re-authenticates.
+    // The presented secret is, by now, neither the current nor the previous hash: forged, or at
+    // least two generations stale (see ReuseRevokeReason). Revoke the whole session: if it is
+    // theft the attacker is locked out; the benign holder of such a token re-authenticates.
     await db.authSessions.revokeBySid(sid);
     await endRealtimeConnections({ sid }, { db, logger });
     const forensics = describeReuse(session, reason, new Date());
     // Awaited: this path throws on the next line, and `session_reuse_revoked` is the one event a
     // post-mortem cannot do without. Cannot fail the request - see emit.
     await emit('session_reuse_revoked', forensics);
-    logger?.warn('Refresh-token reuse detected; revoked session', { sid, userId: session.userId, ...forensics });
+    // Request IP/UA are only known to the caller; its audit sink logs the full triage line.
+    logger?.warn('Refresh-token reuse detected; revoked session', { sid, userId: session.userId, reason });
     throw invalid();
   };
 
