@@ -101,6 +101,20 @@ describe('ZeroCreditWarning', () => {
     );
   });
 
+  it('shows a retryable error when the server rejects resend with an empty message', async () => {
+    state.currentUser = { emailVerified: false, tags: [PENDING_FREE_CREDITS_TAG] };
+    post.mockRejectedValueOnce({ response: { status: 500, data: { message: '' } } });
+    renderWarning();
+    fireEvent.click(screen.getByTestId('credits-warning-verify-btn'));
+    await waitFor(() =>
+      expect(screen.getByTestId('credits-warning-verify-error')).toHaveTextContent(
+        'Failed to send verification email. Please try again later.'
+      )
+    );
+    expect(screen.getByTestId('credits-warning-verify-btn')).toHaveTextContent(/try again/i);
+    expect(screen.getByTestId('credits-warning-verify-btn')).not.toBeDisabled();
+  });
+
   it('shows the server message when the email service is not configured', async () => {
     state.currentUser = { emailVerified: false, tags: [PENDING_FREE_CREDITS_TAG] };
     post.mockRejectedValueOnce({

@@ -109,4 +109,13 @@ describe('resendVerificationErrorMessage', () => {
     expect(resendVerificationErrorMessage({ response: { status: 500, data: { message: 'Boom' } } })).toBe('Boom');
     expect(resendVerificationErrorMessage({})).toBe('Failed to send verification email. Please try again later.');
   });
+
+  it('falls back when the server sends an empty error message', () => {
+    expect(resendVerificationErrorMessage({ response: { status: 500, data: { message: '' } } })).toBe(
+      'Failed to send verification email. Please try again later.'
+    );
+    expect(
+      resendVerificationErrorMessage({ response: { status: 503, data: { isConfigError: true, message: '' } } })
+    ).toBe('Email service is not configured.');
+  });
 });

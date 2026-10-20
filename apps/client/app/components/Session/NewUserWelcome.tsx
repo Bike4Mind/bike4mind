@@ -37,6 +37,7 @@ const NewUserWelcome = () => {
   const enforceCredits = !!useGetSettingsValue('enforceCredits');
   const defaultFreeCredits = Number(useGetSettingsValue('defaultFreeCredits')) || 0;
   const balance = useEffectiveCredits();
+  const liveBalance = useEffectiveCredits({ live: true });
   const answerCost = useSelectedModelAnswerCost();
   const sendPrompt = useChatActions(s => s.sendPrompt);
   const setChatInputValue = useChatInput(s => s.setChatInputValue);
@@ -81,14 +82,14 @@ const NewUserWelcome = () => {
   if (!show) return null;
 
   const awaitingVerification = isAwaitingEmailVerification(currentUser);
-  const canStart = welcomeCanStart({ enforceCredits, balance });
+  const canStart = welcomeCanStart({ enforceCredits, balance: liveBalance });
   const creditsLine = welcomeCreditsLine({
     enforceCredits,
     balance,
     awaitingVerification,
     pendingGrant: currentUser?.pendingCreditGrant ?? defaultFreeCredits,
   });
-  // Same credits the line above quotes: the pending grant before verification, else the live balance.
+  // Same credits the line above quotes: the pending grant before verification, else the displayed balance.
   const estimateCredits = awaitingVerification ? (currentUser?.pendingCreditGrant ?? defaultFreeCredits) : balance;
   const answersEstimate = creditsLine ? formatAnswersEstimate(estimateCredits, answerCost) : null;
 
@@ -135,7 +136,7 @@ const NewUserWelcome = () => {
       )}
       {!canStart && !creditsLine && (
         <Typography level="body-sm" data-testid="new-user-welcome-out-of-credits">
-          You&apos;re out of credits. The options below show how to continue.
+          You&apos;re out of credits.
         </Typography>
       )}
       {canStart && (

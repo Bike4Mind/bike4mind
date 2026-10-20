@@ -88,7 +88,7 @@ function PersonalZeroCreditWarning({ hasDraft }: { hasDraft: boolean }) {
 /**
  * The out-of-credits block with what this account can actually do for free: claim a Gears reward,
  * or finish the email verification that releases the starter grant. Free routes belong to the
- * personal account, so an organization's empty balance gets only the paid offer.
+ * personal account, so an organization's empty balance directs the user to their admin.
  */
 export function ZeroCreditWarning({ hasDraft }: { hasDraft: boolean }) {
   const isPersonal = useSelectedAccount(s => !s.selectedAccount || s.selectedAccount.personal);

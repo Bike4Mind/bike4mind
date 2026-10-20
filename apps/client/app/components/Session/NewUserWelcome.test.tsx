@@ -11,6 +11,7 @@ const { state, sendPrompt, setChatInputValue } = vi.hoisted(() => ({
     isSuccess: true,
     isFetching: false,
     balance: 9982,
+    liveBalance: null as number | null,
     enforceCredits: true,
     hasComposer: true,
     answerCost: { modelName: 'Claude Sonnet 5.5', creditsPerAnswer: 54 } as ModelAnswerCost | null,
@@ -32,7 +33,10 @@ vi.mock('@client/app/hooks/data/sessions', () => ({
 vi.mock('@client/app/hooks/data/settings', () => ({
   useGetSettingsValue: (key: string) => (key === 'enforceCredits' ? state.enforceCredits : undefined),
 }));
-vi.mock('@client/app/hooks/useEffectiveCredits', () => ({ useEffectiveCredits: () => state.balance }));
+vi.mock('@client/app/hooks/useEffectiveCredits', () => ({
+  useEffectiveCredits: (options?: { live?: boolean }) =>
+    options?.live ? (state.liveBalance ?? state.balance) : state.balance,
+}));
 vi.mock('@client/app/hooks/useSelectedModelAnswerCost', () => ({
   useSelectedModelAnswerCost: () => state.answerCost,
 }));
@@ -62,6 +66,7 @@ describe('NewUserWelcome', () => {
     state.isSuccess = true;
     state.isFetching = false;
     state.balance = 9982;
+    state.liveBalance = null;
     state.enforceCredits = true;
     state.hasComposer = true;
     state.answerCost = { modelName: 'Claude Sonnet 5.5', creditsPerAnswer: 54 };
@@ -93,9 +98,24 @@ describe('NewUserWelcome', () => {
   it('explains the empty card at 0 credits with no pending grant instead of showing only a title', () => {
     state.balance = 0;
     renderWelcome();
-    expect(screen.getByTestId('new-user-welcome-out-of-credits')).toHaveTextContent(/out of credits/i);
+    expect(screen.getByTestId('new-user-welcome-out-of-credits').textContent).toBe("You're out of credits.");
     expect(screen.queryByTestId('new-user-welcome-credits')).not.toBeInTheDocument();
     expect(screen.getByTestId('new-user-welcome-privacy-link')).toBeInTheDocument();
+  });
+
+  it('hides starters when the live balance is exhausted while the displayed balance is frozen', () => {
+    state.liveBalance = 0;
+    renderWelcome();
+    expect(screen.queryByText(/type your own below/i)).not.toBeInTheDocument();
+    expect(screen.queryAllByTestId(/^new-user-welcome-prompt-/)).toHaveLength(0);
+  });
+
+  it('restores starters when live credits recover while the displayed balance is frozen at zero', () => {
+    state.balance = 0;
+    state.liveBalance = 1000;
+    renderWelcome();
+    expect(screen.getByText(/type your own below/i)).toBeInTheDocument();
+    expect(screen.getAllByTestId(/^new-user-welcome-prompt-/)).toHaveLength(3);
   });
 
   it('does not show the out-of-credits line while there is credit to start with', () => {

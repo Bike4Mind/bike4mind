@@ -68,7 +68,7 @@ export function resendVerificationErrorMessage(error: ResendVerificationError): 
     return "You've reached the limit for resending verification emails. Please wait 15 minutes before trying again.";
   }
   if (error.response?.status === 503 && error.response?.data?.isConfigError) {
-    return error.response.data.message ?? 'Email service is not configured.';
+    return error.response.data.message || 'Email service is not configured.';
   }
-  return error.response?.data?.message ?? 'Failed to send verification email. Please try again later.';
+  return error.response?.data?.message || 'Failed to send verification email. Please try again later.';
 }
