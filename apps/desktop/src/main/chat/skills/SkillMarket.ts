@@ -46,11 +46,13 @@ export class SkillMarket {
   constructor(private readonly deps: SkillMarketDeps) {}
 
   async browse(filters: SkillMarketFilters, page: number): Promise<SkillMarketPage> {
-    const params: Record<string, string> = { page: String(page), limit: String(PAGE_SIZE), sort: filters.sort };
-    if (filters.q.trim()) params.q = filters.q.trim();
-    if (filters.scope) params.scope = filters.scope;
-    if (filters.tools) params.tools = filters.tools;
-    if (filters.minRating) params.minRating = String(filters.minRating);
+    // Read field by field: this arrives over IPC, and a missing field must not make the call reject.
+    const params: Record<string, string> = { page: String(page), limit: String(PAGE_SIZE) };
+    if (typeof filters?.sort === 'string') params.sort = filters.sort;
+    if (typeof filters?.q === 'string' && filters.q.trim()) params.q = filters.q.trim();
+    if (filters?.scope) params.scope = filters.scope;
+    if (filters?.tools) params.tools = filters.tools;
+    if (filters?.minRating) params.minRating = String(filters.minRating);
     const read = await this.get(MARKET, params);
     if ('error' in read) return { listings: [], hasMore: false, error: read.error };
     const body = asRecord(read.data);

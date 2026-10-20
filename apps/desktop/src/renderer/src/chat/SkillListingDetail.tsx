@@ -52,7 +52,7 @@ export function SkillListingDetail({ listingRef, onBack }: { listingRef: SkillMa
     setBusy(true);
     setNotice(null);
     const result = await window.b4m.skillMarket.importListing(request);
-    setBusy(false);
+    // Busy lasts until the reload lands, so the stale Import or update offer cannot be clicked twice.
     if (result.ok) {
       setRename(null);
       setNotice(
@@ -64,6 +64,7 @@ export function SkillListingDetail({ listingRef, onBack }: { listingRef: SkillMa
           : { color: 'success', text: `${request.targetSkillId ? 'Updated' : 'Imported as'} /${result.skill.name}.` }
       );
       await load();
+      setBusy(false);
       return;
     }
     if (result.code === 'name_taken') {
@@ -77,6 +78,7 @@ export function SkillListingDetail({ listingRef, onBack }: { listingRef: SkillMa
     } else {
       setNotice({ color: 'danger', text: result.error });
     }
+    setBusy(false);
   };
 
   const applyUpdate = (update: SkillMarketUpdate) => {
@@ -239,6 +241,11 @@ export function SkillListingDetail({ listingRef, onBack }: { listingRef: SkillMa
             </>
           )}
         </Stack>
+      )}
+      {!detail.canImport && !myImport?.skill && (
+        <Typography level="body-sm" color="neutral" data-testid="skill-listing-cannot-import">
+          This account can't import this listing.
+        </Typography>
       )}
       {myImport?.skill && !update && (
         <Typography level="body-sm" data-testid="skill-listing-imported">

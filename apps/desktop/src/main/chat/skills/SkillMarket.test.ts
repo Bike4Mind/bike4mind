@@ -79,6 +79,12 @@ describe('SkillMarket', () => {
     expect(page.listings.map(row => row.name)).toEqual(['guide-for-testers']);
   });
 
+  it('resolves on a filters payload missing its fields rather than rejecting', async () => {
+    get.mockResolvedValue({ data: { data: [], hasMore: false } });
+    await expect(market.browse({} as SkillMarketFilters, 1)).resolves.toEqual({ listings: [], hasMore: false });
+    expect(get).toHaveBeenCalledWith('/api/skills/market', { params: { page: '1', limit: '24' } });
+  });
+
   it('maps a network failure and a 404 to errors rather than rejecting', async () => {
     get.mockRejectedValueOnce(httpError()).mockRejectedValueOnce(httpError(404));
     expect((await market.recommended()).error).toBe('The server could not be reached.');

@@ -194,6 +194,29 @@ describe('SkillMarketPanel', () => {
     expect(confirm).not.toHaveBeenCalled();
   });
 
+  it('keeps Import busy until the listing has reloaded, so it cannot be clicked twice', async () => {
+    let reloaded: (value: Awaited<ReturnType<typeof listing>>) => void = () => {};
+    importListing.mockResolvedValue({ ok: true, skill: { id: 's1', name: 'guide-for-testers' } });
+    await mount({ id: 'l1' });
+    listing.mockReturnValueOnce(new Promise(resolve => (reloaded = resolve)));
+
+    await click('skill-listing-import-btn');
+    expect(byTestId('skill-listing-import-btn')?.hasAttribute('disabled')).toBe(true);
+
+    await act(async () =>
+      reloaded({ detail: detail({ myImport: { version: 1, skill: { id: 's1', name: 'guide-for-testers' } } }) })
+    );
+    expect(byTestId('skill-listing-import-btn')).toBeNull();
+    expect(importListing).toHaveBeenCalledTimes(1);
+  });
+
+  it('says why there is no Import button when the account cannot import the listing', async () => {
+    listing.mockResolvedValue({ detail: detail({ canImport: false }) });
+    await mount({ id: 'l1' });
+    expect(byTestId('skill-listing-import-btn')).toBeNull();
+    expect(byTestId('skill-listing-cannot-import')).not.toBeNull();
+  });
+
   it('opens the listing on the web from main', async () => {
     await mount({ id: 'l1' });
     await click('skill-listing-web-btn');
