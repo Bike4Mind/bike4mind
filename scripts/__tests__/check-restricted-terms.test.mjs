@@ -144,6 +144,16 @@ describe('compileTerms', () => {
     expect(compileTerms('.acme').test('\u{10428}acmez')).toBe(false);
   });
 
+  it('reads an astral character whole on either edge, and one inside the match', () => {
+    // U+10428 is an astral lowercase letter, U+10400 an astral uppercase one.
+    // A lone surrogate half would look like punctuation here, so each side is
+    // checked with a letter on the other side of it.
+    expect(compileTerms('\u{10400}b').test('A\u{10400}b')).toBe(true);
+    expect(compileTerms('acme').test('\u{10428}Acme')).toBe(true);
+    expect(compileTerms('.acme').test('x\u{10428}acme')).toBe(false);
+    expect(compileTerms('acme.').test('acme\u{10428}z')).toBe(false);
+  });
+
   it('folds a term that contains a combining mark the same way as the text', () => {
     // Devi: NFD leaves the vowel signs as combining marks, and NFKC cannot compose them.
     expect(compileTerms('\u0939\u093F\u0902\u0926\u0940').test('text \u0939\u093F\u0902\u0926\u0940 here')).toBe(
