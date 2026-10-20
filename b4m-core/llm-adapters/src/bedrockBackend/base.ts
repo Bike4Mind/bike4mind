@@ -40,6 +40,9 @@ interface BedrockOptions {
   stream: boolean;
 }
 
+// Bedrock rewords context overflow per model family; Llama says "maximum context length".
+const CONTEXT_OVERFLOW_MESSAGES = ['Input is too long', 'maximum context length'];
+
 // Harden Bedrock retries for transient 503 (ServiceUnavailableException) and
 // throttling. The AWS SDK default is maxAttempts:3 with sub-second standard backoff -
 // too shallow for brief Bedrock capacity blips.
@@ -50,9 +53,6 @@ interface BedrockOptions {
 // Adaptive mode adds AWS's token-bucket backoff + client-side rate limiting
 // (recommended for throttle/503-prone workloads). This absorbs brief blips; sustained
 // outages still need provider/model fallback (tracked separately).
-// Bedrock rewords context overflow per model family; Llama says "maximum context length".
-const CONTEXT_OVERFLOW_MESSAGES = ['Input is too long', 'maximum context length'];
-
 const BEDROCK_RETRY_CONFIG = { maxAttempts: 6, retryMode: 'adaptive' as const };
 
 // A failed tool-use turn rethrows through every enclosing catch. Logging each time would repeat the
