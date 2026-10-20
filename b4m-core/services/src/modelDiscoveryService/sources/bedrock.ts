@@ -1,4 +1,4 @@
-import { ModelBackend, bedrockFoundationIdOf, type ModelRecord } from '@bike4mind/common';
+import { LIFECYCLE_SUNSET_STATUSES, ModelBackend, bedrockFoundationIdOf, type ModelRecord } from '@bike4mind/common';
 import { limitConcurrency } from '../concurrency';
 import type {
   DiscoveredModel,
@@ -235,16 +235,20 @@ function readBedrock({ summaries, availability, catalogModelIds }: BedrockFacts)
   const missing = new Map<string, Set<string>>();
   for (const catalogId of catalogModelIds ?? []) {
     const foundationId = bedrockFoundationIdOf(catalogId);
-    const baseId = foundationId ?? catalogId;
-    const base = listed.get(baseId);
-    if (!base) {
-      gap(catalogId, `foundation model ${baseId} is not in the Bedrock listing; no lifecycle propagated`);
-    } else if (base.lifecycle) {
-      if (foundationId !== null) {
+    // A bare id is listed, or absent, in its own right; only a profile id inherits
+    // from a foundation entry the listing itself never names. A foundation that is
+    // not listed is absence's to report, not a gap here on every run.
+    if (foundationId === null) continue;
+    const base = listed.get(foundationId);
+    if (!base) continue;
+    if (base.lifecycle) {
+      // Inherit a sunset claim only. Copying an `active` foundation would shadow a
+      // typed deprecation an aggregator reported for the profile id directly.
+      if (LIFECYCLE_SUNSET_STATUSES.has(base.lifecycle.status)) {
         records.push({ modelId: catalogId, lifecycleEvidence: 'typed', patch: { lifecycle: base.lifecycle } });
       }
     } else if (base.statusless) {
-      missing.set(baseId, (missing.get(baseId) ?? new Set()).add(catalogId));
+      missing.set(foundationId, (missing.get(foundationId) ?? new Set()).add(catalogId));
     }
   }
   for (const [baseId, dependents] of missing) {

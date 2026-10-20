@@ -250,28 +250,30 @@ describe('bedrock normalization', () => {
       byId({ summaries: [base(modelLifecycle)] }).get('anthropic.claude-x-v1:0')?.patch.lifecycle;
 
     it.each([
-      ['active', 'ACTIVE', 'us.anthropic.claude-x-v1:0'],
-      ['active', 'ACTIVE', 'apac.anthropic.claude-x-v1:0'],
       ['legacy', 'LEGACY', 'global.anthropic.claude-x-v1:0'],
-    ])('propagates an %s base to %s', (status, rawStatus, profileId) => {
+      ['legacy', 'LEGACY', 'us.anthropic.claude-x-v1:0'],
+    ])('propagates a %s base to %s', (status, rawStatus, profileId) => {
       const records = byId({ summaries: [base({ status: rawStatus })], catalogModelIds: [profileId] });
       expect(records.get(profileId)?.patch.lifecycle).toEqual({ status });
     });
 
     it.each([
-      ['unknown scope prefix', 'jp.anthropic.claude-x-v1:0', 'jp.anthropic.claude-x-v1:0'],
-      ['foundation model not listed', 'us.meta.llama-9', 'meta.llama-9'],
-    ])('drops a profile id with %s and reports it as not in the listing', (_label, profileId, foundationId) => {
+      ['ACTIVE', 'us.anthropic.claude-x-v1:0'],
+      ['ACTIVE', 'apac.anthropic.claude-x-v1:0'],
+    ])('leaves a profile id unclaimed when its base is %s (%s)', (rawStatus, profileId) => {
+      // A copied `active` would be the first lifecycle claim for the profile id and
+      // shadow a typed deprecation from an aggregator.
+      const records = byId({ summaries: [base({ status: rawStatus })], catalogModelIds: [profileId] });
+      expect(records.has(profileId)).toBe(false);
+    });
+
+    it.each([
+      ['unknown scope prefix', 'jp.anthropic.claude-x-v1:0'],
+      ['foundation model not listed', 'us.meta.llama-9'],
+    ])('leaves a catalog id with %s alone without a gap', (_label, profileId) => {
       const facts = { summaries: [base({ status: 'ACTIVE' })], catalogModelIds: [profileId] };
-      const expected = [
-        {
-          source: 'bedrock',
-          modelId: profileId,
-          reason: `foundation model ${foundationId} is not in the Bedrock listing; no lifecycle propagated`,
-        },
-      ];
       expect(byId(facts).has(profileId)).toBe(false);
-      expect(bedrockLifecycleGaps(facts)).toEqual(expected);
+      expect(bedrockLifecycleGaps(facts)).toEqual([]);
     });
 
     it('makes no claim for an unknown status without legacyTime, but reports the raw value', () => {
@@ -329,8 +331,12 @@ describe('bedrock normalization', () => {
     });
 
     it('adds no record for a bare id in catalogModelIds', () => {
-      const records = byId({ summaries: [base({ status: 'ACTIVE' })], catalogModelIds: ['anthropic.claude-x-v1:0'] });
-      expect([...records.keys()]).toEqual(['anthropic.claude-x-v1:0']);
+      const records = normalizeBedrockModels({
+        summaries: [base({ status: 'ACTIVE' })],
+        catalogModelIds: ['anthropic.claude-x-v1:0'],
+      });
+      expect(records).toHaveLength(1);
+      expect(records[0].modelId).toBe('anthropic.claude-x-v1:0');
     });
   });
 

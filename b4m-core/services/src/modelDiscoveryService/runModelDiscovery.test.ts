@@ -20,6 +20,7 @@ import {
   presentationOwnedOutsideDiscovery,
   runModelDiscovery,
 } from './runModelDiscovery';
+import { normalizeBedrockModels } from './sources/bedrock';
 import type {
   DiscoveredModel,
   DiscoveryLogger,
@@ -826,6 +827,38 @@ describe('runModelDiscovery', () => {
         );
         expect(profileRow?.patch.lifecycle).toMatchObject(legacy);
         expect(bedrock.runs.docs.at(-1)?.droppedRecords).toContainEqual(gap);
+      });
+
+      it('keeps an aggregator deprecation for a profile id whose foundation is still active', async () => {
+        const profileId = 'global.anthropic.claude-sonnet-4-6';
+        const bedrock = harness([
+          stubSource({
+            name: 'bedrock',
+            kind: 'provider',
+            records: normalizeBedrockModels({
+              summaries: [{ modelId: 'anthropic.claude-sonnet-4-6', modelLifecycle: { status: 'ACTIVE' } }],
+              catalogModelIds: [profileId],
+            }),
+            authoritativeFor: [ModelBackend.Bedrock],
+          }),
+          stubSource({
+            name: 'litellm',
+            kind: 'aggregator',
+            records: [
+              {
+                modelId: profileId,
+                lifecycleEvidence: 'typed',
+                patch: { lifecycle: { status: 'deprecated', deprecationDate: '2026-07-01' } },
+              },
+            ],
+          }),
+        ]);
+        await seedActive(bedrock, profileId, 'Claude Sonnet 4.6 (global)');
+
+        await runModelDiscovery(bedrock.adapters, bedrock.options);
+
+        const profileRow = bedrock.catalog.rows.find(row => row.modelId === profileId && row.source === 'discovery');
+        expect(profileRow?.patch.lifecycle).toMatchObject({ status: 'deprecated', deprecationDate: '2026-07-01' });
       });
 
       describe('frozen profile ids', () => {
