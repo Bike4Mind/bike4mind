@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 /**
  * Guards the CLIENT half of the auto-offer lever. The server side of `skipAutoOffers` has been
@@ -21,6 +21,7 @@ vi.mock('@client/app/utils/llm', () => ({
 
 import { handleLLMCommand } from './LLMCommand';
 import { handleCommand } from '@client/app/utils/commands';
+import { registerSurfaceChatContextProvider } from '@client/app/utils/surfaceChatContext';
 
 type HandlerArgs = Parameters<typeof handleLLMCommand>[0];
 
@@ -192,5 +193,48 @@ describe('handleLLMCommand - per-send systemContext', () => {
 
     expect(withIt.slice(0, -1)).toEqual((without as unknown[] | undefined) ?? []);
     expect(llmRequestBody().params).not.toHaveProperty('systemContext');
+  });
+});
+
+// The view description and the surface brief change on every turn, so they are the two context
+// messages flagged `perTurn`; the server moves only those into the user turn. Losing the flag puts
+// them back in the system prompt, where a change busts the cached prefix for the whole conversation.
+// `systemContext` is a caller's guidance, not per-turn data, and must stay in the system prompt.
+describe('handleLLMCommand - per-turn context placement', () => {
+  const messages = () => (llmRequestBody().extraContextMessages ?? []) as Array<Record<string, unknown>>;
+  const viewMessage = () => messages().find(m => String(m.content).startsWith('[Current View Context]'));
+
+  let unregister: (() => void) | undefined;
+
+  beforeEach(() => {
+    post.mockReset();
+    post.mockResolvedValue({ data: { quest: { id: 'quest-1' }, session: { id: 'session-1' } } });
+  });
+
+  afterEach(() => {
+    unregister?.();
+    unregister = undefined;
+  });
+
+  it('flags the view description', async () => {
+    await handleLLMCommand(baseArgs());
+
+    expect(viewMessage()).toEqual(expect.objectContaining({ perTurn: true }));
+  });
+
+  it('flags the surface brief', async () => {
+    unregister = registerSurfaceChatContextProvider(() => ({ briefContext: 'ACTIVE BRIEF' }));
+
+    await handleLLMCommand(baseArgs());
+
+    expect(messages().find(m => m.content === 'ACTIVE BRIEF')).toEqual(expect.objectContaining({ perTurn: true }));
+  });
+
+  it('leaves the caller-supplied systemContext unflagged', async () => {
+    unregister = registerSurfaceChatContextProvider(() => ({ briefContext: 'ACTIVE BRIEF' }));
+
+    await handleLLMCommand({ ...baseArgs(), systemContext: 'Extra instructions for this send.' });
+
+    expect(messages().find(m => m.content === 'Extra instructions for this send.')).not.toHaveProperty('perTurn');
   });
 });
