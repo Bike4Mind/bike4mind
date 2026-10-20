@@ -90,7 +90,10 @@ export const createCompletionContract = defineEndpoint({
         'are refused with: `tool_search_unsupported` (a server tool, `tool_reference` or echoed tool search block on a model ' +
         'that cannot serve tool search here), `all_tools_deferred` (every tool deferred and no server tool), ' +
         '`deferred_tool_cache_control` (`cache_control` on a deferred tool), `unknown_tool_reference` (a `tool_reference` ' +
-        'naming a tool not in `tools`, or carrying no string `tool_name`).',
+        'naming a tool not in `tools`, or carrying no string `tool_name`). Mid-conversation tool changes are refused with: ' +
+        '`tool_changes_unsupported` (a `tool_addition` / `tool_removal` system message on a model that cannot serve it ' +
+        'here), `invalid_tool_change` (a malformed block, or one placed where the provider does not accept it), and ' +
+        '`unknown_tool_reference` (a changed tool not in `tools`).',
       schema: CompletionsBadRequestErrorSchema,
     },
     413: { description: 'Request body over 25 MB.', schema: ApiErrorSchema },

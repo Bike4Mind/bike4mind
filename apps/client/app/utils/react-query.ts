@@ -41,6 +41,7 @@ const mergeCacheEntry = <T extends { updatedAt?: CacheTimestamp; lastUpdated?: C
  * @param data - The data object to write or delete, must contain an 'id' field
  * @param options - Configuration options
  * @param options.keysAllowedToCreate - Array of query key paths where new items can be created
+ * @param options.synchronous - Finish all writes before returning (for cancellable query functions).
  * @param options.canCreateAt - Extra gate on the create-path insert, consulted per matched queryKey.
  *   Defaults to always-allow. Use this when a queryKey can carry a filter fragment (e.g. the sidebar's
  *   Content/Origin filters) that `data` might not satisfy - without it, a live write/create event
@@ -61,6 +62,7 @@ export const updateAllQueryData = <
   data: T,
   options: {
     keysAllowedToCreate: Array<string[]>;
+    synchronous?: boolean;
     canCreateAt?: (queryKey: readonly unknown[], data: T) => boolean;
   } = { keysAllowedToCreate: [] }
 ) => {
@@ -73,7 +75,7 @@ export const updateAllQueryData = <
 
   // Immediate sync processing for small operations (<=10 queries) avoids setTimeout
   // violations while staying responsive.
-  if (collectionQueryKeys.length <= 10) {
+  if (collectionQueryKeys.length <= 10 || options.synchronous) {
     collectionQueryKeys.forEach(queryKey => {
       updateSingleQueryDataFast(queryClient, queryKey, type, data, options);
     });

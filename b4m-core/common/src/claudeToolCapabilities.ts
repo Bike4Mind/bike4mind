@@ -74,6 +74,11 @@ function completionsForwardsNativeTools(model: CompletionsToolCapabilityModel): 
   return model.adapterFamily ? model.adapterFamily === 'anthropic-messages' : model.backend === ModelBackend.Anthropic;
 }
 
+/** supportsToolChanges, narrowed to models whose `/api/ai/v1/completions` adapter keeps the messages in place and sends the beta. */
+export function completionsSupportsToolChanges(model: CompletionsToolCapabilityModel): boolean {
+  return completionsForwardsNativeTools(model) && supportsToolChanges(model);
+}
+
 /** supportsToolSearch, narrowed to models whose `/api/ai/v1/completions` adapter actually forwards it. */
 export function completionsSupportsToolSearch(model: CompletionsToolCapabilityModel): boolean {
   return completionsForwardsNativeTools(model) && supportsToolSearch(model);
