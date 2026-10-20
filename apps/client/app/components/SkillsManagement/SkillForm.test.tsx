@@ -69,6 +69,15 @@ describe('SkillForm SKILL.md import', () => {
     expect(screen.getByTestId('skill-form-import-from-b4m')).toHaveTextContent("another author's Skill Market skill");
   });
 
+  it('shows an error when the chosen file cannot be read', async () => {
+    renderForm();
+    const file = new File(['x'], 'SKILL.md');
+    file.text = () => Promise.reject(new Error('denied'));
+    fireEvent.change(screen.getByTestId('skill-form-import-file'), { target: { files: [file] } });
+    await waitFor(() => expect(screen.getByTestId('skill-form-import-error')).toHaveTextContent('could not be read'));
+    expect(value('skill-name-input')).toBe('');
+  });
+
   it('does not render a non-http source as a link', () => {
     renderForm();
     paste('---\n# Bike4Mind-Source: javascript:alert(1)\nname: x\n---\nb');

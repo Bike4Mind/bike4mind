@@ -9,7 +9,10 @@ export const SKILL_MD_THIRD_PARTY_NOTE = 'Third-party skill from the Bike4Mind S
 
 const THIRD_PARTY_LINE = new RegExp(`^\\s*#\\s*${SKILL_MD_THIRD_PARTY_NOTE}`, 'm');
 
-/** Matches `@agent_name` mentions but not emails (`a@b.com`): `@` must follow whitespace or line start. */
+/**
+ * Matches `@agent_name` mentions but not emails (`a@b.com`): `@` must follow whitespace or line start.
+ * A heuristic (it also hits `@param`), so the dialog words the warning as "may call".
+ */
 const AGENT_MENTION = /(^|\s)@([a-z][a-z0-9_]+)/gm;
 
 const SKILL_NAME_PATH_SAFE = /^[a-z0-9-]+$/;
