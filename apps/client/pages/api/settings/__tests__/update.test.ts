@@ -316,4 +316,19 @@ describe('settings/update reviewer email list', () => {
       expect.anything()
     );
   });
+
+  it('refuses a value that is not a list', async () => {
+    await expect(runHandler('ImageModerationReviewerEmails', 'reviewer@example.com')).rejects.toThrow();
+    expect(findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('stores an empty list when every address is removed', async () => {
+    stageWriteResult('ImageModerationReviewerEmails', []);
+    await runHandler('ImageModerationReviewerEmails', []);
+    expect(findOneAndUpdate).toHaveBeenCalledWith(
+      { settingName: 'ImageModerationReviewerEmails' },
+      { $set: { settingValue: [] } },
+      expect.anything()
+    );
+  });
 });

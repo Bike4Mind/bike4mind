@@ -26,6 +26,21 @@ describe('ImageModerationIncidentRepository', () => {
     await ImageModerationIncident.deleteMany({});
   });
 
+  describe('surface', () => {
+    it('round-trips each surface', async () => {
+      for (const surface of ['generation', 'edit', 'upload'] as const) {
+        const inc = await imageModerationIncidentRepository.record({ ...baseIncident(), surface });
+        expect((await ImageModerationIncident.findById(inc._id).lean())?.surface).toBe(surface);
+      }
+    });
+
+    it('rejects a value outside the enum', async () => {
+      await expect(
+        imageModerationIncidentRepository.record({ ...baseIncident(), surface: 'other' as 'upload' })
+      ).rejects.toThrow(/surface/);
+    });
+  });
+
   describe('markAlerted', () => {
     it('stamps alertedAt on the incident and leaves it absent until then', async () => {
       const inc = await imageModerationIncidentRepository.record(baseIncident());
