@@ -34,6 +34,10 @@ vi.mock('./BillingModal', () => ({
     open ? <div data-testid="billing-open" data-focus={focus} /> : null,
 }));
 
+vi.mock('./CreditsModal', () => ({
+  default: ({ open }: { open: boolean }) => (open ? <div data-testid="usage-open" /> : null),
+}));
+
 import CreditsExplanationModal from './CreditsExplanationModal';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -49,6 +53,14 @@ describe('CreditsExplanationModal', () => {
   beforeEach(() => {
     state.defaultFreeCredits = 100;
     state.organizationId = null;
+  });
+
+  it('opens the usage history from See usage', () => {
+    renderModal();
+    expect(screen.queryByTestId('usage-open')).toBeNull();
+    fireEvent.click(screen.getByTestId('credits-explanation-usage'));
+    expect(screen.queryByTestId('credits-explanation-modal')).toBeNull();
+    expect(screen.getByTestId('usage-open')).toBeInTheDocument();
   });
 
   it('hides the no-card sentence when no free credits are configured', () => {
@@ -72,7 +84,7 @@ describe('CreditsExplanationModal', () => {
     );
 
     expect(screen.getByTestId('credits-explanation-modal')).toBeInTheDocument();
-    expect(screen.getByTestId('credits-explanation-answers')).toHaveTextContent('answers left');
+    expect(screen.getByTestId('credits-explanation-answers')).toHaveTextContent(/typical answers left/);
     expect(screen.getByText(/Free starting credits require no card/)).toBeInTheDocument();
     expect(screen.queryByTestId('billing-open')).toBeNull();
 

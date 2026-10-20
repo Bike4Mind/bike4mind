@@ -60,6 +60,7 @@ export interface AnswerCostReference {
 
 /** Credits a typical answer costs on `model`, at the rates billing charges; null when unpriced or free. */
 export function typicalAnswerCredits(model: ModelInfo): number | null {
+  if (model.freeToRun) return null;
   const rates = getTextModelCreditsPer1M(model);
   if (!rates) return null;
   const multiplier = tokenEstimateMultiplier(model.id);

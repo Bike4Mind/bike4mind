@@ -69,6 +69,10 @@ describe('typicalAnswerCredits', () => {
     expect(typicalAnswerCredits(free)).toBeNull();
   });
 
+  it('returns null for a free-to-run model even when it still lists prices', () => {
+    expect(typicalAnswerCredits({ ...SONNET_55, freeToRun: true } as ModelInfo)).toBeNull();
+  });
+
   it('returns null for an unpriced model rather than calling it free', () => {
     expect(typicalAnswerCredits({ ...SONNET_55, pricing: undefined } as unknown as ModelInfo)).toBeNull();
   });
