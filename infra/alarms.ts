@@ -1671,25 +1671,28 @@ if (isMonitoredStage) {
    * A timeout, OOM or init crash never reaches the handler's emit, so it shows up here and nowhere
    * else. A run that throws also counts in voiceHoldSweepFailures. Same 2-of-3 rule as that alarm.
    */
-  new aws.cloudwatch.MetricAlarm('voiceHoldSweepLambdaErrors', {
-    name: `${$app.name}-${$app.stage}-voice-hold-sweep-lambda-errors`,
-    alarmDescription: 'The stale voice hold sweep Lambda is erroring (timeout, OOM or crash)',
-    comparisonOperator: 'GreaterThanThreshold',
-    evaluationPeriods: 3,
-    datapointsToAlarm: 2,
-    metricName: 'Errors',
-    namespace: 'AWS/Lambda',
-    period: 300,
-    statistic: 'Sum',
-    threshold: 0,
-    treatMissingData: 'notBreaching',
-    dimensions: { FunctionName: voiceHoldSweepCron.nodes.function.name },
-    alarmActions: [dlqAlarmTopic.arn],
-    tags: {
-      Application: 'Voice',
-      Severity: 'High',
-    },
-  });
+  // The sweep cron only exists on scheduled stages; an ENABLE_MONITORING preview has no Lambda to watch.
+  if (voiceHoldSweepCron) {
+    new aws.cloudwatch.MetricAlarm('voiceHoldSweepLambdaErrors', {
+      name: `${$app.name}-${$app.stage}-voice-hold-sweep-lambda-errors`,
+      alarmDescription: 'The stale voice hold sweep Lambda is erroring (timeout, OOM or crash)',
+      comparisonOperator: 'GreaterThanThreshold',
+      evaluationPeriods: 3,
+      datapointsToAlarm: 2,
+      metricName: 'Errors',
+      namespace: 'AWS/Lambda',
+      period: 300,
+      statistic: 'Sum',
+      threshold: 0,
+      treatMissingData: 'notBreaching',
+      dimensions: { FunctionName: voiceHoldSweepCron.nodes.function.name },
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: {
+        Application: 'Voice',
+        Severity: 'High',
+      },
+    });
+  }
 
   /**
    * Alarm: Session Reuse Revoked Burst
