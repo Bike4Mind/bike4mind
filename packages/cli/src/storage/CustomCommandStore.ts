@@ -6,6 +6,8 @@ import { parseCommandFile, extractCommandName } from '../utils/commandParser.js'
 import { findMarkdownFiles } from '../utils/findMarkdownFiles.js';
 import { RemoteSkillSource } from './RemoteSkillSource.js';
 import { isReservedCommandName } from '../config/commands.js';
+import { logger } from '../utils/Logger.js';
+import { frontmatterHasSourceStamp } from '@bike4mind/common';
 
 /**
  * Store for managing custom slash commands
@@ -244,6 +246,14 @@ export class CustomCommandStore {
     }
 
     const fileContent = await fs.readFile(filePath, 'utf-8');
+
+    // A SKILL.md exported from Bike4Mind is a Claude Code copy of an account skill. Loading it here
+    // would run market text as a trusted local command and shadow the account copy (local wins).
+    if (isSkillFile && frontmatterHasSourceStamp(fileContent)) {
+      logger.debug(`Skipping ${filePath}: exported from Bike4Mind; the account skill is used instead`);
+      return;
+    }
+
     const command = parseCommandFile(fileContent, filePath, commandName, source);
 
     // Since global commands load first, later commands (from project directories
