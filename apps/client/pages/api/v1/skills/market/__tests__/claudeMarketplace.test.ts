@@ -257,6 +257,7 @@ describe('GET /api/v1/skills/market/{id}/claude-plugin.zip', () => {
     ['an unlisted listing', { visibility: 'unlisted' }],
     ["another org's listing", { organizationId: '65a0000000000000000000bb' }],
     ['a delisted listing', { status: 'delisted' }],
+    ['a hidden listing', { hiddenByReports: true }],
   ])('404s %s', async (_label, overrides) => {
     mockFindOne.mockResolvedValue(doc(listing(LISTING_A, overrides)));
     const { error } = await call(zipHandler, { id: LISTING_A });
