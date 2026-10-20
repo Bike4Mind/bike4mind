@@ -57,6 +57,18 @@ export interface PushDeps {
 }
 
 const MAX_LISTED_FILES = 10;
+// Must stay in sync with SKILL_DESCRIPTION_MAX in apps/client/server/utils/skillValidation.ts.
+const DESCRIPTION_MAX = 500;
+
+/** The server requires a description, but many Claude Code commands/*.md files have none. */
+function descriptionFor(fields: SkillMdFields): string {
+  if (fields.description?.trim()) return fields.description;
+  const firstLine = (fields.body ?? '')
+    .split('\n')
+    .map(line => line.replace(/^#+\s*/, '').trim())
+    .find(Boolean);
+  return (firstLine ?? '').slice(0, DESCRIPTION_MAX);
+}
 
 /**
  * Built from an explicit field list (never a spread of parsed data) so
@@ -66,7 +78,7 @@ const MAX_LISTED_FILES = 10;
 export function buildSkillPayload(fields: SkillMdFields, fallbackName: string): SkillPayload {
   return {
     name: (fields.name ?? fallbackName).trim().toLowerCase(),
-    description: fields.description ?? '',
+    description: descriptionFor(fields),
     body: fields.body ?? '',
     ...(fields.argumentHint !== undefined && { argumentHint: fields.argumentHint }),
     disableModelInvocation: fields.disableModelInvocation ?? false,

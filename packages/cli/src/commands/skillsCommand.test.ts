@@ -143,10 +143,19 @@ describe('buildSkillPayload', () => {
   it('maps disableModelInvocation and omits an absent argumentHint', () => {
     expect(buildSkillPayload({ name: ' X ', body: 'b', disableModelInvocation: true }, 'fallback')).toEqual({
       name: 'x',
-      description: '',
+      description: 'b',
       body: 'b',
       disableModelInvocation: true,
     });
+  });
+
+  it('falls back to the first body line, without heading marks, when there is no description', () => {
+    const body = '\n## Review the open PR\n\nThen summarize it.';
+    expect(buildSkillPayload({ body }, 'f').description).toBe('Review the open PR');
+    expect(buildSkillPayload({ description: '  ', body }, 'f').description).toBe('Review the open PR');
+    expect(buildSkillPayload({ description: 'Given', body }, 'f').description).toBe('Given');
+    expect(buildSkillPayload({ body: 'x'.repeat(600) }, 'f').description).toHaveLength(500);
+    expect(buildSkillPayload({}, 'f').description).toBe('');
   });
 });
 
