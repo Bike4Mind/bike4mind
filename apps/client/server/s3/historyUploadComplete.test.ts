@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
   jobCreate: vi.fn(),
   createInboxMessage: vi.fn(),
   importHistory: vi.fn(),
+  markImportComplete: vi.fn(),
 }));
 
 vi.mock('@server/s3/utils', () => ({ withContext: (fn: unknown) => fn }));
@@ -48,7 +49,7 @@ vi.mock('@bike4mind/services', () => ({
 vi.mock('@bike4mind/common', () => ({ InboxType: { COMMON: 'common' } }));
 vi.mock('@server/utils/importHistoryProgress', () => ({
   updateImportProgress: vi.fn(),
-  markImportComplete: vi.fn(),
+  markImportComplete: h.markImportComplete,
   markImportFailed: vi.fn(),
 }));
 
@@ -100,5 +101,20 @@ describe('historyUploadComplete abandoned-import cleanup', () => {
     expect(h.createInboxMessage).not.toHaveBeenCalledWith(
       expect.objectContaining({ title: 'LLM history import Failed' })
     );
+  });
+});
+
+describe('historyUploadComplete completion counts', () => {
+  it('completes the job with the counts the import reported', async () => {
+    // The job doc is written before the import runs, so it still says 0/N when the import
+    // finishes. Completion has to use what the service reported, not that stale doc.
+    h.jobCreate.mockResolvedValue({ id: 'job-1', totalItems: 0, processedItems: 0 });
+    h.importHistory.mockResolvedValue({ processedItems: 1, totalItems: 1 });
+
+    await run();
+
+    const stats = h.markImportComplete.mock.calls[0][2] as { processedItems: number; totalItems: number };
+    expect(stats).toEqual({ processedItems: 1, totalItems: 1, skippedItems: 0 });
+    expect(stats.processedItems).toBe(stats.totalItems);
   });
 });
