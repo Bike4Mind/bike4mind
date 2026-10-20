@@ -163,6 +163,17 @@ describe('parseBackfillArgs', () => {
     expect(() => parseBackfillArgs([cutoffFlag, '--execute'])).toThrow(/--expect-amount/);
   });
 
+  it.each(['--exclude-email-domains=a.test', '--excute', '--expect-amount', 'execute'])(
+    'rejects the unknown argument %s',
+    arg => {
+      expect(() => parseBackfillArgs([cutoffFlag, arg])).toThrow(/Unknown argument/);
+    }
+  );
+
+  it('tolerates a forwarded `--` separator', () => {
+    expect(parseBackfillArgs(['--', cutoffFlag]).execute).toBe(false);
+  });
+
   it.each(['0', '-1', '1.5', 'ten'])('rejects --expect-amount=%s', value => {
     expect(() => parseBackfillArgs([cutoffFlag, `--expect-amount=${value}`])).toThrow(/positive integer/);
   });

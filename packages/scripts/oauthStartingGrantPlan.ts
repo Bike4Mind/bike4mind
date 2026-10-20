@@ -170,7 +170,16 @@ const parseExpectAmount = (argv: readonly string[]): number | null => {
   return amount;
 };
 
+const VALUE_FLAGS = ['--created-before', '--expect-amount', '--exclude-email-domain'];
+
+const isKnownArg = (arg: string): boolean =>
+  // A bare `--` is what a package-manager script runner may forward ahead of the flags.
+  arg === '--' || arg === '--execute' || VALUE_FLAGS.some(flag => arg.startsWith(`${flag}=`));
+
 export const parseBackfillArgs = (argv: readonly string[]): BackfillArgs => {
+  // A misspelled flag must not be dropped silently: a lost --exclude-email-domain would grant to staff.
+  const unknown = argv.filter(arg => !isKnownArg(arg));
+  if (unknown.length > 0) throw new Error(`Unknown argument(s): ${unknown.join(' ')}`);
   const execute = argv.includes('--execute');
   const expectAmount = parseExpectAmount(argv);
   if (execute && expectAmount === null) {
