@@ -581,6 +581,8 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger,
   const slideVideo = pickedVideo && !(videoUnplayable && currentModal.imageUrl) ? pickedVideo : null;
   const showImage = !slideVideo && !!currentModal.imageUrl;
   const isLandscapeVideo = slideVideo?.orientation === 'landscape';
+  // Video above the text: always on mobile, and for 16:9 on desktop where a side slot is too small
+  const stackVideo = !!slideVideo && (isMobile || isLandscapeVideo);
 
   const renderVideo = () => {
     if (!slideVideo) return null;
@@ -630,8 +632,8 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger,
         sx={{
           width: '100%',
           maxWidth: isMobile ? '100%' : '940px',
-          height: isMobile ? '100%' : '600px',
-          maxHeight: isMobile ? 'calc(100vh - 32px)' : '600px',
+          height: isMobile ? '100%' : stackVideo ? 'min(760px, calc(100vh - 48px))' : '600px',
+          maxHeight: isMobile ? 'calc(100vh - 32px)' : stackVideo ? 'min(760px, calc(100vh - 48px))' : '600px',
           minHeight: 0,
           borderRadius: '12px',
           overflow: 'hidden',
@@ -682,21 +684,25 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger,
         <Box
           sx={{
             display: 'flex',
-            flexDirection: isMobile ? 'column' : 'row',
+            flexDirection: isMobile || stackVideo ? 'column' : 'row',
             flex: 1,
             minHeight: 0,
             position: 'relative',
             overflow: 'hidden',
             justifyContent: 'space-between',
-            columnGap: isMobile ? 0 : isLandscapeVideo ? '40px' : '60px',
+            columnGap: isMobile || stackVideo ? 0 : '60px',
             p: isMobile ? '16px' : '24px',
+            // keeps the close button off the video
+            ...(stackVideo && { pt: '52px' }),
           }}
         >
-          {isMobile && slideVideo && (
+          {stackVideo && (
             <Box
               data-testid="whats-new-slide-video-slot"
               sx={{
-                flexShrink: 0,
+                // desktop: the video gives up height before the text does
+                flexShrink: isMobile ? 0 : 1,
+                minHeight: 0,
                 width: '100%',
                 ...(isLandscapeVideo ? { aspectRatio: '16 / 9' } : { height: '50vh', minHeight: '240px' }),
                 display: 'flex',
@@ -757,9 +763,8 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger,
           {/* Content Section */}
           <Box
             sx={{
-              width: isMobile ? '100%' : slideVideo || showImage ? '400px' : '100%',
-              // flex-basis 0 ignores the width; this floor makes a landscape video shrink first
-              ...(!isMobile && isLandscapeVideo && { minWidth: '300px' }),
+              width: isMobile || stackVideo ? '100%' : slideVideo || showImage ? '400px' : '100%',
+              ...(!isMobile && stackVideo && { minHeight: '140px' }),
               padding: 0,
               display: 'flex',
               flexDirection: 'column',
@@ -957,9 +962,7 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger,
             </Box>
           </Box>
 
-          {/* 16:9 needs a wider slot than the square image one (up to 520px, shrinking on narrow
-              viewports); the fixed 600px sheet height rules out stacking it above the text */}
-          {!isMobile && slideVideo && (
+          {!stackVideo && slideVideo && (
             <Box
               data-testid="whats-new-slide-video-slot"
               sx={{
@@ -968,9 +971,8 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                ...(isLandscapeVideo
-                  ? { flex: '0 1 520px', minWidth: 0, aspectRatio: '16 / 9' }
-                  : { width: '400px', height: '400px' }),
+                width: '400px',
+                height: '400px',
               }}
             >
               {renderVideo()}
