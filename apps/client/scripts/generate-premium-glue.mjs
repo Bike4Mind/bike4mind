@@ -503,14 +503,9 @@ ${entries},
 const WORKSPACE_ID_RE = /^[a-z0-9][a-z0-9_-]*$/i;
 const ENTITLEMENT_KEY_RE = /^[a-z0-9][a-z0-9:_.-]*$/i;
 
-// The workspace ids a session-settings contribution may key on: every non-null id in
-// WORKSPACE_SURFACES (b4m-core/common/src/surfaces.ts). Mirrored rather than imported because this
-// script runs at install time, before any source outside apps/client/scripts is copied, so the
-// TypeScript registry is not on disk. Only open surfaces are registered there - a guarded surface's id
-// deliberately stays in its own module - so an id outside this set is rejected: a typo would otherwise
-// emit a table entry no session can match, and a private-surface contribution has to wait for a
-// registration mechanism. Keep in sync with surfaces.ts; the generator test derives the same set from
-// WORKSPACE_SURFACES and fails until this list catches up.
+// Open workspace ids from WORKSPACE_SURFACES (b4m-core/common/src/surfaces.ts). Mirrored
+// because install-time codegen only has apps/client/scripts; the test reads the source registry.
+// Guarded ids stay in their owning package's workspaceSurfaceIds contribution.
 const REGISTERED_WORKSPACE_IDS = ['opti'];
 
 // A grant entry may instead be `{ "key", "label", "sessionHref"? }`: the same grant, plus how the
@@ -1159,13 +1154,9 @@ function generatePartnerSignupHooks(packages) {
 
 const RESERVED_OBJECT_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
-// Session fields a workspace owns, resolved at read time (b4mContributions.workspaceSessionSettingsExport,
-// `{ "<workspace id>": "<module specifier>" }`, each module exporting `workspaceSessionSettings:
-// WorkspaceSessionSettingsEntry`). Ids are declared in package.json rather than read off the module so
-// they can be validated here, and each must be an open surface registered in WORKSPACE_SURFACES (a
-// guarded surface id stays in its own module, so a private-surface contribution is rejected until a
-// registration mechanism exists; a typo would otherwise emit an entry no session can match). Like the
-// partner signup hooks it must exist in BOTH forms.
+// Session fields a workspace owns, resolved at read time. Each id must name an open
+// workspace or be registered by the same package via workspaceSurfaceIds. Both generated
+// forms must exist so builds without overlays never import an absent package.
 function generateWorkspaceSessionSettings(packages) {
   const outPath = join(CLIENT_ROOT, 'server/premium-generated/premiumWorkspaceSessionSettings.generated.ts');
   const typeImport = `import type { WorkspaceSessionSettingsTable } from '@bike4mind/common';`;
@@ -1173,6 +1164,20 @@ function generateWorkspaceSessionSettings(packages) {
 
   const merged = new Map();
   for (const pkg of packages) {
+    const surfaceIds = pkg.contributions.workspaceSurfaceIds === undefined ? [] : pkg.contributions.workspaceSurfaceIds;
+    if (
+      !Array.isArray(surfaceIds) ||
+      !surfaceIds.every(
+        id =>
+          typeof id === 'string' && WORKSPACE_ID_RE.test(id) && id === id.toLowerCase() && !RESERVED_OBJECT_KEYS.has(id)
+      )
+    ) {
+      throw new Error(
+        `[codegen] invalid workspaceSurfaceIds from package "${pkg.name}": ` +
+          'expected an array of lowercase workspace ids [a-z0-9_-] with no reserved object keys'
+      );
+    }
+    const registeredIds = [...new Set([...REGISTERED_WORKSPACE_IDS, ...surfaceIds])];
     const declared = pkg.contributions[field];
     if (declared === undefined) continue;
     if (!isPlainObject(declared)) {
@@ -1192,13 +1197,11 @@ function generateWorkspaceSessionSettings(packages) {
             `${JSON.stringify(workspaceId)} must be lowercase [a-z0-9_-], because surface ids are matched exactly`
         );
       }
-      if (!REGISTERED_WORKSPACE_IDS.includes(workspaceId)) {
+      if (!registeredIds.includes(workspaceId)) {
         throw new Error(
           `[codegen] invalid ${field} workspace id from package "${pkg.name}": ` +
             `${JSON.stringify(workspaceId)} is not a registered workspace surface id ` +
-            `(${REGISTERED_WORKSPACE_IDS.join(', ')}); only open surfaces are registered, so a ` +
-            `guarded surface's id is rejected until a registration mechanism exists, and a typo ` +
-            `would otherwise emit an entry no session can match`
+            `(${registeredIds.join(', ')}); register guarded ids in this package's workspaceSurfaceIds`
         );
       }
       if (merged.has(workspaceId)) {
