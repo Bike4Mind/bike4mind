@@ -5,8 +5,10 @@ import {
   type IDataLakeDocument,
   type IScopedSetting,
   type ScopeRef,
+  MAX_TOGGLE_TAGS_FILE_IDS,
 } from '@bike4mind/common';
 import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mind/utils';
+import { ZodError } from 'zod';
 import { toggleTags } from './toggleTags';
 import { withStorageOwnerFakes } from '../__tests__/utils/storageOwnerTransferFakes';
 
@@ -177,6 +179,14 @@ describe('toggleTags - ordinary tags', () => {
 
     await expect(run(adapters, { ids: ['f1', 'f2'], tags: ['x'] })).rejects.toThrow(/not accessible/i);
     expect(adapters.db.fabFiles.pushTagsByFabFileId).not.toHaveBeenCalled();
+  });
+
+  it('refuses a batch over the per-request cap before reading anything', async () => {
+    const adapters = makeAdapters([file('f1')]);
+    const ids = Array.from({ length: MAX_TOGGLE_TAGS_FILE_IDS + 1 }, (_, i) => `f${i}`);
+
+    await expect(run(adapters, { ids, tags: ['x'] })).rejects.toBeInstanceOf(ZodError);
+    expect(adapters.db.users.findById).not.toHaveBeenCalled();
   });
 });
 

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { distinctIdCount } from '../utils/objectIds';
-import { DATALAKE_TAG_PREFIX, isDataLakeTagName } from '@bike4mind/common';
+import { DATALAKE_TAG_PREFIX, isDataLakeTagName, MAX_TOGGLE_TAGS_FILE_IDS } from '@bike4mind/common';
 import {
   IAdminSettingsRepository,
   IDataLakeAccessGrantRepository,
@@ -32,7 +32,7 @@ import { storedTagNames } from '../tagService/bulkTagNames';
 import { resolveStorageOwnerTransfer, type StorageOwnerTransferDb } from './reassignStorageOwner';
 
 const fabFileToggleTagsSchema = z.object({
-  ids: z.array(z.string()),
+  ids: z.array(z.string()).max(MAX_TOGGLE_TAGS_FILE_IDS),
   tags: z.array(z.string()),
 });
 

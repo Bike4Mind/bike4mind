@@ -1,5 +1,6 @@
 import { api } from '@client/app/contexts/ApiContext';
-import { IFabFileDocument, IFileTag, IFileTagWithFileCount, ITag } from '@bike4mind/common';
+import { IFabFileDocument, IFileTag, IFileTagWithFileCount, ITag, MAX_TOGGLE_TAGS_FILE_IDS } from '@bike4mind/common';
+import chunk from 'lodash/chunk';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getErrorMessage } from '@client/app/utils/error';
 import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
@@ -124,11 +125,17 @@ export function useToggleTagToFiles() {
 
   return useMutation({
     mutationFn: async (params: { ids: string[]; tags: IFileTag[] }) => {
-      const response = await api.post<ToggledFile[]>(`/api/files/tags/toggle`, {
-        ids: params.ids,
-        tags: params.tags.map(tag => tag.name),
-      });
-      return response.data;
+      // Sequential, one transaction per chunk: the server caps a toggle at MAX_TOGGLE_TAGS_FILE_IDS.
+      // Safe to split because the toggle decides add-or-remove per file, not across the batch.
+      const toggled: ToggledFile[] = [];
+      for (const ids of chunk(params.ids, MAX_TOGGLE_TAGS_FILE_IDS)) {
+        const response = await api.post<ToggledFile[]>(`/api/files/tags/toggle`, {
+          ids,
+          tags: params.tags.map(tag => tag.name),
+        });
+        toggled.push(...response.data);
+      }
+      return toggled;
     },
     onSuccess: data => {
       toast.success(t('file_actions.add_tag', { count: data.length }));
@@ -144,12 +151,15 @@ export function useToggleTagToFiles() {
       if (joinedLakeCount > 0) {
         toast.info(t('file_actions.prefix_arm_join_notice', { count: data.length }), { duration: 8000 });
       }
-      queryClient.invalidateQueries({ queryKey: fabFileKeys.all });
-      queryClient.invalidateQueries({ queryKey: ['file-tags'] });
       if (joinedLakeCount > 0) queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
     },
     onError: () => {
       toast.error(t('file_actions.failed_to_add_tag'));
+    },
+    // A failed chunk leaves earlier chunks written, so the cache is stale on either outcome.
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: fabFileKeys.all });
+      queryClient.invalidateQueries({ queryKey: ['file-tags'] });
     },
   });
 }

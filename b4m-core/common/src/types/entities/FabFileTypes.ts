@@ -11,6 +11,10 @@ export type MimeType =
 
 export const MimeTypes: MimeType[] = ['text/plain', 'text/markdown', 'application/pdf', 'application/json'];
 
+// Per-request cap on /api/files/tags/toggle. The route runs the whole batch in one transaction, one file
+// at a time, so an unbounded selection can outlive Mongo's 60s transaction lifetime; clients chunk.
+export const MAX_TOGGLE_TAGS_FILE_IDS = 100;
+
 // The Files type filter. getMimeTypeFilter (packages/database/src/queries/fabFileSearchQuery.ts) maps every value
 // to a query and FILE_TYPE_OPTIONS (apps/client/app/components/Files/Browser/constants.ts) labels every value.
 export const FAB_FILE_TYPE_FILTERS = [
