@@ -409,3 +409,38 @@ describe('POST /api/files/createFabFile - signing boundaries', () => {
     expect(h.signUrl.mock.calls[0][1]).toBe('put');
   });
 });
+
+describe('POST /api/files/createFabFile - admin modal video', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.lakeFind.mockResolvedValue([]);
+    h.userFindById.mockResolvedValue({ id: 'u1', isAdmin: true, storageLimit: 1e12, currentStorageSize: 0 });
+    h.fabFileCreate.mockImplementation(async data => ({ id: 'f1', ...data }));
+    h.signUrl.mockResolvedValue('https://signed.test/put');
+  });
+
+  const mp4 = (overrides: Record<string, unknown> = {}) =>
+    body({ fileName: 'demo.mp4', mimeType: 'video/mp4', fileSize: 1000, prefix: 'modals', ...overrides });
+  const asAdmin = { user: { id: 'u1', isAdmin: true } };
+
+  it('admits an admin mp4 under the modals prefix', async () => {
+    const { res } = makeRes();
+    await run(mp4(), res, asAdmin);
+
+    const persisted = h.fabFileCreate.mock.calls[0][0] as { mimeType: string; filePath: string };
+    expect(persisted.mimeType).toBe('video/mp4');
+    expect(persisted.filePath).toMatch(/^modals\/.+\.mp4$/);
+  });
+
+  it.each([
+    ['a non-admin', mp4(), { user: { id: 'u1', isAdmin: false } }],
+    ['an admin under another prefix', mp4({ prefix: 'uploads' }), asAdmin],
+    ['an admin with no prefix', mp4({ prefix: undefined }), asAdmin],
+    ['an admin claiming another video type', mp4({ mimeType: 'video/quicktime' }), asAdmin],
+    ['an admin with a non-mp4 name', mp4({ fileName: 'demo.mov' }), asAdmin],
+  ])('refuses %s with the usual 400', async (_case, payload, overrides) => {
+    const { res } = makeRes();
+    await expect(run(payload, res, overrides)).rejects.toThrow(/is not supported/);
+    expect(h.fabFileCreate).not.toHaveBeenCalled();
+  });
+});

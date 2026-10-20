@@ -12,6 +12,7 @@ import {
   withTransaction,
 } from '@bike4mind/database';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
+import { getFileExtension } from '@bike4mind/utils';
 import { logEvent } from '@server/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -23,6 +24,20 @@ import { resolveBrowserUploadUrl } from '@server/utils/browserUploadUrl';
 import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
 
 const createFabFileSchema = fabFilesService.createFabFileSchema;
+
+/**
+ * The admin What's New video upload (AdminModalVideoFields). mp4 stays off the global extension
+ * allowlist because non-image uploads are marked clean without a content scan; only an admin
+ * writing under the public `modals/` prefix, with claim and extension agreeing, gets it admitted.
+ */
+const isAdminModalVideoUpload = (
+  isAdmin: boolean | undefined,
+  params: { prefix?: string | null; mimeType?: string | null; fileName: string }
+) =>
+  !!isAdmin &&
+  params.prefix === 'modals' &&
+  params.mimeType === 'video/mp4' &&
+  getFileExtension(params.fileName) === 'mp4';
 
 const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
   .use((req, res, next) => {
@@ -132,6 +147,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
           // org rungs need the actor's administered-org set, which the service cannot read off a
           // user document.
           administeredOrgIds: ctx.administeredOrgIds,
+          ...(isAdminModalVideoUpload(user.isAdmin, params) && { mimeTypePrecedence: 'claim-first' as const }),
         });
       });
 
