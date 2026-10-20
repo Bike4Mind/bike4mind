@@ -449,6 +449,11 @@ export interface CustomCommand {
   variables?: Record<string, string>;
   /** Tool patterns to allow during skill execution */
   allowedTools?: string[];
+  /**
+   * A Skill Market import (RemoteSkillSource `includeImports`): owned by the user, written by
+   * someone else. Must run wrapped as untrusted content, never as trusted local instructions.
+   */
+  untrusted?: boolean;
   /** Execution context: 'inline' (default) or 'fork' (runs in subagent) */
   context?: 'fork' | 'inline';
   /** When true, skill is hidden from AI's auto-loading in system prompt */
