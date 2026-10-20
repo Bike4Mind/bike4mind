@@ -50,7 +50,7 @@ export const useUsersParams = (): readonly [IGetUsersParams, (patch: Partial<IGe
       setStoredParams(patch);
       if (!touchesView(patch)) return;
       // Written from the store, which useUsersTabUrlSync keeps level with the URL and which already
-      // holds this patch, rather than from a `previous` that a same-tick write may not have committed.
+      // holds this patch merged into the full view, so the URL always carries a complete view.
       navigate({
         to: ADMIN_PATH,
         search: (previous: SearchRecord) => ({ ...previous, ...usersViewToSearch(useUsersTab.getState().params) }),

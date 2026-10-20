@@ -8,6 +8,7 @@ describe('USERS_SEARCH_PARSERS', () => {
     expect(USERS_SEARCH_PARSERS.page(0)).toBeUndefined();
     expect(USERS_SEARCH_PARSERS.page(1.5)).toBeUndefined();
     expect(USERS_SEARCH_PARSERS.page('abc')).toBeUndefined();
+    expect(USERS_SEARCH_PARSERS.page(1e21)).toBeUndefined();
 
     expect(USERS_SEARCH_PARSERS.limit(20)).toBe(20);
     expect(USERS_SEARCH_PARSERS.limit(500)).toBeUndefined();
@@ -17,6 +18,9 @@ describe('USERS_SEARCH_PARSERS', () => {
 
     expect(USERS_SEARCH_PARSERS.order('asc')).toBe('asc');
     expect(USERS_SEARCH_PARSERS.order('sideways')).toBeUndefined();
+
+    expect(USERS_SEARCH_PARSERS.userId('0123456789abcdef01234567')).toBe('0123456789abcdef01234567');
+    expect(USERS_SEARCH_PARSERS.userId('../organizations')).toBeUndefined();
   });
 
   it('reads a list from an array or a lone string, dropping non-strings and blanks', () => {

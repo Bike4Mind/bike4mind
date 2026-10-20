@@ -77,12 +77,17 @@ describe('Users tab URL precedence', () => {
   });
 
   it('writes a filter change to both the URL and the store, keeping the open user', () => {
-    act(() => fakeAdminRouter.reset({ tab: 'users', page: 3, userId: 'u1' }));
+    act(() => fakeAdminRouter.reset({ tab: 'users', page: 3, userId: 'aaaaaaaaaaaaaaaaaaaaaaaa' }));
     const { result } = renderUsersTab();
 
     act(() => result.current[1]({ tags: ['Beta'], page: 1 }));
 
-    expect(fakeAdminRouter.search).toEqual({ tab: 'users', page: 1, tags: ['Beta'], userId: 'u1' });
+    expect(fakeAdminRouter.search).toEqual({
+      tab: 'users',
+      page: 1,
+      tags: ['Beta'],
+      userId: 'aaaaaaaaaaaaaaaaaaaaaaaa',
+    });
     expect(useUsersTab.getState().params).toMatchObject({ page: 1, tags: ['Beta'] });
     expect(result.current[0]).toMatchObject({ page: 1, tags: ['Beta'] });
   });

@@ -7,11 +7,16 @@ import type { ReactNode } from 'react';
 
 vi.mock('@tanstack/react-router', async () => (await import('../__tests__/fakeAdminRouter')).fakeRouterModule);
 
-const KNOWN_USER_ID = 'u1';
+const KNOWN_USER_ID = 'aaaaaaaaaaaaaaaaaaaaaaaa';
+const MISSING_USER_ID = 'bbbbbbbbbbbbbbbbbbbbbbbb';
+const FAILING_USER_ID = 'cccccccccccccccccccccccc';
+const axiosError = (status: number) => ({ isAxiosError: true, response: { status } });
 vi.mock('@client/app/hooks/data/user', () => ({
   useGetUser: (id: string | null) => ({
     isLoading: false,
+    isFetching: false,
     isError: !!id && id !== KNOWN_USER_ID,
+    error: id === MISSING_USER_ID ? axiosError(404) : id === FAILING_USER_ID ? axiosError(500) : null,
     data: id === KNOWN_USER_ID ? { id, name: 'Test User' } : undefined,
   }),
 }));
@@ -80,11 +85,18 @@ describe('FullUserViewModal - URL', () => {
   });
 
   it('closes and says so when the id matches no user', () => {
-    renderOpenModal('no-such-user');
+    renderOpenModal(MISSING_USER_ID);
 
     expect(openUserId()).toBeNull();
     expect(screen.queryByTestId('full-user-view-modal')).not.toBeInTheDocument();
-    expect(toastError).toHaveBeenCalledWith('That user could not be found.');
+    expect(toastError).toHaveBeenCalledWith('That user could not be found.', expect.anything());
+  });
+
+  it('stays open on a server error, which says nothing about the user existing', () => {
+    renderOpenModal(FAILING_USER_ID);
+
+    expect(openUserId()).toBe(FAILING_USER_ID);
+    expect(toastError).not.toHaveBeenCalled();
   });
 });
 

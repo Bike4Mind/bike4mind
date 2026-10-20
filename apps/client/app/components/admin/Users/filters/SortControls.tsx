@@ -4,6 +4,7 @@ import SwapVertIcon from '@mui/icons-material/SwapVert';
 import { IconButton, Option, Select, Stack, Tooltip } from '@mui/joy';
 import React from 'react';
 import { useUsersParams } from '../useUsersTabParams';
+import { USERS_SORT_OPTIONS } from '../usersTabSearch';
 
 interface SortControlsProps {
   disabled?: boolean;
@@ -39,12 +40,11 @@ const SortControls: React.FC<SortControlsProps> = ({ disabled, fullWidth }) => {
           borderBottomRightRadius: 0,
         }}
       >
-        <Option value="createdAt" data-testid="sort-option-created-at">
-          Created At
-        </Option>
-        <Option value="name" data-testid="sort-option-name">
-          Name
-        </Option>
+        {USERS_SORT_OPTIONS.map(option => (
+          <Option key={option.value} value={option.value} data-testid={option.testId}>
+            {option.label}
+          </Option>
+        ))}
       </Select>
       <Tooltip title={isAscending ? 'Ascending (A to Z)' : 'Descending (Z to A)'}>
         <IconButton

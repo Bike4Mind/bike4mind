@@ -49,12 +49,20 @@ describe('Users tab params', () => {
     order: 'asc',
     org: ['Acme'],
     tags: ['Admin'],
-    userId: 'u1',
+    userId: 'aaaaaaaaaaaaaaaaaaaaaaaa',
   };
 
   it('coerces each param in validateSearch and drops invalid ones', () => {
     expect(
-      parseAdminSearch({ page: '2', limit: 7, sort: 'password', order: 'asc', org: 'Acme', tags: [], userId: 'u1' })
+      parseAdminSearch({
+        page: '2',
+        limit: 7,
+        sort: 'password',
+        order: 'asc',
+        org: 'Acme',
+        tags: [],
+        userId: 'aaaaaaaaaaaaaaaaaaaaaaaa',
+      })
     ).toMatchObject({
       page: 2,
       limit: undefined,
@@ -62,7 +70,7 @@ describe('Users tab params', () => {
       order: 'asc',
       org: ['Acme'],
       tags: undefined,
-      userId: 'u1',
+      userId: 'aaaaaaaaaaaaaaaaaaaaaaaa',
     });
   });
 

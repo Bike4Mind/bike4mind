@@ -4,6 +4,7 @@ import { useGetUser } from '@client/app/hooks/data/user';
 import { useConfirmation } from '@client/app/hooks/useConfirmation';
 import { LinearProgress, Modal, ModalClose, ModalDialog } from '@mui/joy';
 import { useNavigate, useSearch } from '@tanstack/react-router';
+import { isAxiosError } from 'axios';
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { USERS_USER_ID_PARAM } from '../usersTabSearch';
@@ -38,11 +39,14 @@ const FullUserViewModal = () => {
   const user = useGetUser(userId);
 
   // A stale or mistyped `?userId=` closes the modal rather than leaving a dead "not found" pane.
+  // Only a settled 404: a cached error that is refetching, or a 5xx, must not close it.
+  const isUnknownUser = !user.isFetching && isAxiosError(user.error) && user.error.response?.status === 404;
   useEffect(() => {
-    if (!userId || !user.isError) return;
-    toast.error('That user could not be found.');
+    if (!userId || !isUnknownUser) return;
+    // A fixed id dedupes StrictMode's double effect run.
+    toast.error('That user could not be found.', { id: 'full-user-view-not-found' });
     setUserId(null);
-  }, [userId, user.isError, setUserId]);
+  }, [userId, isUnknownUser, setUserId]);
 
   /**
    * The card stages every edit locally and sends them only on Update, so closing

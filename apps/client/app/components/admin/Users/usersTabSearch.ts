@@ -1,5 +1,4 @@
 import type { IGetUsersParams } from '@client/app/utils/userAPICalls';
-import { optionalStringSearchValue } from '@client/app/utils/optionalStringSearchValue';
 
 /**
  * The Users tab's `/admin` search params and their coercion. Pure and React-free: adminTabParams.ts
@@ -9,8 +8,13 @@ import { optionalStringSearchValue } from '@client/app/utils/optionalStringSearc
 
 export const PAGE_LIMIT_OPTIONS = [5, 10, 20];
 
-// Must stay in sync with the options SortControls.tsx renders.
-export const USERS_SORT_FIELDS = ['createdAt', 'name'] as const;
+/** The sortable fields, rendered by SortControls.tsx and accepted by the `sort` param. */
+export const USERS_SORT_OPTIONS = [
+  { value: 'createdAt', label: 'Created At', testId: 'sort-option-created-at' },
+  { value: 'name', label: 'Name', testId: 'sort-option-name' },
+] as const;
+
+const USERS_SORT_FIELDS = USERS_SORT_OPTIONS.map(option => option.value);
 
 const SORT_ORDERS = ['asc', 'desc'] as const;
 
@@ -47,7 +51,7 @@ export const USERS_TAB_PARAMS = [...USERS_VIEW_PARAMS, USERS_USER_ID_PARAM] as c
 export type UsersSearch = {
   [USERS_PAGE_PARAM]?: number;
   [USERS_LIMIT_PARAM]?: number;
-  [USERS_SORT_PARAM]?: (typeof USERS_SORT_FIELDS)[number];
+  [USERS_SORT_PARAM]?: (typeof USERS_SORT_OPTIONS)[number]['value'];
   [USERS_ORDER_PARAM]?: (typeof SORT_ORDERS)[number];
   [USERS_ORG_PARAM]?: string[];
   [USERS_TAGS_PARAM]?: string[];
@@ -70,7 +74,8 @@ const oneOf =
 
 const parsePage = (value: unknown): number | undefined => {
   const page = toNumber(value);
-  return Number.isInteger(page) && page >= 1 ? page : undefined;
+  // Safe integers only: a huge page serializes in exponent form, which the users API rejects.
+  return Number.isSafeInteger(page) && page >= 1 ? page : undefined;
 };
 
 const parseLimit = (value: unknown): number | undefined => {
@@ -85,6 +90,10 @@ const parseStringList = (value: unknown): string[] | undefined => {
   return strings.length > 0 ? strings : undefined;
 };
 
+// The id is interpolated into `/api/users/<id>`, so only an ObjectId may come in from a link.
+const parseUserId = (value: unknown): string | undefined =>
+  typeof value === 'string' && /^[0-9a-f]{24}$/.test(value) ? value : undefined;
+
 /** Per-key coercion for the route's `validateSearch`; anything invalid becomes undefined. */
 export const USERS_SEARCH_PARSERS: { readonly [K in keyof UsersSearch]-?: (value: unknown) => UsersSearch[K] } = {
   [USERS_PAGE_PARAM]: parsePage,
@@ -93,7 +102,7 @@ export const USERS_SEARCH_PARSERS: { readonly [K in keyof UsersSearch]-?: (value
   [USERS_ORDER_PARAM]: oneOf(SORT_ORDERS),
   [USERS_ORG_PARAM]: parseStringList,
   [USERS_TAGS_PARAM]: parseStringList,
-  [USERS_USER_ID_PARAM]: optionalStringSearchValue,
+  [USERS_USER_ID_PARAM]: parseUserId,
 };
 
 /**
