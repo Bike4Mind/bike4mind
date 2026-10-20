@@ -85,6 +85,7 @@ describe('ChatService spawn suggestions', () => {
   afterEach(() => {
     service.dispose();
     for (const stream of streams) stream.end();
+    vi.restoreAllMocks();
   });
 
   async function codeSession(): Promise<ChatSessionSummary> {
@@ -378,6 +379,96 @@ describe('ChatService spawn suggestions', () => {
       label: 'Run here, in this conversation - no session was started',
     });
     expect((await store.list()).filter(session => session.origin)).toHaveLength(1);
+  });
+
+  it('draws a run-here message when the reply ends while the send reads the session', async () => {
+    const parent = await codeSession();
+    await service.send(parent.id, 'delegate');
+    await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
+    callTool(streams[0], 's1', 'session_spawn', { prompt: 'do it here instead', title: 'Here' });
+    const suggestion = await awaitSuggestion(parent.id, entry => entry.status === 'pending');
+    await vi.waitUntil(() => streams.length === 2, { timeout: 5000, interval: 5 });
+    const originalSend = service.send.bind(service);
+    const originalGet = store.get.bind(store);
+    vi.spyOn(service, 'send').mockImplementationOnce((...args) => {
+      vi.spyOn(store, 'get').mockImplementationOnce(async id => {
+        // acceptTurn awaits this disk read before deciding whether to queue.
+        reply(streams[1], 'Suggested.');
+        await awaitTurnEnd(parent.id, 1);
+        return originalGet(id);
+      });
+      return originalSend(...args);
+    });
+    const result = await service.startSpawnSuggestion({
+      sessionId: parent.id,
+      suggestionId: suggestion.id,
+      placement: 'here',
+      prompt: suggestion.prompt,
+      title: suggestion.title,
+    });
+    expect(result.ok).toBe(true);
+    await awaitRequestEndingWith(RUN_HERE_PREAMBLE);
+    expect((await store.get(parent.id))?.messages.some(message => message.content.startsWith(RUN_HERE_PREAMBLE))).toBe(
+      true
+    );
+    expect(queueEvents.some(event => event.sent?.message.content.startsWith(RUN_HERE_PREAMBLE))).toBe(true);
+  });
+
+  it('queues a run-here message when another turn starts while the send reads the session', async () => {
+    const { parent, suggestion } = await suggestedBy('do it here instead');
+    const originalSend = service.send.bind(service);
+    const originalGet = store.get.bind(store);
+    vi.spyOn(service, 'send').mockImplementationOnce((...args) => {
+      vi.spyOn(store, 'get').mockImplementationOnce(async id => {
+        const snapshot = await originalGet(id);
+        await originalSend(parent.id, 'concurrent user message');
+        await awaitRequestEndingWith('concurrent user message');
+        return snapshot;
+      });
+      return originalSend(...args);
+    });
+    const result = await service.startSpawnSuggestion({
+      sessionId: parent.id,
+      suggestionId: suggestion.id,
+      placement: 'here',
+      prompt: suggestion.prompt,
+      title: suggestion.title,
+    });
+    expect({
+      result,
+      queued: queue.list(parent.id).map(entry => entry.text),
+      stored: (await store.get(parent.id))?.spawnSuggestions?.[0]?.status,
+    }).toMatchObject({
+      result: { ok: true },
+      queued: [expect.stringContaining(RUN_HERE_PREAMBLE)],
+      stored: 'started',
+    });
+  });
+
+  it('keeps a run-here reminder off a relay queued ahead of the task', async () => {
+    const parent = await codeSession();
+    await service.send(parent.id, 'delegate');
+    await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
+    callTool(streams[0], 's1', 'session_spawn', { prompt: 'remove unused imports', title: 'Tidy imports' });
+    const suggestion = await awaitSuggestion(parent.id, entry => entry.status === 'pending');
+    await vi.waitUntil(() => streams.length === 2, { timeout: 5000, interval: 5 });
+    queue.enqueueRelay(parent.id, 'report current status', { fromSessionId: 'sender', fromTitle: 'Sender', hops: 1 });
+    const result = await service.startSpawnSuggestion({
+      sessionId: parent.id,
+      suggestionId: suggestion.id,
+      placement: 'here',
+      prompt: suggestion.prompt,
+      title: suggestion.title,
+    });
+    expect(result.ok).toBe(true);
+    expect(queue.list(parent.id)).toHaveLength(2);
+    reply(streams[1], 'Suggested.');
+    const relayRequest = await awaitRequestEndingWith('[Message from another conversation');
+    expect(queue.list(parent.id)).toHaveLength(1);
+    expect(wire(relayRequest).at(-1)?.content).not.toContain(`The user chose to run suggestion ${suggestion.id}`);
+    reply(streams[relayRequest], 'Current status.');
+    const taskRequest = await awaitRequestEndingWith(RUN_HERE_PREAMBLE);
+    expect(wire(taskRequest).at(-1)?.content).toContain(`The user chose to run suggestion ${suggestion.id}`);
   });
 
   describe('run here, in this conversation', () => {

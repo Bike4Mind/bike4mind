@@ -1188,6 +1188,8 @@ export interface ChatQueuedMessage {
   id: string;
   sessionId: string;
   text: string;
+  /** App-written reminders that belong only to the user message this entry becomes. */
+  notes?: string[];
   /** Descriptors whose bytes are already on disk; they are held back from pruning while queued. */
   attachments?: ChatAttachment[];
   queuedAt: string;
