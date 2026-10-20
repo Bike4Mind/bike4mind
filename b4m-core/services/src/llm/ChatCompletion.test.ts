@@ -4905,6 +4905,32 @@ describe('ChatCompletionProcess', () => {
       expect(event.costUsd).toBeCloseTo((10 * 10 + 50_000 * 1 + 2_000 * 12.5 + 1000 * 30) / 1_000_000, 9);
     });
 
+    it('stamps the thrown-abort settlement row with the catalog row and the tier of the reported prompt', async () => {
+      const { complete } = reservationOrgSetup({
+        priceSource: 'catalog',
+        priceRowId: 'price-row-4',
+        pricing: {
+          200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 },
+          1_000_000: { input: 20 / 1_000_000, output: 60 / 1_000_000 },
+        },
+      });
+      complete.mockImplementation(async (_model: string, _messages: unknown, _opts: unknown, cb: any) => {
+        await cb(['x'], { inputTokens: 300_000, outputTokens: 1000 });
+        throw abortError();
+      });
+      fundedOrg();
+      mockQuest.sessionId = 'session1';
+      const usageEventsRecord = vi.fn().mockResolvedValue(null);
+      mockDb.usageEvents = { record: usageEventsRecord };
+
+      await service.process({ body: reservationBody(), logger: mockLogger });
+
+      const event = usageEventsRecord.mock.calls[0][0];
+      expect(event).toMatchObject({ status: 'error', priceSource: 'catalog', priceRowId: 'price-row-4' });
+      expect(event.rates).toMatchObject({ tierKey: 1_000_000, input: 20 / 1_000_000, output: 60 / 1_000_000 });
+      expect(event).not.toHaveProperty('turnUsage');
+    });
+
     // Idempotency guard for a cross-model failover: the failed primary
     // attempt streamed partial output AND provider usage before erroring. The loop must
     // settle on ONLY the successful fallback attempt's usage (the per-attempt reset at
@@ -5863,6 +5889,116 @@ describe('ChatCompletionProcess', () => {
       expect(usageEventsRecord).toHaveBeenCalledWith(
         expect.objectContaining({ model: ChatModels.GPT4, status: 'refusal' })
       );
+    });
+
+    describe('settlement price stamp', () => {
+      const stampedModel = (extra: Record<string, unknown> = {}) => ({
+        id: ChatModels.GPT4,
+        type: 'text',
+        name: 'GPT-4',
+        backend: ModelBackend.OpenAI,
+        max_tokens: 100,
+        contextWindow: 1_000_000,
+        pricing: {
+          200000: { input: 2 / 1_000_000, output: 12 / 1_000_000 },
+          1_000_000: { input: 4 / 1_000_000, output: 18 / 1_000_000 },
+        },
+        supportsImageVariation: false,
+        ...extra,
+      });
+      const LOW = { tierKey: 200_000, input: 2 / 1_000_000, output: 12 / 1_000_000 };
+      const HIGH = { tierKey: 1_000_000, input: 4 / 1_000_000, output: 18 / 1_000_000 };
+
+      const settle = async (info: Record<string, unknown>, modelExtra: Record<string, unknown> = {}) => {
+        const { usageEventsRecord } = arrangeUsageEventScenario({
+          enforceCredits: true,
+          primaryComplete: async (_m, _ms, _o, cb) => {
+            await cb(['Hello'], info);
+          },
+        });
+        mockedGetAvailableModels.mockResolvedValue([stampedModel(modelExtra)] as any);
+        await runUsageEventScenario();
+        expect(usageEventsRecord).toHaveBeenCalledTimes(1);
+        return usageEventsRecord.mock.calls[0][0];
+      };
+
+      it('stamps the literal source and no row id for an adapter-priced model', async () => {
+        const event = await settle({ inputTokens: 100, outputTokens: 50 });
+        expect(event.priceSource).toBe('literal');
+        expect(event).not.toHaveProperty('priceRowId');
+        expect(event.rates).toMatchObject(LOW);
+      });
+
+      it('stamps the catalog source and the row id for a catalog-priced model', async () => {
+        const event = await settle(
+          { inputTokens: 100, outputTokens: 50 },
+          { priceSource: 'catalog', priceRowId: 'price-row-1' }
+        );
+        expect(event).toMatchObject({ priceSource: 'catalog', priceRowId: 'price-row-1' });
+      });
+
+      it.each([
+        [200_000, LOW],
+        [200_001, HIGH],
+      ])('stamps the tier of a %i-token provider-reported prompt', async (inputTokens, expected) => {
+        const event = await settle({ inputTokens, outputTokens: 50 });
+        expect(event.rates).toMatchObject(expected);
+      });
+
+      it('counts cache reads and writes toward the prompt that picks the tier', async () => {
+        const event = await settle({
+          inputTokens: 100_000,
+          cacheReadInputTokens: 50_000,
+          cacheCreationInputTokens: 50_001,
+          outputTokens: 50,
+        });
+        expect(event.rates).toMatchObject(HIGH);
+      });
+
+      it('stamps the local-estimate tier when the provider reported no usage', async () => {
+        const event = await settle({});
+        expect(event.settledBasis).toBe('local');
+        expect(event.rates).toMatchObject(LOW);
+        expect(event).not.toHaveProperty('turnUsage');
+      });
+
+      it('writes turnUsage with each turn tier for a multi-turn completion', async () => {
+        const event = await settle({
+          inputTokens: 281_000,
+          outputTokens: 60,
+          turnUsage: [
+            { inputTokens: 80_000, outputTokens: 10 },
+            { inputTokens: 201_000, outputTokens: 50 },
+          ],
+        });
+        expect(event.turnUsage).toEqual([
+          { inputTokens: 80_000, outputTokens: 10, tierKey: 200_000 },
+          { inputTokens: 201_000, outputTokens: 50, tierKey: 1_000_000 },
+        ]);
+        expect(event.rates).toMatchObject(HIGH);
+        expect(event).not.toHaveProperty('turnUsageTruncated');
+      });
+
+      it('writes no turnUsage for a single-turn completion', async () => {
+        const event = await settle({
+          inputTokens: 100,
+          outputTokens: 50,
+          turnUsage: [{ inputTokens: 100, outputTokens: 50 }],
+        });
+        expect(event).not.toHaveProperty('turnUsage');
+        expect(event.rates).toMatchObject(LOW);
+      });
+
+      it('caps turnUsage at 100 entries and flags it past 100 turns', async () => {
+        const event = await settle({
+          inputTokens: 1_010,
+          outputTokens: 101,
+          turnUsage: Array.from({ length: 101 }, () => ({ inputTokens: 10, outputTokens: 1 })),
+        });
+        expect(event.turnUsage).toHaveLength(100);
+        expect(event.turnUsageTruncated).toBe(true);
+        expect(event.turnUsage[99]).toEqual({ inputTokens: 20, outputTokens: 2, tierKey: 200_000 });
+      });
     });
 
     // Exhaustion path + final-hop cross-provider wiring: every hop fails, so the loop runs the

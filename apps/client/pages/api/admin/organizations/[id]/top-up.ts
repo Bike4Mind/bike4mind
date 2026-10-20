@@ -21,6 +21,7 @@ const MAX_TOPUP_CREDITS = 10_000_000;
 
 const TopUpSchema = z.object({
   credits: z.number().int().positive().max(MAX_TOPUP_CREDITS),
+  kind: z.enum(['top_up', 'refund']).default('top_up'),
   // Required idempotency key. The client generates a UUID per submit click so
   // a double-click / retry doesn't double-credit. We piggy-back on the credit-
   // transaction sparse unique index on `stripePaymentIntentId` for atomic
@@ -45,12 +46,26 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
     const { id } = req.query as RequestQuery;
     if (!id) throw new BadRequestError('Organization id required');
 
-    const { credits, idempotencyKey } = TopUpSchema.parse(req.body);
+    const { credits, kind, idempotencyKey } = TopUpSchema.parse(req.body);
     const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
+    const isRefund = kind === 'refund';
     const dedupeKey = `admin_topup_${id}_${idempotencyKey}`;
 
     const organization = await organizationRepository.findById(id);
     if (!organization) throw new NotFoundError('Organization not found');
+
+    // A generic_add is deduped on transactionId, which createTransaction swallows into a silent
+    // no-op rather than the E11000 the subscription path raises. Look the key up first so a
+    // replayed refund answers like a replayed top-up and writes no second audit row. A concurrent
+    // duplicate that slips past this still cannot double-credit: addCredits no-ops on it.
+    if (isRefund && (await creditTransactionRepository.findOne({ transactionId: dedupeKey }))) {
+      req.logger.info(`Refund dedup hit for ${dedupeKey}, treating as success`);
+      return res.status(200).json({
+        organizationId: organization.id,
+        creditsAdded: credits,
+        idempotent: true,
+      });
+    }
 
     // Atomic credit grant + audit log. Without the transaction, an audit-side
     // failure (analytics outage, etc.) after the credit write would leave a
@@ -62,14 +77,25 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
     try {
       await withTransaction(async () => {
         await creditService.addCredits(
-          {
-            ownerId: organization.id,
-            ownerType: CreditHolderType.Organization,
-            credits,
-            type: 'subscription',
-            stripePaymentIntentId: dedupeKey,
-            metadata: { adminUserId: req.user!.id, reason, source: 'admin_topup' },
-          },
+          isRefund
+            ? {
+                ownerId: organization.id,
+                ownerType: CreditHolderType.Organization,
+                credits,
+                type: 'generic_add',
+                reason: 'refund',
+                description: 'Admin refund',
+                transactionId: dedupeKey,
+                metadata: { adminUserId: req.user!.id, reason, source: 'admin_refund' },
+              }
+            : {
+                ownerId: organization.id,
+                ownerType: CreditHolderType.Organization,
+                credits,
+                type: 'subscription',
+                stripePaymentIntentId: dedupeKey,
+                metadata: { adminUserId: req.user!.id, reason, source: 'admin_topup' },
+              },
           {
             db: { creditTransactions: creditTransactionRepository, creditLots: creditLotRepository },
             creditHolderMethods: organizationRepository,
@@ -79,9 +105,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         await recordAdminActionFromRequest(req, {
           action: 'org.credits.topped_up',
           target: { kind: 'organization', id: organization.id, displayName: organization.name },
-          summary: `topped up ${credits} credits`,
+          summary: `${isRefund ? 'refunded' : 'topped up'} ${credits} credits`,
           reason,
-          details: { credits, ownerId: organization.userId },
+          details: { credits, ownerId: organization.userId, ...(isRefund ? { kind } : {}) },
         });
       });
     } catch (err: unknown) {

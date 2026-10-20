@@ -41,6 +41,37 @@ export const USAGE_EVENT_STATUSES = ['ok', 'error', 'timeout', 'refusal', 'degen
 
 export type UsageEventStatus = (typeof USAGE_EVENT_STATUSES)[number];
 
+/** Where a UsageEvent's rates came from: a ModelPrice catalog row, or the adapter literal fallback. */
+export const USAGE_PRICE_SOURCES = ['catalog', 'literal'] as const;
+
+export type UsagePriceSource = (typeof USAGE_PRICE_SOURCES)[number];
+
+/** USD per token for the pricing tier that priced a call (see AppliedRates in models.ts). */
+export const UsageEventRates = z.object({
+  /** The pricing-map key (input-token threshold) of the tier applied. */
+  tierKey: z.number(),
+  input: z.number(),
+  output: z.number(),
+  cacheRead: z.number().optional(),
+  cacheWrite: z.number().optional(),
+});
+
+export type IUsageEventRates = z.infer<typeof UsageEventRates>;
+
+/** One provider request of a multi-turn completion, with the tier it was priced on. */
+export const UsageEventTurn = z.object({
+  inputTokens: z.number(),
+  outputTokens: z.number(),
+  cacheReadTokens: z.number().optional(),
+  cacheWriteTokens: z.number().optional(),
+  tierKey: z.number(),
+});
+
+export type IUsageEventTurn = z.infer<typeof UsageEventTurn>;
+
+/** Most turns one UsageEvent stores; a longer completion keeps the first N-1 plus one aggregated tail entry. */
+export const USAGE_EVENT_TURN_USAGE_CAP = 100;
+
 /**
  * One row per provider API call. Ties true COGS (costUsd, frozen
  * at write time) to what the user was debited (creditsCharged) so margin per
@@ -107,6 +138,26 @@ export const UsageEvent = z.object({
   /** API key that authed the call; present only for API-key-authed usage. */
   apiKeyId: z.string().optional(),
 
+  // Price stamp, written at text-model settlement so a refund or audit can recompute the
+  // charge from the rates actually applied. All optional: rows written before the stamp, and
+  // non-text features (image, voice, ...), leave them unset.
+  /** 'catalog' when a ModelPrice row priced the call, 'literal' when the adapter literal did. */
+  priceSource: z.enum(USAGE_PRICE_SOURCES).optional(),
+  /** The ModelPrice row in force; set only when priceSource is 'catalog'. */
+  priceRowId: z.string().optional(),
+  /**
+   * Rates of the tier applied. A multi-turn row whose turns hit different tiers carries the
+   * tier of its largest turn; turnUsage has each turn's own tierKey.
+   */
+  rates: UsageEventRates.optional(),
+  /**
+   * Per-turn usage, written only when the completion settled over more than one provider
+   * request (tool loops bill turn by turn). Capped at USAGE_EVENT_TURN_USAGE_CAP entries.
+   */
+  turnUsage: z.array(UsageEventTurn).optional(),
+  /** True when turnUsage was capped: its last entry is the sum of every turn from there on. */
+  turnUsageTruncated: z.boolean().optional(),
+
   createdAt: z.date(),
   updatedAt: z.date(),
 });
@@ -117,6 +168,12 @@ export type IUsageEventDocument = IUsageEvent & IMongoDocument;
 
 /** Input for recording an event (server sets id/timestamps). */
 export type IUsageEventInput = Omit<IUsageEvent, 'id' | 'createdAt' | 'updatedAt'>;
+
+/** The price-stamp fields of a UsageEvent, as built by buildUsagePriceStamp. */
+export type UsagePriceStamp = Pick<
+  IUsageEventInput,
+  'priceSource' | 'priceRowId' | 'rates' | 'turnUsage' | 'turnUsageTruncated'
+>;
 
 /** One aggregation bucket of v_margin_by_model_day (schema-doc naming). */
 export interface IModelDayMargin {
