@@ -158,7 +158,7 @@ export class ChatPage extends BasePage {
     await this.sendMessageAndWaitForResponse(prompt, options.timeout);
     await options.verifyAnswers(answers, {
       logic: options.logic,
-      selector: '[data-testid="ai-response"]',
+      selector: '[data-testid="ai-response-body"]',
     });
   }
 
