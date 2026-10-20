@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
+import { PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 import {
+  isAwaitingEmailVerification,
   isBrandNewAccount,
   shouldShowVerificationNag,
   NEW_ACCOUNT_GRACE_MS,
@@ -63,5 +65,25 @@ describe('shouldShowVerificationNag', () => {
   it('shows at exactly the interval boundary', () => {
     const dismissedAt = String(now - EMAIL_VERIFICATION_NAG_INTERVAL_MS);
     expect(shouldShowVerificationNag(dismissedAt, now)).toBe(true);
+  });
+});
+
+describe('isAwaitingEmailVerification', () => {
+  it('is true for an unverified user holding the pending-credits tag', () => {
+    expect(isAwaitingEmailVerification({ emailVerified: false, tags: [PENDING_FREE_CREDITS_TAG] })).toBe(true);
+  });
+
+  it('is false once verified, even with the tag still present', () => {
+    expect(isAwaitingEmailVerification({ emailVerified: true, tags: [PENDING_FREE_CREDITS_TAG] })).toBe(false);
+  });
+
+  it('is false for an unverified user without the tag, and for unknown verification state', () => {
+    expect(isAwaitingEmailVerification({ emailVerified: false, tags: [] })).toBe(false);
+    expect(isAwaitingEmailVerification({ emailVerified: null, tags: [PENDING_FREE_CREDITS_TAG] })).toBe(false);
+  });
+
+  it('is false with no user', () => {
+    expect(isAwaitingEmailVerification(null)).toBe(false);
+    expect(isAwaitingEmailVerification(undefined)).toBe(false);
   });
 });
