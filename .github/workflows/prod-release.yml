@@ -191,6 +191,32 @@ jobs:
         run: |
           pnpm --filter @bike4mind/scripts release-notes:enqueue --tag "$RELEASE_TAG"
 
+      # Best-effort like the release notes: a failure here must never fail the release.
+      - name: Generate release video App token
+        id: video-token
+        if: vars.RELEASE_VIDEO_REPO != '' && github.event.inputs.dry_run != 'true' && steps.create.outputs.release_tag != ''
+        continue-on-error: true
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.RELEASE_VIDEO_APP_ID }}
+          private-key: ${{ secrets.RELEASE_VIDEO_APP_KEY }}
+          owner: ${{ split(vars.RELEASE_VIDEO_REPO, '/')[0] }}
+          repositories: ${{ split(vars.RELEASE_VIDEO_REPO, '/')[1] }}
+
+      - name: Request release video
+        if: vars.RELEASE_VIDEO_REPO != '' && github.event.inputs.dry_run != 'true' && steps.create.outputs.release_tag != '' && steps.video-token.outcome == 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.video-token.outputs.token }}
+          VIDEO_REPO: ${{ vars.RELEASE_VIDEO_REPO }}
+          RELEASE_TAG: ${{ steps.create.outputs.release_tag }}
+          DEPLOYED_SHA: ${{ steps.resolve-sha.outputs.deployed_sha }}
+        run: |
+          gh api "repos/$VIDEO_REPO/dispatches" \
+            -f event_type=release-video \
+            -f "client_payload[tag]=$RELEASE_TAG" \
+            -f "client_payload[deployed_sha]=$DEPLOYED_SHA"
+
       - name: Summary
         if: success()
         env:
