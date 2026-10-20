@@ -50,8 +50,13 @@ import LakeDriveStatusChip from '@client/app/components/datalake/LakeDriveStatus
 import LakeSyncStatus from '@client/app/components/datalake/LakeSyncStatus';
 import LakeGitHubStatusChip from '@client/app/components/datalake/LakeGitHubStatusChip';
 import LakeSkippedFilesChip from '@client/app/components/datalake/LakeSkippedFilesChip';
-import { isDraftLake, lakeVisibilityLabel } from '@client/app/components/datalake/lakeVisibility';
+import {
+  canConnectLakeConnector,
+  isDraftLake,
+  lakeVisibilityLabel,
+} from '@client/app/components/datalake/lakeVisibility';
 import { REBUILD_PENDING_STALE_MS, isGeneratedLakeTagPrefix, type IDataLakeBatchSummary } from '@bike4mind/common';
+import LakeSourceConnectActions from '../steps/LakeSourceConnectActions';
 import AddExistingFilesModal from './AddExistingFilesModal';
 import FinishSourceConnectBanner from './FinishSourceConnectBanner';
 import type { ManagerLake } from './shared';
@@ -209,6 +214,12 @@ export function LakeInfoPanel({
           {lake.name}
         </Typography>
         <FinishSourceConnectBanner lake={lake} fileCount={fileCount} />
+        {/* Same gate and test id as SelectedLakeHeader, so both surfaces expose the same source controls. */}
+        {canConnectLakeConnector(lake) && (
+          <Box data-testid="datalake-selected-lake-source" sx={{ mb: 1 }}>
+            <LakeSourceConnectActions lake={lake} />
+          </Box>
+        )}
         <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: 1, mb: 1 }}>
           {/* Start chat is available to ANY user who can reach the lake (not manage-gated; draft
               lakes confirm first): it opens a session scoped to this lake, applying the lake's preferred prompt server-side.
