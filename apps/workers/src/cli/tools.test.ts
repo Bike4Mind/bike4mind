@@ -178,6 +178,28 @@ describe('tools Lambda handler — request ID correlation', () => {
   });
 });
 
+describe('decide on the CLI tools endpoint', () => {
+  beforeEach(() => {
+    vi.mocked(verifyJwtToken).mockResolvedValue({ id: 'user-1', email: 'u@example.com' } as any);
+    vi.mocked(checkRateLimit).mockResolvedValue(undefined);
+  });
+
+  it('accepts a decide body and hands the handler an executor for it', async () => {
+    vi.mocked(executeToolWithLogging).mockResolvedValue({ success: true, content: '{}' } as any);
+    const body = JSON.stringify({
+      toolName: 'decide',
+      input: { input: 'Payouts failing', questions: [{ type: 'predicate', name: 'is_urgent', instructions: 'x' }] },
+    });
+
+    const { status } = parse((await handleToolRequest(makeEvent({ body }))) as any);
+
+    expect(status).toBe(200);
+    const [, context] = vi.mocked(executeToolWithLogging).mock.calls[0];
+    expect(typeof context.executors?.decide).toBe('function');
+    expect(context.userId).toBe('user-1');
+  });
+});
+
 describe('tool-name enum stays in sync with SUPPORTED_TOOLS', () => {
   // The contract schema's toolName enum and the handler's SUPPORTED_TOOLS are two
   // hand-maintained lists (schema can't import the handler's runtime module). If

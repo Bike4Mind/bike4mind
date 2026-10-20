@@ -1,8 +1,30 @@
 import { Logger } from '@bike4mind/observability';
+import { userRepository } from '@bike4mind/database';
+import type { ServerToolExecutors } from '@bike4mind/services';
+import type { DecisionRunBody } from '@server/decisions/runDecision';
 import { executeToolContract } from '@bike4mind/common';
 import { checkRateLimit } from '@server/cli/auth';
 import { executeToolWithLogging } from '@bike4mind/server-utils/cli/toolsHandler.shared';
 import { defineLambdaRoute } from '@workers/cli/defineLambdaRoute';
+
+/**
+ * The `decide` executor: the app-tier decision runner, billed to the calling CLI user. Built here
+ * rather than in the shared handler because only the app tier can reach that runner.
+ */
+const buildExecutors = (logger: Logger): ServerToolExecutors => ({
+  decide: async request => {
+    // Loaded on demand: the runner pulls the file-access and entitlement graph, which the
+    // weather/search/fetch tools on this same endpoint never touch.
+    const { runDecision } = await import('@server/decisions/runDecision');
+    const user = await userRepository.findById(request.userId);
+    if (!user) throw new Error('No such user');
+    const result = await runDecision({
+      caller: { userId: request.userId, user, logger, source: 'cli' },
+      body: request.input as unknown as DecisionRunBody,
+    });
+    return JSON.stringify({ id: result.id, model: result.model, answers: result.answers });
+  },
+});
 
 /**
  * Route logic for CLI server-side tool execution (production & preview). The Lambda
@@ -34,6 +56,7 @@ export const handleToolRequest = defineLambdaRoute(
         info: msg => logger.info(`[CLI_TOOLS] ${msg}`),
         error: (msg, err) => logger.error(`[CLI_TOOLS] ${msg}`, err),
       },
+      executors: buildExecutors(logger),
     });
 
     // Echo request_id in the body so it matches the X-Request-ID header on the

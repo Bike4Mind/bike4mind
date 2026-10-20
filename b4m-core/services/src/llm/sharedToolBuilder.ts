@@ -89,6 +89,8 @@ export interface ToolBuilderDeps {
    * path). See ToolContext.onToolLlmUsage.
    */
   onToolLlmUsage?: ToolContext['onToolLlmUsage'];
+  /** The `decide` tool's execution seam, forwarded to the tool context (see ToolContext.decide). */
+  decide?: ToolContext['decide'];
   storage: BaseStorage;
   imageGenerateStorage: BaseStorage;
   imageProcessorLambdaName?: string;
@@ -397,6 +399,7 @@ export function buildSharedTools(
       apiKeyId,
       questId: callbacks.questId,
       numberCitables: callbacks.numberCitables,
+      decide: deps.decide,
       getAbortSignal,
     },
     storage,

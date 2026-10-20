@@ -75,6 +75,7 @@ import { Logger } from '@bike4mind/observability';
 import { Permission, OPTI_SURFACE } from '@bike4mind/common';
 import { accessibleBy } from '@casl/mongoose';
 import { lakeWriteToolDb } from '@server/dataLakes/lakeWriteToolDb';
+import { runDecision } from '@server/decisions/runDecision';
 import { executionTurnAuth } from '@server/auth/turnAuth';
 import defineAbilitiesFor from '@server/auth/ability';
 import { missionChatTools, MISSION_CHAT_TOOL_NAMES } from '@workers/deepAgent/missionChatTools';
@@ -1671,6 +1672,13 @@ async function processExecution(
       attachedFileIds: attachedFileIdsForRun(execution, session.knowledgeIds),
       fullyInlinedAttachmentIds,
       onToolLlmUsage: usage => addToolUsage(pendingToolUsage, usage),
+      // The `decide` tool's seam: same runner, hold and retry as the public route, attributed to
+      // the agent surface. `authOrigin` still decides key attribution on the usage row.
+      decide: ({ userId, user: decisionUser, logger: decisionLogger, request }) =>
+        runDecision({
+          caller: { userId, user: decisionUser, logger: decisionLogger, source: 'agent' },
+          body: request,
+        }),
       db: {
         // usageEvents is deliberately absent: onToolLlmUsage already folds tool COGS into the
         // agent_execution event (billIteration), so wiring it would make
@@ -3549,6 +3557,12 @@ async function processSubagentDispatch(
       sessionIncludeLibraryFiles: libraryFlagForScope(session),
       // Without it a library-off session's delegated agent cannot open the files attached to it.
       attachedFileIds: attachedFileIdsForRun(parentRun ?? undefined, session.knowledgeIds),
+      // Same seam as the parent run: a subagent's decision bills through the shared runner.
+      decide: ({ userId, user: decisionUser, logger: decisionLogger, request }) =>
+        runDecision({
+          caller: { userId, user: decisionUser, logger: decisionLogger, source: 'agent' },
+          body: request,
+        }),
       // Manage-but-not-member admission, threaded unvetted: the ownership gate above already
       // confirmed the session belongs to this run before this ToolBuilderDeps is built.
       sessionPreauthorizedLakeIds: session.preauthorizedLakeIds,

@@ -25,6 +25,7 @@ export {
 export * from './sharedToolBuilder';
 export * from './systemPromptDisclosure';
 export * from './toolAvailability';
+export * from './decisionProviders';
 export { ServerAgentStore, builtInAgentModelReferences } from './agents/ServerAgentStore';
 export type { ServerAgentStoreOverlays } from './agents/ServerAgentStore';
 export {

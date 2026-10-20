@@ -1080,6 +1080,7 @@ export class ChatCompletionProcess {
   private _bedrockSvc: Map<string, BedrockGuardrailsService> = new Map();
   private onReplyStream?: IChatCompletionServiceOptions['onReplyStream'];
   private onToolPreamble?: IChatCompletionServiceOptions['onToolPreamble'];
+  private decide?: IChatCompletionServiceOptions['decide'];
   private verbose: boolean = false;
   // Per-name queue of each tool call's reserved credits, in call order (see
   // ToolBuilder.reserveToolCredits). Settled per-call below so a tool invoked more
@@ -1145,6 +1146,7 @@ export class ChatCompletionProcess {
     this.gpcSignalDetected = options.gpcSignalDetected ?? false;
     this.onReplyStream = options.onReplyStream;
     this.onToolPreamble = options.onToolPreamble;
+    this.decide = options.decide;
     this.statusManager = null;
     this.userAbility = null;
     this.systemFilesCache = null;
@@ -3169,6 +3171,7 @@ export class ChatCompletionProcess {
         subagentTelemetryData: this.subagentTelemetryData,
         sendStatusUpdate: (q, status, options) => this.sendStatusUpdate(q, status, options),
         onToolPreamble: this.onToolPreamble,
+        decide: this.decide,
       });
 
       const { mcpToolsByServer, serverAgentConfig } = await toolBuilder.buildMcpTools({

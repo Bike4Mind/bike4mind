@@ -89,6 +89,7 @@ export const MISSING_KEY_TOOLTIPS: Partial<Record<B4MLLMTools, string>> = {
     'Requires an OpenAI or ElevenLabs API key, in Profile > API Keys (add, then activate) or Admin > API Keys.',
   search_knowledge_base:
     'Requires an embeddings API key (VoyageAI or OpenAI) in Profile > API Keys (add, then activate) or Admin > API Keys, or a self-hosted local Ollama embedder (OLLAMA_BASE_URL).',
+  decide: 'Requires an OpenAI or TypeSafe API key in Profile > API Keys (add, then activate) or Admin > API Keys.',
 };
 
 type McpServerOption = Pick<IMcpServerResponse, 'id' | 'enabled' | 'tools'> & { name: string };

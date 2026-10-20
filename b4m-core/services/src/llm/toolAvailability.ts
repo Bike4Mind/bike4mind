@@ -27,6 +27,7 @@ import {
   type GetEffectiveLLMApiKeysAdapters,
 } from '../apiKeyService';
 import { resolveWebSearchProvider } from './tools/implementation/websearch';
+import { hasUsableDecisionProvider } from './decisionProviders';
 
 /**
  * Presence-only availability for tools that need an external API key/config.
@@ -118,6 +119,7 @@ const GATED_TOOLS: readonly B4MLLMTools[] = [
   'edit_image',
   'audio_generation',
   'search_knowledge_base',
+  'decide',
 ];
 
 /**
@@ -271,6 +273,9 @@ export async function resolveToolAvailability(
         hasEmbeddingKey || isLocalEmbedderAvailable() || hasKeylessCloudEmbedder(),
         taint.llmKeys
       ),
+      // Same rule the decision routes apply to their own key lookup, so a model the picker offers
+      // is one the runner can actually reach - the tools are withheld when nothing is callable.
+      decide: maybeFailOpen(hasUsableDecisionProvider(llmKeys), taint.llmKeys),
     };
   } catch (err) {
     // Last-resort safety net for anything outside the per-lookup Promise.allSettled above (this

@@ -179,6 +179,8 @@ export interface ToolBuilderConfig {
    * preamble while the tool executes. No-op when omitted.
    */
   onToolPreamble?: (preamble: string, toolName: string) => void;
+  /** The `decide` tool's execution seam, forwarded to the tool context (see ToolContext.decide). */
+  decide?: ToolContext['decide'];
 }
 
 // Short spoken preambles for tools whose latency would otherwise leave the
@@ -888,6 +890,7 @@ export class ToolBuilder {
         organizationId: organization?.id,
         authOrigin: this.deps.authOrigin,
         apiKeyId: this.deps.apiKeyId,
+        decide: this.deps.decide,
         sessionRepository: this.deps.db.sessions,
         storage: this.deps.storage,
         imageGenerateStorage: this.deps.imageGenerateStorage,

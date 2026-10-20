@@ -29,6 +29,8 @@ import {
   ModelInfo,
   type AuthOrigin,
   type CitableSource,
+  type DecisionQuestion,
+  type DecisionResponse,
 } from '@bike4mind/common';
 
 /**
@@ -71,6 +73,26 @@ export type ToolLlmUsage = {
   cacheWriteTokens: number;
   costUsd: number;
 };
+
+/** One `decide` call's request. Text input only: the tool adds no image arm over the route. */
+export type DecisionToolRequest = {
+  /** Omit to let the host pick the first model it can call; a pinned id must be catalog-known. */
+  model?: string;
+  input: string;
+  questions: DecisionQuestion[];
+};
+
+/**
+ * The host's execution seam for `decide`. Returns the same envelope the public route serializes,
+ * so a tool answer and an API answer cannot drift.
+ */
+export type DecideToolFn = (params: {
+  userId: string;
+  user: IUserDocument;
+  logger: Logger;
+  authOrigin: AuthOrigin;
+  request: DecisionToolRequest;
+}) => Promise<DecisionResponse>;
 
 export interface ToolContext {
   /** The only principal signal a tool call carries - identical whether this turn is a live chat
@@ -395,6 +417,13 @@ export interface ToolContext {
    * write. Keep implementations pure arithmetic (see agentExecutor's addToolUsage).
    */
   onToolLlmUsage?: (usage: ToolLlmUsage) => void;
+  /**
+   * Runs one typed decision through the host's shared runner, so a `decide` call bills, retries
+   * and normalizes exactly as POST /api/v1/decisions does. Injected because that runner's credit
+   * hold lives in the app tier, which b4m-core cannot import. Absent (a lean harness, or a
+   * deployment with no decision provider) means the tool refuses rather than answering un-billed.
+   */
+  decide?: DecideToolFn;
   imageProcessorLambdaName?: string; // Lambda function name for image processing (edit_image, image_generation)
   /**
    * List of allowed directories for file operations.

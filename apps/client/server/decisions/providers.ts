@@ -3,6 +3,7 @@ import type { DecisionProviderId } from '@bike4mind/common';
 import { adminSettingsRepository, apiKeyRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { apiKeyService } from '@bike4mind/services';
+import { usableDecisionProviderKey, type DecisionProviderKeys } from '@bike4mind/services/llm';
 import { getSettingsByNames } from '@bike4mind/utils';
 import {
   createDecisionProviderRegistry,
@@ -12,9 +13,11 @@ import {
   type DecisionProvider,
   type DecisionProviderRegistry,
 } from '@bike4mind/utils/decisionProviders';
-import { usableApiKey } from '@server/generationJobs/wiring';
 
-type EffectiveKeys = Awaited<ReturnType<typeof apiKeyService.getEffectiveLLMApiKeys>>;
+type EffectiveKeys = DecisionProviderKeys;
+
+// Re-exported so the decision routes and their tests keep one import site for the key rule.
+export { selectDecisionProviderKey } from '@bike4mind/services/llm';
 
 const SystemOneBaseUrlSchema = z
   .string()
@@ -60,38 +63,12 @@ let registry: DecisionProviderRegistry | undefined;
 export const getDecisionProviderRegistry = (): DecisionProviderRegistry =>
   (registry ??= createDecisionProviderRegistry(buildDecisionProviders()));
 
-/** Each vendor adds its case here; the exhaustive switch makes the compiler demand it. */
-export const selectDecisionProviderKey = (
-  provider: DecisionProviderId,
-  keys: EffectiveKeys
-): string | null | undefined => {
-  switch (provider) {
-    case 'test':
-      return 'test-key';
-    // The user's own OpenAI key, else the admin demo key, else the deployment env key.
-    case 'openai':
-      return keys.openai;
-    case 'typesafe':
-      return keys.typesafe;
-    default: {
-      const unhandled: never = provider;
-      throw new Error(`no key mapping for decision provider ${String(unhandled)}`);
-    }
-  }
-};
-
 const loadEffectiveKeys = (userId: string, logger: Logger): Promise<EffectiveKeys> =>
   apiKeyService.getEffectiveLLMApiKeys(
     userId,
     { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository }, getSettingsByNames },
     { logger }
   );
-
-// The one key rule both resolvers below share, so the model list and a decision request cannot disagree.
-const usableDecisionProviderKey = (provider: DecisionProviderId, keys: EffectiveKeys): string | null =>
-  provider === 'test'
-    ? (selectDecisionProviderKey(provider, keys) ?? null)
-    : usableApiKey(selectDecisionProviderKey(provider, keys));
 
 export const resolveDecisionProviderKey = async (
   userId: string,
