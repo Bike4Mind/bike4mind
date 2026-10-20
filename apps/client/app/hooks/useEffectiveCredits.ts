@@ -59,6 +59,8 @@ export function useEffectiveCredits(options?: UseEffectiveCreditsOptions): numbe
       setSettleBaseline({ credits: liveCredits, syncCount });
     }
   } else if (
+    // If settlement lands before streaming ends, the chip shows the pre-turn balance until the last
+    // post-turn pull signals sync; deliberate, it avoids flashing the reservation dip.
     settleBaseline &&
     !isAnyStreaming &&
     (liveCredits !== settleBaseline.credits || syncCount !== settleBaseline.syncCount)
@@ -80,5 +82,7 @@ export function useEffectiveCredits(options?: UseEffectiveCreditsOptions): numbe
   if (options?.live) {
     return liveCredits;
   }
+  // A new turn mid-hold keeps the older pre-turn value, so the balance is overstated by the
+  // previous turn's cost until this turn settles.
   return frozenCredits ?? liveCredits;
 }
