@@ -313,7 +313,6 @@ const Register: React.FC = () => {
       useAccessToken.getState().setVerifiedSession(accessToken);
       setCurrentUser(user as Parameters<typeof setCurrentUser>[0]);
       if (result.user) {
-        logEvent({ type: FirstRunEvents.POLICIES_SHOWN, metadata: { path: 'registration' } });
         logEvent({ type: FirstRunEvents.POLICIES_ACCEPTED, metadata: { path: 'registration' } });
       }
 

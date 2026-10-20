@@ -452,7 +452,6 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
       }
       finishLogin(flat as Record<string, unknown> & { accessToken: string });
       if ('user' in response) {
-        logEvent({ type: FirstRunEvents.POLICIES_SHOWN, metadata: { path: 'inline_registration' } });
         logEvent({ type: FirstRunEvents.POLICIES_ACCEPTED, metadata: { path: 'inline_registration' } });
       }
     } catch (error: unknown) {
