@@ -653,8 +653,8 @@ export async function apiListSkills(
     headers: { Authorization: `Bearer ${token}` },
   });
 
-  // Throw rather than return []: the only caller is teardown, and an empty list on (say) an expired
-  // token would silently skip every delete.
+  // Throw rather than return []: an empty list on a failed fetch (e.g. an expired token) would
+  // silently skip every delete in apiDeleteAllSkills.
   if (!response.ok()) {
     throw new Error(`GET /api/skills failed: ${response.status()} ${await response.text()}`);
   }

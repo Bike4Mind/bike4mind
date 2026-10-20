@@ -44,10 +44,17 @@ test.describe('Skills - list, create, detail, edit, share', () => {
   });
 
   test.afterAll(async ({ playwright }) => {
+    // Independent deletes: the member's legacy global-read skill is visible to every user on the
+    // stage, so a failed admin delete must not skip it. Either user is absent if beforeAll threw
+    // before assigning it.
     const ctx = await playwright.request.newContext();
-    await apiDeleteAllSkills(ctx, token, userId);
-    await apiDeleteAllSkills(ctx, member.accessToken, member.userId);
+    const results = await Promise.allSettled([
+      token ? apiDeleteAllSkills(ctx, token, userId) : Promise.resolve(),
+      member ? apiDeleteAllSkills(ctx, member.accessToken, member.userId) : Promise.resolve(),
+    ]);
     await ctx.dispose();
+    const failure = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+    if (failure) throw failure.reason;
   });
 
   // --- List page -----------------------------------------------------------
@@ -212,7 +219,6 @@ test.describe('Skills - list, create, detail, edit, share', () => {
   // --- Non-admin share gate ------------------------------------------------
 
   test('non-admin: global toggles gated, legacy global retractable, 403 on publish', async ({
-    page,
     skillsPage,
     request,
     loginAsUser,
@@ -233,10 +239,7 @@ test.describe('Skills - list, create, detail, edit, share', () => {
     });
 
     const openShareFor = async (skillId: string) => {
-      await page.goto(`/skills/${skillId}`);
-      await page.waitForLoadState('domcontentloaded');
-      await skillsPage.dismissModals();
-      await expect(page.getByTestId('skill-detail-page')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+      await skillsPage.gotoDetail(skillId);
       await skillsPage.openShareDialog();
     };
 
@@ -252,6 +255,8 @@ test.describe('Skills - list, create, detail, edit, share', () => {
     await test.step('PUT .../share turning either global flag on is 403 for a non-admin', async () => {
       const read = await apiShareSkill(request, member.accessToken, fresh.id, { isGlobalRead: true });
       expect(read.status()).toBe(403);
+      // The owner passes the manage-sharing gate, so the refusal has to come from the publish gate.
+      expect(await read.text()).toContain('Skill Market');
       const write = await apiShareSkill(request, member.accessToken, fresh.id, { isGlobalWrite: true });
       expect(write.status()).toBe(403);
     });
@@ -280,7 +285,13 @@ test.describe('Skills - list, create, detail, edit, share', () => {
 
     await test.step('read can be turned off', async () => {
       await openShareFor(legacy.id);
+      // The previous save left read on. If it had been dropped, the switch renders disabled and
+      // `setGlobalRead(false)` would be a no-op against an already-false state.
+      await skillsPage.expectGlobalReadChecked(true);
+      await skillsPage.expectGlobalReadEnabled(true);
       await skillsPage.setGlobalRead(false);
+      // Off is terminal for a non-admin: they cannot switch it back on.
+      await skillsPage.expectGlobalReadEnabled(false);
       const response = await skillsPage.saveShare();
       expect(response.status()).toBe(200);
       expect(response.request().postDataJSON()).toMatchObject({ isGlobalRead: false, isGlobalWrite: false });
