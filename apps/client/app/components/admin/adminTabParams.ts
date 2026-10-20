@@ -7,14 +7,12 @@ import {
   FEEDBACK_ID_PARAM,
   type AuditLogFilters,
 } from '@bike4mind/common';
+import { optionalStringSearchValue } from '@client/app/utils/optionalStringSearchValue';
 
 /**
- * Which `/admin` search params belong to which tab - the one list both the admin route's
- * `validateSearch` (router.tsx) and the tab-sync hook's rebuild (useAdminTabUrlSync.ts) read, so a
- * tab that keeps state in the URL registers its keys here and nowhere else.
- *
- * Deliberately free of AdminTab and the sidebar config: router.tsx imports this eagerly, and the
- * sidebar config drags in every admin icon. adminTabParams.test.ts checks each key is a real slug.
+ * Which `/admin` search params belong to which tab, read by both `validateSearch` (router.tsx) and
+ * the tab-switch rebuild (useAdminTabUrlSync.ts). Kept free of AdminTab and the sidebar config,
+ * which drag every admin icon into router.tsx's eager import.
  */
 
 export const ADMIN_SETTINGS_TAB_SLUG = 'admin-settings';
@@ -29,11 +27,9 @@ const AUDIT_LOG_FILTER_PARAMS = Object.keys(AuditLogFiltersSchema.shape) as Arra
 export const ADMIN_GLOBAL_PARAMS = [EMERGENCY_ACCESS_PARAM, ADMIN_TAB_PARAM] as const;
 
 /**
- * Tab slug -> the params that tab owns. A key must be owned by exactly one tab (the test enforces
- * it): a shared name would carry one tab's value into the other on a tab switch. These URLs get
- * pasted into Slack and copied into login redirects, so never register tokens, form fields, setting
- * values, or a search box over user records (emails, names). Admin Settings' `q` is the accepted
- * exception: it searches platform config, not people.
+ * Tab slug -> the params that tab owns; each key has exactly one owner (tested). These URLs get
+ * shared and copied into login redirects, so never register tokens, form fields, setting values, or
+ * a search over user records. Admin Settings' `q` is fine: it searches config, not people.
  */
 export const ADMIN_TAB_PARAMS = {
   [ADMIN_FEEDBACK_TAB_SLUG]: [FEEDBACK_ID_PARAM],
@@ -56,18 +52,11 @@ const ALL_ADMIN_SEARCH_PARAMS: readonly AdminSearchParam[] = [
 ];
 
 /**
- * Strings only, `String()`-coercing the values TanStack's JSON search parser turned into numbers.
- * Must stay in sync with `optionalStringParam` in router.tsx (same rule; importing from there would
- * be a cycle).
- */
-const optionalString = (value: unknown): string | undefined => (value ? String(value) : undefined);
-
-/**
  * The admin route's `validateSearch`. Every registered key is declared (absent ones as undefined),
  * so each tab's params are typed and survive validation.
  */
 export function parseAdminSearch(search: Record<string, unknown>): AdminSearch {
-  return Object.fromEntries(ALL_ADMIN_SEARCH_PARAMS.map(key => [key, optionalString(search[key])]));
+  return Object.fromEntries(ALL_ADMIN_SEARCH_PARAMS.map(key => [key, optionalStringSearchValue(search[key])]));
 }
 
 /**
@@ -78,7 +67,7 @@ export function parseAdminSearch(search: Record<string, unknown>): AdminSearch {
 export function adminSearchForTab(previous: Record<string, unknown>, slug: string): AdminSearch {
   const kept = new Set<string>([...ADMIN_GLOBAL_PARAMS, ...(PARAMS_BY_TAB_SLUG.get(slug) ?? [])]);
   const search = Object.fromEntries(
-    ALL_ADMIN_SEARCH_PARAMS.map(key => [key, kept.has(key) ? optionalString(previous[key]) : undefined])
+    ALL_ADMIN_SEARCH_PARAMS.map(key => [key, kept.has(key) ? optionalStringSearchValue(previous[key]) : undefined])
   ) as AdminSearch;
   return { ...search, [ADMIN_TAB_PARAM]: slug };
 }

@@ -35,6 +35,7 @@ import { lazyWithPreload } from './utils/lazyWithPreload';
 import { parseStudioModality } from './components/Studio/studioModality';
 import { parseQaStatusSearch } from './hooks/data/qaStatus';
 import { parseAdminSearch } from './components/admin/adminTabParams';
+import { optionalStringSearchValue } from './utils/optionalStringSearchValue';
 import { isIntegrationsPageSource, type IntegrationsPageSource } from '@bike4mind/common';
 
 // Lazy load all route components for code splitting
@@ -100,12 +101,10 @@ const StudioPage = lazy(() => import('./routes/studio/$modality'));
 const QuestMasterV5Page = lazy(() => import('./routes/quests-v5'));
 
 // Shared coercion for the optional string search params nearly every route declares.
-// Identical to the inline form it replaces: falsy (missing or empty) becomes undefined,
-// anything else is String()-coerced. A few routes below deliberately keep a stricter
-// `typeof === 'string'` guard instead, which is not the same thing - do not fold those in.
-// Must stay in sync with `optionalString` in components/admin/adminTabParams.ts.
+// A few routes below deliberately keep a stricter `typeof === 'string'` guard instead,
+// which is not the same thing - do not fold those in.
 const optionalStringParam = (search: Record<string, unknown>, key: string): string | undefined =>
-  search[key] ? String(search[key]) : undefined;
+  optionalStringSearchValue(search[key]);
 
 // AI-themed loading messages for route transitions
 const loadingMessages = [

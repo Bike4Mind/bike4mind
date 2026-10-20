@@ -19,14 +19,10 @@ const sectionFromId = (id: string | undefined): SettingSectionKey =>
   SECTION_ENTRIES.find(([, section]) => section.id === id)?.[0] ?? DEFAULT_SETTING_SECTION;
 
 /**
- * The Admin Settings tab's section and search term, kept in `?section=` and `?q=` so a refresh or a
- * shared link reopens the same view. Setting values never go in the URL.
- *
- * The section reads straight from the URL. The search box keeps its own state, seeded from the URL,
- * because binding a text input to the router would re-render it a navigation behind each keystroke;
- * the term is written back once typing pauses.
- * Leaving the tab needs no cleanup here: the tab-sync hook rebuilds the search from the param
- * registry and drops these keys, and a pending write is cancelled on unmount.
+ * The Admin Settings section and search term, kept in `?section=` and `?q=`. The search box keeps
+ * local state (a router-bound input lags a navigation behind each keystroke) and writes back once
+ * typing pauses. No leave-tab cleanup: the tab-sync rebuild drops these keys, unmount cancels a
+ * pending write.
  */
 export const useAdminSettingsSearchParams = () => {
   const search = useSearch({ strict: false }) as AdminSearch;
