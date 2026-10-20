@@ -1260,6 +1260,8 @@ export class OpenAIBackend implements ICompletionBackend {
         abortSignal: options.abortSignal,
       }
     ).then(r => r.result);
+    // Non-streaming: the full response is back here. Streaming: reassigned once the stream is drained.
+    let modelDoneAt = Date.now();
     let inputTokens = 0;
     let outputTokens = 0;
     let reasoningTokens: number | undefined;
@@ -1465,6 +1467,7 @@ export class OpenAIBackend implements ICompletionBackend {
               model,
               round: toolCallCount,
               msToFirstChunk: null,
+              modelMs: modelDoneAt - roundStart,
               roundMs: Date.now() - roundStart,
               sinceRequestMs: Date.now() - requestStartedAt,
               stopReason: c.finish_reason ?? null,
@@ -1582,6 +1585,7 @@ export class OpenAIBackend implements ICompletionBackend {
         model,
         round: toolCallCount,
         msToFirstChunk: null,
+        modelMs: modelDoneAt - roundStart,
         roundMs: Date.now() - roundStart,
         sinceRequestMs: Date.now() - requestStartedAt,
         stopReason: response.choices[0]?.finish_reason ?? null,
@@ -1694,6 +1698,7 @@ export class OpenAIBackend implements ICompletionBackend {
         ...(normalizedFinishReason ? { stopReason: normalizedFinishReason } : {}),
       });
     }
+    modelDoneAt = Date.now();
 
     this.logger.debug('[OpenAI] Streaming completed', {
       totalChunks: chunkCount,
@@ -1739,6 +1744,7 @@ export class OpenAIBackend implements ICompletionBackend {
         model,
         round: toolCallCount,
         msToFirstChunk: firstChunkAt === null ? null : firstChunkAt - roundStart,
+        modelMs: modelDoneAt - roundStart,
         roundMs: Date.now() - roundStart,
         sinceRequestMs: Date.now() - requestStartedAt,
         stopReason: streamFinishReason ?? null,
@@ -1937,6 +1943,7 @@ export class OpenAIBackend implements ICompletionBackend {
           model,
           round: toolCallCount,
           msToFirstChunk: firstChunkAt === null ? null : firstChunkAt - roundStart,
+          modelMs: modelDoneAt - roundStart,
           roundMs: Date.now() - roundStart,
           sinceRequestMs: Date.now() - requestStartedAt,
           stopReason: streamFinishReason ?? null,
@@ -2284,6 +2291,7 @@ export class OpenAIBackend implements ICompletionBackend {
       // read from finalResponse below. Do NOT also accumulate tool arguments from the *.delta
       // events here - that would double-append against the terminal item's complete arguments.
     }
+    const modelDoneAt = Date.now();
 
     if (!finalResponse) {
       // The openai SDK swallows an abort mid-SSE and ends the iterator quietly; surface it as an
@@ -2320,6 +2328,7 @@ export class OpenAIBackend implements ICompletionBackend {
         model,
         round: toolCallCount,
         msToFirstChunk: firstChunkAt === null ? null : firstChunkAt - roundStart,
+        modelMs: modelDoneAt - roundStart,
         roundMs: Date.now() - roundStart,
         sinceRequestMs: Date.now() - requestStartedAt,
         stopReason: finalResponse.incomplete_details?.reason ?? finalResponse.status ?? null,
@@ -2447,6 +2456,7 @@ export class OpenAIBackend implements ICompletionBackend {
       model,
       round: toolCallCount,
       msToFirstChunk: firstChunkAt === null ? null : firstChunkAt - roundStart,
+      modelMs: modelDoneAt - roundStart,
       roundMs: Date.now() - roundStart,
       sinceRequestMs: Date.now() - requestStartedAt,
       stopReason: finalResponse.incomplete_details?.reason ?? finalResponse.status ?? null,

@@ -6,6 +6,8 @@ export type ToolRoundEntry = {
   round: number;
   /** Null on non-streaming paths, where there is no first chunk to wait for. */
   msToFirstChunk: number | null;
+  /** Provider call start until the response/stream ended, before any tools ran. */
+  modelMs: number;
   /** Provider call start until the round's tool batch finished (or the terminal response ended). */
   roundMs: number;
   /** Time since the first round of this chat turn started. */

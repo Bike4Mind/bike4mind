@@ -5,6 +5,7 @@ const entry: ToolRoundEntry = {
   model: 'test-model',
   round: 0,
   msToFirstChunk: 120,
+  modelMs: 300,
   roundMs: 900,
   sinceRequestMs: 900,
   stopReason: 'tool_use',

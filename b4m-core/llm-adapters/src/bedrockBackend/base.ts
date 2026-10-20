@@ -545,6 +545,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
             await callback(streamedText, { ...buildCompletionInfo(), ...(channel ? { channel } : {}) });
           }
         }
+        const modelDoneAt = Date.now();
 
         // FAIL LOUD on an empty completion. No text AND no tool call means the model produced nothing a
         // user or the pipeline can use - almost always a misrouted inference profile (a "global." model
@@ -617,6 +618,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
             model,
             round: toolCallCount,
             msToFirstChunk: firstChunkAt === null ? null : firstChunkAt - roundStart,
+            modelMs: modelDoneAt - roundStart,
             roundMs: Date.now() - roundStart,
             sinceRequestMs: Date.now() - requestStartedAt,
             stopReason: stopReason ?? null,
@@ -783,6 +785,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
               model,
               round: toolCallCount,
               msToFirstChunk: firstChunkAt === null ? null : firstChunkAt - roundStart,
+              modelMs: modelDoneAt - roundStart,
               roundMs: Date.now() - roundStart,
               sinceRequestMs: Date.now() - requestStartedAt,
               stopReason: stopReason ?? null,

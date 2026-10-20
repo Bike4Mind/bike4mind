@@ -142,6 +142,7 @@ describe('BaseBedrockBackend per-round tool timing log', () => {
       expect(rounds[0].msToFirstChunk).not.toBeNull();
       expect(rounds[1].tools).toEqual([]);
       expect(rounds[1].sinceRequestMs).toBeGreaterThanOrEqual(rounds[0].sinceRequestMs);
+      for (const r of rounds) expect(r.modelMs).toBeLessThanOrEqual(r.roundMs);
     } finally {
       info.mockRestore();
     }

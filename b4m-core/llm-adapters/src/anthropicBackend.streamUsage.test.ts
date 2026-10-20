@@ -223,6 +223,7 @@ describe('AnthropicBackend - per-round tool timing log', () => {
     expect(rounds[1].tools).toEqual([]);
     expect(rounds[1].stopReason).toBe('end_turn');
     expect(rounds[1].sinceRequestMs).toBeGreaterThanOrEqual(rounds[0].sinceRequestMs);
+    for (const r of rounds) expect(r.modelMs).toBeLessThanOrEqual(r.roundMs);
   });
 
   it('logs the round that ends the turn after only end-of-turn tools ran', async () => {

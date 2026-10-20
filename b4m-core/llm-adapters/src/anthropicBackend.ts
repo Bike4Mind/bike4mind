@@ -1393,6 +1393,7 @@ export class AnthropicBackend implements ICompletionBackend {
       // Per-round timing for logToolRound; read after the stream promise settles.
       let roundStart = Date.now();
       let firstChunkAt: number | null = null;
+      let modelDoneAt = roundStart;
       let roundStopReason: string | null = null;
       // Capture per-turn token usage so the post-stream tool-recursion site
       // can carry it forward as accumulated multi-turn billable usage.
@@ -1836,6 +1837,7 @@ export class AnthropicBackend implements ICompletionBackend {
               } finally {
                 // CRITICAL: Always cleanup idle timer to prevent memory leaks
                 if (idleTimer) clearTimeout(idleTimer);
+                modelDoneAt = Date.now();
               }
 
               // Same shape as the idle-timeout check below: the guard aborted, but the
@@ -1986,6 +1988,7 @@ export class AnthropicBackend implements ICompletionBackend {
                   model,
                   round: toolCallCount,
                   msToFirstChunk: firstChunkAt === null ? null : firstChunkAt - roundStart,
+                  modelMs: modelDoneAt - roundStart,
                   roundMs: Date.now() - roundStart,
                   sinceRequestMs: Date.now() - requestStartedAt,
                   stopReason: stopReason ?? null,
@@ -2405,6 +2408,7 @@ export class AnthropicBackend implements ICompletionBackend {
               model,
               round: toolCallCount,
               msToFirstChunk: firstChunkAt === null ? null : firstChunkAt - roundStart,
+              modelMs: modelDoneAt - roundStart,
               roundMs: Date.now() - roundStart,
               sinceRequestMs: Date.now() - requestStartedAt,
               stopReason: roundStopReason,
@@ -2541,6 +2545,7 @@ export class AnthropicBackend implements ICompletionBackend {
         } finally {
           release?.();
         }
+        const modelDoneAt = Date.now();
         const streamedText: string[] = [];
 
         if ('content' in response && Array.isArray(response.content)) {
@@ -2632,6 +2637,7 @@ export class AnthropicBackend implements ICompletionBackend {
             model,
             round: toolCallCount,
             msToFirstChunk: null,
+            modelMs: modelDoneAt - roundStart,
             roundMs: Date.now() - roundStart,
             sinceRequestMs: Date.now() - requestStartedAt,
             stopReason: nonStreamStopReason ?? null,
@@ -2874,6 +2880,7 @@ export class AnthropicBackend implements ICompletionBackend {
               model,
               round: toolCallCount,
               msToFirstChunk: null,
+              modelMs: modelDoneAt - roundStart,
               roundMs: Date.now() - roundStart,
               sinceRequestMs: Date.now() - requestStartedAt,
               stopReason: nonStreamStopReason ?? null,
