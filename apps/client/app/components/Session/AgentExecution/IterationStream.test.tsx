@@ -7,6 +7,7 @@ import type {
   ChildExecution,
   IterationStep,
   ParentExecution,
+  PendingGate,
   PendingPermission,
 } from '@client/app/stores/useAgentExecutionStore';
 
@@ -29,6 +30,7 @@ vi.mock('@client/app/stores/useAgentExecutionStore', () => {
     selector({
       executions: mocks.execution ? { [mocks.execution.executionId]: mocks.execution } : {},
       setPendingPermission: vi.fn(),
+      setPendingGate: vi.fn(),
     });
   // AbortButton (mounted via IterationStream) imports `isActiveStatus` from
   // this module; provide the same predicate the real store exports so the
@@ -50,6 +52,7 @@ vi.mock('@client/app/hooks/useAgentExecution', () => ({
   useAgentExecutionDispatch: () => ({
     abortExecution: vi.fn(),
     respondToPermission: vi.fn(),
+    respondToGate: vi.fn(),
   }),
 }));
 
@@ -171,6 +174,40 @@ describe('IterationStream — render', () => {
 
     expect(screen.getByTestId(`iteration-stream-${EXECUTION_ID}`)).toBeInTheDocument();
     expect(screen.queryByTestId(`permission-card-${EXECUTION_ID}`)).not.toBeInTheDocument();
+  });
+
+  const GATE: PendingGate = {
+    iteration: 2,
+    confidence: 0.42,
+    reason: 'Iteration confidence 42% below threshold 60%',
+    requestedAt: Date.now(),
+  };
+
+  it('mounts the ConfidenceGateCard when execution.pendingGate is set', () => {
+    mocks.execution = makeExecution({ status: 'paused', pendingGate: GATE });
+    render(
+      <TestWrapper>
+        <IterationStream executionId={EXECUTION_ID} />
+      </TestWrapper>
+    );
+
+    expect(screen.getByTestId(`iteration-stream-${EXECUTION_ID}`)).toBeInTheDocument();
+    expect(screen.getByTestId(`confidence-gate-card-${EXECUTION_ID}`)).toBeInTheDocument();
+    expect(screen.getByText(GATE.reason)).toBeInTheDocument();
+    // The header carries the paused chip, so a gate pause with no rendered
+    // iterations is not a bare card with no status.
+    expect(screen.getByText('Paused')).toBeInTheDocument();
+  });
+
+  it('does not mount the ConfidenceGateCard when pendingGate is undefined', () => {
+    mocks.execution = makeExecution({ status: 'running' });
+    render(
+      <TestWrapper>
+        <IterationStream executionId={EXECUTION_ID} />
+      </TestWrapper>
+    );
+
+    expect(screen.queryByTestId(`confidence-gate-card-${EXECUTION_ID}`)).not.toBeInTheDocument();
   });
 });
 

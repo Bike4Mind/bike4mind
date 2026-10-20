@@ -145,6 +145,13 @@ interface AgentExecutePermissionResponse {
   rememberForSession?: boolean;
 }
 
+interface AgentExecuteGateResponse {
+  action: 'agent_execute';
+  command: 'gate_response';
+  executionId: string;
+  decision: 'continue' | 'stop';
+}
+
 interface AgentExecuteReconnect {
   action: 'agent_execute';
   command: 'reconnect';
@@ -153,7 +160,11 @@ interface AgentExecuteReconnect {
 }
 
 export type AgentExecuteCommand =
-  AgentExecuteStart | AgentExecuteAbort | AgentExecutePermissionResponse | AgentExecuteReconnect;
+  | AgentExecuteStart
+  | AgentExecuteAbort
+  | AgentExecutePermissionResponse
+  | AgentExecuteGateResponse
+  | AgentExecuteReconnect;
 
 /** Length cap for the background-completion toast preview. The spec asks for
  * 200 chars; server-side truncation on subagent steps is 2KB, so the final
@@ -439,6 +450,18 @@ export function useAgentExecutionSubscriptions(): void {
     );
 
     unsubscribers.push(
+      subscribeToAction('confidence_gate', async (msg: IMessageDataToClient) => {
+        if (msg.action !== 'confidence_gate') return;
+        store().setPendingGate(msg.executionId, {
+          iteration: msg.iteration,
+          confidence: msg.confidence,
+          reason: msg.reason,
+          requestedAt: Date.now(),
+        });
+      })
+    );
+
+    unsubscribers.push(
       subscribeToAction('reconnect_result', async (msg: IMessageDataToClient) => {
         if (msg.action !== 'reconnect_result') return;
         if (!msg.found || !msg.executionId || !msg.status) return;
@@ -525,6 +548,17 @@ export function useAgentExecutionSubscriptions(): void {
                     ? msg.pendingPermission.requestedAt.getTime()
                     : new Date(msg.pendingPermission.requestedAt).getTime(),
                 toolCallId: msg.pendingPermission.toolCallId,
+              }
+            : undefined,
+          pendingGate: msg.pendingGate
+            ? {
+                iteration: msg.pendingGate.iteration,
+                confidence: msg.pendingGate.confidence,
+                reason: msg.pendingGate.reason,
+                requestedAt:
+                  msg.pendingGate.requestedAt instanceof Date
+                    ? msg.pendingGate.requestedAt.getTime()
+                    : new Date(msg.pendingGate.requestedAt).getTime(),
               }
             : undefined,
         });
@@ -759,6 +793,13 @@ export function useAgentExecutionDispatch() {
           toolCallId,
           approved,
           rememberForSession,
+        } as unknown as Parameters<typeof sendJsonMessage>[0]),
+      respondToGate: (executionId: string, decision: 'continue' | 'stop') =>
+        sendJsonMessage({
+          action: 'agent_execute',
+          command: 'gate_response',
+          executionId,
+          decision,
         } as unknown as Parameters<typeof sendJsonMessage>[0]),
       reconnect: (sessionId?: string, executionId?: string) =>
         sendJsonMessage({

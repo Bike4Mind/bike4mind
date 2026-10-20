@@ -1012,3 +1012,95 @@ describe('useAgentExecutionStore - final_answer collapse (issue #35)', () => {
     expect(child.pendingTextByIteration).toBeUndefined();
   });
 });
+
+// `ConfidenceGateCard` renders purely on `pendingGate` presence, so the field
+// must flip status to `paused` when it lands, clear on every terminal
+// transition, and survive a reconnect only for a still-active run.
+describe('useAgentExecutionStore - pendingGate lifecycle', () => {
+  beforeEach(resetStore);
+
+  const GATE = { iteration: 2, confidence: 0.42, reason: 'confidence 42% below threshold 60%', requestedAt: 1234 };
+
+  it('setPendingGate stores the gate and flips the run to paused', () => {
+    const { startExecution, setPendingGate } = useAgentExecutionStore.getState();
+    startExecution('exec-gate', 'session-A');
+    expect(useAgentExecutionStore.getState().executions['exec-gate'].status).toBe('running');
+
+    setPendingGate('exec-gate', GATE);
+
+    const exec = useAgentExecutionStore.getState().executions['exec-gate'];
+    expect(exec.pendingGate).toEqual(GATE);
+    expect(exec.status).toBe('paused');
+  });
+
+  it('setPendingGate(undefined) clears the gate without touching status', () => {
+    const { startExecution, setPendingGate } = useAgentExecutionStore.getState();
+    startExecution('exec-gate-clear', 'session-A');
+    setPendingGate('exec-gate-clear', GATE);
+    setPendingGate('exec-gate-clear', undefined);
+
+    const exec = useAgentExecutionStore.getState().executions['exec-gate-clear'];
+    expect(exec.pendingGate).toBeUndefined();
+    expect(exec.status).toBe('paused');
+  });
+
+  it('markCompleted / markFailed / markAborted all clear pendingGate', () => {
+    const { startExecution, setPendingGate, markCompleted, markFailed, markAborted } =
+      useAgentExecutionStore.getState();
+
+    startExecution('exec-gate-done', 'session-A');
+    setPendingGate('exec-gate-done', GATE);
+    markCompleted('exec-gate-done', 'partial answer', 2);
+    expect(useAgentExecutionStore.getState().executions['exec-gate-done'].pendingGate).toBeUndefined();
+
+    startExecution('exec-gate-failed', 'session-A');
+    setPendingGate('exec-gate-failed', GATE);
+    markFailed('exec-gate-failed', 'boom');
+    expect(useAgentExecutionStore.getState().executions['exec-gate-failed'].pendingGate).toBeUndefined();
+
+    startExecution('exec-gate-aborted', 'session-A');
+    setPendingGate('exec-gate-aborted', GATE);
+    markAborted('exec-gate-aborted');
+    expect(useAgentExecutionStore.getState().executions['exec-gate-aborted'].pendingGate).toBeUndefined();
+  });
+
+  it('hydrateFromReconnect restores the gate for a paused run', () => {
+    useAgentExecutionStore.getState().hydrateFromReconnect({
+      executionId: 'exec-gate-recon',
+      sessionId: 'session-A',
+      status: 'paused',
+      totalCreditsUsed: 1,
+      iterationCount: 3,
+      pendingGate: GATE,
+    });
+
+    const exec = useAgentExecutionStore.getState().executions['exec-gate-recon'];
+    expect(exec.pendingGate).toEqual(GATE);
+    expect(exec.status).toBe('paused');
+  });
+
+  it('hydrateFromReconnect drops a stale gate for a TERMINAL run', () => {
+    useAgentExecutionStore.getState().hydrateFromReconnect({
+      executionId: 'exec-gate-recon-done',
+      sessionId: 'session-A',
+      status: 'completed',
+      totalCreditsUsed: 1,
+      iterationCount: 3,
+      pendingGate: GATE,
+    });
+
+    expect(useAgentExecutionStore.getState().executions['exec-gate-recon-done'].pendingGate).toBeUndefined();
+  });
+
+  it('ignores a confidence_gate that arrives after the run finished', () => {
+    const { startExecution, setPendingGate, markCompleted } = useAgentExecutionStore.getState();
+    startExecution('exec-gate-late', 'session-A');
+    markCompleted('exec-gate-late', 'done', 1);
+
+    setPendingGate('exec-gate-late', GATE);
+
+    const exec = useAgentExecutionStore.getState().executions['exec-gate-late'];
+    expect(exec.pendingGate).toBeUndefined();
+    expect(exec.status).toBe('completed');
+  });
+});

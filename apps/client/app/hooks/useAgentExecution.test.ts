@@ -708,3 +708,88 @@ describe('useAgentExecutionSubscriptions -- write preview raised mid-run', () =>
     expect(cached.pages[0].data[0].pendingAction).toEqual(pendingAction);
   });
 });
+
+/**
+ * Confidence-gate wire: a paused run is only resumable if the client actually
+ * subscribes to `confidence_gate`, rehydrates `pendingGate` on reconnect, and
+ * can send `gate_response`. Each leg was previously untested and deletable.
+ */
+describe('useAgentExecutionSubscriptions -- confidence gate wire', () => {
+  beforeEach(() => {
+    ws.sendJsonMessage.mockClear();
+    ws.readyState = 3; // CLOSED
+    Object.keys(handlers).forEach(k => delete handlers[k]);
+    useAgentExecutionStore.getState().clearAll();
+  });
+
+  it('a live confidence_gate stores the gate and flips the run to paused', async () => {
+    mountSubscriptions();
+    useAgentExecutionStore.getState().startExecution('exec-gate-1', 'sess-1');
+
+    await handlers['confidence_gate']({
+      action: 'confidence_gate',
+      executionId: 'exec-gate-1',
+      iteration: 2,
+      confidence: 0.42,
+      reason: 'Iteration confidence 42% below threshold 60%',
+    });
+
+    const exec = useAgentExecutionStore.getState().executions['exec-gate-1'];
+    expect(exec.status).toBe('paused');
+    expect(exec.pendingGate).toEqual({
+      iteration: 2,
+      confidence: 0.42,
+      reason: 'Iteration confidence 42% below threshold 60%',
+      requestedAt: expect.any(Number),
+    });
+  });
+
+  it('reconnect_result restores pendingGate with an ISO requestedAt normalised to epoch ms', async () => {
+    useAgentExecutionStore.getState().startExecution('exec-gate-2', 'sess-2');
+    ws.readyState = 1; // OPEN
+    mountSubscriptions();
+
+    const requestedAt = '2026-10-20T12:00:00.000Z';
+
+    await handlers['reconnect_result']({
+      action: 'reconnect_result',
+      found: true,
+      executionId: 'exec-gate-2',
+      status: 'paused',
+      pendingGate: {
+        iteration: 4,
+        confidence: 0.31,
+        reason: 'Iteration confidence 31% below threshold 60%',
+        requestedAt,
+      },
+    });
+
+    const exec = useAgentExecutionStore.getState().executions['exec-gate-2'];
+    expect(exec.pendingGate).toEqual({
+      iteration: 4,
+      confidence: 0.31,
+      reason: 'Iteration confidence 31% below threshold 60%',
+      requestedAt: new Date(requestedAt).getTime(),
+    });
+  });
+
+  it('respondToGate sends the matching gate_response for continue and stop', () => {
+    const { result } = renderHook(() => useAgentExecutionDispatch());
+
+    result.current.respondToGate('exec-gate-3', 'continue');
+    result.current.respondToGate('exec-gate-3', 'stop');
+
+    expect(ws.sendJsonMessage).toHaveBeenNthCalledWith(1, {
+      action: 'agent_execute',
+      command: 'gate_response',
+      executionId: 'exec-gate-3',
+      decision: 'continue',
+    });
+    expect(ws.sendJsonMessage).toHaveBeenNthCalledWith(2, {
+      action: 'agent_execute',
+      command: 'gate_response',
+      executionId: 'exec-gate-3',
+      decision: 'stop',
+    });
+  });
+});

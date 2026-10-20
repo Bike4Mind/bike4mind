@@ -118,6 +118,17 @@ export interface PendingPermission {
   toolCallId?: string;
 }
 
+export interface PendingGate {
+  /** 0-indexed wire convention. */
+  iteration: number;
+  /** 0..1. */
+  confidence: number;
+  /** Server-formatted explanation of why the run paused. */
+  reason: string;
+  /** Epoch ms; unique per pause, so cards can reset click guards on it. */
+  requestedAt: number;
+}
+
 export interface ParentExecution {
   executionId: string;
   /** Session the dispatch was bound to. Set on startExecution; not all server
@@ -128,6 +139,9 @@ export interface ParentExecution {
   totalCreditsUsed: number;
   childExecutions: Record<string, ChildExecution>;
   pendingPermission?: PendingPermission;
+  /** Set while the run sits in `paused` awaiting a Proceed/Stop decision at the
+   *  confidence gate. `ConfidenceGateCard` renders purely on its presence. */
+  pendingGate?: PendingGate;
   /** Optimistic UI flag: user clicked Stop and we're awaiting the server's
    *  abort acknowledgement. Drives the "Aborting…" status + disabled Stop button
    *  so the click has immediate feedback even if the run takes a beat to stop. */
@@ -179,6 +193,8 @@ interface AgentExecutionState {
   /** Optimistic: flag an execution as aborting the moment the user clicks Stop. */
   markAborting: (executionId: string) => void;
   setPendingPermission: (executionId: string, pending: PendingPermission | undefined) => void;
+  /** Set (and flip the run to `paused`) or clear the confidence gate. */
+  setPendingGate: (executionId: string, gate: PendingGate | undefined) => void;
   /** Replace state from a reconnect snapshot - only resets fields the server can re-supply. */
   hydrateFromReconnect: (snapshot: {
     executionId: string;
@@ -187,6 +203,7 @@ interface AgentExecutionState {
     totalCreditsUsed: number;
     iterationCount: number;
     pendingPermission?: PendingPermission;
+    pendingGate?: PendingGate;
     /**
      * Persisted iteration trace for step replay. When provided,
      * replaces `exec.iterations` so the IterationStream can re-render past
@@ -482,12 +499,12 @@ export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => 
       })),
     })),
 
-  // A terminal run can't have a live permission request outstanding - the server
-  // has resolved or abandoned it. `PermissionCard` renders purely on
-  // `pendingPermission` presence (not status), so a lingering value would leave a
-  // dead permission prompt on a completed/failed/aborted run. Clear it on every
-  // terminal transition. `isAborting` is cleared too, so an abort racing a
-  // completed/failed event doesn't leave the flag set on a finished run.
+  // A terminal run can't have a live permission request or gate outstanding -
+  // the server has resolved or abandoned it. The cards render purely on field
+  // presence (not status), so a lingering value would leave a dead prompt on a
+  // completed/failed/aborted run. Clear both on every terminal transition.
+  // `isAborting` is cleared too, so an abort racing a completed/failed event
+  // doesn't leave the flag set on a finished run.
   markCompleted: (executionId, answer, totalCreditsUsed) =>
     set(state => ({
       executions: withExecution(state, executionId, exec => ({
@@ -496,6 +513,7 @@ export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => 
         answer,
         totalCreditsUsed,
         pendingPermission: undefined,
+        pendingGate: undefined,
         isAborting: false,
       })),
     })),
@@ -508,6 +526,7 @@ export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => 
         failureReason: reason,
         errorMessage: message,
         pendingPermission: undefined,
+        pendingGate: undefined,
         isAborting: false,
       })),
     })),
@@ -519,6 +538,7 @@ export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => 
         status: 'aborted',
         failureReason: 'aborted',
         pendingPermission: undefined,
+        pendingGate: undefined,
         isAborting: false,
       })),
     })),
@@ -535,6 +555,22 @@ export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => 
         pendingPermission: pending,
         status: pending ? 'awaiting_permission' : exec.status,
       })),
+    })),
+
+  setPendingGate: (executionId, gate) =>
+    set(state => ({
+      executions: withExecution(state, executionId, exec => {
+        // A late `confidence_gate` for a run that already finished must not
+        // resurrect the card (or flip status back to `paused`). The server
+        // writes gate + status atomically, but the frame still races a
+        // completed/aborted one in the client.
+        if (gate && !isActiveStatus(exec.status)) return exec;
+        return {
+          ...exec,
+          pendingGate: gate,
+          status: gate ? 'paused' : exec.status,
+        };
+      }),
     })),
 
   hydrateFromReconnect: snapshot =>
@@ -555,6 +591,10 @@ export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => 
         // same bug the terminal transitions above guard against.
         pendingPermission: isActiveStatus(snapshot.status) ? snapshot.pendingPermission : undefined,
         isAborting: isActiveStatus(snapshot.status) ? exec.isAborting : false,
+        // Same guard for the confidence gate: `setPendingGate` writes it with
+        // `status: 'paused'`, so it is always live when present on an active run
+        // and stale on a terminal one.
+        pendingGate: isActiveStatus(snapshot.status) ? snapshot.pendingGate : undefined,
         lastKnownIteration: Math.max(exec.lastKnownIteration, snapshot.iterationCount),
         // Step replay. Replace iterations only when the server actually
         // supplied them - `undefined` means "live-only reconnect" (legacy
