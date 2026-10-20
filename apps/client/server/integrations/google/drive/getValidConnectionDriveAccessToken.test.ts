@@ -164,14 +164,18 @@ describe('getValidConnectionDriveAccessToken', () => {
         : { id: 'conn1', connectedBy: 'user-1' }
     );
     h.userFindById.mockResolvedValue({ googleDrive: { ...liveUserGrant.googleDrive, expiresAt: new Date(0) } });
-    h.refreshAccessToken.mockRejectedValue(
-      Object.assign(new Error('Backend Error'), { response: { status: 503, data: { error: 'backendError' } } })
-    );
+    const transientError = Object.assign(new Error('Backend Error'), {
+      response: { status: 503, data: { error: 'backendError' } },
+    });
+    h.refreshAccessToken.mockRejectedValue(transientError);
 
     await expect(
       getValidConnectionDriveAccessToken(kind === 'org' ? 'conn2' : 'conn1', kind === 'org' ? orgOwner : personalOwner)
-    ).rejects.toThrow('Backend Error');
+    ).rejects.toBe(transientError);
     expect(h.updateHealth).not.toHaveBeenCalled();
+    if (kind === 'org') {
+      expect(h.userFindById).not.toHaveBeenCalled();
+    }
   });
 
   it('leaves health untouched when the user lookup itself fails', async () => {
