@@ -347,7 +347,13 @@ describe('useAgentExecutionSubscriptions -- recovering a run after the socket co
     mountSubscriptions();
 
     expect(reconnectCalls()).toEqual([
-      { action: 'agent_execute', command: 'reconnect', sessionId: 'sess-1', executionId: 'exec-1' },
+      {
+        action: 'agent_execute',
+        command: 'reconnect',
+        requestId: expect.any(String),
+        sessionId: 'sess-1',
+        executionId: 'exec-1',
+      },
     ]);
   });
 
@@ -503,7 +509,13 @@ describe('useAgentExecutionSubscriptions -- the sweep runs on the transition, no
     rerender();
 
     expect(reconnectCalls()).toEqual([
-      { action: 'agent_execute', command: 'reconnect', sessionId: 'sess-1', executionId: 'exec-1' },
+      {
+        action: 'agent_execute',
+        command: 'reconnect',
+        requestId: expect.any(String),
+        sessionId: 'sess-1',
+        executionId: 'exec-1',
+      },
     ]);
   });
 
@@ -854,6 +866,7 @@ describe('useAgentExecutionSubscriptions -- confidence gate wire', () => {
         expect(ws.sendJsonMessage).toHaveBeenCalledWith({
           action: 'agent_execute',
           command: 'reconnect',
+          requestId: expect.any(String),
           sessionId: 'sess-4',
           executionId: 'exec-gate-4',
         });
@@ -911,6 +924,7 @@ describe('useAgentExecutionSubscriptions -- confidence gate wire', () => {
         expect(ws.sendJsonMessage).toHaveBeenCalledWith({
           action: 'agent_execute',
           command: 'reconnect',
+          requestId: expect.any(String),
           sessionId: 'sess-6',
           executionId: 'exec-gate-6',
         });
@@ -918,5 +932,258 @@ describe('useAgentExecutionSubscriptions -- confidence gate wire', () => {
         vi.useRealTimers();
       }
     });
+  });
+});
+
+describe('useAgentExecutionSubscriptions -- reconnect snapshot freshness', () => {
+  const gate = { iteration: 2, confidence: 0.42, reason: 'below threshold', requestedAt: 1234 };
+
+  beforeEach(() => {
+    ws.sendJsonMessage.mockClear();
+    ws.readyState = 3;
+    Object.keys(handlers).forEach(key => delete handlers[key]);
+    useAgentExecutionStore.getState().clearAll();
+    mountSubscriptions();
+  });
+
+  const requestReconnect = (sessionId = 'session-fresh', executionId?: string) => {
+    const { result } = renderHook(() => useAgentExecutionDispatch());
+    act(() => {
+      result.current.reconnect(sessionId, executionId);
+    });
+    const message = ws.sendJsonMessage.mock.lastCall?.[0] as { requestId: string };
+    return message.requestId;
+  };
+
+  const reply = (requestId: string | undefined, status: string, pendingGate?: typeof gate) =>
+    handlers['reconnect_result']({
+      action: 'reconnect_result',
+      found: true,
+      requestId,
+      executionId: 'exec-fresh',
+      sessionId: 'session-fresh',
+      status,
+      pendingGate,
+    });
+
+  it.each(['resumed', 'completed'])('does not restore an old gate after a live %s frame', async action => {
+    const store = useAgentExecutionStore.getState();
+    store.startExecution('exec-fresh', 'session-fresh');
+    store.setPendingGate('exec-fresh', gate);
+    const requestId = requestReconnect();
+    await handlers[action]({ action, executionId: 'exec-fresh', answer: 'done', totalCreditsUsed: 1 });
+
+    await reply(requestId, 'paused', gate);
+
+    const execution = useAgentExecutionStore.getState().executions['exec-fresh'];
+    expect(execution.status).toBe(action === 'resumed' ? 'running' : 'completed');
+    expect(execution.pendingGate).toBeUndefined();
+  });
+
+  it('does not erase a new gate with an older running snapshot', async () => {
+    useAgentExecutionStore.getState().startExecution('exec-fresh', 'session-fresh');
+    const requestId = requestReconnect();
+    await handlers['confidence_gate']({ action: 'confidence_gate', executionId: 'exec-fresh', ...gate });
+
+    await reply(requestId, 'running');
+
+    expect(useAgentExecutionStore.getState().executions['exec-fresh']).toMatchObject({
+      status: 'paused',
+      pendingGate: { iteration: gate.iteration },
+    });
+  });
+
+  it('restores a still-paused gate after a response was not accepted', async () => {
+    const store = useAgentExecutionStore.getState();
+    store.startExecution('exec-fresh', 'session-fresh');
+    store.setPendingGate('exec-fresh', gate);
+    store.setPendingGate('exec-fresh', undefined);
+    const requestId = requestReconnect();
+
+    await reply(requestId, 'paused', gate);
+
+    expect(useAgentExecutionStore.getState().executions['exec-fresh'].pendingGate).toEqual(gate);
+  });
+
+  it('accepts a snapshot after credits change without a lifecycle transition', async () => {
+    useAgentExecutionStore.getState().startExecution('exec-fresh', 'session-fresh');
+    const requestId = requestReconnect();
+    useAgentExecutionStore.getState().recordCredits('exec-fresh', 1);
+
+    await reply(requestId, 'paused', gate);
+
+    expect(useAgentExecutionStore.getState().executions['exec-fresh'].pendingGate).toEqual(gate);
+  });
+
+  it('restores missed trace steps from a completed snapshot after a live completion', async () => {
+    const store = useAgentExecutionStore.getState();
+    store.startExecution('exec-fresh', 'session-fresh');
+    const requestId = requestReconnect();
+    await handlers['completed']({
+      action: 'completed',
+      executionId: 'exec-fresh',
+      answer: 'done',
+      totalCreditsUsed: 1,
+    });
+
+    await handlers['reconnect_result']({
+      action: 'reconnect_result',
+      found: true,
+      requestId,
+      executionId: 'exec-fresh',
+      sessionId: 'session-fresh',
+      status: 'completed',
+      steps: [{ type: 'thought', content: 'A missed step', metadata: { iteration: 0, timestamp: 1234 } }],
+    });
+
+    const execution = useAgentExecutionStore.getState().executions['exec-fresh'];
+    expect(execution.status).toBe('completed');
+    expect(execution.iterations[0].step.content).toBe('A missed step');
+  });
+
+  it('does not replace a terminal outcome with a conflicting terminal snapshot', async () => {
+    const store = useAgentExecutionStore.getState();
+    store.startExecution('exec-fresh', 'session-fresh');
+    const requestId = requestReconnect();
+    store.markAborted('exec-fresh');
+
+    await reply(requestId, 'completed');
+
+    expect(useAgentExecutionStore.getState().executions['exec-fresh'].status).toBe('aborted');
+  });
+
+  it('accepts a terminal snapshot after a live status transition when completion was not pushed', async () => {
+    const store = useAgentExecutionStore.getState();
+    store.startExecution('exec-fresh', 'session-fresh');
+    store.setPendingGate('exec-fresh', gate);
+    const requestId = requestReconnect('session-fresh', 'exec-fresh');
+    await handlers['resumed']({ action: 'resumed', executionId: 'exec-fresh' });
+
+    await reply(requestId, 'completed');
+
+    expect(useAgentExecutionStore.getState().executions['exec-fresh'].status).toBe('completed');
+  });
+
+  it('re-asks once after a lifecycle conflict and accepts the current pause', async () => {
+    const store = useAgentExecutionStore.getState();
+    store.startExecution('exec-fresh', 'session-fresh');
+    const requestId = requestReconnect();
+    store.setStatus('exec-fresh', 'continuing');
+    const callsBeforeReply = ws.sendJsonMessage.mock.calls.length;
+
+    await reply(requestId, 'paused', gate);
+
+    expect(ws.sendJsonMessage).toHaveBeenCalledTimes(callsBeforeReply + 1);
+    const retryRequestId = (ws.sendJsonMessage.mock.lastCall?.[0] as { requestId: string }).requestId;
+    await reply(retryRequestId, 'paused', gate);
+    expect(useAgentExecutionStore.getState().executions['exec-fresh'].pendingGate).toEqual(gate);
+  });
+
+  it('does not create a retry loop if the retry is also overtaken by live status', async () => {
+    const store = useAgentExecutionStore.getState();
+    store.startExecution('exec-fresh', 'session-fresh');
+    const requestId = requestReconnect();
+    store.setStatus('exec-fresh', 'continuing');
+    await reply(requestId, 'paused', gate);
+    const retryRequestId = (ws.sendJsonMessage.mock.lastCall?.[0] as { requestId: string }).requestId;
+    store.setStatus('exec-fresh', 'running');
+    const callsBeforeRetryReply = ws.sendJsonMessage.mock.calls.length;
+
+    await reply(retryRequestId, 'paused', gate);
+
+    expect(ws.sendJsonMessage).toHaveBeenCalledTimes(callsBeforeRetryReply);
+    expect(useAgentExecutionStore.getState().executions['exec-fresh'].status).toBe('running');
+  });
+
+  it('equal running progress does not invalidate a reconnect', async () => {
+    const store = useAgentExecutionStore.getState();
+    store.startExecution('exec-fresh', 'session-fresh');
+    const requestId = requestReconnect();
+    await handlers['progress']({ action: 'progress', executionId: 'exec-fresh', status: 'running' });
+    const callsBeforeReply = ws.sendJsonMessage.mock.calls.length;
+
+    await reply(requestId, 'paused', gate);
+
+    expect(ws.sendJsonMessage).toHaveBeenCalledTimes(callsBeforeReply);
+    expect(useAgentExecutionStore.getState().executions['exec-fresh'].pendingGate).toEqual(gate);
+  });
+
+  it('a session-only probe discovers a run that was absent when the request was sent', async () => {
+    const requestId = requestReconnect('session-fresh', undefined);
+
+    await reply(requestId, 'paused', gate);
+
+    expect(useAgentExecutionStore.getState().executions['exec-fresh']).toMatchObject({
+      sessionId: 'session-fresh',
+      status: 'paused',
+      pendingGate: gate,
+    });
+  });
+
+  it('a session-only probe cannot overwrite a run started live while it was in flight', async () => {
+    const requestId = requestReconnect('session-fresh', undefined);
+    useAgentExecutionStore.getState().startExecution('exec-fresh', 'session-fresh');
+
+    await reply(requestId, 'paused', gate);
+
+    expect(useAgentExecutionStore.getState().executions['exec-fresh'].status).toBe('running');
+  });
+
+  it('the newer correlated snapshot wins when responses arrive in reverse order', async () => {
+    useAgentExecutionStore.getState().startExecution('exec-fresh', 'session-fresh');
+    const oldRequestId = requestReconnect();
+    const newRequestId = requestReconnect();
+    await reply(newRequestId, 'running');
+
+    await reply(oldRequestId, 'paused', gate);
+
+    expect(useAgentExecutionStore.getState().executions['exec-fresh'].status).toBe('running');
+  });
+
+  it('cleans up a correlated found:false without affecting another request', async () => {
+    const goneRequestId = requestReconnect('session-gone', 'exec-gone');
+    const liveRequestId = requestReconnect('session-fresh', undefined);
+    await handlers['reconnect_result']({ action: 'reconnect_result', found: false, requestId: goneRequestId });
+
+    expect(useAgentExecutionStore.getState().pendingReconnectRequests[goneRequestId]).toBeUndefined();
+    expect(useAgentExecutionStore.getState().pendingReconnectRequests[liveRequestId]).toBeDefined();
+    await reply(liveRequestId, 'paused', gate);
+    expect(useAgentExecutionStore.getState().executions['exec-fresh'].pendingGate).toEqual(gate);
+  });
+
+  it.each(['missing', 'expired'])('%s responses do not hydrate or retry an active run', async mode => {
+    vi.useFakeTimers();
+    try {
+      useAgentExecutionStore.getState().startExecution('exec-fresh', 'session-fresh');
+      const requestId = requestReconnect();
+      if (mode === 'expired') vi.advanceTimersByTime(60_000);
+      const callsBeforeReply = ws.sendJsonMessage.mock.calls.length;
+
+      await reply(mode === 'missing' ? 'unknown' : requestId, 'paused', gate);
+
+      expect(ws.sendJsonMessage).toHaveBeenCalledTimes(callsBeforeReply);
+      expect(useAgentExecutionStore.getState().executions['exec-fresh'].status).toBe('running');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['missing', 'expired', 'legacy'])('%s responses cannot roll a terminal run back', async mode => {
+    vi.useFakeTimers();
+    try {
+      useAgentExecutionStore.getState().startExecution('exec-fresh', 'session-fresh');
+      let requestId: string | undefined = requestReconnect();
+      useAgentExecutionStore.getState().markCompleted('exec-fresh', 'done', 1);
+      if (mode === 'missing') requestId = 'unknown';
+      if (mode === 'expired') vi.advanceTimersByTime(60_000);
+      if (mode === 'legacy') requestId = undefined;
+
+      await reply(requestId, 'paused', gate);
+
+      expect(useAgentExecutionStore.getState().executions['exec-fresh'].status).toBe('completed');
+      expect(useAgentExecutionStore.getState().executions['exec-fresh'].pendingGate).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

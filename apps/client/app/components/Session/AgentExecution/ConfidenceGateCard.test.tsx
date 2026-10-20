@@ -109,6 +109,34 @@ describe('ConfidenceGateCard', () => {
     expect(mocks.respondToGate).toHaveBeenCalledTimes(1);
   });
 
+  it('allows a retry when reconnect restores the same unanswered pause', () => {
+    mocks.pendingGate = GATE;
+    const { rerender } = renderCard();
+
+    fireEvent.click(screen.getByTestId(`confidence-gate-proceed-${EXECUTION_ID}`));
+
+    mocks.pendingGate = undefined;
+    rerender(
+      <TestWrapper>
+        <ConfidenceGateCard executionId={EXECUTION_ID} />
+      </TestWrapper>
+    );
+    expect(screen.queryByTestId(`confidence-gate-card-${EXECUTION_ID}`)).not.toBeInTheDocument();
+
+    // A rejected response restores the original persisted pause, including its timestamp.
+    mocks.pendingGate = GATE;
+    rerender(
+      <TestWrapper>
+        <ConfidenceGateCard executionId={EXECUTION_ID} />
+      </TestWrapper>
+    );
+
+    fireEvent.click(screen.getByTestId(`confidence-gate-stop-${EXECUTION_ID}`));
+
+    expect(mocks.respondToGate).toHaveBeenCalledTimes(2);
+    expect(mocks.respondToGate).toHaveBeenLastCalledWith(EXECUTION_ID, 'stop');
+  });
+
   it('resets the double-click guard between pauses (regression)', () => {
     // A run can pause at the gate more than once. The card does not unmount in
     // between - only `pendingGate` toggles - so a guard ref that latches `true`

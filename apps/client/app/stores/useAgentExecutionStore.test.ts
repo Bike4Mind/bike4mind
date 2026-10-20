@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useAgentExecutionStore, selectPendingApprovalForSession, findChildAnyDepth } from './useAgentExecutionStore';
 
 // Reset only the data fields between tests - using setState's replace flag
@@ -1181,5 +1181,34 @@ describe('useAgentExecutionStore - pendingGate lifecycle', () => {
     const exec = useAgentExecutionStore.getState().executions['exec-gate-late'];
     expect(exec.pendingGate).toBeUndefined();
     expect(exec.status).toBe('completed');
+  });
+});
+
+describe('useAgentExecutionStore - reconnect request lifetime', () => {
+  beforeEach(resetStore);
+
+  it('bounds unanswered requests and clears correlation state on reset', () => {
+    const store = useAgentExecutionStore.getState();
+    for (let index = 0; index < 101; index += 1) {
+      store.registerReconnectRequest(`request-${index}`, 'session-A');
+    }
+    expect(Object.keys(useAgentExecutionStore.getState().pendingReconnectRequests)).toHaveLength(100);
+    expect(store.consumeReconnectRequest('request-0', 'exec-new')).toBeUndefined();
+    store.clearAll();
+    expect(useAgentExecutionStore.getState().pendingReconnectRequests).toEqual({});
+    expect(store.consumeReconnectRequest('request-100', 'exec-new')).toBeUndefined();
+  });
+
+  it('prunes expired requests when another request is sent', () => {
+    vi.useFakeTimers();
+    try {
+      const store = useAgentExecutionStore.getState();
+      store.registerReconnectRequest('expired', 'session-A');
+      vi.advanceTimersByTime(60_000);
+      store.registerReconnectRequest('fresh', 'session-A');
+      expect(Object.keys(useAgentExecutionStore.getState().pendingReconnectRequests)).toEqual(['fresh']);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -155,6 +155,7 @@ interface AgentExecuteGateResponse {
 interface AgentExecuteReconnect {
   action: 'agent_execute';
   command: 'reconnect';
+  requestId?: string;
   executionId?: string;
   sessionId?: string;
 }
@@ -464,7 +465,16 @@ export function useAgentExecutionSubscriptions(): void {
     unsubscribers.push(
       subscribeToAction('reconnect_result', async (msg: IMessageDataToClient) => {
         if (msg.action !== 'reconnect_result') return;
-        if (!msg.found || !msg.executionId || !msg.status) return;
+        const reconnectSequence = store().consumeReconnectRequest(
+          msg.requestId,
+          msg.found ? msg.executionId : undefined,
+          msg.status
+        );
+        if (reconnectSequence === 'retry') {
+          reconnectRef.current(msg.sessionId, msg.executionId, false);
+          return;
+        }
+        if (!msg.found || !msg.executionId || !msg.status || reconnectSequence === undefined) return;
         const executionId = msg.executionId;
         // Taken from the response, never from request order: responses to a
         // sweep or to concurrent mount probes arrive in any order, and a
@@ -532,6 +542,7 @@ export function useAgentExecutionSubscriptions(): void {
 
         store().hydrateFromReconnect({
           executionId,
+          reconnectSequence,
           sessionId,
           status: msg.status,
           totalCreditsUsed: msg.totalCreditsUsed ?? 0,
@@ -772,10 +783,13 @@ export function useAgentExecutionDispatch() {
   const { sendJsonMessage } = useWebsocket();
 
   return useMemo(() => {
-    const reconnect = (sessionId?: string, executionId?: string) => {
+    const reconnect = (sessionId?: string, executionId?: string, retryAllowed = true) => {
+      const requestId = crypto.randomUUID();
+      useAgentExecutionStore.getState().registerReconnectRequest(requestId, sessionId, executionId, retryAllowed);
       sendJsonMessage({
         action: 'agent_execute',
         command: 'reconnect',
+        requestId,
         sessionId,
         executionId,
       } as unknown as Parameters<typeof sendJsonMessage>[0]);

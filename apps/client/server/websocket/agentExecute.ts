@@ -187,6 +187,7 @@ const GateResponseSchema = BaseMessageSchema.extend({
 
 const ReconnectCommandSchema = BaseMessageSchema.extend({
   command: z.literal('reconnect'),
+  requestId: z.string().max(128).optional(),
   executionId: z.string().optional(),
   sessionId: z.string().optional(),
 });
@@ -829,6 +830,7 @@ async function handleReconnect(
   if (!execution || execution.userId !== userId) {
     await sendAgentEvent(connectionId, endpoint, {
       action: 'reconnect_result',
+      requestId: cmd.requestId,
       found: false,
     });
     return;
@@ -863,6 +865,7 @@ async function handleReconnect(
   // Send current state to client
   await sendAgentEvent(connectionId, endpoint, {
     action: 'reconnect_result',
+    requestId: cmd.requestId,
     found: true,
     executionId: execution.id,
     // Safe to echo: only sent past the ownership check above.

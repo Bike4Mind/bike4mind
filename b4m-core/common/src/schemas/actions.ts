@@ -1544,6 +1544,7 @@ export const ChildExecutionSnapshotSchema: z.ZodType<ChildExecutionSnapshotShape
 
 export const ReconnectResultAction = z.object({
   action: z.literal('reconnect_result'),
+  requestId: z.string().optional(),
   found: z.boolean(),
   executionId: z.string().optional(),
   // The session the found run belongs to, so the client stamps it from the
