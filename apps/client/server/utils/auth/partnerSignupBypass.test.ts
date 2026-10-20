@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // The env registry is read at module load, so seed an env-only partner domain before any import.
 vi.hoisted(() => {
@@ -29,6 +29,11 @@ describe('isPartnerDomainSignupAllowed', () => {
     mockFindActiveRules.mockResolvedValue([ENABLED_RULE]);
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
   it('allows a verified email on an enabled DB rule domain', async () => {
     expect(await isPartnerDomainSignupAllowed('someone@partner.example', true)).toBe(true);
   });
@@ -54,6 +59,17 @@ describe('isPartnerDomainSignupAllowed', () => {
   it('refuses when the rule is disabled (absent from the active set)', async () => {
     mockFindActiveRules.mockResolvedValue([]);
     expect(await isPartnerDomainSignupAllowed('someone@partner.example', true)).toBe(false);
+  });
+
+  it('refuses a disabled rule after the warm-instance cache expires', async () => {
+    vi.useFakeTimers();
+    expect(await isPartnerDomainSignupAllowed('someone@partner.example', true)).toBe(true);
+    mockFindActiveRules.mockResolvedValue([]);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(await isPartnerDomainSignupAllowed('someone@partner.example', true)).toBe(false);
+    expect(mockFindActiveRules).toHaveBeenCalledTimes(2);
   });
 
   it('refuses an env-registry-only domain', async () => {

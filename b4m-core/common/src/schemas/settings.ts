@@ -3493,7 +3493,8 @@ export const settingsMap = {
     userReadable: true,
     name: 'Default Free Credits',
     defaultValue: 0,
-    description: `Credits granted to a user who registers WITHOUT an invite code (only applies when Allow Open Registration is ON). Granted after the user verifies their email, NOT at signup - an unverified throwaway account gets 0 credits (anti-spam). A free user can never spend more than this - their hard ceiling of real model cost is roughly credits / ${CREDITS_PER_USD_COST} USD.`,
+    description:
+      'Base credits granted after email verification to a user who registers WITHOUT an invite code, including eligible partner signups when Allow Open Registration is OFF. Partner-rule credits are added on top of this amount. An unverified account receives no credits. A free user cannot spend beyond their total granted balance.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),

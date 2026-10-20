@@ -1101,6 +1101,30 @@ describe('verifyCallback - partner-domain bypass of the invite gate', () => {
     // The only lookup is the post-create signup grant, never the gate.
     expect(mockPartnerGrant).toHaveBeenCalledTimes(1);
   });
+
+  it.each([AuthStrategy.Google, AuthStrategy.Github])(
+    'adds the partner bonus to the default grant on an invite-only %s signup',
+    async strategy => {
+      mockPartnerGrant.mockResolvedValue({ ...matchedGrant, signupCredits: 500 });
+
+      const { user, info } = await runStandard(strategy, partnerProfile(true));
+
+      expect(user).toBeTruthy();
+      expect(info).toBeUndefined();
+      expect(mockReleasePending).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'u-partner', tags: [PENDING_FREE_CREDITS_TAG] }),
+        expect.anything()
+      );
+      expect(mockAddCredits).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ownerId: 'u-partner',
+          credits: 500,
+          transactionId: 'domain-grant-credits:u-partner',
+        }),
+        expect.anything()
+      );
+    }
+  );
 });
 
 describe('verifyCallback - starter credits on OAuth signup', () => {

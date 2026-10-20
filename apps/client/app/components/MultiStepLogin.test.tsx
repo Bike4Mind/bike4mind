@@ -397,6 +397,35 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
     expect(mocks.toast.error).not.toHaveBeenCalled();
   });
 
+  it('retries with the rotated token after registration is denied and a partner rule is enabled', async () => {
+    const user = userEvent.setup();
+    mocks.verifyOTC
+      .mockResolvedValueOnce({
+        registrationRequired: true,
+        registrationAllowed: false,
+        email: 'new@partner.example',
+        pendingToken: 'ptok-denied',
+      })
+      .mockResolvedValueOnce({
+        registrationRequired: true,
+        registrationAllowed: true,
+        email: 'new@partner.example',
+        pendingToken: 'ptok-admitted',
+      });
+    renderLogin({ enableRegister: false });
+
+    await user.type(textboxIn('login-email-input'), 'new@partner.example');
+    await user.click(screen.getByTestId('login-continue-btn'));
+    await user.type(within(await screen.findByTestId('login-otc-input')).getByRole('textbox'), '12345678');
+    await user.click(screen.getByTestId('login-verify-btn'));
+    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('auth.registrationClosed'));
+
+    await user.click(screen.getByTestId('login-verify-btn'));
+
+    expect(await screen.findByTestId('login-register-username-input')).toBeInTheDocument();
+    expect(mocks.verifyOTC).toHaveBeenLastCalledWith(expect.objectContaining({ pendingToken: 'ptok-denied' }));
+  });
+
   it.each([
     [false, undefined],
     [false, false],
