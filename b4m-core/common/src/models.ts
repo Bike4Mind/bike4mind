@@ -3,6 +3,7 @@ import { BEDROCK_ANTHROPIC_PREFIX } from './claudeModelId';
 // Type-only: ModelCatalogTypes imports ModelBackend from this module, so a value
 // import here would close a runtime cycle. These two are erased at compile time.
 import type { AdapterFamily, ModelDispatchProfile } from './types/entities/ModelCatalogTypes';
+import type { IUsageEventRates, UsagePriceSource } from './types/entities/UsageEventTypes';
 import type { ImageModelCapabilities } from './utils/imageCapabilities';
 
 /**
@@ -641,7 +642,7 @@ export const supportedModels = z.enum({
 export type ModelName = z.infer<typeof supportedModels>;
 
 /** Whether a model's rates came from a ModelPrice catalog row or the adapter's literal fallback. */
-export type ModelPriceSource = 'catalog' | 'literal';
+export type ModelPriceSource = UsagePriceSource;
 
 export type ModelInfo = {
   id: ModelName;
@@ -836,14 +837,7 @@ const alarmIfUnpriced = (model: ModelInfo, cost: number, usage: number): number 
 export const PUBLISHED_CACHE_READ_BACKENDS: ReadonlySet<string> = new Set([ModelBackend.Gemini, ModelBackend.XAI]);
 
 /** The per-token rates one pricing tier applies, in USD per token, as stored on a UsageEvent. */
-export type AppliedRates = {
-  /** The pricing-map key (input-token threshold) of the tier that priced the usage. */
-  tierKey: number;
-  input: number;
-  output: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-};
+export type AppliedRates = IUsageEventRates;
 
 /**
  * The rates costAtTier applies for a request whose whole prompt is `tierBasisTokens`, with the
