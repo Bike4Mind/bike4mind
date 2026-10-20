@@ -169,10 +169,15 @@ export async function pushSkill(file: SkillFile, deps: PushDeps): Promise<'creat
     const me = await api.getCurrentUser();
     if (!me) throw new Error('Not authenticated. Run `b4m /login` to authenticate.');
 
-    const { data } = await api.get<{ data: SkillRow[] }>('/api/skills', {
-      params: { query: payload.name, limit: 100 },
-    });
-    const existing = data.find(s => s.name === payload.name && s.userId === me.id);
+    // ?query is a fuzzy name/description match over every visible skill, so page until the own exact match.
+    let existing: SkillRow | undefined;
+    for (let page = 1; !existing; page++) {
+      const { data, hasMore } = await api.get<{ data: SkillRow[]; hasMore?: boolean }>('/api/skills', {
+        params: { query: payload.name, limit: 100, page },
+      });
+      existing = data.find(s => s.name === payload.name && s.userId === me.id);
+      if (!hasMore) break;
+    }
 
     if (!existing) {
       await api.post('/api/skills', payload);

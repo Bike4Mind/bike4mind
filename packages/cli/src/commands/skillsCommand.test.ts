@@ -3,7 +3,57 @@ import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
 import { toSkillMd } from '@bike4mind/common';
-import { buildSkillPayload, pushSkill, readSkillFile, type PushDeps, type SkillFile } from './skillsCommand.js';
+import {
+  buildSkillPayload,
+  handleSkillsCommand,
+  pushSkill,
+  readSkillFile,
+  type PushDeps,
+  type SkillFile,
+} from './skillsCommand.js';
+
+const handlerMocks = vi.hoisted(() => ({
+  tokens: null as { expiresAt: string } | null,
+  clearAuthTokens: vi.fn(),
+  clearCache: vi.fn(),
+  answer: 'n',
+  api: {
+    getCurrentUser: vi.fn().mockResolvedValue({ id: 'u1' }),
+    get: vi.fn(),
+    post: vi.fn().mockResolvedValue({}),
+    put: vi.fn().mockResolvedValue({}),
+  },
+}));
+
+vi.mock('../storage/ConfigStore.js', () => ({
+  ConfigStore: class {
+    load = async () => ({ apiConfig: undefined });
+    getAuthTokens = async () => handlerMocks.tokens;
+    clearAuthTokens = handlerMocks.clearAuthTokens;
+  },
+}));
+vi.mock('../auth/ApiClient.js', () => ({
+  ApiClient: class {
+    constructor() {
+      return handlerMocks.api;
+    }
+  },
+}));
+vi.mock('../storage/RemoteSkillSource.js', () => ({
+  RemoteSkillSource: class {
+    clearCache = handlerMocks.clearCache;
+  },
+}));
+vi.mock('../utils', async importOriginal => ({
+  ...(await importOriginal<object>()),
+  requireApiUrl: () => 'http://localhost',
+}));
+vi.mock('readline', () => ({
+  createInterface: () => ({
+    question: (_q: string, cb: (a: string) => void) => cb(handlerMocks.answer),
+    close: () => {},
+  }),
+}));
 
 const SKILL = `---
 name: my-skill
@@ -139,7 +189,7 @@ describe('pushSkill', () => {
       { id: 's2', name: 'my-skill-2', userId: 'u1' },
     ]);
     expect(await pushSkill(file(), deps)).toBe('created');
-    expect(api.get).toHaveBeenCalledWith('/api/skills', { params: { query: 'my-skill', limit: 100 } });
+    expect(api.get).toHaveBeenCalledWith('/api/skills', { params: { query: 'my-skill', limit: 100, page: 1 } });
     expect(api.post).toHaveBeenCalledWith('/api/skills', file().payload);
     expect(api.put).not.toHaveBeenCalled();
   });
@@ -257,5 +307,65 @@ describe('pushSkill', () => {
     api.getCurrentUser.mockResolvedValue(null);
     await expect(pushSkill(file(), deps)).rejects.toThrow('b4m /login');
     expect(api.get).not.toHaveBeenCalled();
+  });
+
+  it('pages the lookup until it finds the own skill', async () => {
+    const { api, deps } = makeDeps({ update: true });
+    api.get
+      .mockResolvedValueOnce({ data: [{ id: 'x', name: 'other', userId: ME.id }], hasMore: true })
+      .mockResolvedValueOnce({ data: [{ id: 'id1', name: 'my-skill', userId: ME.id }], hasMore: false });
+    await expect(pushSkill(file(), deps)).resolves.toBe('updated');
+    expect(api.get).toHaveBeenLastCalledWith('/api/skills', { params: { query: 'my-skill', limit: 100, page: 2 } });
+    expect(api.put).toHaveBeenCalledWith('/api/skills/id1', expect.anything());
+    expect(api.post).not.toHaveBeenCalled();
+  });
+});
+
+describe('handleSkillsCommand', () => {
+  const ARGS = { _: ['skills', 'push'], path: '' };
+  let logSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(async () => {
+    ARGS.path = path.dirname(await writeSkill('my-skill/SKILL.md', SKILL));
+    handlerMocks.tokens = { expiresAt: new Date(Date.now() + 60_000).toISOString() };
+    handlerMocks.api.get.mockResolvedValue({ data: [] });
+    vi.clearAllMocks();
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  afterEach(() => logSpy.mockRestore());
+
+  it('fails with the login hint and no API call when there are no tokens', async () => {
+    handlerMocks.tokens = null;
+    await expect(handleSkillsCommand('push', ARGS)).rejects.toThrow('b4m /login');
+    expect(handlerMocks.api.getCurrentUser).not.toHaveBeenCalled();
+  });
+
+  it('clears an expired token and fails with the re-login hint', async () => {
+    handlerMocks.tokens = { expiresAt: new Date(Date.now() - 1000).toISOString() };
+    await expect(handleSkillsCommand('push', ARGS)).rejects.toThrow('re-authenticate');
+    expect(handlerMocks.clearAuthTokens).toHaveBeenCalled();
+    expect(handlerMocks.api.getCurrentUser).not.toHaveBeenCalled();
+  });
+
+  it('clears the remote-skills cache after a write', async () => {
+    await handleSkillsCommand('push', ARGS);
+    expect(handlerMocks.api.post).toHaveBeenCalled();
+    expect(handlerMocks.clearCache).toHaveBeenCalled();
+    expect(logSpy).toHaveBeenCalledWith('Created skill /my-skill');
+  });
+
+  it('prints Aborted and leaves the cache alone when the user declines', async () => {
+    handlerMocks.api.get.mockResolvedValue({ data: [{ id: 'id1', name: 'my-skill', userId: ME.id }] });
+    const isTTY = process.stdin.isTTY;
+    process.stdin.isTTY = true;
+    try {
+      await handleSkillsCommand('push', ARGS);
+    } finally {
+      process.stdin.isTTY = isTTY;
+    }
+    expect(handlerMocks.api.put).not.toHaveBeenCalled();
+    expect(handlerMocks.clearCache).not.toHaveBeenCalled();
+    expect(logSpy).toHaveBeenCalledWith('Aborted');
   });
 });
