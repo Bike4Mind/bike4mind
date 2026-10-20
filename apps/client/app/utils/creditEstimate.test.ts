@@ -2,11 +2,15 @@ import { describe, expect, it } from 'vitest';
 import {
   ARTIFACT_EMISSION_PROMPT,
   ChatModels,
+  getTextModelCost,
   getTextModelCreditsPer1M,
   isModelDeprecated,
+  reservationOutputTokens,
   tokenEstimateMultiplier,
   type ModelInfo,
+  usdToCredits,
 } from '@bike4mind/common';
+import { buildThinkingParams } from '@bike4mind/llm-adapters';
 import {
   APP_PROMPT_TOKENS,
   estimateAnswerCount,
@@ -33,6 +37,8 @@ const SONNET_55 = model(ChatModels.CLAUDE_5_5_SONNET_BEDROCK, 'Claude Sonnet 5.5
 const GPT_MINI = model(ChatModels.GPT5_4_MINI, 'GPT-5.4 Mini', 0.75, 4.5);
 
 const HAIKU_55 = model(ChatModels.CLAUDE_5_5_HAIKU_BEDROCK, 'Claude Haiku 5.5', 0.1, 0.5);
+const INPUT_TOKENS = 20_000;
+const MAX_TOKENS = 128_000;
 
 describe('typical answer size', () => {
   it("counts the app's own system prompt, not just the user's words", () => {
@@ -78,13 +84,48 @@ describe('typicalAnswerCredits', () => {
 });
 
 describe('preflight affordability', () => {
-  it('uses a larger admission hold than the typical displayed answer', () => {
-    expect(preflightAnswerCredits(SONNET_55)!).toBeGreaterThan(typicalAnswerCredits(SONNET_55)!);
+  it('matches the server hold for the real input and output ceiling', () => {
+    expect(preflightAnswerCredits(SONNET_55, INPUT_TOKENS, MAX_TOKENS)).toBe(
+      usdToCredits(getTextModelCost(SONNET_55, INPUT_TOKENS, reservationOutputTokens(MAX_TOKENS)))
+    );
+  });
+
+  it('matches the larger server hold for a model that reasons within its output budget', () => {
+    const reasoning = { ...SONNET_55, thinkingStyle: 'adaptive' } as ModelInfo;
+    expect(preflightAnswerCredits(reasoning, INPUT_TOKENS, MAX_TOKENS)).toBe(
+      usdToCredits(getTextModelCost(reasoning, INPUT_TOKENS, reservationOutputTokens(MAX_TOKENS, true)))
+    );
+  });
+
+  it('matches the raised server hold when legacy Anthropic thinking is enabled', () => {
+    const legacyThinking = {
+      ...SONNET_55,
+      can_think: true,
+      thinkingStyle: 'legacy',
+    } as ModelInfo;
+    const thinking = { enabled: true, budget_tokens: 32_000 };
+    const requestedMaxTokens = 4_096;
+    const sentMaxTokens = buildThinkingParams(
+      legacyThinking.id,
+      legacyThinking,
+      thinking.budget_tokens,
+      requestedMaxTokens
+    ).maxTokens;
+
+    expect(preflightAnswerCredits(legacyThinking, INPUT_TOKENS, requestedMaxTokens, thinking)).toBe(
+      usdToCredits(getTextModelCost(legacyThinking, INPUT_TOKENS, reservationOutputTokens(sentMaxTokens, true)))
+    );
   });
 
   it('offers the cheapest model the balance can admit when the selected model cannot', () => {
-    const balance = preflightAnswerCredits(GPT_MINI)!;
-    const offer = findAffordableModelOffer([SONNET_55, GPT_MINI, HAIKU_55], SONNET_55.id, balance);
+    const balance = preflightAnswerCredits(GPT_MINI, INPUT_TOKENS, MAX_TOKENS)!;
+    const offer = findAffordableModelOffer(
+      [SONNET_55, GPT_MINI, HAIKU_55],
+      SONNET_55.id,
+      balance,
+      INPUT_TOKENS,
+      MAX_TOKENS
+    );
 
     expect(offer?.affordable.id).toBe(HAIKU_55.id);
     expect(offer?.current.modelName).toBe('Claude Sonnet 5.5');
@@ -92,37 +133,46 @@ describe('preflight affordability', () => {
 
   it('does not offer a switch when the selected model is affordable or no alternative is', () => {
     expect(
-      findAffordableModelOffer([SONNET_55, GPT_MINI], SONNET_55.id, preflightAnswerCredits(SONNET_55)!)
+      findAffordableModelOffer(
+        [SONNET_55, GPT_MINI],
+        SONNET_55.id,
+        preflightAnswerCredits(SONNET_55, INPUT_TOKENS, MAX_TOKENS)!,
+        INPUT_TOKENS,
+        MAX_TOKENS
+      )
     ).toBeNull();
-    expect(findAffordableModelOffer([SONNET_55], SONNET_55.id, 1)).toBeNull();
+    expect(findAffordableModelOffer([SONNET_55], SONNET_55.id, 1, INPUT_TOKENS, MAX_TOKENS)).toBeNull();
   });
 
   it('never offers a disabled model', () => {
     const disabled = { ...HAIKU_55, disabled: true } as ModelInfo;
-    const balance = preflightAnswerCredits(GPT_MINI)!;
+    const balance = preflightAnswerCredits(GPT_MINI, INPUT_TOKENS, MAX_TOKENS)!;
 
-    expect(findAffordableModelOffer([SONNET_55, GPT_MINI, disabled], SONNET_55.id, balance)?.affordable.id).toBe(
-      GPT_MINI.id
-    );
+    expect(
+      findAffordableModelOffer([SONNET_55, GPT_MINI, disabled], SONNET_55.id, balance, INPUT_TOKENS, MAX_TOKENS)
+        ?.affordable.id
+    ).toBe(GPT_MINI.id);
   });
 
   it('never offers a deprecated model', () => {
     const deprecated = { ...HAIKU_55, deprecationDate: '2020-01-01' } as ModelInfo;
-    const balance = preflightAnswerCredits(GPT_MINI)!;
+    const balance = preflightAnswerCredits(GPT_MINI, INPUT_TOKENS, MAX_TOKENS)!;
 
     expect(isModelDeprecated(deprecated)).toBe(true);
-    expect(findAffordableModelOffer([SONNET_55, GPT_MINI, deprecated], SONNET_55.id, balance)?.affordable.id).toBe(
-      GPT_MINI.id
-    );
+    expect(
+      findAffordableModelOffer([SONNET_55, GPT_MINI, deprecated], SONNET_55.id, balance, INPUT_TOKENS, MAX_TOKENS)
+        ?.affordable.id
+    ).toBe(GPT_MINI.id);
   });
 
   it('currently offers an accessible free-to-run model first, since it needs 0 credits', () => {
     const free = { ...GPT_MINI, id: 'free-model', name: 'Free', freeToRun: true } as ModelInfo;
-    const balance = preflightAnswerCredits(HAIKU_55)!;
+    const balance = preflightAnswerCredits(HAIKU_55, INPUT_TOKENS, MAX_TOKENS)!;
 
-    expect(findAffordableModelOffer([SONNET_55, HAIKU_55, free], SONNET_55.id, balance)?.affordable.id).toBe(
-      'free-model'
-    );
+    expect(
+      findAffordableModelOffer([SONNET_55, HAIKU_55, free], SONNET_55.id, balance, INPUT_TOKENS, MAX_TOKENS)?.affordable
+        .id
+    ).toBe('free-model');
   });
 });
 
