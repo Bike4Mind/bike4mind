@@ -25,11 +25,8 @@ import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
 
 const createFabFileSchema = fabFilesService.createFabFileSchema;
 
-/**
- * The admin What's New video upload (AdminModalVideoFields). mp4 stays off the global extension
- * allowlist because non-image uploads are marked clean without a content scan; only an admin
- * writing under the public `modals/` prefix, with claim and extension agreeing, gets it admitted.
- */
+// mp4 stays off the global allowlist (non-image uploads skip the content scan); only the admin
+// What's New video upload (AdminModalVideoFields) under `modals/` is admitted.
 const isAdminModalVideoUpload = (
   isAdmin: boolean | undefined,
   params: { prefix?: string | null; mimeType?: string | null; fileName: string }
