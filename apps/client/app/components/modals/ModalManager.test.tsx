@@ -1,17 +1,22 @@
 // @vitest-environment jsdom
 import React from 'react';
-import { render } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ModalManager from './ModalManager';
 import { releaseNoteToModal } from './releaseNoteSlides';
+import { markFirstSignupSession, FIRST_SIGNUP_SESSION_KEY } from '@client/app/utils/firstSignupSession';
+import { NEW_ACCOUNT_GRACE_MS } from '@client/app/utils/onboarding';
+import type { IModal } from '@bike4mind/common';
 
 const mocks = vi.hoisted(() => ({
   triggerModalByTag: vi.fn(),
-  modals: { data: [] as unknown[], isPending: false, slidesPending: false },
+  modals: { data: [] as IModal[], isPending: false, slidesPending: false },
   createdAt: new Date('2020-01-01'),
 }));
 
-vi.mock('./GenericModal', () => ({ default: () => <div data-testid="generic-modal" /> }));
+vi.mock('./GenericModal', () => ({
+  default: ({ isOpen }: { isOpen: boolean }) => (isOpen ? <div data-testid="generic-modal" /> : null),
+}));
 vi.mock('./BannerModal', () => ({ default: () => <div data-testid="banner-modal" /> }));
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: (selector: (s: { currentUser: unknown }) => unknown) =>
@@ -41,8 +46,14 @@ vi.mock('@client/app/hooks/useStreamingState', () => ({
 }));
 vi.mock('@client/app/utils/anyDialogOpen', () => ({ isAnyModalDialogOpen: () => false }));
 
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
+
 describe('ModalManager whats-new auto-trigger', () => {
   beforeEach(() => {
+    localStorage.clear();
     mocks.triggerModalByTag.mockReset();
     mocks.createdAt = new Date('2020-01-01');
     mocks.modals.slidesPending = false;
@@ -77,7 +88,77 @@ describe('ModalManager whats-new auto-trigger', () => {
 
   it('does not auto-trigger for a brand-new account', () => {
     mocks.createdAt = new Date();
+    markFirstSignupSession('user-1');
     render(<ModalManager />);
     expect(mocks.triggerModalByTag).not.toHaveBeenCalled();
+  });
+});
+
+const announcement = (isBanner = false): IModal => ({
+  _id: isBanner ? 'announcement-banner' : 'announcement',
+  title: 'Announcement',
+  subtitle: null,
+  description: null,
+  tags: null,
+  closeButton: true,
+  agreeButton: false,
+  startDate: null,
+  endDate: null,
+  numberOfAgrees: null,
+  imageUrl: null,
+  textMessage: null,
+  priority: 1,
+  enabled: true,
+  isBanner,
+  numberOfViews: { type: 'firstTime', threshold: 1, value: 0 },
+});
+
+describe('ModalManager new-account suppression', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-20T04:00:00Z'));
+    mocks.createdAt = new Date();
+    mocks.modals.data = [announcement(), announcement(true)];
+    mocks.modals.isPending = false;
+    mocks.modals.slidesPending = false;
+    localStorage.clear();
+    mocks.triggerModalByTag.mockReset();
+    markFirstSignupSession('user-1');
+  });
+
+  it('suppresses announcements and banners throughout a new account first visit', () => {
+    const Manager = ModalManager as React.ComponentType<{ tick?: number }>;
+    const { rerender } = render(<Manager tick={0} />);
+    act(() => vi.advanceTimersByTime(3000));
+    expect(screen.queryByTestId('generic-modal')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('banner-modal')).not.toBeInTheDocument();
+
+    act(() => vi.advanceTimersByTime(NEW_ACCOUNT_GRACE_MS));
+    rerender(<Manager tick={1} />);
+    act(() => vi.advanceTimersByTime(3000));
+    expect(screen.queryByTestId('generic-modal')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('banner-modal')).not.toBeInTheDocument();
+  });
+
+  it('keeps suppressing after a reload beyond the grace window', () => {
+    const firstVisit = render(<ModalManager />);
+    firstVisit.unmount();
+    act(() => vi.advanceTimersByTime(NEW_ACCOUNT_GRACE_MS));
+    render(<ModalManager />);
+    act(() => vi.advanceTimersByTime(3000));
+    expect(screen.queryByTestId('generic-modal')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('banner-modal')).not.toBeInTheDocument();
+  });
+
+  it('shows the same announcements on a later visit', () => {
+    const firstVisit = render(<ModalManager />);
+    firstVisit.unmount();
+    localStorage.removeItem(FIRST_SIGNUP_SESSION_KEY);
+
+    render(<ModalManager />);
+    expect(screen.getByTestId('banner-modal')).toBeInTheDocument();
+    expect(screen.queryByTestId('generic-modal')).not.toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(3000));
+    expect(screen.getByTestId('generic-modal')).toBeInTheDocument();
   });
 });

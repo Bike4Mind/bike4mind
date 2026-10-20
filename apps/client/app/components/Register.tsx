@@ -1,3 +1,4 @@
+import { markFirstSignupSession } from '@client/app/utils/firstSignupSession';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useSendOTC, useVerifyOTC } from '@client/app/hooks/data/auth';
 import { formatCountdown, useOtcRateLimit } from '@client/app/hooks/useOtcRateLimit';
@@ -307,6 +308,8 @@ const Register: React.FC = () => {
         // OAuth signups fire the same call from /auth/success via the isNewUser hash param.
         // Only the nested shape is a freshly created account - the flat shape is a login of
         // one that already existed, which must not count as a signup conversion.
+        const registeredUser = user as Parameters<typeof setCurrentUser>[0];
+        if (registeredUser?.id) markFirstSignupSession(registeredUser.id);
         trackSignupConversion('password');
       }
 

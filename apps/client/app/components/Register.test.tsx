@@ -1,3 +1,4 @@
+import { FIRST_SIGNUP_SESSION_KEY } from '@client/app/utils/firstSignupSession';
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, within, waitFor, act } from '@testing-library/react';
@@ -20,6 +21,7 @@ type MfaHookOptions = {
 const mocks = vi.hoisted(() => ({
   setCurrentUser: vi.fn(),
   setAccessToken: vi.fn(),
+  setVerifiedSession: vi.fn(),
   sendOTC: vi.fn(),
   verifyOTC: vi.fn(),
   mutateAsync: vi.fn(),
@@ -54,7 +56,7 @@ vi.mock('@client/app/contexts/UserContext', () => ({
 }));
 vi.mock('@client/app/hooks/useAccessToken', () => ({
   useAccessToken: Object.assign(() => ({ setAccessToken: mocks.setAccessToken }), {
-    getState: () => ({ setVerifiedSession: vi.fn() }),
+    getState: () => ({ setVerifiedSession: mocks.setVerifiedSession }),
   }),
 }));
 vi.mock('@tanstack/react-router', () => ({
@@ -65,6 +67,7 @@ vi.mock('@client/app/utils/authRedirect', () => ({
   applyRedirect: vi.fn(),
   appendRedirectTo: (url: string) => url,
 }));
+vi.mock('@client/app/utils/sessionBootstrap', () => ({ resetSessionBootstrap: vi.fn() }));
 vi.mock('@client/app/utils/refreshCoordinator', () => ({ resetRefreshCoordinator: vi.fn() }));
 vi.mock('@client/app/utils/signupConversion', () => ({ trackSignupConversion: mocks.trackSignupConversion }));
 vi.mock('@client/app/hooks/useCommonStyles', () => ({
@@ -184,7 +187,25 @@ describe('Register - second-factor handoff', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
     mocks.mfa.options = null;
+  });
+
+  it('marks a freshly registered account first session before entering the app', async () => {
+    mocks.verifyOTC.mockResolvedValueOnce({ user: { id: 'new-user' }, accessToken: 'full' });
+    renderRegister();
+    await submitCode(userEvent.setup());
+    await waitFor(() => expect(mocks.setCurrentUser).toHaveBeenCalledWith({ id: 'new-user' }));
+    expect(localStorage.getItem(FIRST_SIGNUP_SESSION_KEY)).toBe('new-user');
+    expect(mocks.setVerifiedSession).toHaveBeenCalledWith('full');
+  });
+
+  it('does not mark an existing account login as a first session', async () => {
+    mocks.verifyOTC.mockResolvedValueOnce({ id: 'existing-user', accessToken: 'full' });
+    renderRegister();
+    await submitCode(userEvent.setup());
+    await waitFor(() => expect(mocks.setCurrentUser).toHaveBeenCalled());
+    expect(localStorage.getItem(FIRST_SIGNUP_SESSION_KEY)).toBeNull();
   });
 
   it('begins a verify challenge when the account already exists and demands MFA', async () => {

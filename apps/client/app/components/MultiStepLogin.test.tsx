@@ -1,3 +1,4 @@
+import { FIRST_SIGNUP_SESSION_KEY } from '@client/app/utils/firstSignupSession';
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, within, waitFor, act, fireEvent } from '@testing-library/react';
@@ -138,6 +139,7 @@ const acceptInlinePolicies = async (user: ReturnType<typeof userEvent.setup>) =>
 
 describe('MultiStepLogin — inline registration (new-user branch)', () => {
   beforeEach(() => {
+    localStorage.clear();
     vi.clearAllMocks();
     mocks.userState.currentUser = null;
     mocks.accessTokenState.accessToken = null;
@@ -194,6 +196,7 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
     // Ad-conversion signal fires exactly once for the freshly created account.
     expect(mocks.trackSignupConversion).toHaveBeenCalledTimes(1);
     expect(mockLogEvent).toHaveBeenCalledWith({ type: 'policies_accepted', metadata: { path: 'inline_registration' } });
+    expect(localStorage.getItem(FIRST_SIGNUP_SESSION_KEY)).toBe('new-1');
   });
 
   it('keeps Create account disabled until BOTH acceptance checkboxes are checked', async () => {
@@ -468,6 +471,7 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
 // /accept-policies loop (issue #386). See the isLoggedIn guard in MultiStepLogin.
 describe('MultiStepLogin — already-logged-in redirect guard', () => {
   beforeEach(() => {
+    localStorage.clear();
     vi.clearAllMocks();
     mocks.userState.currentUser = null;
     mocks.accessTokenState.accessToken = null;
@@ -503,6 +507,7 @@ describe('MultiStepLogin - Cookie settings link', () => {
   const TRACKER_ENV = ['NEXT_PUBLIC_GA_MEASUREMENT_ID', 'NEXT_PUBLIC_REDDIT_PIXEL_ID', 'NEXT_PUBLIC_META_PIXEL_ID'];
 
   beforeEach(() => {
+    localStorage.clear();
     vi.clearAllMocks();
     mocks.userState.currentUser = null;
     mocks.accessTokenState.accessToken = null;
@@ -557,6 +562,7 @@ describe('MultiStepLogin - Cookie settings link', () => {
 // looking for a password field or a forgot-password link that this flow does not have.
 describe('MultiStepLogin - passwordless email step copy', () => {
   beforeEach(() => {
+    localStorage.clear();
     vi.clearAllMocks();
     mocks.userState.currentUser = null;
     mocks.accessTokenState.accessToken = null;
@@ -584,6 +590,7 @@ describe('MultiStepLogin - passwordless email step copy', () => {
 
 describe('MultiStepLogin - email step guidance and code-request errors', () => {
   beforeEach(() => {
+    localStorage.clear();
     vi.clearAllMocks();
     mocks.userState.currentUser = null;
     mocks.accessTokenState.accessToken = null;
@@ -669,6 +676,7 @@ describe('MultiStepLogin - email step guidance and code-request errors', () => {
 
 describe('MultiStepLogin - second-factor handoff', () => {
   beforeEach(() => {
+    localStorage.clear();
     vi.clearAllMocks();
     mocks.userState.currentUser = null;
     mocks.accessTokenState.accessToken = null;

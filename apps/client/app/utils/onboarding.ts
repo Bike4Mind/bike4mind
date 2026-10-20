@@ -1,10 +1,6 @@
 import { PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 
-/**
- * First-run / onboarding helpers, extracted as pure functions so the branchy logic in
- * `ModalManager` (brand-new-account grace) and `EmailVerificationBanner` (nag cadence)
- * is unit-testable and lives in one place instead of inline in effect bodies.
- */
+/** Account-age and email-verification helpers shared by onboarding surfaces. */
 
 /** Window during which a freshly created account is treated as "brand new". */
 export const NEW_ACCOUNT_GRACE_MS = 10 * 60 * 1000; // 10 minutes

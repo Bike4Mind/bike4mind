@@ -242,6 +242,7 @@ describe('[strategy]/callback - signup credited to the source product', () => {
       method: 'github',
     });
     expect(res._getRedirectUrl()).toMatch(/isNewUser=1/);
+    expect(res._getRedirectUrl()).toContain('firstSignupSession=1');
   });
 
   it("persists a new account's acquisition with the provider as the signup method", async () => {
@@ -260,6 +261,7 @@ describe('[strategy]/callback - signup credited to the source product', () => {
 
     expect(mockEmitSignup).not.toHaveBeenCalled();
     expect(res._getRedirectUrl()).not.toMatch(/isNewUser=1/);
+    expect(res._getRedirectUrl()).toContain('firstSignupSession=1');
   });
 
   it('sends nothing for a returning user', async () => {
@@ -281,6 +283,7 @@ describe('[strategy]/callback - signup credited to the source product', () => {
 
     expect(mockEmitSignup).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u-new', method: 'github' }));
     expect(res._getRedirectUrl()).toMatch(/isNewUser=1/);
+    expect(res._getRedirectUrl()).toContain('firstSignupSession=1');
   });
 
   // The account exists once verifyCallback returns, and a retry sees isNewUser false, so a
@@ -422,6 +425,7 @@ describe('[strategy]/callback - second factor gate', () => {
     const redirectUrl = res._getRedirectUrl();
     expect(redirectUrl).toContain('#mfaToken=pending-tok&userId=u-new&mfa=setup');
     expect(redirectUrl).toContain('isNewUser=1&signupMethod=github');
+    expect(redirectUrl).toContain('firstSignupSession=1');
     expect(mockIssueBrowserSession).not.toHaveBeenCalled();
     expect(mockLogSignInSuccess).not.toHaveBeenCalled();
   });

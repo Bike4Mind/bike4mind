@@ -1,3 +1,4 @@
+import { markFirstSignupSession } from '@client/app/utils/firstSignupSession';
 import { useEffect, useRef } from 'react';
 import { useNavigate, useRouter, useSearch } from '@tanstack/react-router';
 import { CircularProgress, Container, Typography, Box } from '@mui/joy';
@@ -23,10 +24,12 @@ const AuthSuccessPage = () => {
   const redirectTo = (search as { redirectTo?: string }).redirectTo;
   // Set when an SSO signup arrives still owing a second factor: the conversion fires once
   // the session exists, as it does for a direct sign-in.
+  const pendingFirstSignupSession = useRef(false);
   const pendingSignupMethod = useRef<string | null>(null);
   const mfaChallenge = useMfaChallenge({
     allowRememberDevice: publicConfig?.allowTrustedDevices ?? false,
     onComplete: ({ user }) => {
+      if (pendingFirstSignupSession.current) markFirstSignupSession(user.id);
       setCurrentUser(user);
       if (pendingSignupMethod.current) trackSignupConversion(pendingSignupMethod.current);
       applyRedirect(router.history, redirectTo);
@@ -54,7 +57,9 @@ const AuthSuccessPage = () => {
     hasProcessed.current = true;
 
     const handleAuthSuccess = async () => {
-      const { token, error, userId, isNewUser, signupMethod, mfa } = parseAuthParams(search as Record<string, unknown>);
+      const { token, error, userId, isNewUser, firstSignupSession, signupMethod, mfa } = parseAuthParams(
+        search as Record<string, unknown>
+      );
 
       if (error) {
         console.error('Authentication error:', error);
@@ -71,6 +76,7 @@ const AuthSuccessPage = () => {
           applyRedirect(router.history, redirectTo);
           return;
         }
+        pendingFirstSignupSession.current = !!(firstSignupSession || isNewUser);
         if (isNewUser) pendingSignupMethod.current = signupMethod || 'oauth';
         await mfaChallenge.begin({
           userId,
@@ -108,6 +114,7 @@ const AuthSuccessPage = () => {
 
           if (response.ok) {
             const userData = await response.json();
+            if (firstSignupSession || isNewUser) markFirstSignupSession(userId);
             setCurrentUser(userData);
 
             // Fire the signup ad conversion for brand-new OAuth accounts.
