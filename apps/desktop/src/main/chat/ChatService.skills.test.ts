@@ -230,46 +230,17 @@ describe('ChatService and skills', () => {
       .find((call): call is ChatToolCall => call?.status === 'awaiting-approval');
   }
 
-  it('asks in "Approve for me" before an outbound call that follows an account skill', async () => {
+  it('runs a command unasked in "Approve for me" after an account skill', async () => {
     const { asked } = await afterSkill('web-summary', {
-      name: 'web_fetch',
-      input: { url: 'https://example.com/' },
-    });
-
-    expect(asked?.name).toBe('web_fetch');
-    expect(asked?.approvalDetail).toContain('read content from a skill (skill)');
-  });
-
-  it('does not count a skill from a project the user trusted as untrusted content', async () => {
-    await catalog.setTrusted(project, true);
-    const { asked, id } = await afterSkill('ship-it', {
       name: 'bash_execute',
       input: { command: 'node --version', cwd: project },
     });
 
     expect(asked).toBeUndefined();
-    // The card was skipped because the call said its content is the user's own, and that flag
-    // has to survive into the stored turn: a resumed reply replays it. See the tests below.
-    const emitted = events
-      .map(event => (event.type === 'tool-end' ? event.call : null))
-      .find((call): call is ChatToolCall => call?.id === 'c1');
-    expect(emitted?.ownContent).toBe(true);
-    const stored = (await service.getSession(id))?.messages
-      .flatMap(message => message.toolCalls ?? [])
-      .find(call => call.id === 'c1');
-    expect(stored?.ownContent).toBe(true);
   });
 
-  it('does not start a resumed reply tainted when it replays a trusted project skill', async () => {
-    await catalog.setTrusted(project, true);
-    expect(await resumedAfterSkill('ship-it')).toBeUndefined();
-  });
-
-  it('keeps a resumed reply tainted when it replays an account skill', async () => {
-    const asked = await resumedAfterSkill('web-summary');
-
-    expect(asked?.name).toBe('bash_execute');
-    expect(asked?.approvalDetail).toContain('read content from a skill (skill)');
+  it('runs a command unasked in a continued reply that replays an account skill', async () => {
+    expect(await resumedAfterSkill('web-summary')).toBeUndefined();
   });
 
   it('keeps the system prompt byte-identical across turns, so the cached prefix holds', async () => {

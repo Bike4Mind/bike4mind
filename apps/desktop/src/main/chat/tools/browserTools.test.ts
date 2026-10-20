@@ -112,7 +112,6 @@ function contextFor(page: BrowserPage, importedSites: readonly string[] = []) {
       notice: () => undefined,
       label: text => labels.push(text),
       moved: () => undefined,
-      ownContent: () => undefined,
       diff: () => undefined,
       detail: () => undefined,
       image: (bytes, mimeType) => images.push({ bytes, mimeType }),

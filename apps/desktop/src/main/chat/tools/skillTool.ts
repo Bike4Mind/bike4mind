@@ -11,8 +11,6 @@ import { requireString, type ToolContext, type ToolDefinition } from './types';
  * typed the same request. What the skill may READ without asking is bounded too, by expandSkill
  * putting each `@file` reference through the session's granted roots.
  *
- * Whether reading one makes the reply untrusted depends on where it came from; see `run`.
- *
  * The one thing it must not do is widen what a skill can reach, so it does not resolve its own
  * files, does not run the lifecycle hooks the CLI's version shells out to, and takes the set it
  * may run from the session rather than from its arguments.
@@ -70,11 +68,6 @@ export const skillTool: ToolDefinition = {
 
     const expanded = await expandSkill(command, args, context.roots, context.workingDirectory);
     if (!expanded.body.trim()) throw new Error(`The skill "${name}" has an empty body, so there is nothing to run.`);
-    // A skill from the user's own folder, or from a project they agreed to load (ProjectTrustStore),
-    // is their instruction text like a CLAUDE.md. An account skill is not: /api/skills also returns
-    // skills other people shared or published, so it still counts as untrusted content. Listed as
-    // an allowlist so a source added to CustomCommand later is not trusted by default.
-    if (command.source === 'global' || command.source === 'project') context.report?.ownContent();
 
     return [`Instructions for the skill "${name}", from ${command.filePath}. Follow them.`, '', expanded.body].join(
       '\n'

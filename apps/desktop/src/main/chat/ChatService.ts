@@ -134,8 +134,7 @@ import { webContextFor } from './tools/webTools';
 import { DoomLoopTracker } from './tools/doomLoop';
 import { WEB_SEARCH_TURN_BUDGET, WebSearchLimiter } from './tools/webSearchLimits';
 import { INTERRUPTED_MESSAGE, STOPPED_BEFORE_CHANGE, untilStopped } from './tools/interruptible';
-import { spendsCredits, readsUntrusted, sendsOut } from './tools/riskAssessment';
-import { MCP_TOOL_PREFIX } from './mcp/names';
+import { spendsCredits } from './tools/riskAssessment';
 import {
   capOutput,
   outputCapFor,
@@ -2015,14 +2014,7 @@ export class ChatService {
           mcpServers: !!this.deps.mcp,
         });
       let tools = toolsFor(roots);
-      // A resumed reply replays the interrupted turn's tool results to the model, so untrusted
-      // text it had already read is still in front of it: it starts out as tainted as the turn
-      // it carries on.
-      const directoryTurn: DirectoryTurn = {
-        declined: [],
-        granted: [],
-        ...(resume ? resumedUntrusted(resume.toolCalls) : {}),
-      };
+      const directoryTurn: DirectoryTurn = { declined: [], granted: [] };
       const project = session.mode === 'code' ? session.project : undefined;
       // Started before the wire messages are built so the instruction files are read alongside
       // them rather than adding a hop of their own; every later turn takes it from the cache.
@@ -2687,7 +2679,6 @@ export class ChatService {
         const diffs: ChatDiff[] = [];
         let detail: ChatToolDetail | undefined;
         let moved = false;
-        let ownContent = false;
         // Set once the turn has stopped waiting on this call. Its work may still be running, and
         // nothing it reports from then on may reach the renderer or the next request.
         let abandoned = false;
@@ -2718,9 +2709,6 @@ export class ChatService {
           moved: () => {
             moved = true;
           },
-          ownContent: () => {
-            ownContent = true;
-          },
         };
         let startedAt = Date.now();
         const decorate = (settled: ChatToolCall): ChatToolCall => ({
@@ -2731,7 +2719,6 @@ export class ChatService {
           ...(attachments.length > 0 ? { media: attachments } : {}),
           ...(notice ? { notice } : {}),
           ...(label ? { label } : {}),
-          ...(ownContent ? { ownContent: true as const } : {}),
           // The one channel above that is NOT kept on a call that failed. A write tool only
           // reports a diff once the bytes are down, so there is nothing to drop here in
           // practice - the condition is what makes that a property of this loop rather than
@@ -2814,18 +2801,6 @@ export class ChatService {
           });
         }
 
-        // A failed call is not a quiet one: an MCP server puts its error in the result body, and
-        // `toolResultContent` sends that text to the model like any other, so only a call the
-        // turn stopped waiting on - whose result is dropped - leaves the reply untainted.
-        if (
-          !abandoned &&
-          scope.directories &&
-          !scope.directories.untrusted &&
-          !settled.ownContent &&
-          readsUntrusted(request.name)
-        ) {
-          scope.directories.untrusted = request.name;
-        }
         this.emit({ type: 'tool-end', sessionId, messageId, call: settled });
         return settled;
       })
@@ -3597,16 +3572,11 @@ export class ChatService {
     // The same call a third time in a row is asked about in 'auto' whatever was allowed before:
     // the model is more likely stuck than making progress, and this is the point to find out.
     const stuck = looping && mode === 'auto';
-    // Once this reply has read web, MCP or account-skill content, an injected instruction may be
-    // steering it, so a call that can send data out is asked whatever "always" was answered
-    // before - unless the shell scan proved the command has nowhere to send it.
-    const tainted = mode === 'auto' && sendsOut(call.name) && !prompt.contained ? directories.untrusted : undefined;
-    if (tainted) prompt = { ...prompt, detail: `${prompt.detail}\n\n${untrustedReason(tainted)}` };
 
     // An irreversible tool is asked every time, whatever was answered before: the standing set
     // is keyed on what a call WOULD do, and for something with no undo that is not a good
     // enough reason to skip asking. The gate refuses to record one for these either.
-    if (!prompt.irreversible && !stuck && !tainted) {
+    if (!prompt.irreversible && !stuck) {
       const standing = gate.isStanding(
         sessionId,
         prompt.key,
@@ -3631,7 +3601,7 @@ export class ChatService {
     // every granted root - is still refused rather than waved through by a loose mode. A mode
     // loose enough to skip the question takes the card's primary action, which is the one the
     // user would have been shown pre-selected.
-    if (this.autoApproves(mode, sessionId, call, prompt, stuck || !!tainted)) {
+    if (this.autoApproves(mode, sessionId, call, prompt, stuck)) {
       return { input: applyOption(call.input, runnable[0]) };
     }
 
@@ -3963,10 +3933,8 @@ export class ChatService {
    * their cookies on a site they happen to have open.
    *
    * 'auto' follows opencode: everything runs except a call that names a reason to stop - a
-   * repeat of the last two calls, a read of a `.env` file, a script that does not parse, a
-   * command that can send data out, an outbound call after the reply read untrusted content
-   * (see DirectoryTurn.untrusted) unless it is a contained shell command, or a path outside the
-   * project the user has not allowed.
+   * repeat of the last two calls, a read of a `.env` file, a script that does not parse, or a
+   * path outside the project that the user has not already allowed.
    */
   private autoApproves(
     mode: ChatApprovalMode,
@@ -4875,33 +4843,6 @@ interface DirectoryTurn {
   declined: string[];
   /** Folders this round's cards granted; their own results already told the model. */
   granted: string[];
-  /**
-   * The first tool this reply read untrusted content from. Outbound calls after it ask in 'auto'.
-   * Reply-scoped so one web search does not turn the rest of the conversation into 'ask'.
-   */
-  untrusted?: string;
-}
-
-/**
- * The first untrusted source a turn that ran out of budget had read. The reply that carries it
- * on gets the same content replayed, so it starts tainted; see DirectoryTurn.untrusted.
- */
-function resumedUntrusted(calls: readonly ChatToolCall[]): { untrusted?: string } {
-  const source = calls.find(call => call.status !== 'denied' && !call.ownContent && readsUntrusted(call.name));
-  return source ? { untrusted: source.name } : {};
-}
-
-function untrustedReason(tool: string): string {
-  const source = tool.startsWith('browser_')
-    ? 'a web page in the browser'
-    : tool.startsWith(MCP_TOOL_PREFIX)
-      ? 'an MCP server'
-      : tool === 'skill'
-        ? 'a skill'
-        : tool === 'session_read'
-          ? 'another conversation'
-          : 'the web';
-  return `Asked because this reply read content from ${source} (${tool}).`;
 }
 
 /** `first`, then whatever of `second` it does not already hold, in order. */

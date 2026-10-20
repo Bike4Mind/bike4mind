@@ -34,7 +34,7 @@ export const APPROVAL_MODE_OPTIONS: readonly ApprovalModeOption[] = [
     mode: 'auto',
     label: 'Approve for me',
     description:
-      'Runs everything except commands that reach outside this project or can send data out, reads of .env files and repeated calls',
+      'Runs everything except commands that reach outside this project, reads of .env files and repeated calls',
     tone: 'neutral',
   },
   {
@@ -59,11 +59,8 @@ export const APPROVAL_MODE_OPTIONS: readonly ApprovalModeOption[] = [
  */
 export const APPROVAL_MODE_FOOTNOTES: readonly string[] = [
   'Commands run as you and are not confined to the folders you have shared; file edits are. "Approve for me" asks about the paths it can see a command name, which a script can still build at run time.',
-  '"Approve for me" runs every other command and edit without asking, including builds, installs and downloads, as you.',
+  '"Approve for me" runs every other command and edit without asking, including builds, installs and network calls, as you.',
   '"Approve for me" asks before a command names a path outside your folders, before a .env file is read, and when the same call is made three times in a row.',
-  '"Approve for me" asks before a command that can send data off this computer (uploads, git push, ssh, inline scripts, GitHub writes such as gh pr comment), and before any command, web fetch, browsing a site, MCP call or message to another session once the reply has read web, browser, MCP or account skill content, or another conversation.',
-  '"Approve for me" still runs commands that only read files or read from GitHub (ls, grep, git diff, git log, gh pr view, gh api GET requests) after the reply has read such content, because they have nowhere to send it.',
-  '"Approve for me" counts a web page, an MCP result, a skill from your account or another conversation as content the reply has read. A skill from your own skills folder or from a project you trusted is not counted, and neither is what a command downloaded and printed, which is covered by the command rules above.',
   'Image, speech and music generation always ask, in every mode, because they spend credits.',
   'Deleting a conversation always asks, in every mode, because it cannot be undone.',
   'File edits into this app\'s own data folder or your credential folders such as ~/.ssh are refused in every mode. A command that names one is a path outside your folders, so "Approve for me" asks.',
