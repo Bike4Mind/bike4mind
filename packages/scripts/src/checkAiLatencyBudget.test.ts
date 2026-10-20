@@ -411,23 +411,25 @@ describe('describeStall', () => {
 });
 
 describe('ChatPage reply reader', () => {
-  const CHAT_PAGE = path.resolve(
-    path.dirname(fileURLToPath(import.meta.url)),
-    '../../../apps/client/e2e/pages/ChatPage.ts'
-  );
+  const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+  const CHAT_PAGE = path.join(REPO, 'apps/client/e2e/pages/ChatPage.ts');
+  const PROMPT_REPLIES = path.join(REPO, 'apps/client/app/components/Session/PromptReplies.tsx');
 
   it('reads replies from the body inside the root container, never the <p>-only ai-response id', () => {
     // ChatPage imports Playwright, so no vitest project can load it; the selector is pinned as
     // text. Reverting to `ai-response` brings back the list-only-reply stall above.
     const source = fs.readFileSync(CHAT_PAGE, 'utf8');
-    expect(source).not.toMatch(/getByTestId\(\s*['"`]ai-response['"`]/);
-    expect(source).not.toMatch(/locator\(\s*['"`]\[data-testid=['"]?ai-response['"]?\]/);
-    expect(source).toMatch(/ai-response-body/);
-    // Strip comment lines so a commented-out call cannot satisfy the guard.
+    // Strip comment lines: the doc comment names both ids, so it must satisfy neither half.
     const code = source
       .split('\n')
       .filter(line => !/^\s*(\/\/|\*|\/\*)/.test(line))
       .join('\n');
+    expect(code).not.toMatch(/getByTestId\(\s*['"`]ai-response['"`]/);
+    expect(code).not.toMatch(/locator\(\s*['"`]\[data-testid=['"]?ai-response['"]?\]/);
+    expect(code).toMatch(/getByTestId\(\s*['"`]ai-response-body['"`]/);
     expect(code).toMatch(/isStreamComplete\(/);
+    // The reader falls back to the whole root when the body id is absent, so renaming the test id
+    // would silently put reasoning text back into the returned string.
+    expect(fs.readFileSync(PROMPT_REPLIES, 'utf8')).toMatch(/data-testid="ai-response-body"/);
   });
 });
