@@ -273,9 +273,13 @@ export function findPullRequestUrls(text: string): PrRef[] {
  */
 const BINDING_COMMAND = /(^|[\s;&|(])(gh\s+pr\s+create|git\s+push)\b/;
 
+export function isBindingCommand(command: string): boolean {
+  return BINDING_COMMAND.test(command);
+}
+
 /** The PR a shell command's output announces, or null. The last URL wins: it is the one printed on completion. */
 export function pullRequestFromShell(command: string, output: string): PrRef | null {
-  if (!BINDING_COMMAND.test(command)) return null;
+  if (!isBindingCommand(command)) return null;
   const urls = findPullRequestUrls(output);
   return urls.length > 0 ? urls[urls.length - 1] : null;
 }

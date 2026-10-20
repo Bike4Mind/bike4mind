@@ -22,6 +22,12 @@ const MAX_TIMEOUT_MS = 300_000;
 /** Per stream. The model pays for this text on every later turn, the endpoint being stateless. */
 const MAX_STREAM_BYTES = 40_000;
 
+/**
+ * The end of a stream the cap cut off, kept apart from the result. `gh pr create` prints the PR
+ * URL last, after whatever a push hook wrote; see ToolReporter.outputTail.
+ */
+const DROPPED_TAIL_BYTES = 4_096;
+
 /** Grace between asking the process group to stop and killing it outright. */
 const SIGKILL_DELAY_MS = 3_000;
 
@@ -139,6 +145,8 @@ interface CommandOutcome {
   watchStopped: boolean;
   /** Set instead of an exit: the user moved the command to the background and it is still running. */
   movedToBackground?: BackgroundProcessInfo;
+  /** The last bytes of stdout the cap dropped, when it dropped any. */
+  stdoutTail?: string;
 }
 
 /**
@@ -150,17 +158,24 @@ class CappedOutput {
   private text = '';
   private bytes = 0;
   private dropped = 0;
+  private tail = Buffer.alloc(0);
 
   push(chunk: Buffer): void {
-    if (this.bytes >= MAX_STREAM_BYTES) {
-      this.dropped += chunk.length;
-      return;
-    }
-    const room = MAX_STREAM_BYTES - this.bytes;
+    const room = Math.max(0, MAX_STREAM_BYTES - this.bytes);
     const kept = chunk.length <= room ? chunk : chunk.subarray(0, room);
-    this.dropped += chunk.length - kept.length;
-    this.bytes += kept.length;
-    this.text += this.decoder.write(kept);
+    if (kept.length > 0) {
+      this.bytes += kept.length;
+      this.text += this.decoder.write(kept);
+    }
+    if (kept.length === chunk.length) return;
+    const lost = chunk.subarray(kept.length);
+    this.dropped += lost.length;
+    this.tail = Buffer.concat([this.tail, lost.subarray(-DROPPED_TAIL_BYTES)]).subarray(-DROPPED_TAIL_BYTES);
+  }
+
+  /** The end of what was dropped, or undefined when nothing was. Its first character may be a split one. */
+  droppedTail(): string | undefined {
+    return this.dropped > 0 ? this.tail.toString('utf8') : undefined;
   }
 
   toString(): string {
@@ -260,6 +275,7 @@ function runCommand(
     };
     const onClose = (code: number | null, closeSignal: NodeJS.Signals | null) => {
       finish();
+      const stdoutTail = stdout.droppedTail();
       resolve({
         stdout: stdout.toString(),
         stderr: stderr.toString(),
@@ -267,6 +283,7 @@ function runCommand(
         signal: closeSignal,
         timedOut,
         watchStopped,
+        ...(stdoutTail ? { stdoutTail } : {}),
       });
     };
 
@@ -573,6 +590,7 @@ export const bashExecute: ToolDefinition = {
         context.report?.moved();
         return formatMoved(command, cwd, outcome.movedToBackground);
       }
+      if (outcome.stdoutTail) context.report?.outputTail?.(outcome.stdoutTail);
       return capOutputMiddle(formatOutcome(command, cwd, timeoutMs, outcome));
     } finally {
       // The background registry owns the launch once it has the child, and runs this cleanup

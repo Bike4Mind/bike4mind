@@ -6,7 +6,7 @@ import type { ChatMoveToBackgroundResult } from '@shared/chat';
 import { BackgroundProcessRegistry } from './BackgroundProcessRegistry';
 import { ForegroundCommandRegistry } from './ForegroundCommandRegistry';
 import { bashExecute, bashExecuteRunOptions, doubleWrapRefusal } from './shellTools';
-import type { ToolContext } from './types';
+import type { ToolContext, ToolReporter } from './types';
 import { resolveUserPath } from './userPath';
 
 vi.mock('./userPath', () => ({ resolveUserPath: vi.fn(async () => process.env.PATH ?? '') }));
@@ -29,6 +29,29 @@ describe('bash_execute', () => {
     const result = await bashExecute.run({ command: 'echo hello from the shell' }, context);
     expect(result).toContain('hello from the shell');
     expect(result).toContain('[exit 0]');
+  });
+
+  it('hands the end of an overflowing stdout to the reporter, and keeps it out of the result', async () => {
+    const url = 'https://github.com/example-org/widgets/pull/611';
+    const outputTail = vi.fn();
+    const report = { outputTail } as unknown as ToolReporter;
+    const result = await bashExecute.run(
+      // The number is computed so the echoed command line does not carry the URL itself.
+      { command: `head -c 150000 /dev/zero | tr '\\0' x; echo; echo ${url.replace('611', '$((600 + 11))')}` },
+      { ...context, report }
+    );
+    expect(result).toContain('[truncated:');
+    expect(result).not.toContain(url);
+    expect(outputTail).toHaveBeenCalledOnce();
+    const tail = outputTail.mock.calls[0][0] as string;
+    expect(tail.trimEnd().endsWith(url)).toBe(true);
+    expect(tail.length).toBeLessThanOrEqual(4_096);
+  });
+
+  it('reports no tail when stdout fits', async () => {
+    const outputTail = vi.fn();
+    await bashExecute.run({ command: 'echo short' }, { ...context, report: { outputTail } as unknown as ToolReporter });
+    expect(outputTail).not.toHaveBeenCalled();
   });
 
   it('reports a non-zero exit with the stderr rather than throwing', async () => {

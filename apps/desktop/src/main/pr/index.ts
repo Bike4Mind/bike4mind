@@ -36,8 +36,9 @@ export function registerPullRequests(options: RegisterPullRequestsOptions): PrMo
         const session = await store.get(sessionId);
         const project = session?.mode === 'code' ? session.project : undefined;
         if (!project) return null;
-        const branch = project.workspaceBranch ?? (await currentBranch(project.workingDirectory).catch(() => null));
-        return { workingDirectory: project.workingDirectory, branch };
+        // Checked out first: the agent may have renamed the branch the app cut for this session.
+        const checkedOut = await currentBranch(project.workingDirectory).catch(() => null);
+        return { workingDirectory: project.workingDirectory, branch: checkedOut ?? project.workspaceBranch ?? null };
       },
       archive: async sessionId => {
         const summary = await chat().setSessionArchived(sessionId, true);

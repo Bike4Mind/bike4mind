@@ -1088,7 +1088,14 @@ export type ChatStreamEvent =
     }
   | { type: 'delta'; sessionId: string; messageId: string; text: string }
   | { type: 'tool-start'; sessionId: string; messageId: string; call: ChatToolCall }
-  | { type: 'tool-end'; sessionId: string; messageId: string; call: ChatToolCall }
+  | {
+      type: 'tool-end';
+      sessionId: string;
+      messageId: string;
+      call: ChatToolCall;
+      /** See ToolReporter.outputTail in main; absent unless a shell command's stdout overflowed. */
+      outputTail?: string;
+    }
   | { type: 'tool-progress'; sessionId: string; messageId: string; callId: string; text: string }
   /** What the model is doing in the round in flight; sent on change only. Status, never stored. */
   | { type: 'phase'; sessionId: string; messageId: string; phase: ModelPhase }

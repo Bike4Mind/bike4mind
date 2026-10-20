@@ -49,6 +49,7 @@ export function fakeGithub(initial: PrSnapshot = snapshot()) {
   let next: PrSnapshot | Error = initial;
   const calls: string[] = [];
   const batches: number[] = [];
+  const branchPrs: (string | null)[] = [];
   const github = {
     snapshot: async (_ref: PrRef, options: { threads: boolean }) => {
       calls.push(`snapshot${options.threads ? '+threads' : ''}`);
@@ -66,7 +67,7 @@ export function fakeGithub(initial: PrSnapshot = snapshot()) {
     },
     findOpenForBranch: async (_cwd: string, branch: string) => {
       calls.push(`branch:${branch}`);
-      return null as string | null;
+      return branchPrs.shift() ?? null;
     },
     enableAutoMerge: async (_ref: PrRef, method: PrMergeMethod) => {
       calls.push(`enable-auto:${method}`);
@@ -88,6 +89,10 @@ export function fakeGithub(initial: PrSnapshot = snapshot()) {
     batches,
     answer(value: PrSnapshot | Error) {
       next = value;
+    },
+    /** What the next branch lookups find, in order; null or nothing left means no PR. */
+    branchAnswers(...urls: (string | null)[]) {
+      branchPrs.push(...urls);
     },
   };
 }
@@ -136,8 +141,12 @@ export class TrackedMonitor extends PrMonitor {
     return this.track(super.publish(sessionId));
   }
 
-  protected override lookUpBranch(sessionId: string): Promise<void> {
-    return this.track(super.lookUpBranch(sessionId));
+  protected override lookUpBranch(sessionId: string, force?: boolean): Promise<void> {
+    return this.track(super.lookUpBranch(sessionId, force));
+  }
+
+  protected override lookUpAfterPush(sessionId: string, created: boolean): Promise<void> {
+    return this.track(super.lookUpAfterPush(sessionId, created));
   }
 
   protected override evaluateAutoFix(sessionId: string, snapshot: PrSnapshot): Promise<void> {

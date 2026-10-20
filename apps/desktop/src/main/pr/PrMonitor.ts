@@ -1,6 +1,7 @@
 import type { ChatAutomaticOrigin, ChatToolCall } from '@shared/chat';
 import type { AutomaticTurnResult } from '../chat/ChatService';
 import {
+  isBindingCommand,
   isFinishedState,
   parsePullRequestUrl,
   prDisplayState,
@@ -35,6 +36,9 @@ const UNOWNED_BRANCHES = new Set(['main', 'master', 'develop', 'HEAD']);
 /** How long a branch with no PR is believed to still have none. */
 const BRANCH_LOOKUP_TTL_MS = 10 * 60_000;
 
+/** `gh pr create` can return before GitHub lists the new PR under its branch. */
+const CREATE_LOOKUP_RETRY_MS = 5_000;
+
 /** gh processes allowed at once across every conversation, so opening many sessions cannot fork a crowd. */
 const MAX_CONCURRENT_GH = 2;
 
@@ -54,6 +58,8 @@ const ENQUEUE_SETTLE_MS = 60_000;
 const UNOPENED_JITTER_MS = 60_000;
 
 const PUSH_COMMAND = /(^|[\s;&|(])git\s+push\b/;
+const CREATE_COMMAND = /(^|[\s;&|(])gh\s+pr\s+create\b/;
+const BRANCH_CHANGE_COMMAND = /(^|[\s;&|(])git\s+(switch|checkout|branch\s+(-[mM]|--move))\b/;
 
 export interface PrTimers {
   set(callback: () => void, ms: number): unknown;
@@ -240,17 +246,34 @@ export class PrMonitor {
 
   /**
    * A tool finished somewhere. Only a shell command that created a PR or pushed a branch with
-   * one can bind; see pullRequestFromShell.
+   * one can bind; see pullRequestFromShell. `outputTail` is the end of stdout the shell tool cut
+   * from the preview, where `gh pr create` prints its URL.
    */
-  observeToolEnd(sessionId: string, call: ChatToolCall): void {
+  observeToolEnd(sessionId: string, call: ChatToolCall, outputTail?: string): void {
     if (!SHELL_TOOLS.has(call.name) || call.status !== 'done') return;
     const command = typeof call.input.command === 'string' ? call.input.command : '';
-    const ref = pullRequestFromShell(command, call.preview ?? '');
+    if (BRANCH_CHANGE_COMMAND.test(command)) this.branchLookups.delete(sessionId);
+    const output = outputTail ? `${call.preview ?? ''}\n${outputTail}` : (call.preview ?? '');
+    const ref = pullRequestFromShell(command, output);
     if (ref) {
       void this.bind(sessionId, ref, 'shell').catch(err => this.deps.logger.warn(`PR: bind failed: ${err}`));
       return;
     }
     if (PUSH_COMMAND.test(command) && this.live.has(sessionId)) this.nudge(sessionId, AFTER_PUSH_MS);
+    if (isBindingCommand(command)) void this.lookUpAfterPush(sessionId, CREATE_COMMAND.test(command));
+  }
+
+  /**
+   * A push or create printed no PR URL we could see; ask GitHub for the branch's PR now rather
+   * than waiting for the conversation to be reopened past the lookup TTL.
+   */
+  protected async lookUpAfterPush(sessionId: string, created: boolean): Promise<void> {
+    if (await this.deps.store.get(sessionId)) return;
+    await this.lookUpBranch(sessionId, true);
+    if (!created || this.disposed || (await this.deps.store.get(sessionId))) return;
+    this.timers.set(() => {
+      if (!this.disposed) void this.lookUpAfterPush(sessionId, false);
+    }, CREATE_LOOKUP_RETRY_MS);
   }
 
   /** The user pasted a URL. Always replaces what was there, unless auto-merge is armed on it. */
@@ -608,11 +631,12 @@ export class PrMonitor {
 
   /**
    * Binding (b): the Code session's branch already has an open PR. Asked once per conversation
-   * per launch (and again after a quiet spell), only when it is opened, never at startup.
+   * per launch (and again after a quiet spell, or once its branch changes), when it is opened or
+   * right after a push or create, never at startup. `force` skips the quiet spell.
    */
-  protected async lookUpBranch(sessionId: string): Promise<void> {
+  protected async lookUpBranch(sessionId: string, force = false): Promise<void> {
     const last = this.branchLookups.get(sessionId);
-    if (last !== undefined && this.now() - last < BRANCH_LOOKUP_TTL_MS) return;
+    if (!force && last !== undefined && this.now() - last < BRANCH_LOOKUP_TTL_MS) return;
     if (this.gh !== 'ok') return;
     this.branchLookups.set(sessionId, this.now());
     const project = await this.deps.chat.project(sessionId).catch(() => null);

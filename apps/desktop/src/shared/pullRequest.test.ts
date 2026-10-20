@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ciSummary,
   findPullRequestUrls,
+  isBindingCommand,
   parsePullRequestUrl,
   pullRequestFromShell,
   samePullRequest,
@@ -34,6 +35,15 @@ const LATER_PUSH_OUTPUT = [
   'To https://github.com/example-org/widgets.git',
   '   1a2b3c4..5d6e7f8  feat/widget-ladder -> feat/widget-ladder',
 ].join('\n');
+
+describe('isBindingCommand', () => {
+  it('matches a push or a create anywhere in a chain, and nothing that only reads a PR', () => {
+    expect(isBindingCommand('git push -u origin feat/x && gh pr create --fill')).toBe(true);
+    expect(isBindingCommand('cd repo; git push')).toBe(true);
+    expect(isBindingCommand('gh pr view 611')).toBe(false);
+    expect(isBindingCommand('echo git-pushed')).toBe(false);
+  });
+});
 
 describe('pullRequestFromShell', () => {
   it('reads the URL gh pr create prints', () => {

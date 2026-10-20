@@ -131,6 +131,12 @@ export interface ToolReporter {
    */
   moved(): void;
   /**
+   * The end of a shell command's stdout that the stream cap dropped from the result. Bounded, and
+   * never stored or sent to the model: it rides the tool-end event so PR detection can see a URL
+   * printed after a long push. See PrMonitor.observeToolEnd.
+   */
+  outputTail?(text: string): void;
+  /**
    * This call's result is text the user wrote or chose to load - a skill from their own folder or
    * from a project they trusted - so reading it does not make the reply untrusted. See
    * ChatToolCall.ownContent.

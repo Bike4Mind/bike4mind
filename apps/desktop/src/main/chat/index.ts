@@ -330,7 +330,7 @@ export function registerChat(
   });
   const broadcast = (event: ChatStreamEvent) => {
     send(IPC_CHANNELS.chatStreamEvent, event);
-    if (event.type === 'tool-end') pullRequests.observeToolEnd(event.sessionId, event.call);
+    if (event.type === 'tool-end') pullRequests.observeToolEnd(event.sessionId, event.call, event.outputTail);
   };
 
   const videoJobs = new VideoJobScheduler({

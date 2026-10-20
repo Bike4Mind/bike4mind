@@ -2693,6 +2693,7 @@ export class ChatService {
         let detail: ChatToolDetail | undefined;
         let moved = false;
         let ownContent = false;
+        let outputTail: string | undefined;
         // Set once the turn has stopped waiting on this call. Its work may still be running, and
         // nothing it reports from then on may reach the renderer or the next request.
         let abandoned = false;
@@ -2722,6 +2723,9 @@ export class ChatService {
           },
           moved: () => {
             moved = true;
+          },
+          outputTail: text => {
+            outputTail = text;
           },
           ownContent: () => {
             ownContent = true;
@@ -2831,7 +2835,13 @@ export class ChatService {
         ) {
           scope.directories.untrusted = request.name;
         }
-        this.emit({ type: 'tool-end', sessionId, messageId, call: settled });
+        this.emit({
+          type: 'tool-end',
+          sessionId,
+          messageId,
+          call: settled,
+          ...(outputTail && !abandoned ? { outputTail } : {}),
+        });
         return settled;
       })
     );
