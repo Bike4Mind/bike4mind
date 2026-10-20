@@ -417,13 +417,17 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
     expect(mockEmitSignup).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1', method: 'otc' }));
   });
 
-  it('reports no credits_granted when the signup seeded none', async () => {
+  it('reports credits_granted with zero when the signup seeded none', async () => {
     mockRegisterViaOTC.mockResolvedValue({ id: 'user-1', tokenVersion: 0, currentCredits: 0 });
     const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
 
     await handler(req, res);
 
-    expect(mockEmitFunnelEvent.mock.calls.map(([c]) => c.event)).toEqual(['email_verified']);
+    expect(mockEmitFunnelEvent.mock.calls.map(([c]) => [c.event, c.metadata])).toEqual([
+      ['email_verified', { method: 'otc' }],
+      ['credits_granted', { amount: 0, source: 'signup', method: 'otc' }],
+      ['signup_completed', { method: 'otc' }],
+    ]);
   });
 
   // The account exists once registerViaOTC returns and a retry is a login, not a signup, so an

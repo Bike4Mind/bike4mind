@@ -20,6 +20,7 @@ import { pseudonymize } from './pseudonymize';
 import { stableEventId } from './signupEvents';
 import {
   emitFunnelEvent,
+  emitSignupFunnelEvents,
   isSyntheticIdentity,
   parseDomainList,
   recordFirstChatValue,
@@ -166,6 +167,24 @@ describe('emitFunnelEvent', () => {
   it('never throws when the emitter rejects', async () => {
     mockEmit.mockRejectedValue(new Error('network'));
     await expect(emitFunnelEvent({ user: { id: 'u1' }, event: 'email_verified' })).resolves.toBe(true);
+  });
+});
+
+describe('emitSignupFunnelEvents', () => {
+  it('emits the verified, zero-credit and completed stages with one method', async () => {
+    await emitSignupFunnelEvents({ user: { id: 'u1' }, method: 'github', emailVerified: true, creditsGranted: 0 });
+
+    expect(mockEmit.mock.calls.map(([event]) => [event.event, event.metadata])).toEqual([
+      ['email_verified', { method: 'github' }],
+      ['credits_granted', { amount: 0, source: 'signup', method: 'github' }],
+      ['signup_completed', { method: 'github' }],
+    ]);
+  });
+
+  it('omits only email_verified when the provider did not verify the email', async () => {
+    await emitSignupFunnelEvents({ user: { id: 'u1' }, method: 'github', emailVerified: false, creditsGranted: 0 });
+
+    expect(mockEmit.mock.calls.map(([event]) => event.event)).toEqual(['credits_granted', 'signup_completed']);
   });
 });
 

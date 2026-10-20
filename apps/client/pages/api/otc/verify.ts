@@ -210,6 +210,12 @@ const handler = baseApi({ auth: false })
           }
           if (grants.currentCredits !== null) existingUser.currentCredits = grants.currentCredits;
           if (grants.joinedOrganizationId) existingUser.organizationId = grants.joinedOrganizationId;
+          await emitFunnelEvent({ user: existingUser, event: 'email_verified', metadata: { method: 'otc' } });
+          await emitFunnelEvent({
+            user: existingUser,
+            event: 'credits_granted',
+            metadata: { amount: grants.creditsGranted, source: 'signup', method: 'otc' },
+          });
         } catch (err) {
           req.logger.error('OTC login emailVerified update failed', err);
         }
@@ -440,13 +446,12 @@ const handler = baseApi({ auth: false })
     }
     const funnelUser = { id: newUser.id, ...signupFunnel };
     await emitFunnelEvent({ user: funnelUser, event: 'email_verified', metadata: { method: 'otc' } });
-    if ((newUser.currentCredits ?? 0) > 0) {
-      await emitFunnelEvent({
-        user: funnelUser,
-        event: 'credits_granted',
-        metadata: { amount: newUser.currentCredits, source: 'signup', method: 'otc' },
-      });
-    }
+    await emitFunnelEvent({
+      user: funnelUser,
+      event: 'credits_granted',
+      metadata: { amount: newUser.currentCredits ?? 0, source: 'signup', method: 'otc' },
+    });
+    await emitFunnelEvent({ user: funnelUser, event: 'signup_completed', metadata: { method: 'otc' } });
 
     const registrationSession = await authSessionService.issueSession(
       newUser.id,

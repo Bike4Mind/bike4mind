@@ -100,7 +100,7 @@ function signedUpAfterLaunch(createdAt: Date | string | null | undefined): boole
   return Number.isFinite(ms) && ms >= FIRST_VALUE_LAUNCH_AT.getTime();
 }
 
-export type FunnelEvent = 'credits_granted' | 'email_verified' | 'first_value';
+export type FunnelEvent = 'credits_granted' | 'email_verified' | 'first_value' | 'signup_completed';
 
 /**
  * One once-per-user funnel stage to Overwatch under the host product. The eventId is keyed on the
@@ -125,6 +125,24 @@ export async function emitFunnelEvent(opts: {
     ...(opts.metadata && { metadata: opts.metadata }),
   }).catch(() => {});
   return true;
+}
+
+export async function emitSignupFunnelEvents(opts: {
+  user: FunnelUser;
+  method: string;
+  emailVerified: boolean;
+  creditsGranted: number;
+}): Promise<void> {
+  const metadata = { method: opts.method };
+  if (opts.emailVerified) {
+    await emitFunnelEvent({ user: opts.user, event: 'email_verified', metadata });
+  }
+  await emitFunnelEvent({
+    user: opts.user,
+    event: 'credits_granted',
+    metadata: { amount: opts.creditsGranted, source: 'signup', ...metadata },
+  });
+  await emitFunnelEvent({ user: opts.user, event: 'signup_completed', metadata });
 }
 
 /**

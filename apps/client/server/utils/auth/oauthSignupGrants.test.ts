@@ -18,7 +18,10 @@ describe('applyOAuthSignupDomainGrant', () => {
   });
 
   it('runs the shared domain grant with the oauth-signup trigger', async () => {
-    await applyOAuthSignupDomainGrant('user-1', 'dee@partner.example');
+    const grant = { creditsGranted: 25, subscriptionCreditsGranted: 10 };
+    mockApplySignupDomainGrant.mockResolvedValue(grant);
+
+    await expect(applyOAuthSignupDomainGrant('user-1', 'dee@partner.example')).resolves.toBe(grant);
 
     expect(mockApplySignupDomainGrant).toHaveBeenCalledWith(
       expect.objectContaining({ userId: 'user-1', email: 'dee@partner.example', trigger: 'oauth-signup' })
@@ -28,7 +31,10 @@ describe('applyOAuthSignupDomainGrant', () => {
   it('logs with the user id and never throws', async () => {
     mockApplySignupDomainGrant.mockRejectedValue(new Error('boom'));
 
-    await expect(applyOAuthSignupDomainGrant('user-1', 'dee@partner.example')).resolves.toBeUndefined();
+    await expect(applyOAuthSignupDomainGrant('user-1', 'dee@partner.example')).resolves.toMatchObject({
+      creditsGranted: 0,
+      subscriptionCreditsGranted: 0,
+    });
     expect(mockLoggerError).toHaveBeenCalledWith(expect.stringContaining('user-1'), expect.any(Error));
   });
 });

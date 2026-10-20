@@ -300,13 +300,16 @@ describe('/api/email/verify - funnel events', () => {
     expect(mockEmitFunnelEvent.mock.calls[0][0].user).toEqual(expect.objectContaining({ id: 'user-1' }));
   });
 
-  it('reports no credits_granted when nothing was granted', async () => {
+  it('reports credits_granted with zero when nothing was granted', async () => {
     mockUser({ email: NON_DOMAIN_EMAIL, tags: [] });
     const { req, res } = makeReqRes();
 
     await handler(req, res);
 
-    expect(funnelEvents()).toEqual([['email_verified', { method: 'link' }]]);
+    expect(funnelEvents()).toEqual([
+      ['email_verified', { method: 'link' }],
+      ['credits_granted', { amount: 0, source: 'signup', method: 'link' }],
+    ]);
   });
 
   it('leaves a failed grant out of the credits_granted amount', async () => {
@@ -317,7 +320,10 @@ describe('/api/email/verify - funnel events', () => {
     await handler(req, res);
 
     expect(res._getStatusCode()).toBe(200);
-    expect(funnelEvents()).toEqual([['email_verified', { method: 'link' }]]);
+    expect(funnelEvents()).toEqual([
+      ['email_verified', { method: 'link' }],
+      ['credits_granted', { amount: 0, source: 'signup', method: 'link' }],
+    ]);
   });
 
   it('reports nothing when the token does not verify', async () => {

@@ -16,6 +16,7 @@ import { EmailEvents } from '@server/utils/eventBus';
 import { getLogoUrl, buildEmailLogoImg, escapeHtml } from '@server/utils/mailer/emailHelpers';
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
+import { emitSignupFunnelEvents } from '@server/analytics/funnel';
 
 const userImportSchema = z.object({
   email: z.email('Invalid email format'),
@@ -85,6 +86,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
               },
             }
           );
+
+          await emitSignupFunnelEvents({
+            user: newUser,
+            method: 'admin',
+            emailVerified: newUser.emailVerified === true,
+            creditsGranted: newUser.currentCredits ?? validatedData.startingCredits ?? 0,
+          });
 
           // Apply storage limit if provided (createUser hardcodes storageLimit: 1000, so we override after)
           if (validatedData.startingStorage !== undefined) {

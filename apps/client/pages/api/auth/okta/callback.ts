@@ -49,6 +49,7 @@ import { isLocalAppUrl } from '@server/utils/validators';
 import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
 import { stampOAuthSourceTag } from '@server/utils/auth/oauthSourceTag';
 import { getClientIp } from '@server/utils/ip';
+import { emitSignupFunnelEvents, recordSignupAcquisition } from '@server/analytics/funnel';
 
 /**
  * Type guard to validate query parameter is a non-empty string.
@@ -313,6 +314,8 @@ const handleOktaCallback = async (req: Request, res: Response) => {
     // Tracks whether this callback links Okta to an existing account for the
     // first time (vs. a routine re-login on an already-linked provider).
     let isNewProviderLink = false;
+    let isNewUser = false;
+    let signupCreditsGranted = 0;
     if (user) {
       // Update existing user's OAuth credentials
       const authProviders: IAuthProviders[] = user.authProviders || [];
@@ -466,9 +469,13 @@ const handleOktaCallback = async (req: Request, res: Response) => {
       const emailForNewAccount = userInfo.email_verified === true ? email : null;
       const baseUsername = deriveOAuthUsername(username ?? null, name, emailForNewAccount);
       user = await createUniqueOAuthUser({ name, baseUsername, email: emailForNewAccount, oauthCredentials });
+      isNewUser = true;
       Logger.debug('[Okta Callback] Created new user:', user.id);
       // Never reaches /api/email/verify, so the verified domain's grant runs here (no flat grant for Okta).
-      if (emailForNewAccount) await applyOAuthSignupDomainGrant(user.id, emailForNewAccount);
+      if (emailForNewAccount) {
+        const domainGrant = await applyOAuthSignupDomainGrant(user.id, emailForNewAccount);
+        signupCreditsGranted = domainGrant.creditsGranted + domainGrant.subscriptionCreditsGranted;
+      }
       await stampOAuthSourceTag(user.id, stateResult.payload.clientId);
     }
 
@@ -478,6 +485,16 @@ const handleOktaCallback = async (req: Request, res: Response) => {
     // paths consistent and guards against a future query adding +password. Never
     // persisted: nothing below calls user.save() (writes go via User.updateOne).
     user.password = null;
+
+    if (isNewUser) {
+      const signupFunnel = await recordSignupAcquisition({ req, user, method: AuthStrategy.Okta });
+      await emitSignupFunnelEvents({
+        user: { id: user.id, ...signupFunnel },
+        method: AuthStrategy.Okta,
+        emailVerified: userInfo.email_verified === true,
+        creditsGranted: signupCreditsGranted,
+      });
+    }
 
     // Check if user is banned
     if (user.isBanned) {

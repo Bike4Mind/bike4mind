@@ -105,11 +105,17 @@ vi.mock('@bike4mind/observability', async importOriginal => {
 // Signup/link grants are unit-tested in emailVerifiedGrants.test.ts; assert the callback's wiring here.
 const mockApplyOAuthSignupDomainGrant = vi.fn();
 const mockApplyEmailVerifiedGrants = vi.fn();
+const mockRecordSignupAcquisition = vi.fn().mockResolvedValue({ isSynthetic: false });
+const mockEmitSignupFunnelEvents = vi.fn().mockResolvedValue(undefined);
 vi.mock('@server/utils/auth/oauthSignupGrants', () => ({
   applyOAuthSignupDomainGrant: (...a: unknown[]) => mockApplyOAuthSignupDomainGrant(...a),
 }));
 vi.mock('@server/auth/emailVerifiedGrants', () => ({
   applyEmailVerifiedGrants: (...a: unknown[]) => mockApplyEmailVerifiedGrants(...a),
+}));
+vi.mock('@server/analytics/funnel', () => ({
+  recordSignupAcquisition: (...a: unknown[]) => mockRecordSignupAcquisition(...a),
+  emitSignupFunnelEvents: (...a: unknown[]) => mockEmitSignupFunnelEvents(...a),
 }));
 
 // Import after mocks are registered.
@@ -168,6 +174,7 @@ beforeEach(() => {
   });
   mockUpdateOne.mockResolvedValue({});
   mockCreate.mockResolvedValue({ id: 'new-user', _id: 'new-user', tokenVersion: 0, isBanned: false });
+  mockApplyOAuthSignupDomainGrant.mockResolvedValue({ creditsGranted: 0, subscriptionCreditsGranted: 0 });
   mockRevokeAllByUserId.mockResolvedValue(0);
   mockEndConnections.mockResolvedValue({ connectionIds: [] });
   // Default both lookup stages to "no match" so tests that drive the handler
@@ -401,6 +408,10 @@ describe('/api/auth/okta/callback - new-account email verification gate', () => 
     });
 
     expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ email: 'verified@example.com' }));
+    expect(mockEmitSignupFunnelEvents).toHaveBeenCalledTimes(1);
+    expect(mockEmitSignupFunnelEvents).toHaveBeenCalledWith(
+      expect.objectContaining({ method: 'okta', emailVerified: true, creditsGranted: 0 })
+    );
   });
 
   it('creates the account WITHOUT an email when email_verified is false', async () => {

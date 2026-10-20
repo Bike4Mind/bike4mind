@@ -111,13 +111,11 @@ const handler = baseApi({ auth: false })
 
         // Funnel floor (server/analytics/funnel.ts); both never throw.
         await emitFunnelEvent({ user: userBeforeVerify, event: 'email_verified', metadata: { method: 'link' } });
-        if (creditsGranted > 0) {
-          await emitFunnelEvent({
-            user: userBeforeVerify,
-            event: 'credits_granted',
-            metadata: { amount: creditsGranted, source: 'signup', method: 'link' },
-          });
-        }
+        await emitFunnelEvent({
+          user: userBeforeVerify,
+          event: 'credits_granted',
+          metadata: { amount: creditsGranted, source: 'signup', method: 'link' },
+        });
       }
 
       return res.json({ message: 'Email verified successfully' });

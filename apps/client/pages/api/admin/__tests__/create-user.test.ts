@@ -4,6 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mockCreateUser = vi.fn();
 const mockSendOTC = vi.fn();
 const mockStoreNonce = vi.fn();
+const mockEmitSignupFunnelEvents = vi.fn();
 
 vi.mock('@bike4mind/services', () => ({
   userService: {
@@ -49,6 +50,9 @@ vi.mock('@server/utils/mailer/emailHelpers', () => ({
 vi.mock('@server/utils/config', () => ({
   Config: { JWT_SECRET: 'test-secret' },
 }));
+vi.mock('@server/analytics/funnel', () => ({
+  emitSignupFunnelEvents: (...args: unknown[]) => mockEmitSignupFunnelEvents(...args),
+}));
 
 vi.mock('jsonwebtoken', () => ({ default: { sign: () => 'signed-token' } }));
 
@@ -76,7 +80,7 @@ describe('admin/create-user', () => {
   });
 
   it('stores password: null + hasUsablePassword: false for a passwordless shell account', async () => {
-    mockCreateUser.mockResolvedValue({ id: 'u1', email: 'shell@example.com', username: 'shell' });
+    mockCreateUser.mockResolvedValue({ id: 'u1', email: 'shell@example.com', username: 'shell', currentCredits: 0 });
 
     await runHandler(makeReq({ username: 'shell', email: 'shell@example.com', name: 'Shell User' }), makeRes());
 
@@ -86,6 +90,12 @@ describe('admin/create-user', () => {
       }),
       expect.any(Object)
     );
+    expect(mockEmitSignupFunnelEvents).toHaveBeenCalledWith({
+      user: expect.objectContaining({ id: 'u1' }),
+      method: 'admin',
+      emailVerified: false,
+      creditsGranted: 0,
+    });
   });
 
   it('stores the supplied password + hasUsablePassword: true when an admin provides one', async () => {

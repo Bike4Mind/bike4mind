@@ -10,6 +10,7 @@ import { getLogoUrl, buildEmailLogoImg } from '@server/utils/mailer/emailHelpers
 import { Config } from '@server/utils/config';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
+import { emitSignupFunnelEvents } from '@server/analytics/funnel';
 
 const createUserSchema = z.object({
   username: usernameSchema,
@@ -87,6 +88,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
           },
         }
       );
+
+      await emitSignupFunnelEvents({
+        user: newUser,
+        method: 'admin',
+        emailVerified: newUser.emailVerified === true,
+        creditsGranted: newUser.currentCredits ?? validatedData.initialCredits,
+      });
 
       // Send OTC welcome email so the new user knows how to sign in.
       // Failures are non-fatal - the user is created regardless.

@@ -17,7 +17,7 @@ import { logEvent } from '@server/utils/analyticsLog';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { readConsentedAcquisitionTouches } from '@server/analytics/acquisition';
 import { emitSignupForSourceProducts } from '@server/analytics/signupEvents';
-import { recordSignupAcquisition } from '@server/analytics/funnel';
+import { emitSignupFunnelEvents, recordSignupAcquisition } from '@server/analytics/funnel';
 import { AuthEvents } from '@bike4mind/common';
 import { resolveOAuthFailureReason, oauthFailureRedirectMessage } from '@server/utils/auth/oauthFailureReason';
 import { isLocalAppUrl } from '@server/utils/validators';
@@ -171,7 +171,19 @@ const handler = baseApi({ auth: false })
           // - a Lambda freeze after the redirect would drop it for good. The cost is bounded
           // and narrow: emitProductEvent has its own 2s timeout and per-emit catch, and a
           // signup naming no product resolves here immediately, which is most of them.
-          ({ isSynthetic: isSyntheticSignup } = await recordSignupAcquisition({ req, user, method: strategy }));
+          const signupFunnel = await recordSignupAcquisition({ req, user, method: strategy });
+          isSyntheticSignup = signupFunnel.isSynthetic;
+          const funnelUser = {
+            id: user.id,
+            acquisition: signupFunnel.acquisition,
+            isSynthetic: isSyntheticSignup,
+          };
+          await emitSignupFunnelEvents({
+            user: funnelUser,
+            method: strategy,
+            emailVerified: user.emailVerified === true,
+            creditsGranted: (user as IUserObject & { signupCreditsGranted?: number }).signupCreditsGranted ?? 0,
+          });
           if (!isSyntheticSignup) {
             await emitSignupForSourceProducts({
               userId: user.id,

@@ -5,6 +5,7 @@ const h = vi.hoisted(() => ({
   update: vi.fn(),
   createUser: vi.fn(),
   publish: vi.fn(),
+  emitSignupFunnelEvents: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -19,6 +20,9 @@ vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown)
 vi.mock('@bike4mind/database', () => ({ userRepository: { update: h.update } }));
 vi.mock('@bike4mind/services', () => ({ userService: { createUser: h.createUser } }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@server/analytics/funnel', () => ({
+  emitSignupFunnelEvents: (...args: unknown[]) => h.emitSignupFunnelEvents(...args),
+}));
 vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.publish } } }));
 vi.mock('@server/utils/mailer/emailHelpers', async importOriginal => ({
   ...(await importOriginal<typeof import('@server/utils/mailer/emailHelpers')>()),
@@ -48,6 +52,12 @@ describe('POST /api/admin/bulk-create-users', () => {
 
     expect(h.update).toHaveBeenCalledTimes(1);
     expect(h.update.mock.calls[0][0]).toStrictEqual({ id: 'new-1', storageLimit: 5000, tags: ['x', 'y'] });
+    expect(h.emitSignupFunnelEvents).toHaveBeenCalledWith({
+      user: expect.objectContaining({ id: 'new-1' }),
+      method: 'admin',
+      emailVerified: false,
+      creditsGranted: 0,
+    });
   });
 
   it('writes the created defaults, with tags undefined, when neither is given', async () => {

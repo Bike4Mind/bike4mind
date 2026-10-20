@@ -44,8 +44,10 @@ vi.mock('@server/analytics/signupEvents', () => ({
   emitSignupForSourceProducts: (...a: any[]) => mockEmitSignup(...a),
 }));
 const mockRecordSignupAcquisition = vi.fn().mockResolvedValue({ isSynthetic: false });
+const mockEmitSignupFunnelEvents = vi.fn().mockResolvedValue(undefined);
 vi.mock('@server/analytics/funnel', () => ({
   recordSignupAcquisition: (...a: any[]) => mockRecordSignupAcquisition(...a),
+  emitSignupFunnelEvents: (...a: any[]) => mockEmitSignupFunnelEvents(...a),
 }));
 
 const mockIssueBrowserSession = vi.fn().mockResolvedValue({ accessToken: 'jwt-access', sid: 'sid' });
@@ -205,6 +207,29 @@ describe('[strategy]/callback - signup credited to the source product', () => {
   // Attribution is gated server-side on a consent decision, so a touch cookie alone is not
   // enough to emit - see readConsentedAcquisitionTouches.
   const touchCookie = `${touch}; b4m-consent-decision=granted`;
+
+  it.each(['google', 'github'])('emits one complete signup funnel for %s', async strategy => {
+    const { req, res } = makeReqRes();
+    req.query.strategy = strategy;
+    let passportCallback: Promise<unknown> | undefined;
+    mockAuthenticate.mockImplementation((_strategy: string, _opts: any, cb: any) => () => {
+      passportCallback = cb(null, {
+        id: 'u-new',
+        isBanned: false,
+        isNewUser: true,
+        emailVerified: true,
+        signupCreditsGranted: 100,
+      });
+    });
+
+    await handler(req, res, vi.fn());
+    await passportCallback;
+
+    expect(mockEmitSignupFunnelEvents).toHaveBeenCalledTimes(1);
+    expect(mockEmitSignupFunnelEvents).toHaveBeenCalledWith(
+      expect.objectContaining({ method: strategy, emailVerified: true, creditsGranted: 100 })
+    );
+  });
 
   it("sends a new account's touches, read from its own cookies, with the provider as the method", async () => {
     const res = await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, {

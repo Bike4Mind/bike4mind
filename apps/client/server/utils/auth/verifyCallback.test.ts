@@ -1057,16 +1057,18 @@ describe('verifyCallback - starter credits on OAuth signup', () => {
         expect.objectContaining({ reason: 'OAuth signup (provider-verified email)' })
       );
       expect(mockUserRepositoryUpdate).toHaveBeenCalledWith({ id: 'new-id', tags: [], pendingCreditGrant: null });
+      expect((user as { signupCreditsGranted?: number }).signupCreditsGranted).toBe(100);
     }
   );
 
   it('does not tag or grant for an enterprise SSO strategy', async () => {
-    const { err } = await runStandard(AuthStrategy.SAML, verifiedProfile);
+    const { err, user } = await runStandard(AuthStrategy.SAML, verifiedProfile);
 
     expect(err).toBeNull();
     expect(mockCreate).toHaveBeenCalledTimes(1);
     expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('tags');
     expect(mockReleasePending).not.toHaveBeenCalled();
+    expect((user as { signupCreditsGranted?: number }).signupCreditsGranted).toBe(0);
   });
 
   it('does not tag or grant when the account has no email', async () => {
