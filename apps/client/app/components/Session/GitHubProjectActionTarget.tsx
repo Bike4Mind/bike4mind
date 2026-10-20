@@ -10,6 +10,13 @@ function nonEmptyString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
+/**
+ * Target details on the web MCP confirmation card for the two GitHub Projects write tools. The
+ * display_* labels are resolved by the tool itself (b4m-core/mcp/src/github/tools/projects.ts) and
+ * are never model-supplied; the id fallback covers previews persisted before those labels existed.
+ * Slack renders the same two tools from the same fields - must stay in sync with
+ * b4m-core/slack/src/confirmation/confirmation-buttons.ts.
+ */
 export function GitHubProjectActionTarget({ tool, params }: GitHubProjectActionTargetProps) {
   if (tool !== TOOL_ADD_ISSUE_TO_PROJECT && tool !== TOOL_UPDATE_PROJECT_ITEM_FIELDS) {
     return null;
