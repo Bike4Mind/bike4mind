@@ -28,7 +28,6 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     label: 'Read Notebooks',
     description: 'View notebooks and sessions',
     endpoints: [
-      'GET /api/sessions',
       'GET /api/sessions/:id',
       'GET /api/v1/quests/:id',
       'GET /api/v1/quests/:id/files',
