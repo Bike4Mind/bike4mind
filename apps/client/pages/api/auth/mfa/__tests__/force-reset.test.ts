@@ -88,6 +88,17 @@ describe('POST /api/auth/mfa/force-reset', () => {
     expect(mockRemovePasskeys).not.toHaveBeenCalled();
   });
 
+  it('denies an impersonating admin resetting the MFA of the account they impersonate from', async () => {
+    const { run } = post({ userId: 'A', reason: REASON }, { ...ADMIN, id: 'B', impersonatedBy: 'A' });
+
+    await expect(run()).rejects.toBeInstanceOf(ForbiddenError);
+    expect(mockDeny).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ action: 'user.mfa.denied', attempted: 'user.mfa.reset' })
+    );
+    expect(mockForceResetMFA).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['missing', undefined],
     ['too short', ' abc '],

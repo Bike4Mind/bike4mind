@@ -6,19 +6,36 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 let stored: Record<string, unknown> | null = null;
 const findOneAndUpdate = vi.fn();
 const deleteOne = vi.fn();
+const order = vi.hoisted(() => [] as string[]);
 
 vi.mock('@bike4mind/database/infra', () => ({
   AdminSettings: {
     findOne: () => ({ lean: () => Promise.resolve(stored) }),
-    findOneAndUpdate: (...args: unknown[]) => findOneAndUpdate(...args),
-    deleteOne: (...args: unknown[]) => deleteOne(...args),
+    findOneAndUpdate: (...args: unknown[]) => {
+      order.push('findOneAndUpdate');
+      return findOneAndUpdate(...args);
+    },
+    deleteOne: (...args: unknown[]) => {
+      order.push('deleteOne');
+      return deleteOne(...args);
+    },
   },
 }));
 vi.mock('@bike4mind/utils', () => ({ invalidateSettingsCache: vi.fn() }));
-vi.mock('@bike4mind/database', () => ({ withTransaction: (fn: () => unknown) => fn() }));
+vi.mock('@bike4mind/database', () => ({
+  withTransaction: async (fn: () => Promise<unknown>) => {
+    order.push('tx:start');
+    const result = await fn();
+    order.push('tx:end');
+    return result;
+  },
+}));
 const recordAdminActionFromRequest = vi.fn();
 vi.mock('@server/utils/adminAudit', () => ({
-  recordAdminActionFromRequest: (...args: unknown[]) => recordAdminActionFromRequest(...args),
+  recordAdminActionFromRequest: (...args: unknown[]) => {
+    order.push('record');
+    return recordAdminActionFromRequest(...args);
+  },
 }));
 // Deterministic stand-ins for the shared crypto. `enc:` marks ciphertext so the tests can
 // assert a value was encrypted at rest without depending on real AES output. update.ts pulls
@@ -343,6 +360,7 @@ describe('settings/update reviewer email list', () => {
 
 describe('settings/update admin audit trail', () => {
   beforeEach(() => {
+    order.length = 0;
     stored = null;
     findOneAndUpdate.mockReset();
     deleteOne.mockReset();
@@ -363,6 +381,21 @@ describe('settings/update admin audit trail', () => {
         changes: [{ field: 'tagLineMain', before: 'Old line', after: 'Welcome aboard' }],
       })
     );
+  });
+
+  it('writes and records an upsert inside one transaction', async () => {
+    stored = { settingName: 'tagLineMain', settingValue: 'Old line' };
+    stageWriteResult('tagLineMain', 'Welcome aboard');
+    await runHandler('tagLineMain', 'Welcome aboard');
+
+    expect(order).toEqual(['tx:start', 'findOneAndUpdate', 'record', 'tx:end']);
+  });
+
+  it('deletes and records a clear inside one transaction', async () => {
+    stored = { settingName: 'forcedRetrievalMinSimilarityPct', settingValue: 60 };
+    await runHandler('forcedRetrievalMinSimilarityPct', '');
+
+    expect(order).toEqual(['tx:start', 'deleteOne', 'record', 'tx:end']);
   });
 
   it('records a null before when the setting was never stored', async () => {

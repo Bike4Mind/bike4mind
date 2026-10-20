@@ -206,6 +206,17 @@ describe('DELETE /api/users/[id]/delete', () => {
       expect(mockAdminDeleteUser).not.toHaveBeenCalled();
     });
 
+    it('denies an impersonating admin deleting the account they impersonate from', async () => {
+      const { call } = await run({ user: { id: 'B', isAdmin: true, impersonatedBy: 'A' } as never, id: 'A' });
+
+      await expect(call).rejects.toBeInstanceOf(ForbiddenError);
+      expect(mockDeny).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ action: 'user.deletion.denied', attempted: 'user.deleted' })
+      );
+      expect(mockAdminDeleteUser).not.toHaveBeenCalled();
+    });
+
     it.each([
       ['missing', {}],
       ['too short', { reason: ' abc ' }],

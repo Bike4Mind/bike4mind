@@ -36,29 +36,31 @@ const updateOrgBodySchema = z.object({
  * update never writes currentCredits itself.
  */
 const applyAdminCreditEdit = async (req: Request, orgId: string, requestedBalance: number) => {
-  const organization = await organizationRepository.findById(orgId);
-  if (!organization) throw new NotFoundError('Organization not found');
-
-  const previousBalance = organization.currentCredits ?? 0;
-  const credits = requestedBalance - previousBalance;
-  if (credits === 0) return;
-
-  const reason = parseAdminActionReason((req.body as { creditReason?: unknown } | undefined)?.creditReason);
-  const metadata = { adminUserId: req.user!.id, reason, previousBalance, source: 'admin_org_edit' };
   const creditAdapters = {
     db: { creditTransactions: creditTransactionRepository, creditLots: creditLotRepository },
     creditHolderMethods: organizationRepository,
   };
-  const ledgerEntry = {
-    ownerId: organization.id,
-    ownerType: CreditHolderType.Organization,
-    credits: Math.abs(credits),
-    reason: 'admin_adjustment',
-    description: reason,
-    metadata,
-  } as const;
 
   await withTransaction(async () => {
+    // Read the balance inside the transaction so a retry after a write conflict recomputes the delta.
+    const organization = await organizationRepository.findById(orgId);
+    if (!organization) throw new NotFoundError('Organization not found');
+
+    const previousBalance = organization.currentCredits ?? 0;
+    const credits = requestedBalance - previousBalance;
+    if (credits === 0) return;
+
+    const reason = parseAdminActionReason((req.body as { creditReason?: unknown } | undefined)?.creditReason);
+    const metadata = { adminUserId: req.user!.id, reason, previousBalance, source: 'admin_org_edit' };
+    const ledgerEntry = {
+      ownerId: organization.id,
+      ownerType: CreditHolderType.Organization,
+      credits: Math.abs(credits),
+      reason: 'admin_adjustment',
+      description: reason,
+      metadata,
+    } as const;
+
     if (credits > 0) {
       await creditService.addCredits({ ...ledgerEntry, type: 'generic_add' }, creditAdapters);
     } else {

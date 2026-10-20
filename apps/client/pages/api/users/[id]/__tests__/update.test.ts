@@ -997,6 +997,22 @@ describe('PUT /api/users/:id/update - admin audit trail', () => {
       expect(mockAdminUpdateUser).not.toHaveBeenCalled();
     });
 
+    it('denies an impersonating admin changing the credits of the account they impersonate from', async () => {
+      mockUserFindById.mockReturnValue(target({ id: 'A' }));
+      const { promise } = run({
+        user: { id: 'B', isAdmin: true, impersonatedBy: 'A' },
+        userId: 'A',
+        body: { creditDelta: 50, creditReason: CREDIT_REASON },
+      });
+
+      await expect(promise).rejects.toMatchObject({ statusCode: 403 });
+      expect(mockDeny).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ action: 'user.credits.denied', attempted: 'user.credits.adjusted' })
+      );
+      expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+    });
+
     it('still lets an admin edit their own profile without a credit change', async () => {
       mockUserFindById.mockReturnValue(target({ id: ADMIN.id }));
       const { res, promise } = run({ user: ADMIN, userId: ADMIN.id, body: { name: 'Renamed' } });

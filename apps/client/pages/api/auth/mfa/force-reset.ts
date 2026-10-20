@@ -12,7 +12,7 @@ import { respond } from '@server/utils/respond';
 import { logAuthAudit } from '@server/utils/authAudit';
 import {
   denySelfAdminAction,
-  isSameUserId,
+  isSelfOrImpersonator,
   parseAdminActionReason,
   recordAdminActionFromRequest,
 } from '@server/utils/adminAudit';
@@ -40,7 +40,7 @@ const handler = baseApi().post(
 
     // Resetting your own MFA must go through /api/auth/mfa/disable, which requires recent
     // verification and honours enforceMFA.
-    if (isSameUserId(adminUser.id, userId)) {
+    if (isSelfOrImpersonator(adminUser, userId)) {
       await denySelfAdminAction(req, {
         action: 'user.mfa.denied',
         attempted: 'user.mfa.reset',

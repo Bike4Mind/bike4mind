@@ -239,9 +239,13 @@ describe('POST /api/admin/users/[userId]/grant-subscription - reason and self-gr
     ['individual', { subscriptionType: 'individual', priceId: plan.priceId, durationMonths: 2 }],
   ];
 
-  function callWith(body: Record<string, unknown>, userId = 'user-1') {
+  function callWith(
+    body: Record<string, unknown>,
+    userId = 'user-1',
+    user: Record<string, unknown> = { isAdmin: true, id: 'admin-1', email: 'a@example.com' }
+  ) {
     const { req, res } = createMocks({ method: 'POST', query: { userId }, body });
-    (req as unknown as { user: unknown }).user = { isAdmin: true, id: 'admin-1', email: 'a@example.com' };
+    (req as unknown as { user: unknown }).user = user;
     (req as unknown as { logger: unknown }).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     return () => (handler as unknown as (rq: unknown, rs: unknown) => Promise<unknown>)(req, res);
   }
@@ -274,6 +278,18 @@ describe('POST /api/admin/users/[userId]/grant-subscription - reason and self-gr
       );
       expect(mockSubCreate).not.toHaveBeenCalled();
       expect(mockAddCredits).not.toHaveBeenCalled();
+    });
+
+    it('denies an impersonating admin granting to the account they impersonate from', async () => {
+      const user = { isAdmin: true, id: 'admin-2', email: 'b@example.com', impersonatedBy: 'admin-1' };
+      await expect(callWith({ ...body, reason: REASON }, 'admin-1', user)()).rejects.toMatchObject({
+        statusCode: 403,
+      });
+      expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ action: 'user.subscription.denied' })
+      );
+      expect(mockSubCreate).not.toHaveBeenCalled();
     });
   });
 });

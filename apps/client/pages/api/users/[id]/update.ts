@@ -26,6 +26,7 @@ import { requireStepUp } from '@server/auth/stepUp';
 import {
   denySelfAdminAction,
   isSameUserId,
+  isSelfOrImpersonator,
   parseAdminActionReason,
   recordAdminActionFromRequest,
 } from '@server/utils/adminAudit';
@@ -229,14 +230,15 @@ const handler = baseApi().put(
 
       // No self-service privilege: an admin cannot move their own balance or change their own
       // admin flag. The attempt is recorded as a critical denied entry and answered with a 403.
-      if (isSelf && changesRole) {
+      const deniesSelf = isSelfOrImpersonator(currentUser, userId);
+      if (deniesSelf && changesRole) {
         await denySelfAdminAction(req, {
           action: 'user.role.denied',
           attempted: body.isAdmin ? 'user.role.admin_granted' : 'user.role.admin_revoked',
           target: auditTarget,
         });
       }
-      if (isSelf && changesCredits) {
+      if (deniesSelf && changesCredits) {
         await denySelfAdminAction(req, {
           action: 'user.credits.denied',
           attempted: 'user.credits.adjusted',

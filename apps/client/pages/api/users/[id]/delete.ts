@@ -18,7 +18,7 @@ import {
 import { toSafeUser, UnauthorizedError, type IUserDocument, type IUserRepository } from '@bike4mind/common';
 import {
   denySelfAdminAction,
-  isSameUserId,
+  isSelfOrImpersonator,
   parseAdminActionReason,
   recordAdminActionFromRequest,
 } from '@server/utils/adminAudit';
@@ -34,7 +34,7 @@ const handler = baseApi().delete(
     const userId = req.query.id!;
 
     if (!req.user.isAdmin) throw new UnauthorizedError('You are not authorized to delete users');
-    if (isSameUserId(req.user.id, userId)) {
+    if (isSelfOrImpersonator(req.user, userId)) {
       await denySelfAdminAction(req, {
         action: 'user.deletion.denied',
         attempted: 'user.deleted',

@@ -25,6 +25,7 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
 
 const update = vi.hoisted(() => vi.fn(async () => ({ id: 'org1', userId: 'u1', name: 'Acme' })));
 const credit = vi.hoisted(() => ({
+  events: [] as string[],
   findById: vi.fn(),
   addCredits: vi.fn(),
   subtractCredits: vi.fn(),
@@ -38,13 +39,25 @@ vi.mock('@bike4mind/services', () => ({
   organizationService: { update, get: vi.fn() },
   creditService: { addCredits: credit.addCredits, subtractCredits: credit.subtractCredits },
 }));
-vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: { findById: credit.findById } }));
+vi.mock('@bike4mind/database/infra', () => ({
+  organizationRepository: {
+    findById: (...a: unknown[]) => {
+      credit.events.push('findById');
+      return credit.findById(...a);
+    },
+  },
+}));
 vi.mock('@bike4mind/database', () => ({
   creditLotRepository: {},
   creditTransactionRepository: {},
   partnerSignupRuleRepository: {},
   userRepository: {},
-  withTransaction: (fn: any) => fn(),
+  withTransaction: async (fn: any) => {
+    credit.events.push('tx:start');
+    const result = await fn();
+    credit.events.push('tx:end');
+    return result;
+  },
 }));
 vi.mock('@bike4mind/database/social', () => ({ groupRepository: {} }));
 vi.mock('@bike4mind/common', async importOriginal => ({
@@ -115,6 +128,7 @@ describe('PUT /api/organizations/[id] -- Zod validation', () => {
 describe('PUT /api/organizations/[id] -- admin credit edit', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    credit.events.length = 0;
     credit.findById.mockResolvedValue({ id: 'org-123', userId: 'owner-1', name: 'Acme', currentCredits: 1000 });
   });
 
@@ -156,6 +170,13 @@ describe('PUT /api/organizations/[id] -- admin credit edit', () => {
       req,
       expect.objectContaining({ details: expect.objectContaining({ credits: -200 }) })
     );
+  });
+
+  it('reads the balance inside the transaction so a retry recomputes the delta', async () => {
+    const { req, res } = makeReq({ currentCredits: 1500, creditReason: 'Goodwill for the outage' }, 'org-123', true);
+    await mockRefs.putHandler!(req, res);
+
+    expect(credit.events).toEqual(['tx:start', 'findById', 'tx:end']);
   });
 
   it('refuses a balance change without a reason and moves nothing', async () => {

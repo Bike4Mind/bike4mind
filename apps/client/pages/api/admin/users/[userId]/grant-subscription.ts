@@ -20,7 +20,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sendToClient } from '@server/websocket/utils';
 import {
   denySelfAdminAction,
-  isSameUserId,
+  isSelfOrImpersonator,
   parseAdminActionReason,
   recordAdminActionFromRequest,
 } from '@server/utils/adminAudit';
@@ -67,7 +67,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
     if (typeof userId !== 'string' || !userId) {
       throw new BadRequestError('Invalid user ID');
     }
-    if (isSameUserId(req.user.id, userId)) {
+    if (isSelfOrImpersonator(req.user, userId)) {
       await denySelfAdminAction(req, {
         action: 'user.subscription.denied',
         attempted: 'user.subscription.granted',
