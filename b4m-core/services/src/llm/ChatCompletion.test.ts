@@ -8691,9 +8691,9 @@ describe('ChatCompletionProcess', () => {
       // once the reserved recovery budget lands too small - the first build still carries a system
       // message, every rebuild after it does not.
       dropSystemMessagesOnRebuild?: boolean;
-      // Per-call currentTurnMessageCount for the first build and the rebuild, so a caller can pin
-      // that the recovered payload's count is the one used.
-      turnCounts?: { first: number; rebuilt: number };
+      // Appends an attachment to the current turn, so the volatile part of the payload is more than
+      // the bare prompt and an anchor placed by counting back from the end lands on it.
+      turnAttachment?: boolean;
     }): Promise<any> => {
       const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue(manyMcpTools as any);
       const buildToolPromptSpy = vi.spyOn(ToolBuilder.prototype, 'buildToolPrompt').mockResolvedValue(null);
@@ -8722,12 +8722,9 @@ describe('ChatCompletionProcess', () => {
       } as any);
       mockedGetAvailableModels.mockResolvedValue([smallContextModel] as any);
       const userOnlyBuild = { messages: [{ role: 'user', content: 'Hello' }], messageTruncation: null };
-      if (opts.turnCounts) {
-        let call = 0;
-        const turnCounts = opts.turnCounts;
+      if (opts.turnAttachment) {
         mockedBuildAndSortMessages.mockImplementation(async (prev: any[], _context: any[], prompt: any[]) => ({
-          messages: [...(prev ?? []), ...prompt],
-          currentTurnMessageCount: call++ === 0 ? turnCounts.first : turnCounts.rebuilt,
+          messages: [...(prev ?? []), { role: 'user', content: 'attached file' }, ...prompt],
           messageTruncation: null,
         }));
       } else if (opts.dropSystemMessagesOnRebuild) {
@@ -8760,19 +8757,21 @@ describe('ChatCompletionProcess', () => {
       };
     };
 
-    it('places the history anchor from the recovered payload, using the count the rebuild reported', async () => {
-      // The rebuild sheds the oldest turn AND reports a wider current turn (say, an attachment), so
-      // the index differs from both the first build's count and the recovered array's length alone.
+    it('places the history anchor on the recovered payload, not by counting back from the end', async () => {
+      // The rebuild sheds the oldest turn, and the current turn carries an attachment, so the last
+      // history message is two places from the end rather than one.
       const { completeCall } = await runRecoveryScenario({
         recoveryTokenCounts: [100, 50],
-        turnCounts: { first: 1, rebuilt: 2 },
+        turnAttachment: true,
       });
 
       const sent = completeCall![1] as IMessage[];
-      // Recovered history is [turn two, reply two, turn three, reply three], then a 2-message turn.
+      // Recovered history is [turn two, reply two, turn three, reply three], then the attachment and
+      // the prompt.
       expect(sent.map(m => m.content).slice(0, 4)).toEqual(['turn two', 'reply two', 'turn three', 'reply three']);
-      expect(sent.find(m => m.cache === true)?.content).toBe('turn three');
+      expect(sent.find(m => m.cache === true)?.content).toBe('reply three');
       expect(sent.at(-1)?.cache).toBeUndefined();
+      expect(sent.at(-2)?.cache).toBeUndefined();
     });
 
     it('reserves toolSchemaTokens before rebuilding, so a rebuild that reports "fits" actually fits', async () => {
@@ -9491,6 +9490,18 @@ describe('ChatCompletionProcess', () => {
 
         expect(messages.at(-1)).toEqual({ role: 'user', content: 'Hello' });
         expect(systemText(messages)).toContain('[Current View Context]');
+      });
+
+      // The disclosure has to answer "what did the model actually see, and where" - a relocated
+      // source reported as system would claim an authority it was deliberately moved out of.
+      it('reports each source where it was sent, not where it was assembled', async () => {
+        await runWithContext({ includeSystemPrompt: true });
+
+        const blocks = service.systemPromptText?.blocks ?? [];
+        expect(blocks.find(b => b.name === 'mementos')?.placement).toBe('user_turn');
+        // Mementos and the flagged view context move; the rest of that channel stays.
+        expect(blocks.find(b => b.name === 'extra_context')?.placement).toBe('mixed');
+        expect(blocks.find(b => b.name === 'date_time_context')?.placement).toBe('system');
       });
     });
 
