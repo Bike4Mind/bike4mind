@@ -1522,11 +1522,14 @@ describe('ImageGenerationService quest partial writes', () => {
   };
 
   // Turns credit enforcement on so quest.creditsUsed is a real number (7) on the partial writes.
-  const enforceCredits = (service: ImageGenerationService) => {
+  const enforceCredits = (
+    service: ImageGenerationService,
+    cost: { requiredCredits: number; usdCost: number } = { requiredCredits: 7, usdCost: 7 / CREDITS_PER_USD_COST }
+  ) => {
     vi.spyOn(
       service as unknown as { validateUserCredits: () => Promise<unknown> },
       'validateUserCredits'
-    ).mockResolvedValue({ requiredCredits: 7, usdCost: 7 / CREDITS_PER_USD_COST });
+    ).mockResolvedValue(cost);
     // process() reads the settings map once for the credit gate and once for moderation.
     vi.mocked(getSettingsMap).mockResolvedValueOnce({ enforceCredits: 'true' }).mockResolvedValueOnce({});
   };
@@ -1680,6 +1683,38 @@ describe('ImageGenerationService quest partial writes', () => {
       },
       creditsUsed: 7,
     });
+  });
+
+  it('persists the settled draw rather than the round-up pre-flight figure', async () => {
+    vi.mocked(getAvailableModels).mockResolvedValue([geminiModelInfo]);
+    mockGeminiEdit.mockReset();
+    mockGeminiEdit.mockResolvedValue({ type: 'success', dataUrl: 'data:image/png;base64,RESULT' });
+    settlementDraw.mockReturnValue(0.75);
+    const { service, update } = makeService();
+    // The gate reserved 7; settlement draws on 6.5 credits and must persist 6.
+    enforceCredits(service, { requiredCredits: 7, usdCost: 6.5 / CREDITS_PER_USD_COST });
+    await processEdit(service);
+
+    expect(callArgs(update).find(arg => arg.status === 'done')?.creditsUsed).toBe(6);
+  });
+
+  it('draws and debits nothing when credit enforcement is off', async () => {
+    vi.mocked(getAvailableModels).mockResolvedValue([geminiModelInfo]);
+    mockGeminiEdit.mockReset();
+    mockGeminiEdit.mockResolvedValue({ type: 'success', dataUrl: 'data:image/png;base64,RESULT' });
+    const { service, update, quest } = makeService();
+    // A quest that already carries a pre-flight figure: without the enforcement term the
+    // settlement would draw and debit it even though billing is off.
+    quest.creditsUsed = 7;
+    settlementDraw.mockClear();
+    vi.mocked(deductCreditsWithOrgSupport).mockClear();
+    // The credit gate, then moderation; enforcement off means no validateUserCredits call.
+    vi.mocked(getSettingsMap).mockResolvedValueOnce({ enforceCredits: 'false' }).mockResolvedValueOnce({});
+    await processEdit(service);
+
+    expect(settlementDraw).not.toHaveBeenCalled();
+    expect(deductCreditsWithOrgSupport).not.toHaveBeenCalled();
+    expect(callArgs(update).find(arg => arg.status === 'done')?.creditsUsed).toBe(7);
   });
 
   describe('saving generated images to the user files', () => {

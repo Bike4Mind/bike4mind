@@ -1240,6 +1240,55 @@ describe('ImageEditService quest partial writes', () => {
     });
   });
 
+  describe('settled credits persistence', () => {
+    const withValidatedCost = (cost: { requiredCredits: number; usdCost: number }) =>
+      vi
+        .spyOn(
+          ImageEditService.prototype as unknown as { validateUserCredits: () => Promise<unknown> },
+          'validateUserCredits'
+        )
+        .mockResolvedValue(cost);
+
+    const arrangeBilled = () => {
+      editSpy.mockResolvedValue({ type: 'success', dataUrl: 'https://example.invalid/out.png' });
+      return makeService('session1', undefined, { creditTransactions: { create: vi.fn() } });
+    };
+
+    const doneWrite = (update: ReturnType<typeof vi.fn>) =>
+      update.mock.calls.map(c => c[0] as Record<string, unknown>).find(arg => arg.status === 'done');
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('persists the settled draw rather than the round-up pre-flight figure', async () => {
+      // The gate reserved 7; settlement draws on 6.5 credits and must persist 6.
+      withValidatedCost({ requiredCredits: 7, usdCost: 6.5 / CREDITS_PER_USD_COST });
+      vi.mocked(getSettingsValue).mockImplementation(key => (key === 'enforceCredits' ? true : undefined));
+      settlementDraw.mockReturnValue(0.75);
+      const { service, update } = arrangeBilled();
+
+      await process(service);
+
+      expect(doneWrite(update)?.creditsUsed).toBe(6);
+    });
+
+    it('draws and debits nothing when credit enforcement is off', async () => {
+      const { service, update, quest } = arrangeBilled();
+      // A quest that already carries a pre-flight figure: without the enforcement term the
+      // settlement would draw and debit it even though billing is off.
+      quest.creditsUsed = 7;
+      settlementDraw.mockClear();
+      vi.mocked(deductCreditsWithOrgSupport).mockClear();
+
+      await process(service);
+
+      expect(settlementDraw).not.toHaveBeenCalled();
+      expect(deductCreditsWithOrgSupport).not.toHaveBeenCalled();
+      expect(doneWrite(update)?.creditsUsed).toBe(7);
+    });
+  });
+
   describe('saving the edited image to the user files', () => {
     const arrange = (saveGeneratedAsset: SaveGeneratedAssetFn, dbExtras: Record<string, unknown> = {}) => {
       editSpy.mockResolvedValue({ type: 'success', dataUrl: 'https://example.invalid/out.png' });
