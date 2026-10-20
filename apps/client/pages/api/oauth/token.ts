@@ -30,6 +30,7 @@ import { logOAuthError } from '@server/auth/oauthErrorLog';
 import { mintRefreshFamily, refreshFamilyExpiresAt } from '@server/auth/oauthRefreshToken';
 import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
 import { logAuthAudit } from '@server/utils/authAudit';
+import { getClientIp } from '@server/utils/ip';
 
 const AuthCodeRequestSchema = z.object({
   grant_type: z.literal('authorization_code'),
@@ -68,8 +69,10 @@ function idTokenUserParams(user: { id: string; email?: string | null; username?:
 
 const invalidGrant = { error: 'invalid_grant', error_description: 'Invalid refresh token' };
 
-// Refresh gets a per-IP ceiling above the per-client limit, so one relying-party backend (one egress IP)
-// is capped by its per-client budget, while unauthenticated refresh traffic is still bounded per IP.
+// Refresh counts in its own per-IP bucket (tokenRateLimitSubject), so a relying-party backend refreshing at
+// volume never spends the 20/min code-exchange budget of users behind the same egress IP. Its per-IP
+// ceiling sits above the per-client limit, so one backend is capped by its per-client budget, while
+// unauthenticated refresh traffic is still bounded per IP.
 const REFRESH_PER_CLIENT_LIMIT = 600;
 const REFRESH_PER_IP_LIMIT = 2 * REFRESH_PER_CLIENT_LIMIT;
 const RATE_WINDOW_MS = 60 * 1000;
@@ -77,8 +80,11 @@ const RATE_WINDOW_MS = 60 * 1000;
 const tokenRateLimit = (req: { body?: { grant_type?: unknown } }) =>
   req.body?.grant_type === 'refresh_token' ? REFRESH_PER_IP_LIMIT : 20;
 
+const tokenRateLimitSubject = (req: Parameters<typeof getClientIp>[0] & { body?: { grant_type?: unknown } }) =>
+  req.body?.grant_type === 'refresh_token' ? `refresh:${getClientIp(req)}` : undefined;
+
 const handler = baseApi({ auth: false })
-  .use(rateLimit({ limit: tokenRateLimit, windowMs: RATE_WINDOW_MS }))
+  .use(rateLimit({ limit: tokenRateLimit, windowMs: RATE_WINDOW_MS, subject: tokenRateLimitSubject }))
   .post(async (req, res) => {
     const { grant_type } = req.body;
     const logError = (error: string, status: number) =>
@@ -245,6 +251,7 @@ const handler = baseApi({ auth: false })
     if (grant_type === 'refresh_token') {
       const parsed = RefreshRequestSchema.safeParse(req.body);
       if (!parsed.success) {
+        logError('invalid_request', 400);
         return res.status(400).json({ error: 'invalid_request', error_description: parsed.error.message });
       }
       const { refresh_token, client_id, client_secret, scope } = parsed.data;
@@ -253,14 +260,17 @@ const handler = baseApi({ auth: false })
       // parties hold these families: a first-party client never reaches a session through here.
       const client = await oauthClientRepository.findByClientId(client_id);
       if (!client) {
+        logError('invalid_client', 401);
         return res.status(401).json({ error: 'invalid_client', error_description: 'Unknown client' });
       }
       if (client.clientType !== 'relying-party') {
+        logError('unauthorized_client', 400);
         return res.status(400).json({ error: 'unauthorized_client' });
       }
       if (client.tokenEndpointAuthMethod === 'client_secret_post') {
         const authed = client_secret ? await oauthClientRepository.verifyClientSecret(client_id, client_secret) : null;
         if (!authed) {
+          logError('invalid_client', 401);
           return res.status(401).json({ error: 'invalid_client', error_description: 'Client authentication required' });
         }
       }
@@ -275,6 +285,7 @@ const handler = baseApi({ auth: false })
       if (!rl.success) {
         const retryAfter = Math.max(1, Math.ceil((rl.expiresAt.getTime() - Date.now()) / 1000));
         res.setHeader('Retry-After', retryAfter);
+        logError('temporarily_unavailable', 429);
         return res.status(429).json({
           error: 'temporarily_unavailable',
           error_description: `Rate limit exceeded. Try again in ${retryAfter} seconds.`,
@@ -291,6 +302,7 @@ const handler = baseApi({ auth: false })
         family.expiresAt <= new Date() ||
         family.clientId !== client_id
       ) {
+        logError('invalid_grant', 400);
         return res.status(400).json(invalidGrant);
       }
 
@@ -304,27 +316,32 @@ const handler = baseApi({ auth: false })
           event: 'oauth_refresh_reuse_revoked',
           metadata: { clientId: client_id, familyId: family.familyId },
         });
+        logError('invalid_grant', 400);
         return res.status(400).json(invalidGrant);
       }
 
       // Every precondition is checked before the rotate below, so a failure here does not consume the token.
       const user = await userRepository.findById(family.userId);
       if (!user || !isTokenVersionCurrent(family.tokenVersion, user.tokenVersion)) {
+        logError('invalid_grant', 400);
         return res.status(400).json(invalidGrant);
       }
       try {
         assertAccountStateUsable(user);
       } catch {
+        logError('invalid_grant', 400);
         return res.status(400).json(invalidGrant);
       }
       const grant = await oauthGrantRepository.findGrant(user.id, client_id);
       // family.scopes always holds offline_access, so this also rejects a grant that dropped it.
       if (!grant || !grantCovers(grant.scopes, family.scopes)) {
+        logError('invalid_grant', 400);
         return res.status(400).json(invalidGrant);
       }
 
       const scopes = scope ? scope.split(' ').filter(Boolean) : family.scopes;
       if (!scopes.every(s => family.scopes.includes(s))) {
+        logError('invalid_scope', 400);
         return res.status(400).json({ error: 'invalid_scope', error_description: 'scope exceeds the original grant' });
       }
 
@@ -342,6 +359,7 @@ const handler = baseApi({ auth: false })
           event: 'oauth_refresh_reuse_revoked',
           metadata: { clientId: client_id, familyId: family.familyId, concurrent: true },
         });
+        logError('invalid_grant', 400);
         return res.status(400).json(invalidGrant);
       }
 

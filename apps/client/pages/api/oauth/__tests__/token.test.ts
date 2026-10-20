@@ -33,7 +33,10 @@ const h = vi.hoisted(() => ({
   assertAccountStateUsable: vi.fn(),
   tryIncrement: vi.fn(),
   logAuthAudit: vi.fn(),
-  rateLimitOptions: null as null | { limit: (req: unknown) => number },
+  rateLimitOptions: null as null | {
+    limit: (req: unknown) => number;
+    subject?: (req: unknown) => string | undefined;
+  },
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -46,11 +49,12 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@server/middlewares/rateLimit', () => ({
-  rateLimit: (opts: { limit: (req: unknown) => number }) => {
+  rateLimit: (opts: NonNullable<typeof h.rateLimitOptions>) => {
     h.rateLimitOptions = opts;
     return () => undefined;
   },
 }));
+vi.mock('@server/utils/ip', () => ({ getClientIp: () => '203.0.113.7' }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: h.logAuthAudit }));
 vi.mock('@server/auth/oauthServer', () => ({
   validateClient: h.validateClient,
@@ -661,6 +665,42 @@ describe('POST /api/oauth/token refresh_token grant', () => {
     expect(limit({ body: { grant_type: 'refresh_token' } })).toBe(1200);
     expect(limit({ body: { grant_type: 'authorization_code' } })).toBe(20);
     expect(limit({ body: {} })).toBe(20);
+  });
+
+  // rateLimit keys `rate-limit:${subject ?? ip}:${pathname}`, so a distinct refresh subject is what keeps
+  // refresh volume from 429ing authorization_code requests from the same IP.
+  it('counts refresh in its own per-IP bucket, leaving the code exchange on the default key', () => {
+    const subject = h.rateLimitOptions!.subject!;
+    expect(subject({ body: { grant_type: 'refresh_token' } })).toBe('refresh:203.0.113.7');
+    expect(subject({ body: { grant_type: 'authorization_code' } })).toBeUndefined();
+    expect(subject({ body: {} })).toBeUndefined();
+  });
+
+  const logCases: Array<[string, () => void, Record<string, unknown>, string, number]> = [
+    [
+      'reuse of a superseded token',
+      () => (h.findByFamilyId as Mock).mockResolvedValue(family({ tokenHash: 'h:other' })),
+      refreshBody,
+      'invalid_grant',
+      400,
+    ],
+    [
+      'per-client rate limit',
+      () => (h.tryIncrement as Mock).mockResolvedValue({ success: false, expiresAt: new Date(Date.now() + 30_000) }),
+      refreshBody,
+      'temporarily_unavailable',
+      429,
+    ],
+    ['scope wider than the family', () => {}, { ...refreshBody, scope: 'files:write' }, 'invalid_scope', 400],
+  ];
+
+  it.each(logCases)('%s logs one [OAUTH_ERROR] line', async (_name, setup, reqBody, error, status) => {
+    setup();
+    const res = await call(reqBody);
+
+    expect(res.statusCode).toBe(status);
+    expect(res.oauthLines).toEqual([`[OAUTH_ERROR] route=oauth/token client=client-1 error=${error} status=${status}`]);
+    expect(res.oauthLines[0]).not.toContain('secret0');
   });
 });
 
