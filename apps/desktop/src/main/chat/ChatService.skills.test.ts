@@ -77,7 +77,11 @@ describe('ChatService and skills', () => {
     };
     catalog = new SkillCatalog(new ProjectTrustStore(join(base, 'trust.json')), accountSkills);
     for (const key of Object.keys(turnLimits) as (keyof typeof turnLimits)[]) delete turnLimits[key];
-    events = [];
+    // Bound to this test's own array, not read through `events` at emit time: the previous test's
+    // disposed service can still emit the 'done' of its aborted reply after this hook has run,
+    // and counted here it would end a turn() wait before this test's reply has settled.
+    const emitted: ChatStreamEvent[] = [];
+    events = emitted;
     streams = [];
     post = vi.fn().mockImplementation(() => {
       const stream = new PassThrough();
@@ -98,7 +102,7 @@ describe('ChatService and skills', () => {
       skills: catalog,
       approvals: new ApprovalGate(),
       turnLimits,
-      emit: event => events.push(event),
+      emit: event => emitted.push(event),
     });
   });
 
