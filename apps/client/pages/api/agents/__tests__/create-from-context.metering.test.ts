@@ -65,7 +65,7 @@ vi.mock('@bike4mind/services/llm/modelAdmission', () => ({
 vi.mock('@bike4mind/services/cliCompletions', () => ({ estimateInputTokens: () => 1000 }));
 vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn() }));
 vi.mock('@server/dataLakes/attachmentLakeAccess', () => ({ createAttachmentLakeAccess: () => async () => ({}) }));
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: vi.fn() }));
 
 const MODEL = { id: 'gpt-4-test', backend: 'openai', pricing: { 200_000: { input: 1e-6, output: 2e-6 } } };
 // Partial: the metered backend sizes its hold with the real llm-adapters output-budget helpers.

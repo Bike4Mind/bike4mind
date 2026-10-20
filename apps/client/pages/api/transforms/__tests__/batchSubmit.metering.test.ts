@@ -29,7 +29,7 @@ vi.mock('@server/middlewares/baseApi', () => {
   };
   return { baseApi: () => chain };
 });
-vi.mock('@server/utils/config', () => ({ Config: { ANTHROPIC_API_KEY: 'sk-test' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { ANTHROPIC_API_KEY: 'sk-test' } }));
 vi.mock('@bike4mind/database', () => ({ transformBatchRepository: { create: m.create } }));
 vi.mock('@bike4mind/llm-adapters', () => ({
   getAvailableModels: async () => [{ id: 'claude-opus-4-6' }],

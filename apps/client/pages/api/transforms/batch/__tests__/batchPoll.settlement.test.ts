@@ -28,7 +28,7 @@ vi.mock('@server/middlewares/baseApi', () => {
   };
   return { baseApi: () => chain };
 });
-vi.mock('@server/utils/config', () => ({ Config: { ANTHROPIC_API_KEY: 'sk-test' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { ANTHROPIC_API_KEY: 'sk-test' } }));
 vi.mock('@bike4mind/utils', () => ({
   NotFoundError: class extends Error {},
   usdToCreditsStochastic: (usd: number) => Math.round(usd * 1000),

@@ -47,7 +47,7 @@ vi.mock('@bike4mind/database', () => ({
   organizationRepository: {},
   userRepository: {},
 }));
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getSignedUrl: async () => 'https://s/x' }) }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({ getSignedUrl: async () => 'https://s/x' }) }));
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: async () => ({}) },
   fabFilesService: { assertRewriteFits: m.assertRewriteFits },

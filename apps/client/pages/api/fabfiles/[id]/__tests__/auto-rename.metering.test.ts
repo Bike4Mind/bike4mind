@@ -78,7 +78,7 @@ vi.mock('@bike4mind/services/llm/modelAdmission', () => ({
 }));
 vi.mock('@bike4mind/services/cliCompletions', () => ({ estimateInputTokens: () => 1000 }));
 vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn() }));
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getSignedUrl: async () => 'https://s/x' }) }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({ getSignedUrl: async () => 'https://s/x' }) }));
 vi.mock('@client/services/operationsModelService', () => ({
   OperationsModelService: {
     getOperationsModel: async () => ({
