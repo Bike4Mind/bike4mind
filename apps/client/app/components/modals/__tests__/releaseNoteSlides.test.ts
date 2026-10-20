@@ -31,6 +31,13 @@ describe('releaseNoteToModal', () => {
     expect(new Date(slide.createdAt).toISOString()).toBe('2026-03-05T15:00:00.000Z');
   });
 
+  it('carries no media, so the slider shows text only', () => {
+    const slide = releaseNoteToModal(note());
+    expect(slide.imageUrl).toBeNull();
+    expect(slide.images).toBeNull();
+    expect(slide.video).toBeNull();
+  });
+
   it('falls back to the release tag when the headline is blank', () => {
     expect(releaseNoteToModal(note({ headline: '  ' })).title).toBe('v1.2.3');
   });

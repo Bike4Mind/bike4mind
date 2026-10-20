@@ -3,6 +3,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@server/utils/errors';
 import { z } from 'zod';
+import { ModalVideoSchema } from '@bike4mind/common';
 import { cacheExternalImage, cacheExternalImages } from '@server/utils/cacheExternalImage';
 
 const ModalImageSchema = z.object({
@@ -17,6 +18,7 @@ const CreateModalRequestSchema = z.object({
   textMessage: z.string().nullable(),
   imageUrl: z.string().nullable(),
   images: z.array(ModalImageSchema).optional(),
+  video: ModalVideoSchema.nullable().optional(),
   isBanner: z.boolean().prefault(false),
   description: z.string().nullable(),
   tags: z.array(z.string()).nullable(),

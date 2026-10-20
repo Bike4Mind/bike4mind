@@ -3,7 +3,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
 import { z } from 'zod';
-import { WHATS_NEW_DEFAULT_REPOSITORY } from '@bike4mind/common';
+import { ModalVideoSchema, WHATS_NEW_DEFAULT_REPOSITORY } from '@bike4mind/common';
 import { cacheExternalImage, cacheExternalImages } from '@server/utils/cacheExternalImage';
 import { isValidObjectId } from '@server/utils/objectId';
 import { WhatsNewDistributionService } from '@server/services/whatsNewDistribution';
@@ -26,6 +26,7 @@ const UpdateModalRequestSchema = z.object({
   description: z.string().max(15000).nullable().optional(),
   imageUrl: z.string().nullable().optional(),
   images: z.array(ModalImageSchema).nullable().optional(),
+  video: ModalVideoSchema.nullable().optional(),
   textMessage: z.string().nullable().optional(),
   isBanner: z.coerce.boolean().optional(),
   tags: z.array(z.string()).nullable().optional(),

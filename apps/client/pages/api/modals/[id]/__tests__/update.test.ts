@@ -7,6 +7,7 @@ const mockRefs = vi.hoisted(() => ({
   putHandler: null as null | ((req: any, res: any) => unknown),
   modal: null as any,
   updateExistingModalCall: undefined as any,
+  findOneAndUpdate: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -23,7 +24,10 @@ vi.mock('@server/middlewares/baseApi', () => {
 vi.mock('@bike4mind/database/social', () => ({
   ModalModel: {
     findById: () => Promise.resolve(mockRefs.modal),
-    findOneAndUpdate: () => Promise.resolve(mockRefs.modal),
+    findOneAndUpdate: (...args: unknown[]) => {
+      mockRefs.findOneAndUpdate(...args);
+      return Promise.resolve(mockRefs.modal);
+    },
   },
 }));
 
@@ -92,5 +96,41 @@ describe('PUT /api/modals/[id] - S3 distribution repository metadata', () => {
     const [, , content] = mockRefs.updateExistingModalCall;
     const payload = JSON.parse(content);
     expect(payload.metadata.repositoryUrl).toBe('https://github.com/Bike4Mind/bike4mind');
+  });
+});
+
+describe('PUT /api/modals/[id] - video', () => {
+  const video = {
+    landscapeUrl: 'https://bucket.s3.us-east-2.amazonaws.com/modals/demo-16x9.mp4',
+    landscapePosterUrl: 'https://bucket.s3.us-east-2.amazonaws.com/modals/demo-16x9.png',
+    portraitUrl: 'https://cdn.example.com/demo-9x16.mp4',
+    portraitPosterUrl: null,
+  };
+
+  beforeEach(() => {
+    mockRefs.findOneAndUpdate.mockClear();
+    mockRefs.modal = { _id: { toString: () => MODAL_ID }, tags: [], toObject: () => mockRefs.modal };
+  });
+
+  it('persists the video urls', async () => {
+    const { req, res } = mocks({ video });
+    await mockRefs.putHandler!(req, res);
+
+    const [, update] = mockRefs.findOneAndUpdate.mock.calls[0];
+    expect(update.$set.video).toEqual(video);
+  });
+
+  it('accepts clearing the video', async () => {
+    const { req, res } = mocks({ video: null });
+    await mockRefs.putHandler!(req, res);
+
+    const [, update] = mockRefs.findOneAndUpdate.mock.calls[0];
+    expect(update.$set.video).toBeNull();
+  });
+
+  it('rejects a non-http video url', async () => {
+    const { req, res } = mocks({ video: { ...video, landscapeUrl: 'javascript:alert(1)' } });
+    await expect(mockRefs.putHandler!(req, res)).rejects.toThrow();
+    expect(mockRefs.findOneAndUpdate).not.toHaveBeenCalled();
   });
 });

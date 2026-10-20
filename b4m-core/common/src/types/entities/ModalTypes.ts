@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { IMongoDocument } from '.';
 import { ICounter } from './CounterTypes';
 import { VariantContent } from './AudienceVariantTypes';
@@ -7,6 +8,25 @@ export interface ModalImage {
   width?: number;
   height?: number;
 }
+
+const modalVideoUrl = z
+  .url({ protocol: /^https?$/ })
+  .max(2048)
+  .nullable()
+  .optional();
+
+/**
+ * Product video for a modal slide. Landscape is the 16:9 cut shown on desktop, portrait the 9:16 cut
+ * shown on mobile; the slider falls back to the other orientation when one is missing.
+ */
+export const ModalVideoSchema = z.object({
+  landscapeUrl: modalVideoUrl,
+  landscapePosterUrl: modalVideoUrl,
+  portraitUrl: modalVideoUrl,
+  portraitPosterUrl: modalVideoUrl,
+});
+
+export type ModalVideo = z.infer<typeof ModalVideoSchema>;
 
 /**
  * Generation metadata for auto-generated modals (e.g., What's New).
@@ -55,6 +75,7 @@ export interface IModal {
   numberOfViews: ICounter | null;
   imageUrl: string | null;
   images?: ModalImage[] | null;
+  video?: ModalVideo | null;
   textMessage: string | null;
   /** Generation metadata for auto-generated modals (null for manual modals) */
   generationMetadata?: IGenerationMetadata | null;

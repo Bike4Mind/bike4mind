@@ -64,6 +64,7 @@ import GenericModal from '@client/app/components/modals/GenericModal';
 import { getS3Url } from '@client/app/utils/s3';
 import { useGetPresignedUrl } from '@client/app/hooks/data/fabFiles';
 import { useConfig } from '@client/app/hooks/data/settings';
+import AdminModalVideoFields from './AdminModalVideoFields';
 
 interface EditModalProps {
   isOpen: boolean;
@@ -143,6 +144,7 @@ const EditModalNew: React.FC<EditModalProps> = ({ isOpen, onClose, modalData, on
         endDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
         imageUrl: '',
         images: [],
+        video: null,
         textMessage: '',
         tags: [],
         numberOfAgrees: {
@@ -677,6 +679,17 @@ const EditModalNew: React.FC<EditModalProps> = ({ isOpen, onClose, modalData, on
                     />
                   </Box>
                 )}
+
+                {!modalFields.isBanner && (
+                  <>
+                    <Divider />
+                    <AdminModalVideoFields
+                      value={modalFields.video}
+                      onChange={video => setModalFields(prev => ({ ...prev, video }))}
+                      bucketName={fabfileBucketName}
+                    />
+                  </>
+                )}
               </Stack>
             </CardContent>
           </Card>
@@ -947,6 +960,19 @@ const EditModalNew: React.FC<EditModalProps> = ({ isOpen, onClose, modalData, on
                       </Typography>
                       <Typography>{modalFields.description || 'Not set'}</Typography>
                     </Box>
+
+                    {!modalFields.isBanner && modalFields.video && (
+                      <Box>
+                        <Typography level="body-sm" fontWeight="lg">
+                          Video:
+                        </Typography>
+                        <Typography data-testid="modal-review-video-text">
+                          {[modalFields.video.landscapeUrl && '16:9', modalFields.video.portraitUrl && '9:16']
+                            .filter(Boolean)
+                            .join(' + ') || 'Posters only'}
+                        </Typography>
+                      </Box>
+                    )}
 
                     <Box>
                       <Typography level="body-sm" fontWeight="lg">
