@@ -87,7 +87,7 @@ export type GeneratedAudioResponse = z.infer<typeof generatedAudioResponseSchema
 /**
  * 413 body: the audio was generated and billed, exceeds the response ceiling, and
  * offloading it to storage failed too. Written, never thrown, so it carries no
- * `name`/`request_id`.
+ * `request_id`.
  */
 export const generatedAudioTooLargeSchema = z.object({ error: z.string() });
 

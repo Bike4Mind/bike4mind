@@ -1083,11 +1083,6 @@ export interface components {
       error: string;
       /** @description Correlation id, mirrors the X-Request-ID header. */
       request_id?: string;
-      /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
     };
     /**
      * @description Outcome fields of the quest polled at `GET /api/v1/quests/{id}` after this ACK. A finished turn that failed is `status: "done"` with `type: "error"` and the failure text in `reply`, so a caller reading `reply` alone cannot tell a failure from an answer - check `type` first, and also treat a terminal `status: "stopped"` (a missing session, a user-cancelled turn) as failure even though it never sets `type`. `errorCode` is an optional refinement of `type: "error"`, present only for a classified billing failure; credit exhaustion arrives here as `insufficient_credits`, the same vocabulary the synchronous 422s on `/api/ai/music`, `/api/ai/sound-effects` and `/api/ai/tts` use. `QUEST_ERROR_CODES` publishes a second member, `spend_cap_exceeded`, but no current throw site on this endpoint raises it as a quest errorCode: its only one, the embed chat route's pre-flight 422, fires outside the process try/catch that would classify it onto the quest. Most `type: "error"` turns - an abort, a provider timeout or overload - have NO `errorCode`; its absence does not mean success, only that the failure is unclassified. A recovered stuck quest that still has renderable content is not a failure at all: it keeps `type: "message"` even though it did not finish, so a caller gets the content rather than an error. `fallbackInfo` is present only when the requested model failed and another model produced the reply: `fallbackModel` answered, `primaryModel` is what was asked for, and `reason` is the error from the first failed attempt on the requested model. The poll body carries further fields not modelled here, including `images`, `files`, `toolPayloads`, `promptMeta`, and the attachment report (`attachmentNotices`/`attachmentDelivery`) - only the outcome subset is modelled here.
@@ -1261,11 +1256,6 @@ export interface components {
     ScopeForbiddenResponse: {
       error: string;
       request_id?: string;
-      /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
       /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
       required_scopes?: string[];
       /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
@@ -1274,11 +1264,6 @@ export interface components {
     sendChatMessageResponse504: {
       error: string;
       request_id?: string;
-      /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
       /** @enum {string} */
       errorCode: 'request_timeout';
       quest_id: string;
@@ -1529,7 +1514,6 @@ export interface components {
       | {
           error: string;
           request_id?: string;
-          name?: string;
         };
     /**
      * @example {
@@ -1618,11 +1602,6 @@ export interface components {
     createCompletionResponse400: {
       error: string;
       request_id?: string;
-      /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
       /** @enum {string} */
       errorCode?:
         | 'unknown_model'
@@ -1634,22 +1613,12 @@ export interface components {
     createCompletionResponse422: {
       error: string;
       request_id?: string;
-      /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
       /** @enum {string} */
       errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
     };
     createCompletionResponse503: {
       error: string;
       request_id?: string;
-      /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
       /** @enum {string} */
       errorCode?: 'provider_not_configured';
     };
@@ -1861,11 +1830,6 @@ export interface components {
     synthesizeSpeechResponse400: {
       error: string;
       request_id?: string;
-      /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
       /** @enum {string} */
       provider?: 'openai' | 'elevenlabs';
       /** @enum {string} */
@@ -1874,11 +1838,6 @@ export interface components {
     synthesizeSpeechResponse401: {
       error: string;
       request_id?: string;
-      /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
       /** @enum {string} */
       provider?: 'openai' | 'elevenlabs';
       /** @enum {string} */
@@ -1887,11 +1846,6 @@ export interface components {
     synthesizeSpeechResponse403: {
       error: string;
       request_id?: string;
-      /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
       /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
       required_scopes?: string[];
       /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
@@ -1904,11 +1858,6 @@ export interface components {
     synthesizeSpeechResponse404: {
       error: string;
       request_id?: string;
-      /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
       /** @enum {string} */
       provider?: 'openai' | 'elevenlabs';
       /** @enum {string} */
@@ -1926,11 +1875,6 @@ export interface components {
     synthesizeSpeechResponse422: {
       error: string;
       request_id?: string;
-      /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
       /** @enum {string} */
       provider?: 'openai' | 'elevenlabs';
       /** @enum {string} */
@@ -1939,11 +1883,6 @@ export interface components {
     synthesizeSpeechResponse429: {
       error: string;
       request_id?: string;
-      /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
       /** @enum {string} */
       provider?: 'openai' | 'elevenlabs';
       /** @enum {string} */
@@ -1952,11 +1891,6 @@ export interface components {
     synthesizeSpeechResponse502: {
       error: string;
       request_id?: string;
-      /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
       /** @enum {string} */
       provider?: 'openai' | 'elevenlabs';
       /** @enum {string} */
@@ -2027,11 +1961,6 @@ export interface components {
     generateMusicResponse422: {
       error: string;
       request_id?: string;
-      /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
       /** @enum {string} */
       errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
     };
@@ -2099,11 +2028,6 @@ export interface components {
     generateSoundEffectResponse403: {
       error: string;
       request_id?: string;
-      /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
       /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
       required_scopes?: string[];
       /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
@@ -2117,11 +2041,6 @@ export interface components {
     generateSoundEffectResponse422: {
       error: string;
       request_id?: string;
-      /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
       /** @enum {string} */
       errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
     };
@@ -2443,11 +2362,6 @@ export interface components {
     generateImageResponse403: {
       error: string;
       request_id?: string;
-      /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
       /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
       required_scopes?: string[];
       /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
@@ -2610,11 +2524,6 @@ export interface components {
     editImageResponse403: {
       error: string;
       request_id?: string;
-      /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
       /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
       required_scopes?: string[];
       /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
@@ -2716,11 +2625,6 @@ export interface components {
     createFileUploadResponse400: {
       error: string;
       request_id?: string;
-      /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
       /**
        * @description Stable refusal code: `storage_limit_exceeded` (your total storage), `org_storage_limit_exceeded` (the organization limit), or `file_too_large` (the per-file size limit). Branch on this, not on the message.
        * @enum {string}
@@ -2866,33 +2770,18 @@ export interface components {
     createEmbeddingsResponse401: {
       error: string;
       request_id?: string;
-      /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
       /** @enum {string} */
       errorCode?: 'insufficient_credits' | 'provider_not_configured' | 'provider_rejected';
     };
     createEmbeddingsResponse422: {
       error: string;
       request_id?: string;
-      /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
       /** @enum {string} */
       errorCode?: 'insufficient_credits' | 'provider_not_configured' | 'provider_rejected';
     };
     createEmbeddingsResponse503: {
       error: string;
       request_id?: string;
-      /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
       /** @enum {string} */
       errorCode?: 'insufficient_credits' | 'provider_not_configured' | 'provider_rejected';
     };
@@ -3050,11 +2939,6 @@ export interface components {
     createDecisionResponse401: {
       error: string;
       request_id?: string;
-      /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
       /** @enum {string} */
       errorCode?:
         | 'insufficient_credits'
@@ -3074,11 +2958,6 @@ export interface components {
     createDecisionResponse404: {
       error: string;
       request_id?: string;
-      /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
       /** @enum {string} */
       errorCode?:
         | 'insufficient_credits'
@@ -3098,11 +2977,6 @@ export interface components {
     createDecisionResponse422: {
       error: string;
       request_id?: string;
-      /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
       /** @enum {string} */
       errorCode?:
         | 'insufficient_credits'
@@ -3122,11 +2996,6 @@ export interface components {
     createDecisionResponse502: {
       error: string;
       request_id?: string;
-      /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
       /** @enum {string} */
       errorCode?:
         | 'insufficient_credits'
@@ -3146,11 +3015,6 @@ export interface components {
     createDecisionResponse503: {
       error: string;
       request_id?: string;
-      /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
       /** @enum {string} */
       errorCode?:
         | 'insufficient_credits'
@@ -3576,22 +3440,12 @@ export interface components {
     searchDataLakeResponse422: {
       error: string;
       request_id?: string;
-      /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
       /** @enum {string} */
       errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
     };
     searchDataLakeResponse503: {
       error: string;
       request_id?: string;
-      /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
       /** @enum {string} */
       errorCode?: 'provider_not_configured';
     };
@@ -3762,11 +3616,6 @@ export interface components {
     createVideoGenerationResponse403: {
       error: string;
       request_id?: string;
-      /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
       /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
       required_scopes?: string[];
       /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
@@ -3777,11 +3626,6 @@ export interface components {
     createVideoGenerationResponse404: {
       error: string;
       request_id?: string;
-      /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
       /** @enum {string} */
       errorCode?:
         | 'unsupported_duration'
@@ -3802,11 +3646,6 @@ export interface components {
     createVideoGenerationResponse422: {
       error: string;
       request_id?: string;
-      /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
       /** @enum {string} */
       errorCode?:
         | 'unsupported_duration'
@@ -4095,11 +3934,6 @@ export interface components {
     cancelMusicGenerationResponse409: {
       error: string;
       request_id?: string;
-      /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
       /** @enum {string} */
       errorCode?:
         | 'unsupported_duration'
@@ -4191,11 +4025,6 @@ export interface components {
       error: string;
       request_id?: string;
       /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
-      /**
        * @description Stable refusal code: `storage_limit_exceeded` (your total storage), `org_storage_limit_exceeded` (the organization limit), or `file_too_large` (the per-file size limit). Branch on this, not on the message.
        * @enum {string}
        */
@@ -4215,11 +4044,6 @@ export interface components {
     createMusicGenerationResponse403: {
       error: string;
       request_id?: string;
-      /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
       /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
       required_scopes?: string[];
       /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
@@ -4230,11 +4054,6 @@ export interface components {
     createMusicGenerationResponse422: {
       error: string;
       request_id?: string;
-      /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
       /** @enum {string} */
       errorCode?:
         | 'unsupported_duration'
@@ -4472,11 +4291,6 @@ export interface components {
     listVoicesResponse503: {
       error: string;
       request_id?: string;
-      /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
       /** @enum {string} */
       errorCode?: 'provider_not_configured';
     };
@@ -4520,22 +4334,12 @@ export interface components {
     createVoiceSessionResponse422: {
       error: string;
       request_id?: string;
-      /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
       /** @enum {string} */
       errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
     };
     createVoiceSessionResponse503: {
       error: string;
       request_id?: string;
-      /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
       /** @enum {string} */
       errorCode?: 'provider_not_configured';
     };
@@ -4978,11 +4782,6 @@ export interface components {
     createTranscriptionUploadResponse422: {
       error: string;
       request_id?: string;
-      /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
       /** @enum {string} */
       errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
     };
@@ -5009,22 +4808,12 @@ export interface components {
     createTranscriptionResponse422: {
       error: string;
       request_id?: string;
-      /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
       /** @enum {string} */
       errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
     };
     createTranscriptionResponse503: {
       error: string;
       request_id?: string;
-      /**
-       * @deprecated
-       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
-       */
-      name?: string;
       /** @enum {string} */
       errorCode?: 'provider_not_configured';
     };

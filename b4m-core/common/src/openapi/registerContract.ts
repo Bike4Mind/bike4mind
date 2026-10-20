@@ -2,7 +2,7 @@ import type { z } from 'zod';
 import { getOpenApiMetadata } from '@asteasolutions/zod-to-openapi';
 import { registry } from './registry';
 import { SECURITY_REQUIREMENT, JWT_SECURITY_REQUIREMENT } from './security';
-import { ErrorResponse, DEPRECATED_NAME_METADATA } from './schemas';
+import { ErrorResponse } from './schemas';
 // Specific file, not the barrel (`../schemas`): the barrel re-exports actions.ts,
 // which imports @bike4mind/hearth - absent in the install-only CI openapi job.
 import { ApiErrorSchema, ScopeForbiddenErrorSchema } from '../schemas/chat';
@@ -30,26 +30,6 @@ const headerObjects = (headers: Record<string, string>): NonNullable<ContractRes
     Object.entries(headers).map(([name, description]) => [name, { description, schema: { type: 'string' as const } }])
   );
 
-/**
- * Re-apply the deprecation to a `name` a bespoke error schema inherited from
- * `ApiErrorSchema` (see CONVENTIONS.md section 1: those extend the envelope rather than
- * re-declaring it). `.extend()` carries the field through as a plain optional string, so
- * without this the sunset notice would appear on the shared `ErrorResponse` component and
- * nowhere else. Keyed on field *identity*, not the name `name`, so a schema that declares
- * a `name` of its own - a person's name, say - is left alone.
- */
-function annotateInheritedName(schema: z.ZodTypeAny): z.ZodTypeAny {
-  // Structural rather than `z.ZodObject`: that type's shape values widen to $ZodType,
-  // which does not carry the `.openapi()` augmentation.
-  const objectSchema = schema as unknown as {
-    shape?: Record<string, z.ZodTypeAny>;
-    extend?: (shape: Record<string, z.ZodTypeAny>) => z.ZodTypeAny;
-  };
-  const inherited = objectSchema.shape?.name;
-  if (!inherited || inherited !== ApiErrorSchema.shape.name || !objectSchema.extend) return schema;
-  return objectSchema.extend({ name: inherited.openapi(DEPRECATED_NAME_METADATA) });
-}
-
 const DEPRECATION_HEADER_DOCS: Record<string, string> = {
   Deprecation: 'RFC 9745: when this endpoint was deprecated.',
   Sunset: 'RFC 8594: the first day this endpoint may stop being served.',
@@ -57,7 +37,7 @@ const DEPRECATION_HEADER_DOCS: Record<string, string> = {
 };
 
 /** The auto-injected scope 403's body: one shared component, $ref'd by every operation. */
-const SCOPE_FORBIDDEN_RESPONSE = annotateInheritedName(ScopeForbiddenErrorSchema).openapi('ScopeForbiddenResponse');
+const SCOPE_FORBIDDEN_RESPONSE = ScopeForbiddenErrorSchema.openapi('ScopeForbiddenResponse');
 
 /**
  * zod-to-openapi derives a parameter's `required`/nullable-ness from
@@ -94,9 +74,9 @@ function undoCoercionForOpenApi(schema: z.ZodTypeAny): z.ZodTypeAny {
 
 /**
  * Apply {@link undoCoercionForOpenApi} across a `pathParams`/`queryParams` object
- * schema's fields. Structural rather than plain `z.ZodObject` access for the same
- * reason as {@link annotateInheritedName}: shape values widen to `$ZodType`, which
- * does not carry `.safeExtend()`'s precise return type - cast back to `T` at the end,
+ * schema's fields. Structural rather than plain `z.ZodObject` access because shape
+ * values widen to `$ZodType`, which lacks the `.openapi()` augmentation and
+ * `.safeExtend()`'s precise return type - cast back to `T` at the end,
  * since `.safeExtend()` on a `ZodObject` always yields another `ZodObject`. `.safeExtend()`
  * rather than `.extend()`: zod 4 refuses to overwrite keys with `.extend()` on an object
  * that carries a `.refine()` (e.g. a `from <= to` range check), and throws at spec
@@ -142,7 +122,7 @@ export function registerContract(contract: EndpointContract): void {
         ? ErrorResponse
         : body.schema === ScopeForbiddenErrorSchema
           ? SCOPE_FORBIDDEN_RESPONSE
-          : annotateInheritedName(body.schema).openapi(componentName, {
+          : body.schema.openapi(componentName, {
               ...(body.example !== undefined && { example: body.example }),
             });
 

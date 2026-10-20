@@ -305,13 +305,6 @@ export type ChatQuestPollResult = z.infer<typeof ChatQuestPollResultSchema>;
 export const ApiErrorSchema = z.object({
   error: z.string(),
   request_id: z.string().optional(),
-  /**
-   * Deprecated, sunset 2026-12-01. The `name` of whatever was thrown - our own error
-   * classes usually, a library/driver class name on an unhandled 500 - added to every
-   * body by apps/client's errorHandler. Documented here so the runtime and the spec
-   * agree while it is still served; do not build on it. See CONVENTIONS.md section 1.
-   */
-  name: z.string().optional(),
 });
 
 /**
@@ -322,8 +315,8 @@ export const ApiErrorSchema = z.object({
  *
  * Derived from `ApiErrorSchema` rather than re-declaring `error`/`request_id`:
  * both of those 422s are *thrown*, so errorHandler serves the body and adds
- * `name`. Extending is what keeps that documented here (and what drops it again
- * on the sunset date) instead of leaving a bespoke copy behind to drift.
+ * `request_id`. Extending is what keeps that documented here instead of leaving a
+ * bespoke copy behind to drift.
  *
  * Also covers `spend_cap_exceeded`; the name is a published OpenAPI component, so it stays.
  */

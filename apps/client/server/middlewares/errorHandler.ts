@@ -10,21 +10,14 @@ import type { RateLimitErrorInfo } from '@server/cli/auth';
 export function buildErrorBody({
   error,
   requestId,
-  name,
   additionalInfo,
 }: {
   error: string;
   requestId: string | undefined;
-  name?: string;
   additionalInfo?: Record<string, unknown>;
 }): Record<string, unknown> {
   return {
     ...additionalInfo,
-    // Deprecated, remove on 2026-12-01 along with `name` in ApiErrorSchema /
-    // ErrorResponse. It leaks the thrower's class name onto a public wire and it
-    // shadows any `name` an endpoint put in additionalInfo. Documented in the
-    // envelope only for the deprecation window; see CONVENTIONS.md section 1.
-    ...(name !== undefined && { name }),
     error,
     request_id: requestId,
   };
@@ -37,7 +30,7 @@ export function buildErrorBody({
 export function httpErrorToResponse(
   error: HTTPError,
   requestId: string | undefined,
-  { name, rateLimitInBody = false }: { name?: string; rateLimitInBody?: boolean } = {}
+  { rateLimitInBody = false }: { rateLimitInBody?: boolean } = {}
 ): { status: number; headers: Record<string, string>; body: Record<string, unknown> } {
   const { retryAfter, rateLimitHeaders, ...rest }: RateLimitErrorInfo & Record<string, unknown> =
     error.additionalInfo ?? {};
@@ -49,7 +42,6 @@ export function httpErrorToResponse(
     headers,
     body: buildErrorBody({
       additionalInfo: rateLimitInBody ? error.additionalInfo : rest,
-      name,
       error: error.message || 'Server Error',
       requestId,
     }),
@@ -97,7 +89,7 @@ const errorHandler = (error: unknown, req: Request, res: Response) => {
     }
 
     if (errorObj instanceof HTTPError) {
-      httpResponse = httpErrorToResponse(errorObj, req.requestId, { name: errorObj.name, rateLimitInBody: true });
+      httpResponse = httpErrorToResponse(errorObj, req.requestId, { rateLimitInBody: true });
       statusCode = httpResponse.status;
     } else if ('status' in error && typeof (error as Record<string, unknown>).status === 'number') {
       statusCode = (error as Record<string, unknown>).status as number;
@@ -120,7 +112,6 @@ const errorHandler = (error: unknown, req: Request, res: Response) => {
 
     res.status(statusCode).json(
       buildErrorBody({
-        name: errorObj.name,
         error: castMessage ?? (errorObj.message || 'Server Error'),
         requestId: req.requestId,
       })
