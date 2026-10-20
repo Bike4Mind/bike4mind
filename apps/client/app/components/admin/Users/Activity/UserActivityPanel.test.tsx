@@ -15,6 +15,10 @@ const mocks = vi.hoisted(() => ({
   targetEntries: [] as unknown[],
   actorEntries: [] as unknown[],
   history: undefined as unknown,
+  listError: false,
+  hasNextPage: false,
+  fetchNextPage: vi.fn(),
+  creditError: false,
 }));
 
 vi.mock('@client/app/hooks/data/adminUserActivity', () => ({
@@ -27,13 +31,13 @@ vi.mock('@client/app/hooks/data/adminUserActivity', () => ({
     return {
       data: { pages: [{ entries, nextCursor: null, actorViewAvailable: mocks.actorViewAvailable }] },
       isLoading: false,
-      isError: false,
-      hasNextPage: false,
+      isError: mocks.listError,
+      hasNextPage: mocks.hasNextPage,
       isFetchingNextPage: false,
-      fetchNextPage: vi.fn(),
+      fetchNextPage: mocks.fetchNextPage,
     };
   },
-  useUserCreditHistory: () => ({ data: mocks.history, isLoading: false, isError: false }),
+  useUserCreditHistory: () => ({ data: mocks.history, isLoading: false, isError: mocks.creditError }),
 }));
 
 const history = (overrides: Partial<UserCreditHistory> = {}): UserCreditHistory => ({
@@ -65,6 +69,10 @@ beforeEach(() => {
   mocks.targetEntries = [makeAuditEntry({ id: 'a'.repeat(24), summary: 'Granted 100 credits' })];
   mocks.actorEntries = [makeAuditEntry({ id: 'b'.repeat(24), summary: 'Changed a role' })];
   mocks.history = history();
+  mocks.listError = false;
+  mocks.hasNextPage = false;
+  mocks.creditError = false;
+  mocks.fetchNextPage.mockClear();
 });
 
 describe('UserActivityPanel', () => {
@@ -128,6 +136,29 @@ describe('UserActivityPanel', () => {
 
     fireEvent.click(screen.getByTestId(`audit-table-row-${'c'.repeat(24)}`));
     expect(screen.queryByTestId('audit-drawer-open-in-log-link')).toBeNull();
+  });
+
+  it('surfaces a failed activity list and offers a retry by refresh', () => {
+    mocks.listError = true;
+    renderPanel();
+
+    expect(screen.getByText('Could not load activity. Refresh to try again.')).toBeTruthy();
+  });
+
+  it('surfaces a failed credit history', () => {
+    mocks.creditError = true;
+    renderPanel();
+
+    expect(screen.getByTestId('user-credit-chart-error')).toBeTruthy();
+  });
+
+  it('loads another page from the list footer', () => {
+    mocks.hasNextPage = true;
+    renderPanel();
+
+    fireEvent.click(screen.getByTestId('audit-table-load-more-btn'));
+
+    expect(mocks.fetchNextPage).toHaveBeenCalled();
   });
 
   it('says on the chart when the ledger may be incomplete', () => {
