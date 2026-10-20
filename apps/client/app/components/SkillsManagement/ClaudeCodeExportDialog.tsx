@@ -3,19 +3,18 @@ import { Alert, Button, DialogContent, DialogTitle, Modal, ModalClose, ModalDial
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DownloadIcon from '@mui/icons-material/Download';
 import { toast } from 'sonner';
-import { b4mOnlyHints, buildClaudeCodeInstallCommand, toAbsoluteUrl, toSkillMd } from '@bike4mind/common';
+import { toAbsoluteUrl } from '@bike4mind/common';
+import {
+  b4mOnlyHints,
+  buildClaudeCodeInstallCommand,
+  toSkillMd,
+  type SkillMdSkill,
+} from '@bike4mind/common/utils/skillMd';
 import { downloadData } from '@client/app/utils/download';
 
 export interface ClaudeCodeExportDialogProps {
   onClose: () => void;
-  skill: {
-    name: string;
-    description: string;
-    body: string;
-    argumentHint?: string;
-    disableModelInvocation?: boolean;
-    allowedTools?: string[];
-  };
+  skill: SkillMdSkill & { allowedTools?: string[] };
   /** App path of the skill or listing page, stamped into the file as its source. */
   sourcePath: string;
   version?: number;
@@ -52,7 +51,7 @@ const ClaudeCodeExportDialog: FC<ClaudeCodeExportDialogProps> = ({
     try {
       command = buildClaudeCodeInstallCommand(skill.name, content);
     } catch {
-      toast.error(`"${skill.name}" is not a valid Claude Code skill name - use Download and rename the folder`);
+      toast.error(`Could not build an install command for "${skill.name}" - use Download instead`);
       return;
     }
     Promise.resolve()

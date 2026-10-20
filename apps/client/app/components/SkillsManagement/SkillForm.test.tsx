@@ -2,7 +2,7 @@ import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
-import { toSkillMd } from '@bike4mind/common';
+import { toSkillMd } from '@bike4mind/common/utils/skillMd';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { SkillForm } from './SkillForm';
 
@@ -58,15 +58,25 @@ describe('SkillForm SKILL.md import', () => {
 
   it('flags a Bike4Mind export and warns when it is a third-party market skill', () => {
     const skill = { name: 'mine', description: 'd', body: 'b' };
+    const ownUrl = `${window.location.origin}/skills/1`;
     renderForm();
-    paste(toSkillMd(skill, { sourceUrl: 'https://app.example/skills/1' }));
+    paste(toSkillMd(skill, { sourceUrl: ownUrl }));
     const own = screen.getByTestId('skill-form-import-from-b4m');
     expect(own).toHaveTextContent('came from Bike4Mind');
-    expect(own.querySelector('a')).toHaveAttribute('href', 'https://app.example/skills/1');
+    expect(own.querySelector('a')).toHaveAttribute('href', ownUrl);
     expect(screen.queryByTestId('skill-form-import-dropped')).not.toBeInTheDocument();
 
-    paste(toSkillMd(skill, { sourceUrl: 'https://app.example/skills/market/2', thirdParty: true }));
+    paste(toSkillMd(skill, { sourceUrl: `${window.location.origin}/skills/market/2`, thirdParty: true }));
     expect(screen.getByTestId('skill-form-import-from-b4m')).toHaveTextContent("another author's Skill Market skill");
+  });
+
+  it('does not link a stamp from another origin and words it neutrally', () => {
+    renderForm();
+    paste(toSkillMd({ name: 'mine', description: 'd', body: 'b' }, { sourceUrl: 'https://evil.example/x' }));
+    const alert = screen.getByTestId('skill-form-import-from-b4m');
+    expect(alert.querySelector('a')).toBeNull();
+    expect(alert).toHaveTextContent('https://evil.example/x');
+    expect(alert).not.toHaveTextContent('came from Bike4Mind');
   });
 
   it('shows an error when the chosen file cannot be read', async () => {
