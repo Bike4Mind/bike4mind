@@ -771,7 +771,7 @@ describe('start command system context', () => {
 });
 
 describe('reconnect command', () => {
-  const reconnectEvent = (target: { executionId?: string; sessionId?: string }) => ({
+  const reconnectEvent = (target: { executionId?: string; sessionId?: string; requestId?: string }) => ({
     requestContext: { connectionId: 'conn-1', domainName: 'example.com', stage: 'dev' },
     body: JSON.stringify({ accessToken: 'jwt', action: 'agent_execute', command: 'reconnect', ...target }),
   });
@@ -784,6 +784,15 @@ describe('reconnect command', () => {
     mockApiGwSend.mockResolvedValue(undefined);
     vi.mocked(verifyApiKey).mockRejectedValue(new Error('not a key'));
     vi.mocked(verifyJwtToken).mockResolvedValue({ id: 'user-1' } as never);
+  });
+
+  it.each([true, false])('echoes the requestId when found is %s', async found => {
+    mockFindActiveBySessionId.mockResolvedValueOnce(found ? { ...baseExecution, status: 'paused' } : null);
+    const invoke = func as unknown as (...arguments_: unknown[]) => Promise<unknown>;
+
+    await invoke(reconnectEvent({ sessionId: 'session-1', requestId: 'request-123' }), {}, noopLogger);
+
+    expect(sentPayloads()[0]).toMatchObject({ requestId: 'request-123', found });
   });
 
   it('echoes the execution sessionId on a found run, so the client never has to correlate', async () => {
