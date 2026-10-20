@@ -209,7 +209,7 @@ export const removeFileFromLake = async (
     // ever softened (e.g. to make a retry "quietly" tolerate a non-member), the restore path's
     // absent ownership test becomes an unbounded add door. Do not soften it without re-deriving
     // that authorization from scratch.
-    // Restamps so a retried remove repairs a post-pull reassign throw (rolled back on transactional
+    // Restamps so a by-id remove retry repairs a post-pull reassign throw (rolled back on transactional
     // routes); costs a findById + findByDatalakeTags per expected NotFound in finalizePrefixArmLeaves.
     if (file) await reassignStorageOwner(file.id, db);
     throw new NotFoundError('File not found in this data lake');
@@ -229,8 +229,8 @@ export const removeFileFromLake = async (
     await recordLakeMembershipChange({ actor, lake, fabFileId: file.id, action: 'removed', origin }, { db, logger });
   }
   // Unconditional, unlike the event above: the losing half of two concurrent removals has already
-  // pulled the tags and would otherwise never recompute the owner. A throw here is repaired by
-  // retrying a remove door (the refusal above restamps), but not a toggle, whose retry re-adds.
+  // pulled the tags and would otherwise never recompute the owner. A throw here is repaired only by a retry
+  // that targets this file id again (the refusal above restamps); a connector or toggle retry does not.
   await reassignStorageOwner(file.id, db);
   return { contentTags };
 };

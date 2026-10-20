@@ -116,6 +116,17 @@ export const useDeleteFileTag = () => {
   });
 };
 
+/** Thrown when a later chunk fails after earlier chunks were already committed. */
+class PartialToggleError extends Error {
+  constructor(
+    readonly applied: number,
+    readonly total: number
+  ) {
+    super(`Tag toggle applied to ${applied} of ${total} files`);
+    this.name = 'PartialToggleError';
+  }
+}
+
 /** A toggled file, plus how many lakes it joined solely via a content-prefix tag. */
 type ToggledFile = IFabFileDocument & { prefixArmJoinedLakeCount?: number };
 
@@ -128,12 +139,17 @@ export function useToggleTagToFiles() {
       // Sequential, one transaction per chunk: the server caps a toggle at MAX_TOGGLE_TAGS_FILE_IDS.
       // Safe to split because the toggle decides add-or-remove per file, not across the batch.
       const toggled: ToggledFile[] = [];
-      for (const ids of chunk(params.ids, MAX_TOGGLE_TAGS_FILE_IDS)) {
-        const response = await api.post<ToggledFile[]>(`/api/files/tags/toggle`, {
-          ids,
-          tags: params.tags.map(tag => tag.name),
-        });
-        toggled.push(...response.data);
+      try {
+        for (const ids of chunk(params.ids, MAX_TOGGLE_TAGS_FILE_IDS)) {
+          const response = await api.post<ToggledFile[]>(`/api/files/tags/toggle`, {
+            ids,
+            tags: params.tags.map(tag => tag.name),
+          });
+          toggled.push(...response.data);
+        }
+      } catch (error) {
+        if (toggled.length > 0) throw new PartialToggleError(toggled.length, params.ids.length);
+        throw error;
       }
       return toggled;
     },
@@ -153,7 +169,11 @@ export function useToggleTagToFiles() {
       }
       if (joinedLakeCount > 0) queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
     },
-    onError: () => {
+    onError: error => {
+      if (error instanceof PartialToggleError) {
+        toast.error(t('file_actions.toggle_tag_partial', { applied: error.applied, total: error.total }));
+        return;
+      }
       toast.error(t('file_actions.failed_to_add_tag'));
     },
     // A failed chunk leaves earlier chunks written, so the cache is stale on either outcome.
