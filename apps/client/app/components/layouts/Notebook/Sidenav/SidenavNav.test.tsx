@@ -446,12 +446,17 @@ describe('default prompts', () => {
 
   const sidebarNamesIn = (text: string) =>
     text
-      .split(/(?<=[.!?])\s+/)
+      // A new sentence starts with a capital or a quote, so a mid-sentence "the ? shortcut" does not split one.
+      .split(/(?<=[.!?])\s+(?=[A-Z"])/)
       .filter(sentence => /\b(side ?bar|sidenav)\b/i.test(sentence))
       .flatMap(sentence => [...sentence.matchAll(/"([^"]+)"/g)].map(match => match[1]));
 
   it('reads the help center prompt among them', () => {
     expect(defaultPrompts.map(prompt => prompt.key)).toContain('HelpCenterPrompt');
+  });
+
+  it('keeps a quoted name after a mid-sentence ? in its sidebar sentence', () => {
+    expect(sidebarNamesIn('Open "Help" or press the ? key in the sidebar. Then "Other" elsewhere.')).toEqual(['Help']);
   });
 
   it('name only sidebar rows that exist', () => {
