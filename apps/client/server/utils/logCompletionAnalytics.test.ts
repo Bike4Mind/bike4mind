@@ -160,6 +160,17 @@ describe('logCompletionAnalytics - credits logged', () => {
     expect(creditsLogged()).toBe(0);
   });
 
+  it('logs the settled credits even when the completion reported no output tokens', async () => {
+    await logCompletionAnalytics({
+      ...baseParams,
+      finalOutputTokens: 0,
+      finalCreditsUsed: 7,
+      body: { model: 'gpt-4.1', messages: [] } as any,
+    });
+
+    expect(creditsLogged()).toBe(7);
+  });
+
   it('falls back to the unrounded expectation to two decimals, with no 1-credit minimum', async () => {
     vi.mocked(getTextModelCost).mockReturnValueOnce(0.00001);
 
