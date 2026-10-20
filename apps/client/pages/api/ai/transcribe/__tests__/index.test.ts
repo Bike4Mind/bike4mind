@@ -51,13 +51,15 @@ vi.mock('@client/services/operationsModelService', () => ({
   getEffectiveApiKeyByBackend: (...a: unknown[]) => mocks.getEffectiveApiKeyByBackend(...a),
 }));
 // Stands in for the real reservation: settle writes the ledger row through subtractCredits and, like
-// the real one, logs rather than throws when that write fails.
+// the real one, logs rather than throws when that write fails, and writes no row for a 0 charge
+// (settleCreditHold in creditHold.ts, chargeDirectly in creditPreflight.ts).
 const { fakeHold } = vi.hoisted(() => ({
   fakeHold: (
     subtract: (...a: unknown[]) => unknown,
     args: { userId: string; logger: { error: (...a: unknown[]) => void } }
   ) => ({
     settle: async (credits: number, entry: Record<string, unknown>) => {
+      if (credits === 0) return 0;
       try {
         await subtract({ ...entry, ownerId: args.userId, credits }, {});
       } catch (err) {
