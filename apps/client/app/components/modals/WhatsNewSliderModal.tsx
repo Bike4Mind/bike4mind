@@ -696,28 +696,6 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger,
             ...(stackVideo && { pt: '52px' }),
           }}
         >
-          {stackVideo && (
-            <Box
-              data-testid="whats-new-slide-video-slot"
-              sx={{
-                flexShrink: 0,
-                width: '100%',
-                ...(isLandscapeVideo ? { aspectRatio: '16 / 9' } : { height: '50vh', minHeight: '240px' }),
-                // Desktop sheet height minus its insets and ~200px kept for the date, title and first lines
-                ...(!isMobile && {
-                  width: 'min(100%, calc((min(760px, 100vh - 48px) - 292px) * 16 / 9))',
-                  alignSelf: 'center',
-                }),
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                mb: 2,
-              }}
-            >
-              {renderVideo()}
-            </Box>
-          )}
-
           {/* Image Section - Top on mobile */}
           {isMobile && showImage && (
             <Box
@@ -767,7 +745,6 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger,
           <Box
             sx={{
               width: isMobile || stackVideo ? '100%' : slideVideo || showImage ? '400px' : '100%',
-              ...(!isMobile && stackVideo && { minHeight: '140px' }),
               padding: 0,
               display: 'flex',
               flexDirection: 'column',
@@ -791,6 +768,22 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger,
                 },
               }}
             >
+              {/* Inside the scroll area so the video scrolls away with the text */}
+              {stackVideo && (
+                <Box
+                  data-testid="whats-new-slide-video-slot"
+                  sx={{
+                    width: '100%',
+                    ...(isLandscapeVideo ? { aspectRatio: '16 / 9' } : { height: '50vh', minHeight: '240px' }),
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    mb: 2,
+                  }}
+                >
+                  {renderVideo()}
+                </Box>
+              )}
               <Box
                 sx={theme => ({
                   display: 'block',
