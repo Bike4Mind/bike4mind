@@ -1,3 +1,5 @@
+import { PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
+
 /**
  * First-run / onboarding helpers, extracted as pure functions so the branchy logic in
  * `ModalManager` (brand-new-account grace) and `EmailVerificationBanner` (nag cadence)
@@ -47,4 +49,11 @@ export function shouldShowVerificationNag(
   const dismissedAt = parseInt(dismissedAtRaw, 10);
   if (!Number.isFinite(dismissedAt)) return true;
   return now - dismissedAt >= nagIntervalMs;
+}
+
+/** Signed up openly and still owes email verification before the starter grant lands. */
+export function isAwaitingEmailVerification(
+  user: { emailVerified?: boolean | null; tags?: string[] | null } | null | undefined
+): boolean {
+  return user?.emailVerified === false && (user.tags ?? []).includes(PENDING_FREE_CREDITS_TAG);
 }
