@@ -9,14 +9,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'crypto';
 import { createMocks } from 'node-mocks-http';
 
-const { mockFind, mockFindOne, mockFindVersion, mockMemberOrgs, mockAdminOrgs, mockFindOrg } = vi.hoisted(() => ({
-  mockFind: vi.fn(),
-  mockFindOne: vi.fn(),
-  mockFindVersion: vi.fn(),
-  mockMemberOrgs: vi.fn(),
-  mockAdminOrgs: vi.fn(),
-  mockFindOrg: vi.fn(),
-}));
+const { mockFind, mockFindOne, mockFindVersion, mockFindVersions, mockMemberOrgs, mockAdminOrgs, mockFindOrg } =
+  vi.hoisted(() => ({
+    mockFind: vi.fn(),
+    mockFindOne: vi.fn(),
+    mockFindVersion: vi.fn(),
+    mockFindVersions: vi.fn(),
+    mockMemberOrgs: vi.fn(),
+    mockAdminOrgs: vi.fn(),
+    mockFindOrg: vi.fn(),
+  }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   methodNotAllowedHandler: () => (_req: unknown, res: { status: (n: number) => { end: () => void } }) =>
@@ -42,7 +44,7 @@ vi.mock('@server/middlewares/rateLimit', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   SkillListing: { find: mockFind, findOne: mockFindOne },
-  SkillListingVersion: { findById: mockFindVersion },
+  SkillListingVersion: { findById: mockFindVersion, find: mockFindVersions },
   adminSettingsRepository: {},
   inboxRepository: {},
 }));
@@ -111,6 +113,9 @@ beforeEach(() => {
   mockAdminOrgs.mockResolvedValue([]);
   mockFindOrg.mockResolvedValue({ id: ORG_ID, name: 'Acme Labs' });
   mockFindVersion.mockImplementation(async (versionId: string) => doc(version(versionId.slice(2))));
+  mockFindVersions.mockImplementation(async ({ _id }: { _id: { $in: string[] } }) =>
+    _id.$in.map(versionId => doc(version(versionId.slice(2))))
+  );
   mockFind.mockReturnValue({ sort: async () => [doc(listing(LISTING_A)), doc(listing(LISTING_B))] });
   mockFindOne.mockImplementation(async ({ _id }: { _id: string }) => doc(listing(_id)));
 });
@@ -133,7 +138,7 @@ describe('GET /api/v1/skills/market/claude-marketplace.json', () => {
     const body = res._getJSONData();
     expect(body.name).toBe('b4m-acme-labs');
     expect(body.forceRemoveDeletedPlugins).toBe(true);
-    expect(body.plugins.map((p: { name: string }) => p.name)).toEqual(['review-pr', 'review-pr-000002']);
+    expect(body.plugins.map((p: { name: string }) => p.name)).toEqual(['review-pr-00000001', 'review-pr-00000002']);
     expect(body.plugins[0]).toMatchObject({
       version: '3',
       description: 'Review a PR',
@@ -158,12 +163,14 @@ describe('GET /api/v1/skills/market/claude-marketplace.json', () => {
     expect(mockFind).not.toHaveBeenCalled();
   });
 
-  it('skips a listing whose current version is no longer approved', async () => {
-    mockFindVersion.mockImplementation(async (versionId: string) =>
-      doc({ ...version(versionId.slice(2)), reviewStatus: versionId.endsWith('1') ? 'superseded' : 'approved' })
+  it("skips a listing whose current version is no longer approved, without renaming the other's plugin", async () => {
+    mockFindVersions.mockImplementation(async ({ _id }: { _id: { $in: string[] } }) =>
+      _id.$in.map(versionId =>
+        doc({ ...version(versionId.slice(2)), reviewStatus: versionId.endsWith('1') ? 'superseded' : 'approved' })
+      )
     );
     const { res } = await call(feedHandler, { orgId: ORG_ID });
-    expect(res._getJSONData().plugins.map((p: { name: string }) => p.name)).toEqual(['review-pr']);
+    expect(res._getJSONData().plugins.map((p: { name: string }) => p.name)).toEqual(['review-pr-00000002']);
   });
 });
 

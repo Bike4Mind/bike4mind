@@ -25,10 +25,11 @@ export function claudeMarketplaceNameFor(org: { id: string; name?: string }): st
   return name ? `b4m-${name}` : `b4m-org-${org.id.slice(-8)}`;
 }
 
-/** The listing's skill name, made unique within one feed by suffixing the tail of its id. */
-export function claudePluginNameFor(listingName: string, listingId: string, taken: Set<string>): string {
-  const base = claudeSkillNameFor(listingName);
-  const name = taken.has(base) ? `${base}-${listingId.slice(-6)}` : base;
-  taken.add(name);
-  return name;
-}
+/**
+ * `<skill-name-slug>-<listing id tail>`. Depends on the listing alone, so the dialog can show it
+ * without knowing the other listings, and delisting one listing never renames another's plugin
+ * (which the feed's `forceRemoveDeletedPlugins` would uninstall). 8 hex chars reach past the
+ * ObjectId counter into its per-process random bytes, so a clash between same-named listings is negligible.
+ */
+export const claudePluginNameFor = (listingName: string, listingId: string): string =>
+  `${claudeSkillNameFor(listingName)}-${listingId.slice(-8)}`;

@@ -68,11 +68,13 @@ const zipOf = (listing: ISkillListing, version: ISkillListingVersion) =>
 async function approvedVersionOf(listing: ISkillListing): Promise<ISkillListingVersion | null> {
   if (!listing.currentApprovedVersionId) return null;
   const doc = await SkillListingVersion.findById(listing.currentApprovedVersionId);
-  const version = doc?.toJSON() as unknown as ISkillListingVersion | undefined;
-  return version && ['approved', 'auto_approved'].includes(version.reviewStatus) ? version : null;
+  return servable(doc?.toJSON() as unknown as ISkillListingVersion | undefined);
 }
 
-// Not the feed's (collision-suffixed) plugin name, so the zip does not depend on the other listings.
+const servable = (version: ISkillListingVersion | undefined): ISkillListingVersion | null =>
+  version && ['approved', 'auto_approved'].includes(version.reviewStatus) ? version : null;
+
+// The bare skill name, not the plugin name, so the skill reads as /review-pr inside the plugin.
 const skillDirName = (version: ISkillListingVersion) => claudeSkillNameFor(version.snapshot.name);
 
 /** The marketplace.json for one org: its approved Organization listings, oldest first. */
@@ -87,26 +89,34 @@ export async function buildClaudeMarketplace(
   }).sort({ _id: 1 });
   const listings = docs.map(d => d.toJSON() as unknown as ISkillListing);
 
-  // Oldest first, so a later listing with the same name is the one that gets the id suffix.
-  const taken = new Set<string>();
-  const plugins: ClaudeMarketplace['plugins'] = [];
+  const versionIds = listings.flatMap(l => (l.currentApprovedVersionId ? [l.currentApprovedVersionId] : []));
+  const versionDocs = await SkillListingVersion.find({ _id: { $in: versionIds } });
+  const versions = new Map(
+    versionDocs.map(d => {
+      const version = d.toJSON() as unknown as ISkillListingVersion;
+      return [String(version.id), version];
+    })
+  );
+
   // ponytail: builds every zip per fetch; cache the sha on the version doc if an org has hundreds of listings.
-  for (const listing of listings) {
-    const version = await approvedVersionOf(listing);
-    if (!version) continue;
-    const zip = await zipOf(listing, version);
-    plugins.push({
-      name: claudePluginNameFor(version.snapshot.name, String(listing.id), taken),
-      description: version.snapshot.description,
-      version: String(version.version),
-      source: { source: 'archive', url: pluginZipUrl(String(listing.id)), sha256: sha256(zip) },
-    });
-  }
+  const plugins = await Promise.all(
+    listings.map(async listing => {
+      const version = servable(versions.get(String(listing.currentApprovedVersionId)));
+      if (!version) return null;
+      const zip = await zipOf(listing, version);
+      return {
+        name: claudePluginNameFor(version.snapshot.name, String(listing.id)),
+        description: version.snapshot.description,
+        version: String(version.version),
+        source: { source: 'archive' as const, url: pluginZipUrl(String(listing.id)), sha256: sha256(zip) },
+      };
+    })
+  );
 
   return {
     name: claudeMarketplaceNameFor(org),
     owner: { name: org.name || 'Bike4Mind' },
     forceRemoveDeletedPlugins: true,
-    plugins,
+    plugins: plugins.filter(p => p !== null),
   };
 }

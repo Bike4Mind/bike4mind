@@ -17,10 +17,9 @@ describe('claudeMarketplaceNameFor', () => {
 });
 
 describe('claudePluginNameFor', () => {
-  it('suffixes the id tail on a collision', () => {
-    const taken = new Set<string>();
-    expect(claudePluginNameFor('review-pr', 'aaaaaa111111', taken)).toBe('review-pr');
-    expect(claudePluginNameFor('review-pr', 'bbbbbb222222', taken)).toBe('review-pr-222222');
+  it('suffixes the listing id tail, so same-named listings get distinct names', () => {
+    expect(claudePluginNameFor('Review PR', 'aaaa11111111')).toBe('review-pr-11111111');
+    expect(claudePluginNameFor('review-pr', 'bbbb22222222')).toBe('review-pr-22222222');
   });
 });
 

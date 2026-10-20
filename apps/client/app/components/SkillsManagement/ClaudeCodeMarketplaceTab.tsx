@@ -3,11 +3,12 @@ import { Button, Stack, Typography } from '@mui/joy';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import KeyIcon from '@mui/icons-material/Key';
 import { toast } from 'sonner';
-import { ApiKeyScope, claudeMarketplaceNameFor, claudeSkillNameFor, toAbsoluteUrl } from '@bike4mind/common';
+import { ApiKeyScope, claudeMarketplaceNameFor, claudePluginNameFor, toAbsoluteUrl } from '@bike4mind/common';
 import { useCreateUserApiKey } from '@client/app/hooks/data/userApiKeys';
 
 export interface ClaudeCodeMarketplaceTabProps {
   org: { id: string; name: string };
+  listingId: string;
   skillName: string;
 }
 
@@ -18,7 +19,7 @@ const KEY_PLACEHOLDER = 'b4m_<your skills:read key>';
  * org's plugin feed (pages/api/v1/skills/market/claude-marketplace.json.ts). `skills:read` is a
  * confined scope, so the New-Key modals don't offer it and the key is minted here instead.
  */
-const ClaudeCodeMarketplaceTab: FC<ClaudeCodeMarketplaceTabProps> = ({ org, skillName }) => {
+const ClaudeCodeMarketplaceTab: FC<ClaudeCodeMarketplaceTabProps> = ({ org, listingId, skillName }) => {
   const [key, setKey] = useState<string | null>(null);
   const createKey = useCreateUserApiKey({ onSuccess: result => setKey(result.key) });
 
@@ -101,7 +102,7 @@ const ClaudeCodeMarketplaceTab: FC<ClaudeCodeMarketplaceTabProps> = ({ org, skil
       <Stack spacing={1}>
         <Typography level="title-sm">2. Start claude once, then install</Typography>
         <Typography component="pre" level="body-xs" sx={{ m: 0 }} data-testid="skill-claude-code-marketplace-install">
-          /plugin install {claudeSkillNameFor(skillName)}@{marketplace}
+          /plugin install {claudePluginNameFor(skillName, listingId)}@{marketplace}
         </Typography>
         <Typography level="body-xs" textColor="text.tertiary">
           Or run <code>/plugin</code> to browse every skill in the marketplace.
