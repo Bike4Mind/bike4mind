@@ -27,7 +27,7 @@ export const useCreditSyncSignal = create<{ syncCount: number; markSynced: () =>
  * Backstop for the post-turn hold when no sync ever lands (listener unmounted, request lost).
  * Must outlast the last `BALANCE_SYNC_DELAYS_MS` entry plus its round trip.
  */
-export const POST_STREAM_HOLD_MAX_MS = 7000;
+export const POST_STREAM_HOLD_MAX_MS = 10000;
 
 /**
  * Server-side credit reservation dips the balance to a worst-case value for
