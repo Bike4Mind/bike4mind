@@ -1,4 +1,4 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, QueryObserver } from '@tanstack/react-query';
 import { act, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IUserDocument } from '@bike4mind/common';
@@ -130,6 +130,36 @@ describe('CreditBalanceSyncListener', () => {
         await vi.advanceTimersByTimeAsync(0);
       });
       expect(api.get).not.toHaveBeenCalled();
+    });
+
+    it('leaves the cached org data untouched when the cancelled refetch resolves late', async () => {
+      useLLM.setState({ organizationId: 'org-1' });
+      const orgKey = ['organizations', 'user', 'u1'];
+      queryClient.setQueryData(orgKey, { credits: 100 });
+      let resolveRefetch!: (data: { credits: number }) => void;
+      const observer = new QueryObserver(queryClient, {
+        queryKey: orgKey,
+        queryFn: () =>
+          new Promise<{ credits: number }>(res => {
+            resolveRefetch = res;
+          }),
+        staleTime: Infinity,
+      });
+      const unsubscribe = observer.subscribe(() => undefined);
+      renderListener();
+      runTurn();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(BALANCE_SYNC_DELAYS_MS[0]);
+      });
+
+      runTurn();
+      await act(async () => {
+        resolveRefetch({ credits: 50 });
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(queryClient.getQueryData(orgKey)).toEqual({ credits: 100 });
+      unsubscribe();
     });
 
     it('leaves the organization queries alone when no pull is running', () => {
