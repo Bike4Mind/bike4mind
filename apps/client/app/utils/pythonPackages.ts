@@ -18,6 +18,9 @@ const FROM_IMPORT_LINE = /^[ \t]*from[ \t]+([\w.]+)[ \t]+import\b/gm;
 
 const topLevelModule = (dotted: string): string => dotted.split('.')[0];
 
+// Drops what the line regex can catch that is not a module: `*`, a `\` continuation.
+const MODULE_NAME = /^[A-Za-z_]\w*$/;
+
 /**
  * Every module referenced by import statements, deduplicated, as top-level import names.
  * Handles `import a.b`, `import a, b as c`, and `from a.b import c`; relative imports are ignored.
@@ -28,13 +31,13 @@ export function detectPythonImports(code: string): string[] {
   for (const match of code.matchAll(IMPORT_LINE)) {
     for (const clause of match[1].split(',')) {
       const name = topLevelModule(clause.trim().split(/\s+/)[0] ?? '');
-      if (name) found.add(name);
+      if (MODULE_NAME.test(name)) found.add(name);
     }
   }
 
   for (const match of code.matchAll(FROM_IMPORT_LINE)) {
     const name = topLevelModule(match[1]);
-    if (name) found.add(name);
+    if (MODULE_NAME.test(name)) found.add(name);
   }
 
   return Array.from(found);

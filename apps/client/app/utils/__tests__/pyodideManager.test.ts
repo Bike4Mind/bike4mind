@@ -380,6 +380,57 @@ describe('sandbox transport', () => {
     }
   });
 
+  it('settles a run waiting on the runtime load when it is interrupted', async () => {
+    const { pyodideManager, pending } = await readySandbox();
+    void pending.catch(() => {});
+    const run = pyodideManager.execute('print(1)').then(
+      () => 'resolved',
+      (error: Error) => error.message
+    );
+
+    pyodideManager.interrupt();
+
+    await expect(run).resolves.toBe('Execution interrupted');
+    // The replacement load is the live one, not marked failed by the interrupted load.
+    expect(pyodideManager.getState().error).toBeNull();
+  });
+
+  it('an interrupt during the handshake does not leave a timer that tears down the next sandbox', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.resetModules();
+      const { pyodideManager, PYODIDE_SANDBOX_SRC } = await import('../pyodideManager');
+      const first = pyodideManager.initialize().then(
+        () => 'resolved',
+        (error: Error) => error.message
+      );
+      await Promise.resolve();
+
+      pyodideManager.interrupt();
+      await expect(first).resolves.toBe('Execution interrupted');
+
+      const replacement = document.querySelector(`iframe[src="${PYODIDE_SANDBOX_SRC}"]`) as HTMLIFrameElement;
+      expect(replacement).not.toBeNull();
+      // Keep the replacement's own handshake alive past the first one's 15s deadline.
+      Object.defineProperty(replacement, 'contentWindow', { configurable: true, value: { postMessage: () => {} } });
+      window.dispatchEvent(
+        new MessageEvent('message', { data: { type: 'pyodide-sandbox-ready' }, source: replacement.contentWindow })
+      );
+      await vi.advanceTimersByTimeAsync(14_000);
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: { type: 'initializing', progress: 10, message: 'loading' },
+          source: replacement.contentWindow,
+        })
+      );
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      expect(replacement.isConnected).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('lets a slow load keep going as long as it reports progress', async () => {
     vi.useFakeTimers();
     try {
@@ -430,6 +481,16 @@ describe('execution results', () => {
 
   afterEach(() => {
     document.querySelectorAll('iframe').forEach(node => node.remove());
+  });
+
+  it('rejects a second run while one is pending instead of orphaning the first', async () => {
+    const { pyodideManager, fromSandbox } = await readySandbox();
+    const first = pyodideManager.execute('print(1)');
+
+    await expect(pyodideManager.execute('print(2)')).rejects.toThrow('Another Python script is already running');
+
+    fromSandbox({ type: 'result', result: { success: true, output: '1\n', plots: [], executionTime: 1 } });
+    await expect(first).resolves.toMatchObject({ success: true, output: '1\n' });
   });
 
   it('surfaces the worker status while a run is loading packages', async () => {

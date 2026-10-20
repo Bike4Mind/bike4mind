@@ -25,6 +25,10 @@ describe('detectPythonImports', () => {
     expect(detectPythonImports(code)).toEqual(['torch', 'os', 'numpy', 'transformers']);
   });
 
+  it('drops tokens that are not module names', () => {
+    expect(detectPythonImports('import numpy as np, \\\n    pandas\nimport *')).toEqual(['numpy']);
+  });
+
   it('ignores relative and commented-out imports', () => {
     expect(detectPythonImports('from . import utils\nfrom .models import Net\n# import torch')).toEqual([]);
   });
