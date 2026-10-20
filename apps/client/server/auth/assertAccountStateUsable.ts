@@ -1,5 +1,5 @@
 import { userService } from '@bike4mind/services';
-import { ForbiddenError, UnauthorizedError } from '@server/utils/errors';
+import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 
 export function assertAccountStateUsable(user: Parameters<typeof userService.accountBlockReasons>[0]): void {
   switch (userService.accountBlockReasons(user)[0]) {

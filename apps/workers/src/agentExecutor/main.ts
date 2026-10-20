@@ -8,7 +8,7 @@ import {
 } from '@aws-sdk/client-sqs';
 import { connectDB, mongoose } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { handler } from '@workers/queueHandlers/agentExecutor';
 import { createExecutorApp, runQueueMessage, VISIBILITY_SECONDS, EXECUTION_BUDGET_MS } from './server';
 import type { QueueMessageDeps } from './queueMessage';

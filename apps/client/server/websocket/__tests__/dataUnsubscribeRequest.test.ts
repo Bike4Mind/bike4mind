@@ -46,7 +46,7 @@ vi.mock('@bike4mind/database', () => ({
   QuerySubscription: { updateOne: (...args: unknown[]) => mockUpdateOne(...args) },
 }));
 
-vi.mock('@server/utils/errors', () => ({
+vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   ForbiddenError: class ForbiddenError extends Error {},
   NotFoundError: class NotFoundError extends Error {},
   UnauthorizedError: class UnauthorizedError extends Error {},
@@ -61,7 +61,7 @@ vi.mock('sst', () => ({
 }));
 
 import { func } from '../dataUnsubscribeRequest';
-import { ForbiddenError, UnauthorizedError } from '@server/utils/errors';
+import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 
 const baseEvent = (accessToken = 'token-123') => ({
   requestContext: { connectionId: 'conn-1' },

@@ -4,7 +4,7 @@ import {
   ACQUISITION_FIELD_LIMIT,
   readAcquisitionCookies,
   type AcquisitionTouches,
-} from '@client/lib/subscriptions/acquisition';
+} from '@bike4mind/server-utils/lib/subscriptions/acquisition';
 import { parseCookies } from './cookies';
 import { resolveServerConsent } from './serverConsent';
 

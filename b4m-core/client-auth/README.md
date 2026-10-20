@@ -27,3 +27,7 @@ process. Keep it: a new export that reads `process.env` or touches `fs` belongs 
   so switching between hosted and self-hosted does not force a re-login.
 - `selectApiEndpoint` / `parseApiUrl` / `ApiEndpoint` - endpoint resolution, with "unconfigured" as
   an explicit state rather than an empty string.
+
+## Publishing
+
+Released to npm from CI through npm trusted publishing (OIDC); no npm token is stored.

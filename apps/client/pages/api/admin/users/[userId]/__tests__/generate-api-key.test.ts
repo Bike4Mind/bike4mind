@@ -44,7 +44,7 @@ vi.mock('@server/middlewares/csrfProtection', () => ({
   csrfProtection: () => vi.fn(),
 }));
 
-vi.mock('@server/utils/errors', () => ({
+vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   ForbiddenError: class ForbiddenError extends Error {},
 }));
 
@@ -90,7 +90,7 @@ vi.mock('@server/utils/analyticsLog', () => ({
 }));
 
 import '../generate-api-key';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
 
 const activeLake = (id: string) => ({ id, status: 'active', createdByUserId: 'someone', name: id, slug: id });

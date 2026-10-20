@@ -6,7 +6,7 @@ import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { respond } from '@server/utils/respond';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { isValidObjectId, toObjectIdString } from '@server/utils/objectId';
+import { isValidObjectId, toObjectIdString } from '@bike4mind/server-utils/utils/objectId';
 import { z } from 'zod';
 
 const MAX_SHARED_WITH_USERS = 50;

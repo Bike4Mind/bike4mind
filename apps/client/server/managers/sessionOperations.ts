@@ -2,7 +2,7 @@ import { Ability } from '@server/auth/ability';
 import { accessibleBy } from '@casl/mongoose';
 import { mongoose, Quest, Session } from '@bike4mind/database';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
-import { NotFoundError } from '@server/utils/errors';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import {
   Permission,
   IChatHistoryItem,

@@ -1,6 +1,6 @@
 import { CloudFrontClient, GetDistributionCommand } from '@aws-sdk/client-cloudfront';
 import { CloudWatchClient, GetMetricDataCommand, ListMetricsCommand } from '@aws-sdk/client-cloudwatch';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import {
   parseWebAclNameFromArn,
   rangeToCacheSegment,

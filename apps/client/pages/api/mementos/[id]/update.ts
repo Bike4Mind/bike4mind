@@ -3,7 +3,7 @@ import { Memento } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { MementoGroomingService } from '../../../../services/MementoGroomingService';
 import { UpdateMementoSchema } from '@server/validators/mementoValidators';
-import { isValidObjectId } from '@server/utils/objectId';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 
 const handler = baseApi().patch(async (req: Request, res: Response) => {
   req.logger.updateMetadata({ endpoint: 'mementos/[id]/update' });

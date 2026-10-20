@@ -40,7 +40,7 @@ vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({
   decryptSecret: (value: string) => value.replace(/^enc:/, ''),
 }));
 
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { SECRET_ENCRYPTION_KEY: 'test-key' },
 }));
 

@@ -24,7 +24,7 @@ vi.mock('@bike4mind/services', async importOriginal => {
 });
 vi.mock('@bike4mind/fab-pipeline', () => ({ FabFileChunkSearchIndex: {} }));
 vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: () => false }));
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({}) }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({}) }));
 vi.mock('@bike4mind/server-utils/integrations/google/drive/connectorCopyGate', () => ({
   evaluateConnectorCopyDeletion: vi.fn(),
 }));

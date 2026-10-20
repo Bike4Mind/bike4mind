@@ -6,7 +6,7 @@ const { resolveMediaBillingOrgId } = vi.hoisted(() => ({ resolveMediaBillingOrgI
 vi.mock('./resolveMediaBillingOrgId', () => ({
   resolveMediaBillingOrgId: (...a: unknown[]) => resolveMediaBillingOrgId(...a),
 }));
-vi.mock('@server/utils/errors', () => ({
+vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   ForbiddenError: class ForbiddenError extends Error {
     statusCode = 403;
     constructor(

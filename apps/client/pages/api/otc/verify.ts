@@ -19,6 +19,8 @@ import {
 } from '@bike4mind/database';
 import { userService, authSessionService } from '@bike4mind/services';
 import { applySignupDomainGrant } from '@server/entitlements/signupDomainGrant';
+import { isPartnerDomainSignupAllowed } from '@server/utils/auth/partnerSignupBypass';
+import { isOpenRegistrationAllowed } from '@server/utils/auth/openRegistration';
 import { applyEmailVerifiedGrants } from '@server/auth/emailVerifiedGrants';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
@@ -33,9 +35,9 @@ import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { logSignInSuccess, resolveSecondFactor } from '@server/auth/signInSecondFactor';
 import { setRefreshCookie } from '@bike4mind/server-utils/auth/refreshCookie';
 import { buildSessionDevice } from '@server/auth/sessionDevice';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { logEvent } from '@server/utils/analyticsLog';
-import { getClientIp } from '@server/utils/ip';
+import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { readConsentedAcquisitionTouches } from '@server/analytics/acquisition';
 import { emitSignupForSourceProducts } from '@server/analytics/signupEvents';
 import { emitEmailVerifiedFunnelEvents, emitFunnelEvent, recordSignupAcquisition } from '@server/analytics/funnel';
@@ -301,6 +303,10 @@ const handler = baseApi({ auth: false })
 
     // --- NEW USER REGISTRATION ---
     // Reached only after a correct code, so this is enumeration-safe.
+    // A fresh self-host install admits its first account and promotes it to admin below.
+    const isBootstrapUser = process.env.B4M_SELF_HOST === 'true' && (await userRepository.count({})) === 0;
+    const partnerDomainAllowed = !isBootstrapUser && (await isPartnerDomainSignupAllowed(normalizedEmail, true));
+
     // If no username was supplied, this is a login attempt for an email with no account:
     // signal the client to collect a username and finish registration inline. The code is
     // single-use (the nonce was already rotated above), so hand back a re-issued token
@@ -314,14 +320,11 @@ const handler = baseApi({ auth: false })
       });
       return res.status(200).json({
         registrationRequired: true,
+        registrationAllowed: isBootstrapUser || partnerDomainAllowed || (await isOpenRegistrationAllowed()),
         email: normalizedEmail,
         pendingToken: registrationToken,
       });
     }
-
-    // Self-host bootstrap: a fresh install has no admin to issue invites or enable
-    // open registration, so the first account skips the invite gate and gets admin.
-    const isBootstrapUser = process.env.B4M_SELF_HOST === 'true' && (await userRepository.count({})) === 0;
 
     // Register + finalize (email-verified state, deferred free-credit grant) in one
     // service call. registerViaOTC grants credits BEFORE dropping the pending tag, so
@@ -367,7 +370,7 @@ const handler = baseApi({ auth: false })
             creditLots: creditLotRepository,
           },
           logger: req.logger,
-          skipInviteCheck: isBootstrapUser,
+          skipInviteCheck: isBootstrapUser || partnerDomainAllowed,
         }
       );
     } catch (err) {

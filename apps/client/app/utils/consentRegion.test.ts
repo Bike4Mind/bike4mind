@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { APP_DECISION_COOKIE, DECISION_COOKIE, REGION_COOKIE } from '@client/lib/consentCookies';
+import { APP_DECISION_COOKIE, DECISION_COOKIE, REGION_COOKIE } from '@bike4mind/server-utils/lib/consentCookies';
 import { readConsentRegion, readSharedConsent, publishResolvedConsent } from './consentRegion';
 
 function setCookie(raw: string) {

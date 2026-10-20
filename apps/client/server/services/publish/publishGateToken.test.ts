@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import jwt from 'jsonwebtoken';
 import type { Request } from 'express';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { gateCookieName, signGateToken, verifyGateToken, requestHasGateProof } from './publishGateToken';
 
 const reqWithCookie = (cookieHeader?: string) => ({ headers: { cookie: cookieHeader } }) as unknown as Request;

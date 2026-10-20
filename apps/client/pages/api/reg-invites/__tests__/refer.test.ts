@@ -14,7 +14,7 @@ vi.mock('@server/managers/regInviteManager', () => ({
   createRegInvite: vi.fn(async (invite: any) => ({ ...invite, id: 'invite-1' })),
   generateCode: vi.fn(() => 'CODE123'),
 }));
-vi.mock('@server/utils/mailer/emailHelpers', () => ({
+vi.mock('@bike4mind/server-utils/utils/mailer/emailHelpers', () => ({
   getLogoUrl: vi.fn(() => ''),
   buildEmailLogoImg: vi.fn(() => ''),
 }));

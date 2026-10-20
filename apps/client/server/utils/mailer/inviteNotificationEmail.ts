@@ -1,6 +1,6 @@
 import { InviteType } from '@bike4mind/common';
 import { EmailEvents } from '@server/utils/eventBus';
-import { escapeHtml } from './emailHelpers';
+import { escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 
 /** Human-readable noun for an invite type, as used in invite email copy. */
 export const getInviteTypeName = (type: InviteType): string => {

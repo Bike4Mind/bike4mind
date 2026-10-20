@@ -8,7 +8,7 @@ import {
   isSvgGraphicallyEmpty,
 } from '@bike4mind/utils/artifactParser';
 import { tryParseChartJSON } from './chartJsonParser';
-import { scanImportStatements } from './importStatements';
+import { scanImportStatements } from '@bike4mind/utils/importStatements';
 
 // Block extraction, the shared types and every fence-promotion detector live in core, so the
 // server's chat pass and this module agree on what a reply contains; this module keeps the

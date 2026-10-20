@@ -2,7 +2,7 @@ import { taskSchedulerService } from '@bike4mind/services';
 import { taskScheduleRepository } from '@bike4mind/database';
 import { TaskScheduleHandler } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
-import { sendToQueue } from '@server/utils/sqs';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { Resource } from 'sst';
 import type { SelfHostWorker } from './selfHostWorker';
 

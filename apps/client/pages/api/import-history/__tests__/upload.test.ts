@@ -30,7 +30,10 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (h: RouteHandler) => h }));
-vi.mock('@bike4mind/common', () => ({ Permission: { create: 'create' } }));
+vi.mock('@bike4mind/common', () => ({
+  Permission: { create: 'create' },
+  BadRequestError: class BadRequestError extends Error {},
+}));
 vi.mock('@bike4mind/database/auth', () => ({ Session: class Session {} }));
 vi.mock('@bike4mind/services', () => ({
   importHistoryService: { ImportSource: { OPENAI: 'OpenAI', CLAUDE: 'Claude' } },
@@ -75,7 +78,8 @@ const makeRes = () => {
 const makeReq = (opts: { query?: Record<string, unknown>; userId?: string; chunks?: string[] } = {}) => {
   const chunks = opts.chunks ?? ['history-zip-bytes'];
   return {
-    query: opts.query ?? { source: 'OpenAI' },
+    // 'history-zip-bytes' is 17 bytes.
+    query: opts.query ?? { source: 'OpenAI', size: '17' },
     user: { id: opts.userId ?? 'user-1' },
     ability: { can: () => true },
     destroy: vi.fn(),
@@ -119,7 +123,7 @@ describe('PUT /api/import-history/upload (self-host proxy)', () => {
     await captured.put!(
       makeReq({
         userId: 'user-1',
-        query: { source: 'OpenAI', key: 'victim/OpenAI/evil.zip', path: '../../etc/passwd' },
+        query: { source: 'OpenAI', size: '17', key: 'victim/OpenAI/evil.zip', path: '../../etc/passwd' },
       }),
       res
     );
@@ -129,6 +133,24 @@ describe('PUT /api/import-history/upload (self-host proxy)', () => {
     expect(key).toMatch(/^user-1\/OpenAI\/\d+\.zip$/);
     expect(key).not.toContain('victim');
     expect(key).not.toContain('..');
+  });
+
+  it.each([undefined, '0', 'abc', String(MAX_HISTORY_UPLOAD_BYTES + 1)])(
+    'rejects a missing or invalid declared size (%s)',
+    async size => {
+      const res = makeRes();
+      await captured.put!(makeReq({ query: { source: 'OpenAI', size } }), res);
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(uploadMock).not.toHaveBeenCalled();
+    }
+  );
+
+  // Hosted S3 refuses any length but the presign's bound one with 403; the proxy matches it.
+  it.each(['16', '18'])('403s a body that is not the declared size (%s) without uploading', async size => {
+    const res = makeRes();
+    await captured.put!(makeReq({ query: { source: 'OpenAI', size } }), res);
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(uploadMock).not.toHaveBeenCalled();
   });
 
   it('413s a body over the cap without uploading anything', async () => {
@@ -176,7 +198,9 @@ describe('GET /api/import-history/upload', () => {
     process.env.B4M_SELF_HOST = 'true';
     const res = makeRes();
     await captured.get!(makeReq(), res);
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ url: '/api/import-history/upload?source=OpenAI' }));
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ url: '/api/import-history/upload?source=OpenAI&size=17' })
+    );
     // The presign would only be discarded, so it is never minted - no MinIO round trip per import.
     expect(getSignedUrlMock).not.toHaveBeenCalled();
   });
@@ -184,9 +208,29 @@ describe('GET /api/import-history/upload', () => {
   it('hands back the presigned URL when hosted', async () => {
     process.env.B4M_SELF_HOST = 'false';
     const res = makeRes();
-    await captured.get!(makeReq(), res);
+    await captured.get!(makeReq({ query: { source: 'OpenAI', size: '2048' } }), res);
     expect(res.json).toHaveBeenCalledWith(
       expect.objectContaining({ url: 'http://minio:9000/history-bucket/user-1/OpenAI/1.zip?sig=x' })
     );
+    // The signature binds Content-Length, so S3 refuses a PUT of any other size.
+    expect(getSignedUrlMock).toHaveBeenCalledWith(
+      expect.any(String),
+      'put',
+      expect.objectContaining({ ContentLength: 2048 })
+    );
+  });
+
+  it.each([
+    ['hosted', undefined],
+    ['hosted', '0'],
+    ['hosted', 'abc'],
+    ['hosted', String(MAX_HISTORY_UPLOAD_BYTES + 1)],
+    ['self-host', undefined],
+  ])('refuses an upload URL without a valid declared size (%s, %s)', async (mode, size) => {
+    process.env.B4M_SELF_HOST = String(mode === 'self-host');
+    await expect(captured.get!(makeReq({ query: { source: 'OpenAI', size } }), makeRes())).rejects.toThrow(
+      /size must be/
+    );
+    expect(getSignedUrlMock).not.toHaveBeenCalled();
   });
 });

@@ -93,7 +93,7 @@ vi.mock('@server/utils/validators', () => ({
   },
 }));
 vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({ encryptSecret: (v: string) => `enc:${v}` }));
-vi.mock('@server/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: undefined } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: undefined } }));
 // A class, not a bare object: the real services barrel constructs Loggers at import time.
 vi.mock('@bike4mind/observability', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/observability')>();

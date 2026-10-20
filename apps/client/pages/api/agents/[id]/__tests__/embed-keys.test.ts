@@ -36,7 +36,7 @@ vi.mock('@bike4mind/database', () => ({
 
 import '@pages/api/agents/[id]/embed-keys';
 import { CreditHolderType } from '@bike4mind/common';
-import { BadRequestError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 
 const OWNED_KEY = {
   id: 'key-1',

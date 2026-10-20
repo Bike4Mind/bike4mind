@@ -16,7 +16,7 @@ import { OMITTED_QUALITY_TIER, OpenAIImageCostCalculator } from './imageCostCalc
 import { estimateImageCredits } from '../imageCost';
 import type { Logger } from '@bike4mind/observability';
 import { silentLogger, statusLog } from '../__tests__/utils/testUtils';
-import { getSettingsValue } from '@bike4mind/utils';
+import { getSettingsValue, ImageModerationBlockedError } from '@bike4mind/utils';
 import { moderateImageOrThrow } from './imageModerationGate';
 import { deductCreditsWithOrgSupport } from '../creditService';
 
@@ -1512,7 +1512,7 @@ describe('ImageGenerationService quest partial writes', () => {
       userId: 'user1',
     });
 
-  const processEdit = (service: ImageGenerationService, generationId?: string) =>
+  const processEdit = (service: ImageGenerationService, generationId?: string, logger: Logger = silentLogger) =>
     service.process({
       body: {
         generationId,
@@ -1524,7 +1524,7 @@ describe('ImageGenerationService quest partial writes', () => {
         fabFileIds: ['f1'],
         intent: 'continuation',
       } as never,
-      logger: silentLogger,
+      logger,
     });
 
   it('invoke retry writes exactly images, replies, type, promptMeta and an undefined promptEnhancement when none is given', async () => {
@@ -1817,6 +1817,36 @@ describe('ImageGenerationService quest partial writes', () => {
         session: { id: 'session1', userId: 'user1' },
         statusLog: statusLog('Preparing to paint...', 'Now painting...', 'Error: provider down'),
       },
+    });
+  });
+
+  describe('error log level (only error level forwards to the Slack alert channel)', () => {
+    const makeLogger = () => ({ ...silentLogger, warn: vi.fn(), error: vi.fn() }) as unknown as Logger;
+
+    beforeEach(() => {
+      vi.mocked(getAvailableModels).mockResolvedValue([geminiModelInfo]);
+      mockGeminiEdit.mockReset();
+    });
+
+    it('logs a content-policy block at warn with only the request id, never at error', async () => {
+      mockGeminiEdit.mockRejectedValue(new ImageModerationBlockedError('blocked by policy', 'req_abc'));
+      const logger = makeLogger();
+      const { service, update } = makeService();
+      await processEdit(service, undefined, logger);
+
+      expect(logger.error).not.toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalledWith('Image generation blocked by content policy:', { requestId: 'req_abc' });
+      expect(callArgs(update).find(arg => arg.type === 'error')?.reply).toBe('blocked by policy');
+    });
+
+    it('still logs any other failure at error', async () => {
+      const failure = new Error('provider down');
+      mockGeminiEdit.mockRejectedValue(failure);
+      const logger = makeLogger();
+      const { service } = makeService();
+      await processEdit(service, undefined, logger);
+
+      expect(logger.error).toHaveBeenCalledWith('Error processing image generation:', failure);
     });
   });
 });

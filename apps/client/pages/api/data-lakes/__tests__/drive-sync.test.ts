@@ -67,7 +67,7 @@ vi.mock('@server/integrations/google/drive/driveClient', async importOriginal =>
 });
 vi.mock('@server/security/tokenEncryption', () => ({ decryptToken: h.decryptToken }));
 vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({ isEncrypted: h.isEncrypted }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('sst', () => ({ Resource: { driveLakeIngestQueue: { url: 'queue-url' } } }));
 vi.mock('@bike4mind/database', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/database')>();
@@ -100,7 +100,7 @@ vi.mock('@bike4mind/database', async importOriginal => {
 });
 
 import handler from '../drive-sync';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 const FOLDER_ID = 'Folder_Abc-123';
 

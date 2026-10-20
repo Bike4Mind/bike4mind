@@ -23,7 +23,7 @@ const { notify } = vi.hoisted(() => ({ notify: vi.fn().mockResolvedValue(undefin
 vi.mock('@server/websocket/utils', () => ({ sendToClient: notify }));
 vi.mock('@server/middlewares/baseApi', () => ({ baseApi: () => ({ post: (fn: unknown) => fn }) }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: {
     get MONGODB_URI() {
       return process.env.NOTEBOOK_MONGO_URI;
@@ -50,7 +50,7 @@ vi.mock('sst', () => ({
 // Cross-process integration proof starts at the backend API route; no UI is imported.
 // eslint-disable-next-line no-restricted-imports
 import curate from '@pages/api/notebooks/curate';
-import * as storage from '@server/utils/storage';
+import * as storage from '@bike4mind/server-utils/utils/storage/index';
 import { S3Storage, createS3Client } from '@bike4mind/fab-pipeline';
 import { SelfHostWorker } from './selfHostWorker';
 import { dispatchSelfHostEvent } from './eventDispatch';

@@ -25,7 +25,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (fn: (req: unknown, res: unknown) => unknown) => fn,
 }));
-vi.mock('@server/utils/config', () => ({ isE2EEnabled: h.isE2EEnabled }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ isE2EEnabled: h.isE2EEnabled }));
 vi.mock('sst', () => ({
   Resource: {
     get E2E_CLEANUP_SECRET() {

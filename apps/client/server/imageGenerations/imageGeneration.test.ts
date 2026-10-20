@@ -23,7 +23,7 @@ vi.mock('sst', () => ({
   }),
 }));
 
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: vi.fn(() => ({ __mock: 'filesStorage' })),
   getGeneratedImageStorage: vi.fn(() => ({ __mock: 'generatedImageStorage' })),
 }));

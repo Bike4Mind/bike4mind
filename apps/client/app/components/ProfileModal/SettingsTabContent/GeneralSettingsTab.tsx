@@ -107,7 +107,9 @@ const GeneralSettingsTab = () => {
     // the former, so this must not PUT directly (see browserUploadCallSites.test.ts).
 
     try {
-      const uploadUrl = await api.get(`/api/import-history/upload?source=${source}`).then(res => res.data.url);
+      const uploadUrl = await api
+        .get(`/api/import-history/upload?source=${source}&size=${file.size}`)
+        .then(res => res.data.url);
       // The File streams straight through; reading it into an ArrayBuffer first would hold an
       // entire history export in browser memory.
       await uploadFileToUrl(uploadUrl, file, file.type, {

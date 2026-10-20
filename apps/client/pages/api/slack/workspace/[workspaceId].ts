@@ -1,6 +1,6 @@
 import { slackDevWorkspaceRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
-import { NotFoundError, BadRequestError } from '@server/utils/errors';
+import { NotFoundError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 /**
  * Get workspace information by ID

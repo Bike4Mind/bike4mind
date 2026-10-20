@@ -50,7 +50,7 @@ vi.mock('@server/middlewares/apiKeyRateLimit', () => ({ apiKeyRateLimit: () => (
 vi.mock('@server/analytics/analyticsMiddleware', () => ({ analyticsMiddleware: () => () => {} }));
 vi.mock('@bike4mind/database', () => ({ connectDB: async () => {} }));
 vi.mock('@bike4mind/common', () => ({ ApiKeyScope: {} }));
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { MONGODB_URI: 'mongodb://test/%STAGE%', STAGE: 'test' },
   isDevelopment: () => true,
 }));

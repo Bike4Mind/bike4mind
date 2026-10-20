@@ -17,7 +17,7 @@
  */
 import { baseApi } from '@server/middlewares/baseApi';
 import { Quest } from '@bike4mind/database/content';
-import { isValidObjectId } from '@server/utils/objectId';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { z } from 'zod';
 
 const ProgressBody = z.object({

@@ -5,7 +5,7 @@ import { apiKeyService } from '@bike4mind/services';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { buildApiKeyTable, getAvailableModels } from '@bike4mind/llm-adapters';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { ApiKeyScope, RapidReplyResponseStyleCommon } from '@bike4mind/common';
 import { findRottedRapidModelIds } from '@server/rapidReply/rapidMappingHealth';
 

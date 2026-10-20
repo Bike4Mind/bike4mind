@@ -18,7 +18,7 @@ import {
   loadLiveOwner,
   type AnnotationLean,
 } from '@server/services/publish';
-import { isValidObjectId } from '@server/utils/objectId';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 
 /**
  * /api/publish/annotations/[publicId] - the collaboration layer for a published

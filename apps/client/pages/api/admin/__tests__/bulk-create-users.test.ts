@@ -26,8 +26,8 @@ vi.mock('@server/analytics/funnel', () => ({
   recordSyntheticIdentity: (...args: unknown[]) => h.recordSyntheticIdentity(...args),
 }));
 vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.publish } } }));
-vi.mock('@server/utils/mailer/emailHelpers', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/utils/mailer/emailHelpers')>()),
+vi.mock('@bike4mind/server-utils/utils/mailer/emailHelpers', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/mailer/emailHelpers')>()),
   getLogoUrl: () => 'logo',
   buildEmailLogoImg: () => '',
 }));

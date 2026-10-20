@@ -38,7 +38,7 @@ import { Logger } from '@bike4mind/observability';
 import { HELP_DATALAKE_SLUG, createHelpEmbedder, ingestHelpDatalake } from '@bike4mind/scripts/help/ingestHelpDatalake';
 import { apiKeyService } from '@bike4mind/services';
 import { getSettingsByNames } from '@bike4mind/utils';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import * as path from 'path';
 import { Resource } from 'sst';
 

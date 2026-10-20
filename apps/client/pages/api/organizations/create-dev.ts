@@ -6,11 +6,11 @@
 import { organizationRepository, userRepository } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
-import { isDevelopment } from '@server/utils/config';
+import { isDevelopment } from '@bike4mind/server-utils/utils/config';
 import { Request } from 'express';
 import { z } from 'zod';
 import { organizationService } from '@bike4mind/services';
-import { ORGANIZATION_SUBSCRIPTION_MIN_SEATS } from '@client/lib/subscriptions/constants';
+import { ORGANIZATION_SUBSCRIPTION_MIN_SEATS } from '@bike4mind/server-utils/lib/subscriptions/constants';
 
 const CreateDevOrgSchema = z.object({
   name: z.string().min(1),

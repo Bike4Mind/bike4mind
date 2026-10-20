@@ -66,7 +66,7 @@ vi.mock('@server/middlewares/rateLimit', () => ({
     );
   },
 }));
-vi.mock('@server/utils/config', () => ({ isDevelopment: h.isDevelopment }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ isDevelopment: h.isDevelopment }));
 // Configurable so the model-only feature gate (EnableLakeModelInconsistencyDetection) can be tested
 // without also disabling EnableDataLakes, which every request passes through first.
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
@@ -101,8 +101,8 @@ vi.mock('@bike4mind/database', () => ({
   fabFileChunkRepository: {},
 }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
-vi.mock('@server/utils/dlqRegistry', () => ({ getSourceQueueUrl: h.getSourceQueueUrl }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
+vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({ getSourceQueueUrl: h.getSourceQueueUrl }));
 
 import { ForbiddenError, MODEL_INCONSISTENCY_RUN_LEASE_MS } from '@bike4mind/common';
 import handler from '../inconsistencies';

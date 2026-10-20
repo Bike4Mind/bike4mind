@@ -3,7 +3,7 @@ import { CcAgentCommandAction, CcAgentCommandPayload } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/utils';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ensureTavernAccess } from '@server/utils/errors';
+import { ensureTavernAccess } from '@bike4mind/server-utils/utils/errors';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { sendToConnection } from '@server/websocket/utils';
 import { randomUUID } from 'node:crypto';

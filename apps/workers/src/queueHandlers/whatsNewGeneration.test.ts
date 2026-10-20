@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { dispatch } from './whatsNewGeneration';
 import { ModalModel } from '@bike4mind/database';
 import { logEvent } from '@server/utils/analyticsLog';
-import { WhatsNewConfigService } from '@client/services/whatsNewConfigService';
+import { WhatsNewConfigService } from '@bike4mind/server-utils/services/whatsNewConfigService';
 import { apiKeyService } from '@bike4mind/services';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import {
@@ -29,7 +29,7 @@ vi.mock('@server/utils/analyticsLog', () => ({
   logEvent: vi.fn(),
 }));
 
-vi.mock('@client/services/whatsNewConfigService', () => ({
+vi.mock('@bike4mind/server-utils/services/whatsNewConfigService', () => ({
   WhatsNewConfigService: {
     getConfig: vi.fn(),
   },
@@ -80,7 +80,7 @@ vi.mock('@bike4mind/llm-adapters', async importOriginal => {
   return { ...actual, getAvailableModels: vi.fn(), getLlmByModel: vi.fn() };
 });
 
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   emitModalGenerationMetrics: vi.fn().mockResolvedValue(undefined),
 }));
 

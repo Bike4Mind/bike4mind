@@ -112,7 +112,7 @@ vi.mock('@server/dataLakes/attachmentLakeAccess', () => ({
   createAttachmentLakeAccess: createAttachmentLakeAccessSpy,
 }));
 
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: vi.fn() }));
 
 vi.mock('@casl/mongoose', () => ({
   accessibleBy: accessibleBySpy,

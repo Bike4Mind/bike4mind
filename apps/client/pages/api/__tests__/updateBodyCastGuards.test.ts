@@ -97,7 +97,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 vi.mock('@bike4mind/services', () => ({ creditService: {} }));
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({}) }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({}) }));
 
 vi.mock('@bike4mind/database/ai', () => ({
   rapidReplyMappingRepository: {

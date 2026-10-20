@@ -1,7 +1,7 @@
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import type { DiscoveryRunHost } from '@bike4mind/common';
 import type { modelDiscoveryService } from '@bike4mind/services';
-import { emitMetrics, type MetricDimensions } from '@server/utils/cloudwatch';
+import { emitMetrics, type MetricDimensions } from '@bike4mind/server-utils/utils/cloudwatch';
 
 export const MODEL_DISCOVERY_NAMESPACE = 'Lumina5/ModelDiscovery';
 

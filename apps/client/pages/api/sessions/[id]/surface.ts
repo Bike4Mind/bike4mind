@@ -3,7 +3,7 @@ import { sessionRepository } from '@bike4mind/database';
 import { ApiKeyScope, redactSessionForClient } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { surfaceAccessForRequest } from '@server/entitlements/surfaceAccess';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { parseTargetSurface } from '@server/utils/parseTargetSurface';
 import { Request } from 'express';
 import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';

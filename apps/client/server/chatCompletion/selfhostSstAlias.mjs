@@ -1,7 +1,7 @@
 /**
  * Self-host entrypoint shim for the always-on chatCompletion server.
  *
- * The server (`server.ts` -> `@server/utils/config`) does `import { Resource } from 'sst'`
+ * The server (`server.ts` -> `@bike4mind/server-utils/utils/config`) does `import { Resource } from 'sst'`
  * and reads `Resource.*` at module-load time. In the hosted image SST injects those values;
  * the Next app resolves them via a turbopack build alias (`sst` -> `@bike4mind/resource`).
  * A plain `tsx`-run standalone server gets neither, so `import 'sst'` would hit the real SST

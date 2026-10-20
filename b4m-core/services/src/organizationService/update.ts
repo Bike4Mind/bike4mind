@@ -1,4 +1,4 @@
-import { IOrganizationRepository, IUserDocument } from '@bike4mind/common';
+import { IOrganizationRepository, IUserDocument, MAX_STORAGE_LIMIT_MB } from '@bike4mind/common';
 import { secureParameters } from '@bike4mind/utils';
 import { NotFoundError } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -11,6 +11,8 @@ const updateSchema = z.object({
   currentCredits: z.coerce.number().optional(),
   systemPrompt: z.string().max(10000).optional(), // ~2500 tokens
   maxCreditsPerMember: z.number().int().positive().nullable().optional(),
+  /** Decimal MB; null clears the override back to DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB. */
+  storageLimit: z.number().min(0).max(MAX_STORAGE_LIMIT_MB).nullable().optional(),
 });
 
 type UpdateParameters = z.infer<typeof updateSchema>;
@@ -71,6 +73,13 @@ export const update = async (user: IUserDocument, params: UpdateParameters, adap
   // undefined, so `?? undefined` would leave the previous cap in place (a null PUT no-ops).
   if (user.isAdmin && rest.maxCreditsPerMember !== undefined) {
     update.maxCreditsPerMember = rest.maxCreditsPerMember ?? null;
+  }
+
+  // Platform-admin only: a manager must not raise their own org's quota. Same null-not-undefined
+  // rule as maxCreditsPerMember, so a cleared limit falls back to the default. Lowering it below
+  // current usage deletes nothing; checkStorageLimit just refuses new uploads.
+  if (user.isAdmin && rest.storageLimit !== undefined) {
+    update.storageLimit = rest.storageLimit ?? null;
   }
 
   const updated = await adapters.db.organizations.update(update);

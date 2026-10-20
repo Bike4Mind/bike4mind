@@ -38,9 +38,13 @@ vi.mock('@bike4mind/database/infra', () => ({
 }));
 
 const appFileFindByIdAndDelete = vi.hoisted(() => vi.fn());
+const appFileCtor = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/database/content', () => {
   class AppFile {
     id = 'newfile1';
+    constructor(doc: Record<string, unknown>) {
+      appFileCtor(doc);
+    }
     save = vi.fn(async () => undefined);
     static findByIdAndDelete = appFileFindByIdAndDelete;
   }
@@ -52,10 +56,11 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 const storageDelete = vi.hoisted(() => vi.fn(async () => undefined));
+const storageGetSignedUrl = vi.hoisted(() => vi.fn(async () => 'https://signed.example/put'));
 vi.mock('@bike4mind/fab-pipeline', () => ({
   S3Storage: class {
     delete = storageDelete;
-    getSignedUrl = vi.fn(async () => 'https://signed.example/put');
+    getSignedUrl = storageGetSignedUrl;
   },
 }));
 
@@ -121,6 +126,22 @@ describe('POST /api/organizations/[id]/upload-logo', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({ url: 'https://signed.example/put', fileId: 'newfile1' });
     expect(storageDelete).toHaveBeenCalledWith('organizations/old.png');
+  });
+
+  it('binds the declared fileSize into the presigned PUT, so S3 refuses a logo of any other length', async () => {
+    const res = await invoke({ id: OWNER, isAdmin: false });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(storageGetSignedUrl).toHaveBeenCalledWith(
+      expect.stringMatching(new RegExp(`^organizations/${ORG_ID}/`)),
+      'put',
+      {
+        expiresIn: 600,
+        ContentType: 'image/png',
+        ContentLength: 1024,
+      }
+    );
+    expect(appFileCtor).toHaveBeenCalledWith(expect.objectContaining({ size: 1024 }));
   });
 
   it('answers 404 when the org does not exist', async () => {

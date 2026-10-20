@@ -19,8 +19,8 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { Resource } from 'sst';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@server/utils/errors';
-import { Config } from '@server/utils/config';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { Logger } from '@bike4mind/observability';
 import {
   evaluateTier1Secrets,

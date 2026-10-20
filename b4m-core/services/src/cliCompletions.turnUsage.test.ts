@@ -25,6 +25,7 @@ vi.mock('./creditService', async importOriginal => ({
 }));
 vi.mock('@bike4mind/llm-adapters', () => ({
   reasonsWithinOutputBudget: vi.fn(() => false),
+  isAdaptiveThinkingByDefault: vi.fn(() => false),
   resolveOutputMaxTokens: vi.fn(
     ({ requested, fallback }: { requested?: number; fallback: number }) => requested ?? fallback
   ),

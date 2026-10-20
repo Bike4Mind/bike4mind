@@ -59,7 +59,7 @@ vi.mock('@bike4mind/services', async orig => {
 });
 
 const { createTranscribeUpload, transcribeUpload, TranscribeRequestError } = await import('./transcribe');
-const { BadRequestError } = await import('@server/utils/errors');
+const { BadRequestError } = await import('@bike4mind/server-utils/utils/errors');
 const { speechToTextService } = await import('@bike4mind/services');
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never;

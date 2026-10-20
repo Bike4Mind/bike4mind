@@ -82,7 +82,8 @@ vi.mock('@bike4mind/database', () => ({
     validateAndRotateNonce: (...a: unknown[]) => mockValidateAndRotateNonce(...a),
     consumeOtherCodes: (...a: unknown[]) => mockConsumeOtherCodes(...a),
   },
-  adminSettingsRepository: {},
+  adminSettingsRepository: { findBySettingName: vi.fn(async () => null) },
+  partnerSignupRuleRepository: { findActiveRules: vi.fn(async () => []) },
   registrationInviteRepository: {},
   subscriberRepository: {},
   creditTransactionRepository: {},
@@ -121,7 +122,10 @@ vi.mock('@server/middlewares/checkBlockedIP', () => ({ checkBlockedIP: () => () 
 vi.mock('@server/auth/tokenGenerator', () => ({
   authTokenGenerator: { createAccessToken: () => ({ accessToken: 'access', refreshToken: 'refresh' }) },
 }));
-vi.mock('@server/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' }, isE2EEnabled: () => false }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
+  Config: { JWT_SECRET: 'test-secret' },
+  isE2EEnabled: () => false,
+}));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 const mockEmitSignup = vi.fn().mockResolvedValue([]);
 vi.mock('@server/analytics/signupEvents', () => ({
@@ -444,6 +448,7 @@ describe('/api/otc/verify — enumeration resistance', () => {
     expect(mockRes.status).toHaveBeenCalledWith(200);
     const body = mockRes.json.mock.calls[0][0];
     expect(body.registrationRequired).toBe(true);
+    expect(body.registrationAllowed).toBe(false);
     expect(body.email).toBe('user@example.com');
     expect(typeof body.pendingToken).toBe('string');
     // Enumeration-safe: no refresh token / session is issued at this stage.

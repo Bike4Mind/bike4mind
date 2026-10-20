@@ -5,11 +5,11 @@ import { MCPClient } from '@bike4mind/mcp';
 import { baseApi } from '@server/middlewares/baseApi';
 import { assertMcpServerEnabled } from '@server/utils/mcpServerFlag';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
-import { BadRequestError, ForbiddenError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { encryptEnvVariables, decryptEnvVariables } from '@server/security/tokenEncryption';
 import { mcpServerUpdateBodySchema } from '@server/validators/mcpServerValidators';
 import { assertNoForbiddenMcpEnvKeys } from '@server/utils/mcpEnvValidation';
-import { isValidObjectId } from '@server/utils/objectId';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { respond } from '@server/utils/respond';
 
 const handler = baseApi()

@@ -7,8 +7,8 @@
 
 import { listQuestFilesContract } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { isValidObjectId } from '@server/utils/objectId';
-import { NotFoundError } from '@server/utils/errors';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { toPublicFile } from '@server/files/toPublicFile';
 import { listQuestFiles } from '@server/files/listQuestFiles';
 

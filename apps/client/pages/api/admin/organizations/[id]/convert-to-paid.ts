@@ -1,6 +1,6 @@
 import { Organization, organizationRepository } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -8,8 +8,8 @@ import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { createCustomer, CustomerType, stripe } from '@server/integrations/stripe/stripe';
 import { USD_CHECKOUT_SESSION_PARAMS } from '@server/integrations/stripe/checkoutCurrency';
 import { isAllowedCallbackOrigin } from '@server/integrations/stripe/callbackUrl';
-import { Config } from '@server/utils/config';
-import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@client/lib/subscriptions/constants';
+import { Config } from '@bike4mind/server-utils/utils/config';
+import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@bike4mind/server-utils/lib/subscriptions/constants';
 import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
 import { StripeSubscriptionMetadataSchema } from '@client/lib/subscriptions/schema';
 import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';

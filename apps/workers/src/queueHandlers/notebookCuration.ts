@@ -16,7 +16,7 @@ import { CurationOptions } from '@bike4mind/common';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { sendToClient } from '@server/websocket/utils';
 import { NotebookCurationEvents } from '@server/utils/eventBus';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { z } from 'zod';
 import { Resource } from 'sst';
 import { createHash } from 'crypto';

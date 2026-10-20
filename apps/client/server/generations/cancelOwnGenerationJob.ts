@@ -1,6 +1,6 @@
 import type { ApiErrorCode, IGenerationJobDocument } from '@bike4mind/common';
 import { getGenerationJobEngine } from '@server/generationJobs/wiring';
-import { ConflictError } from '@server/utils/errors';
+import { ConflictError } from '@bike4mind/server-utils/utils/errors';
 
 /**
  * Requests cancellation of a job the caller owns (resolve it with findOwnGenerationJob first) and returns its

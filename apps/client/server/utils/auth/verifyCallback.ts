@@ -10,13 +10,14 @@ import {
   isEligibleForFreeCredits,
   releaseVerifiedPendingFreeCredits,
 } from '@server/auth/emailVerifiedGrants';
-import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
+import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 import { emitEmailVerifiedFunnelEvents } from '@server/analytics/funnel';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { isProviderEmailVerified, selectProviderEmail, decideAutoLink, applyAccountLink } from './oauthAccountLink';
 import { createUniqueOAuthUser, deriveOAuthUsername } from './createOAuthUser';
 import { OAuthFailureReason } from './oauthFailureReason';
 import { isOpenRegistrationAllowed } from './openRegistration';
+import { isPartnerDomainSignupAllowed } from './partnerSignupBypass';
 import { applyOAuthSignupDomainGrant } from './oauthSignupGrants';
 
 /**
@@ -209,7 +210,14 @@ const authenticateUser = async (
       //
       // Enterprise SSO is deliberately exempt (see SELF_SERVE_STRATEGIES): registering
       // the IdP is itself the admin's authorization for that domain's users.
-      if (SELF_SERVE_STRATEGIES.has(strategy) && !(await isOpenRegistrationAllowed())) {
+      //
+      // A provider-verified email on an enabled partner-domain rule may still register
+      // (the same bypass the OTC path applies, via the shared helper).
+      if (
+        SELF_SERVE_STRATEGIES.has(strategy) &&
+        !(await isOpenRegistrationAllowed()) &&
+        !(await isPartnerDomainSignupAllowed(email, isProviderEmailVerified(profile)))
+      ) {
         done(null, undefined, { code: 'registration_closed' });
         return;
       }

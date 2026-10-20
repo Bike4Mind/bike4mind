@@ -1,6 +1,6 @@
 import { agentExecutionRepository } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
-import { settleStrandedQuests } from '@server/utils/settleStrandedQuests';
+import { settleStrandedQuests } from '@bike4mind/server-utils/utils/settleStrandedQuests';
 import type { ExecutionTarget } from './queueMessage';
 
 /**

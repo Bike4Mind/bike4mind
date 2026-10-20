@@ -2,7 +2,7 @@ import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
 import { BadRequestError } from '@bike4mind/utils';
 import { decryptToken } from '@server/security/tokenEncryption';
-import { assertUrlAllowed, safeFetch, SsrfError } from '@server/utils/ssrfProtection';
+import { assertUrlAllowed, safeFetch, SsrfError } from '@bike4mind/server-utils/utils/ssrfProtection';
 
 interface PresignImageUploadRequest {
   fileName: string;

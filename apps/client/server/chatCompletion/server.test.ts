@@ -20,7 +20,7 @@ vi.mock('sst', () => ({ Resource: mockResource }));
 
 // The quest-processing-failure metric's emit seam.
 const mockEmitMetrics = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-vi.mock('@server/utils/cloudwatch', () => ({ emitMetrics: mockEmitMetrics }));
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetrics: mockEmitMetrics }));
 
 // WS connection lookup + fanout seams for the ws-completions route.
 const mockConnectionFind = vi.hoisted(() => vi.fn());
@@ -118,7 +118,9 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
   registerProcessErrorHandlers: vi.fn(),
 }));
-vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
+  Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' },
+}));
 
 import { createApp, drainInFlight, DRAIN_TIMEOUT_MS } from './server';
 import { GENERIC_PROCESSING_FAILURE_REPLY } from './internal/route';

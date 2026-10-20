@@ -15,7 +15,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { webhookDeliveryRepository } from '@bike4mind/database/infra';
 import { webhookSubscriptionRepository } from '@bike4mind/database/infra';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { isValidObjectId } from '@server/utils/objectId';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { WebhookDeliveryStatus, IWebhookDeliveryDocument } from '@bike4mind/common';
 
 interface DeliveryListQuery {

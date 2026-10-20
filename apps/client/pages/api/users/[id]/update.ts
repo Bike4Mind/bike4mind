@@ -20,7 +20,7 @@ import {
 } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
 import { triggerTelemetryDeletion } from '@server/utils/telemetryDeletion';
-import { getClientIp, truncateIp } from '@server/utils/ip';
+import { getClientIp, truncateIp } from '@bike4mind/server-utils/utils/ip';
 import * as z from 'zod';
 import { requireStepUp } from '@server/auth/stepUp';
 

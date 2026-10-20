@@ -2,7 +2,7 @@ import { IAppFileGetAllApiResponse } from '@bike4mind/common';
 import { AppFile } from '@bike4mind/database/content';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ensureAdmin } from '@server/utils/errors';
+import { ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 import qs from 'qs';
 import { z } from 'zod';
 

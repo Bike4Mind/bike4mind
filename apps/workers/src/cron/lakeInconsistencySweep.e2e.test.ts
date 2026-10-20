@@ -11,7 +11,7 @@ import {
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 
 const { emitMetric } = vi.hoisted(() => ({ emitMetric: vi.fn() }));
-vi.mock('@server/utils/cloudwatch', () => ({ emitMetric }));
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetric }));
 import { runLakeInconsistencySweep } from './lakeInconsistencySweep';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });

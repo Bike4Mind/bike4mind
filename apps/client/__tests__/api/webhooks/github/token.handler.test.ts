@@ -31,7 +31,7 @@ const mockConfig: Record<string, string | undefined> = {
   SECRET_ENCRYPTION_KEY: currentKey,
   SECRET_ENCRYPTION_KEY_PREVIOUS: previousKey,
 };
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: new Proxy({}, { get: (_t, key: string) => mockConfig[key] }),
 }));
 
@@ -59,11 +59,11 @@ vi.mock('@bike4mind/observability', () => {
 });
 
 const mockSendToQueue = vi.fn().mockResolvedValue(undefined);
-vi.mock('@server/utils/sqs', () => ({
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({
   sendToQueue: (...args: unknown[]) => mockSendToQueue(...args),
 }));
 
-vi.mock('@server/utils/dlqRegistry', () => ({
+vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({
   getSourceQueueUrl: vi.fn(() => 'https://sqs.us-east-2.amazonaws.com/123/githubWebhookQueue'),
 }));
 

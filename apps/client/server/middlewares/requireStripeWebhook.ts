@@ -1,5 +1,5 @@
-import { Config, isDevelopment } from '@server/utils/config';
-import { InternalServerError } from '@server/utils/errors';
+import { Config, isDevelopment } from '@bike4mind/server-utils/utils/config';
+import { InternalServerError } from '@bike4mind/server-utils/utils/errors';
 import { RequestHandler } from 'express';
 import { z } from 'zod';
 

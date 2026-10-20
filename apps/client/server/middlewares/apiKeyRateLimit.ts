@@ -1,7 +1,7 @@
 import { TooManyRequestsError } from '@bike4mind/utils';
 import { RequestHandler } from 'express';
 import { checkApiKeyRateLimit, type RateLimitCounter } from '@server/utils/apiKeyRateLimitCheck';
-import { emitMetric } from '@server/utils/cloudwatch';
+import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { ApiKeyScope, API_KEY_RATE_LIMIT_HEADER_NAMES } from '@bike4mind/common';
 import { resolveRouteTemplate } from '@server/utils/resolveRouteTemplate';

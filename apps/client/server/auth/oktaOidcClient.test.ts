@@ -24,7 +24,7 @@ vi.mock('openid-client', () => {
 });
 
 // Mock Config - must use inline factory
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: {
     OKTA_AUDIENCE: 'https://test.okta.com',
     OKTA_CLIENT_ID: 'test-client-id',
@@ -55,7 +55,7 @@ vi.mock('@bike4mind/database', () => ({
 // Import after mocks
 import * as openidClient from 'openid-client';
 import { identityProviderRepository } from '@bike4mind/database';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import {
   generatePkceParams,
   getOktaConfigWithFallback,

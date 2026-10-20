@@ -2,6 +2,7 @@ import {
   ANTHROPIC_OUTPUT_CONFIG_EFFORT_MODELS,
   ChatModels,
   CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS,
+  ModelBackend,
   NO_TEMPERATURE_MODELS,
   REASONING_SUPPORTED_MODELS,
   type ModelInfo,
@@ -195,6 +196,8 @@ export function reasonsWithinOutputBudget(modelInfo: ModelInfo): boolean {
  * bump is neither harmless nor invisible. Explicit values are still clamped down
  * to the model's own cap, since over-requesting 400s the whole turn.
  *
+ * Thinking Gemini models with a declared cap default to that cap when unset.
+ *
  * Models that reason inside the output budget default to
  * ADAPTIVE_THINKING_MAX_TOKENS_FLOOR, clamped to their own cap: a small default can
  * be consumed entirely by reasoning, leaving an empty visible reply. "Their own cap"
@@ -224,9 +227,18 @@ export function resolveOutputMaxTokens({
   modelMaxOutputTokens: number | undefined;
 }): number {
   const reasonsWithinBudget = reasonsWithinOutputBudget(modelInfo);
-  const preferred =
-    usableTokenCount(requested) ?? (reasonsWithinBudget ? ADAPTIVE_THINKING_MAX_TOKENS_FLOOR : fallback);
   const cap = usableTokenCount(modelMaxOutputTokens);
+  // Gemini counts thinking inside maxOutputTokens; keep in sync with geminiBackend.getGenerationConfig,
+  // which only bounds thinking when the cap binds. The web client sends the model max too.
+  const unsetDefault =
+    modelInfo.backend === ModelBackend.Gemini &&
+    modelInfo.can_think === true &&
+    cap !== undefined &&
+    modelInfo.maxOutputTokensDerived !== true
+      ? cap
+      : fallback;
+  const preferred =
+    usableTokenCount(requested) ?? (reasonsWithinBudget ? ADAPTIVE_THINKING_MAX_TOKENS_FLOOR : unsetDefault);
   // An unusable cap must not clamp. `Math.min(n, undefined)` is NaN, and this result sizes
   // a credit reservation downstream, so the resolver has to be total or a malformed catalog
   // row puts NaN on a money path. Substituting `fallback` instead would be a sizing decision
@@ -457,6 +469,13 @@ export function planReasoningEffort(
   };
 }
 
+/** Whether `model` thinks adaptively, at the provider default effort, on a request that names no thinking. */
+export function isAdaptiveThinkingByDefault(model: string, modelInfo: ModelInfo): boolean {
+  return (
+    modelInfo.can_think === true && modelInfo.thinkingStyle === 'adaptive' && ADAPTIVE_THINKING_BY_DEFAULT.has(model)
+  );
+}
+
 /**
  * The effort an adaptive model runs at when the caller named none, from the auto-classified
  * query complexity. An adaptive model that thinks unasked does so on every request (and every
@@ -470,7 +489,6 @@ export function effortForComplexity(
   modelInfo: ModelInfo,
   complexity: QueryComplexityType | undefined
 ): ReasoningEffort | undefined {
-  if (!modelInfo.can_think || modelInfo.thinkingStyle !== 'adaptive') return undefined;
-  if (!ADAPTIVE_THINKING_BY_DEFAULT.has(model)) return undefined;
+  if (!isAdaptiveThinkingByDefault(model, modelInfo)) return undefined;
   return complexity === 'simple' || complexity === 'contextual' ? 'low' : undefined;
 }

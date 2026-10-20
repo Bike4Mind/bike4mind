@@ -14,7 +14,7 @@ vi.mock('sst', () => ({
 }));
 
 // Mock CloudWatch metrics
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   emitModalGenerationMetrics: vi.fn().mockResolvedValue(undefined),
 }));
 
