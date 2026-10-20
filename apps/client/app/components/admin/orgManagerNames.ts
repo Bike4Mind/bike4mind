@@ -9,8 +9,7 @@ import { type AdministrableOrg, canAdministerOrganization, type IUserDetails } f
 export function orgManagerNames(
   org: AdministrableOrg & { userDetails?: ReadonlyArray<Pick<IUserDetails, 'id' | 'name' | 'email'>> | null }
 ): string[] {
-  const candidateIds = new Set([...(org.adminUserIds ?? []), ...(org.managerId ? [org.managerId] : [])]);
-  return [...candidateIds]
+  return [...new Set(org.adminUserIds ?? [])]
     .filter(id => id !== org.userId && canAdministerOrganization({ id }, org))
     .map(id => {
       const details = org.userDetails?.find(detail => String(detail.id) === id);

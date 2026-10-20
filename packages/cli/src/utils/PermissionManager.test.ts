@@ -524,4 +524,50 @@ describe('PermissionManager', () => {
       expect(manager.needsPermission('edit_file')).toBe(true);
     });
   });
+
+  describe('sandbox auto-allow', () => {
+    it('skips the prompt for a sandboxed call to a tool whose descriptor declares the sandbox', () => {
+      const manager = new PermissionManager(new ToolCatalog());
+      manager.setSandboxState('auto-allow', true);
+      expect(manager.needsPermission('bash_execute', { isSandboxed: true })).toBe(false);
+      expect(manager.needsPermission('bash_execute', { isSandboxed: false })).toBe(true);
+    });
+
+    it('does not extend to a tool without the declaration', () => {
+      const manager = new PermissionManager(new ToolCatalog());
+      manager.setSandboxState('auto-allow', true);
+      expect(manager.needsPermission('write_shell_stdin', { isSandboxed: true })).toBe(true);
+    });
+
+    it('does not extend to a plugin that declares the sandbox itself', () => {
+      const catalog = new ToolCatalog();
+      catalog.register('plugin_shell', {
+        source: { kind: 'plugin', packageName: 'p' },
+        effect: 'execute',
+        approval: 'prompt_always',
+        commandArg: 'command',
+        sandbox: 'command',
+      });
+      const manager = new PermissionManager(catalog);
+      manager.setSandboxState('auto-allow', true);
+      expect(manager.needsPermission('plugin_shell', { isSandboxed: true })).toBe(true);
+    });
+  });
+
+  describe('sandbox escalation approvals', () => {
+    it('remembers an approval by key for the session', () => {
+      const manager = new PermissionManager(new ToolCatalog());
+      expect(manager.isSandboxEscalationApproved('k')).toBe(false);
+      manager.approveSandboxEscalation('k');
+      expect(manager.isSandboxEscalationApproved('k')).toBe(true);
+      expect(manager.isSandboxEscalationApproved('other')).toBe(false);
+    });
+
+    it('is cleared with the session trust', () => {
+      const manager = new PermissionManager(new ToolCatalog());
+      manager.approveSandboxEscalation('k');
+      manager.clearSessionTrust();
+      expect(manager.isSandboxEscalationApproved('k')).toBe(false);
+    });
+  });
 });

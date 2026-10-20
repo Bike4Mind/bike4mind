@@ -15,13 +15,13 @@ export function setWebSocketToolExecutor(executor: WebSocketToolExecutor | null)
 /**
  * Tool categories for routing decisions
  */
-const SERVER_TOOLS = ['weather_info', 'web_search', 'web_fetch'] as const;
+const SERVER_TOOLS = ['weather_info', 'web_search', 'web_fetch', 'decide'] as const;
 
 type ServerToolName = (typeof SERVER_TOOLS)[number];
 
 /**
- * Server-side tools (weather, web_search, web_fetch) run on B4M's API with company keys; every
- * other tool runs locally through the implementation its caller passes in.
+ * Server-side tools (weather, web_search, web_fetch, decide) run on B4M's API with company keys;
+ * every other tool runs locally through the implementation its caller passes in.
  */
 export function isServerTool(toolName: string): toolName is ServerToolName {
   return SERVER_TOOLS.includes(toolName as ServerToolName);

@@ -5,6 +5,7 @@ import {
   shouldPersistGeneratedAudio,
   generateSoundEffectContract,
   SoundGenerationVendor,
+  usdToCreditsStochastic,
 } from '@bike4mind/common';
 import { adminSettingsRepository, apiKeyRepository, usageEventRepository } from '@bike4mind/database';
 import { apiKeyService, estimateSoundCredits } from '@bike4mind/services';
@@ -24,8 +25,8 @@ const SUPPORTS_OUTPUT_FORMAT: Record<SoundGenerationVendor, (format: string) => 
 };
 
 // Provider-agnostic sound-effects generation. Meters usage: because the cost is
-// deterministic (duration-driven), it RESERVES the exact charge before calling
-// the provider and settles it on success / refunds it on failure - so a charge
+// deterministic (duration-driven), it RESERVES the rounded-up charge before
+// calling the provider and settles the exact cost on success / refunds it on failure - so a charge
 // can never fail after the audio is produced. Bills the organization's shared
 // pool for org-billed API keys and for org-seat members; otherwise the user. All
 // billing is gated on the enforceCredits admin setting, so self-host /
@@ -131,8 +132,9 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
     return res.status(502).json({ error: 'Sound generation failed' });
   }
 
-  // Settle the full reservation: the provider generates exactly the billed duration.
-  const creditsCharged = await reservation.settle(reservation.reservedCredits, {
+  // The provider generates exactly the billed duration, so settle that exact cost; the round-up held at
+  // reservation is refunded.
+  const creditsCharged = await reservation.settle(usdToCreditsStochastic(usdCost), {
     type: 'sound_effects_usage',
     sessionId,
     model: provider,

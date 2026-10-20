@@ -486,10 +486,17 @@ describe('rotateSession', () => {
         .mockResolvedValueOnce(makeSession({ refreshTokenHash: 'newer', previousRefreshTokenHash: 'newer-prev' }));
       authSessions.recoverRotateHash.mockResolvedValue(null);
 
-      await expect(rotateSession(buildRefreshToken(SID, held), { db, signAccessToken })).rejects.toThrow(
+      const audit = vi.fn();
+      await expect(rotateSession(buildRefreshToken(SID, held), { db, signAccessToken, audit })).rejects.toThrow(
         UnauthorizedError
       );
       expect(authSessions.revokeBySid).toHaveBeenCalledWith(SID);
+      expect(audit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'session_reuse_revoked',
+          metadata: expect.objectContaining({ reason: 'chain_advanced_during_recovery' }),
+        })
+      );
     });
 
     it('stops a replay loop: the allowance survives recoveries and only a true rotation clears it', async () => {
@@ -546,7 +553,84 @@ describe('rotateSession', () => {
       await expect(
         rotateSession(buildRefreshToken(SID, generateRefreshSecret()), { db, signAccessToken, audit })
       ).rejects.toThrow(UnauthorizedError);
-      expect(audit).toHaveBeenCalledWith({ type: 'session_reuse_revoked', sid: SID, userId: 'user-1' });
+      expect(audit).toHaveBeenCalledWith({
+        type: 'session_reuse_revoked',
+        sid: SID,
+        userId: 'user-1',
+        metadata: expect.objectContaining({ reason: 'unrecognized_secret' }),
+      });
+    });
+
+    it('records triage fields on session_reuse_revoked and never token material', async () => {
+      const { authSessions, db, signAccessToken } = setup();
+      const audit = vi.fn();
+      const now = Date.now();
+      authSessions.findBySid.mockResolvedValue(
+        makeSession({
+          refreshTokenHash: 'cur',
+          previousRefreshTokenHash: 'prev',
+          graceExpiresAt: new Date(now - 300_000),
+          lastUsedAt: new Date(now - 600_000),
+          createdAt: new Date(now - 86_400_000),
+          recoveries: 1,
+          device: { ip: '203.0.113.7', userAgent: 'UA/1' },
+        })
+      );
+      const presented = generateRefreshSecret();
+      await expect(
+        rotateSession(buildRefreshToken(SID, presented), { db, signAccessToken, audit })
+      ).rejects.toThrow(UnauthorizedError);
+
+      const { metadata } = audit.mock.calls[0][0];
+      expect(metadata).toEqual({
+        reason: 'unrecognized_secret',
+        msSinceLastUse: expect.any(Number),
+        msSinceReplayWindowClosed: expect.any(Number),
+        sessionAgeMs: expect.any(Number),
+        recoveries: 1,
+        createdVia: 'otc',
+        issuedIp: '203.0.113.7',
+        issuedUserAgent: 'UA/1',
+      });
+      expect(metadata.msSinceLastUse).toBeGreaterThanOrEqual(600_000);
+      expect(metadata.msSinceReplayWindowClosed).toBeGreaterThanOrEqual(300_000);
+      expect(metadata.sessionAgeMs).toBeGreaterThanOrEqual(86_400_000);
+      const serialized = JSON.stringify(metadata);
+      for (const secretish of [presented, hashRefreshSecret(presented), 'cur', 'prev']) {
+        expect(serialized).not.toContain(secretish);
+      }
+    });
+
+    it('tags a revoke after a lost rotation CAS whose chain moved two generations on', async () => {
+      const { authSessions, db, signAccessToken } = setup();
+      const audit = vi.fn();
+      const held = generateRefreshSecret();
+      authSessions.findBySid
+        .mockResolvedValueOnce(makeSession({ refreshTokenHash: hashRefreshSecret(held) }))
+        .mockResolvedValueOnce(makeSession({ refreshTokenHash: 'newer', previousRefreshTokenHash: 'newer-prev' }));
+      authSessions.rotateHash.mockResolvedValue(null);
+
+      await expect(rotateSession(buildRefreshToken(SID, held), { db, signAccessToken, audit })).rejects.toThrow(
+        UnauthorizedError
+      );
+      expect(audit).toHaveBeenCalledWith(
+        expect.objectContaining({ metadata: expect.objectContaining({ reason: 'chain_advanced_during_rotation' }) })
+      );
+    });
+
+    it('reports null issuing fields and window when the row has none', async () => {
+      const { authSessions, db, signAccessToken } = setup();
+      const audit = vi.fn();
+      authSessions.findBySid.mockResolvedValue(makeSession({ refreshTokenHash: 'cur' }));
+      await expect(
+        rotateSession(buildRefreshToken(SID, generateRefreshSecret()), { db, signAccessToken, audit })
+      ).rejects.toThrow(UnauthorizedError);
+      expect(audit.mock.calls[0][0].metadata).toMatchObject({
+        msSinceReplayWindowClosed: null,
+        recoveries: 0,
+        issuedIp: null,
+        issuedUserAgent: null,
+      });
     });
 
     it('emits session_recovered on a recovery rotation', async () => {

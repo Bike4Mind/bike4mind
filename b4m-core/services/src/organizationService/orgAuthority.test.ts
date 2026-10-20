@@ -11,16 +11,11 @@ describe('canAdministerOrganization', () => {
 describe('isCurrentOrgMember', () => {
   const org = {
     userId: 'owner-id',
-    managerId: 'manager-id',
     users: [{ userId: 'member-id' }, { userId: 'other-member-id' }],
   };
 
   it('counts the billing owner', () => {
     expect(isCurrentOrgMember(org, 'owner-id')).toBe(true);
-  });
-
-  it('counts the appointed manager', () => {
-    expect(isCurrentOrgMember(org, 'manager-id')).toBe(true);
   });
 
   it('counts a user on the roster', () => {

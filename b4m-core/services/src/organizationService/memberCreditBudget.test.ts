@@ -89,18 +89,6 @@ describe('setMemberCreditDefault', () => {
     expect(organizations.update).not.toHaveBeenCalled();
   });
 
-  it('refuses a bare manager who is not an appointed admin', async () => {
-    organizations.findById.mockResolvedValue(org({ managerId: 'manager1' }));
-    await expect(
-      setMemberCreditDefault(
-        actor('manager1'),
-        { organizationId: 'org1', maxCreditsPerMember: 500 },
-        { db: { organizations } }
-      )
-    ).rejects.toThrow(NotFoundError);
-    expect(organizations.update).not.toHaveBeenCalled();
-  });
-
   it.each([0, -5, 0.4, Number.POSITIVE_INFINITY])(
     'rejects a non-positive, fractional or infinite default (%s)',
     async value => {
@@ -177,12 +165,6 @@ describe('setMemberCreditOverride', () => {
   it('refuses a stale appointed admin with no users[] row, and does not write', async () => {
     organizations.findById.mockResolvedValue(org({ users: [{ userId: 'member1', permissions: ['read'] }] }));
     await expect(run(actor('orgAdmin1'), 'member1', 50)).rejects.toThrow(NotFoundError);
-    expect(organizations.setMemberMaxCredits).not.toHaveBeenCalled();
-  });
-
-  it('refuses a bare manager who is not an appointed admin', async () => {
-    organizations.findById.mockResolvedValue(org({ managerId: 'manager1' }));
-    await expect(run(actor('manager1'), 'member1', 50)).rejects.toThrow(NotFoundError);
     expect(organizations.setMemberMaxCredits).not.toHaveBeenCalled();
   });
 

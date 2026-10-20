@@ -235,8 +235,8 @@ describe('executeCompletion - org billing routing', () => {
   });
 
   it('bills the org for its billing owner, who holds no users[] row', async () => {
-    // assignManager/ownership never write a roster row, so a roster-only check would 403 the two
-    // principals most entitled to spend the pool.
+    // Ownership never writes a roster row, so a roster-only check would 403 the principal most
+    // entitled to spend the pool.
     const { db, organizations } = buildDb({ org: buildOrg({ userId: 'user1', users: [] }) });
 
     await executeCompletion({ ...baseParams, db, billingOrganizationId: 'org1' });

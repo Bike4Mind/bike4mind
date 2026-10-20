@@ -32,7 +32,6 @@ const GrantSubscriptionSchema = z.object({
   organizationId: z.string().optional(), // For existing team subscriptions
   durationMonths: z.number().min(1).max(12).prefault(1), // How many months to grant
   billingOwnerId: z.string().optional(), // User ID of the billing owner (maps to organization.userId)
-  managerId: z.string().optional(), // User ID of the team manager
 });
 
 interface RequestQuery {
@@ -56,7 +55,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
       organizationId,
       durationMonths,
       billingOwnerId,
-      managerId,
     } = GrantSubscriptionSchema.parse(req.body);
 
     if (typeof userId !== 'string' || !userId) {
@@ -169,7 +167,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
             personal: false,
             stripeCustomerId: null, // Admin granted subscriptions don't need Stripe customer
             billingOwnerId: billingOwnerId, // Optional billing owner
-            managerId: managerId, // Optional team manager
           },
           {
             db: {

@@ -11,7 +11,10 @@ const orgs = vi.hoisted(() => ({
   broken: 'org-broken',
   members: new Map<string, string[]>(),
   admins: new Map<string, string[]>(),
-  info: new Map<string, { name?: string; userId?: string; managerId?: string }>(),
+  info: new Map<
+    string,
+    { name?: string; userId?: string; adminUserIds?: string[]; users?: { userId: string; permissions: string[] }[] }
+  >(),
 }));
 vi.mock('@bike4mind/database/infra', async importOriginal => ({
   ...(await importOriginal<object>()),
@@ -513,7 +516,12 @@ describe('Skill Market (real mongod)', () => {
 
   it('SLA reminders: nudge author and org reviewers once per day, never approve', async () => {
     orgs.members.set(AUTHOR, [ORG]);
-    orgs.info.set(ORG, { name: 'Acme', userId: 'org-owner', managerId: 'org-mgr' });
+    orgs.info.set(ORG, {
+      name: 'Acme',
+      userId: 'org-owner',
+      adminUserIds: ['org-mgr'],
+      users: [{ userId: 'org-mgr', permissions: ['read'] }],
+    });
     const { listing, version } = await publish(
       await makeSkill(AUTHOR, 'Fetch and summarize.', { allowedTools: ['web_fetch'] }),
       'organization',

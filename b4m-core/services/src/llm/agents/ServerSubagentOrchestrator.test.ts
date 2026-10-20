@@ -1,10 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ReActAgent } from '@bike4mind/agents';
 import type { AgentResult, ServerAgentDefinition } from '@bike4mind/agents';
-import { getTextModelCost, getTurnsCost, type ModelInfo } from '@bike4mind/common';
+import { CREDITS_PER_USD_COST, getTextModelCost, getTurnsCost, type ModelInfo } from '@bike4mind/common';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
-import { usdToCredits } from '@bike4mind/utils';
 import {
   ServerSubagentOrchestrator,
   type ServerSubagentTracker,
@@ -12,6 +11,25 @@ import {
   type ChildExecutionStatus,
 } from './ServerSubagentOrchestrator';
 import { runWithFakeTimers } from '../__tests__/helpers/fakeTimers';
+
+// The real stochastic rounding, with its draw pinned so the fallback charge is assertable.
+const { settlementDraw } = vi.hoisted(() => ({ settlementDraw: vi.fn(() => 0.5) }));
+vi.mock('@bike4mind/utils', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/utils')>();
+  return {
+    ...actual,
+    usdToCreditsStochastic: (usd: number) => actual.usdToCreditsStochastic(usd, () => settlementDraw()),
+  };
+});
+beforeEach(() => {
+  settlementDraw.mockReturnValue(0.5);
+});
+
+// What a draw of 0.5 settles for an exact USD cost: the floor, plus 1 when the fraction exceeds the draw.
+const settledAtHalf = (usd: number) => {
+  const raw = usd * CREDITS_PER_USD_COST;
+  return Math.floor(raw) + (0.5 < raw - Math.floor(raw) ? 1 : 0);
+};
 
 /**
  * Minimal stubs. The orchestrator's background + dispatch paths are exercised
@@ -298,6 +316,43 @@ describe('ServerSubagentOrchestrator', () => {
       expect(tracker.onFailure).not.toHaveBeenCalled();
     }, 30_000);
 
+    it.each([0, undefined])(
+      'reports totalCredits as undefined when the dispatched child persisted %s',
+      async persistedCredits => {
+        const tracker = makeTracker({
+          onStart: vi.fn().mockResolvedValue('child-zero-id'),
+          pollChildStatus: vi.fn().mockResolvedValue({
+            status: 'completed',
+            result: { answer: 'Done', iterations: 1, totalCredits: persistedCredits },
+          } satisfies ChildExecutionStatus),
+        });
+
+        const orchestrator = new ServerSubagentOrchestrator({
+          userId: 'u1',
+          llm: makeLlm(),
+          logger: makeLogger(),
+          parentTools: [],
+          tracker,
+          getRemainingTimeMs: () => 2 * 60 * 1000,
+        });
+
+        const result = await runWithFakeTimers(
+          orchestrator.delegateToAgent({
+            task: 't',
+            agentDef: makeAgentDef(),
+            thoroughness: 'medium',
+          }),
+          { advanceByMs: POLL_TICK_MS }
+        );
+
+        expect(result.finalAnswer).toBe('Done');
+        // A persisted 0 is indistinguishable from "not reported", so it must not reach
+        // delegateToAgent's onCredits gate (which would write an all-zero usage event).
+        expect(result.completionInfo.totalCredits).toBeUndefined();
+      },
+      30_000
+    );
+
     it('sets handoffSignal and returns placeholder when parent deadline is reached', async () => {
       // Parent has 60s remaining; thoroughness budget is 3min. Will dispatch.
       // After dispatch, polling will see status=running while parent's remaining
@@ -503,8 +558,8 @@ describe('ServerSubagentOrchestrator', () => {
         thoroughness: 'medium',
       });
 
-      expect(result.completionInfo.totalCredits).toBeCloseTo(usdToCredits(getTurnsCost(tiered, turnUsage)), 10);
-      expect(result.completionInfo.totalCredits!).toBeLessThan(usdToCredits(getTextModelCost(tiered, 301_000, 1_200)));
+      expect(result.completionInfo.totalCredits).toBe(settledAtHalf(getTurnsCost(tiered, turnUsage)));
+      expect(result.completionInfo.totalCredits!).toBeLessThan(settledAtHalf(getTextModelCost(tiered, 301_000, 1_200)));
     });
 
     it('prices a cached long prompt in the totals fallback on the tier its whole prompt falls in', async () => {
@@ -533,9 +588,8 @@ describe('ServerSubagentOrchestrator', () => {
       });
 
       // 210K prompt: the >200K rates, though the uncached 20K alone sits under the threshold.
-      expect(result.completionInfo.totalCredits).toBeCloseTo(
-        usdToCredits(20_000 * 0.000006 + 190_000 * 0.000006 * 0.1 + 100 * 0.0000225),
-        10
+      expect(result.completionInfo.totalCredits).toBe(
+        settledAtHalf(20_000 * 0.000006 + 190_000 * 0.000006 * 0.1 + 100 * 0.0000225)
       );
     });
 
@@ -573,15 +627,65 @@ describe('ServerSubagentOrchestrator', () => {
       // The fallback credit sits on the cache-aware basis (input/output PLUS the
       // additive cache buckets) - the same basis as the costUsd recorded by
       // delegateToAgent's onCredits, so the two numbers in a usage-event row agree.
-      expect(result.completionInfo.totalCredits).toBeCloseTo(
-        usdToCredits(getTextModelCost(model, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens)),
-        10
+      expect(result.completionInfo.totalCredits).toBe(
+        settledAtHalf(getTextModelCost(model, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens))
       );
       // Strictly higher than the cache-blind value PR #132 would have produced: the
       // cache buckets are additive positive costs, so this is the ~+36% correction.
       expect(result.completionInfo.totalCredits!).toBeGreaterThan(
-        usdToCredits(getTextModelCost(model, inputTokens, outputTokens))
+        settledAtHalf(getTextModelCost(model, inputTokens, outputTokens))
       );
+    });
+
+    describe('final charge rounding', () => {
+      // 12K input tokens at $4.375e-7 each: exactly 10.5 credits at the default rate.
+      const halfCreditModel: ModelInfo = {
+        id: MODEL_ID,
+        backend: 'bedrock',
+        pricing: { 1_000_000: { input: 10.5 / CREDITS_PER_USD_COST / 12_000, output: 0 } },
+      } as unknown as ModelInfo;
+
+      const delegateWith = async (m: ModelInfo, totalInputTokens: number) => {
+        stubAgentRun({
+          totalTokens: totalInputTokens,
+          totalInputTokens,
+          totalOutputTokens: 0,
+          iterations: 1,
+          toolCalls: 0,
+          reachedMaxIterations: false,
+        });
+        const orchestrator = new ServerSubagentOrchestrator({
+          userId: 'u1',
+          llm: makeLlm(MODEL_ID),
+          logger: makeLogger(),
+          parentTools: [],
+          availableModels: [m],
+        });
+        return orchestrator.delegateToAgent({
+          task: 't',
+          agentDef: makeAgentDef({ model: MODEL_ID }),
+          thoroughness: 'medium',
+        });
+      };
+
+      it.each([
+        [0.25, 11],
+        [0.75, 10],
+      ])('charges N or N+1 for a cost of N + 0.5 credits (draw %s -> %s)', async (draw, expected) => {
+        settlementDraw.mockReturnValue(draw);
+
+        const result = await delegateWith(halfCreditModel, 12_000);
+
+        expect(result.completionInfo.totalCredits).toBe(expected);
+      });
+
+      it('can charge 0 for a tiny cost instead of a 1-credit minimum', async () => {
+        settlementDraw.mockReturnValue(0.5);
+
+        const result = await delegateWith(model, 1);
+
+        expect(result.completionInfo.totalCredits).toBe(0);
+      });
     });
 
     it('warns and leaves totalCredits unset when the model is not in availableModels (#152)', async () => {

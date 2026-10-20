@@ -364,11 +364,6 @@
       "count": 1
     }
   },
-  "apps/client/pages/api/data-lakes/[id].ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 4
-    }
-  },
   "apps/client/pages/api/data-lakes/[id]/articles.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
@@ -382,11 +377,6 @@
   "apps/client/pages/api/data-lakes/[id]/findings/index.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
-    }
-  },
-  "apps/client/pages/api/data-lakes/[id]/lifecycle.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 4
     }
   },
   "apps/client/pages/api/data-lakes/[id]/proposals/[proposalId].ts": {
@@ -414,24 +404,9 @@
       "count": 2
     }
   },
-  "apps/client/pages/api/data-lakes/[id]/settings.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
   "apps/client/pages/api/data-lakes/[id]/transfer-ownership.ts": {
     "b4m/no-raw-entity-response": {
       "count": 2
-    }
-  },
-  "apps/client/pages/api/data-lakes/[id]/visibility.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/data-lakes/archived.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
     }
   },
   "apps/client/pages/api/data-lakes/batches/[batchId].ts": {
@@ -445,16 +420,6 @@
     }
   },
   "apps/client/pages/api/data-lakes/batches/index.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/data-lakes/deleted.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/data-lakes/index.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
     }

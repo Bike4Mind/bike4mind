@@ -13,7 +13,7 @@ import {
   type UserQuestionResponse,
 } from '@bike4mind/services/llm/tools/cliTools';
 import type { PermissionManager } from './PermissionManager';
-import type { PermissionResponse } from '../components/PermissionPrompt';
+import type { ShowPermissionPrompt } from '../tools/gateway/gatewayTypes.js';
 import type { SandboxOrchestrator } from '../sandbox/SandboxOrchestrator.js';
 import type { ApiClient } from '../auth/ApiClient';
 import { executeHooks, buildHookContext } from '../agents/hookExecutor.js';
@@ -23,6 +23,8 @@ import { HookBlockedError } from '../agents/types.js';
 import type { CheckpointStore } from '../storage/CheckpointStore.js';
 import type { InteractionMode } from '../bootstrap/types.js';
 import { wrapTools, type AgentContext, type WrapToolDeps } from '../tools/gateway/index.js';
+
+import { hasDecisionModels } from './decisionModelProbe.js';
 
 /**
  * Simple CLI-friendly storage adapter
@@ -312,7 +314,7 @@ export async function generateCliTools(
   llm: ICompletionBackend,
   model: string,
   permissionManager: PermissionManager,
-  showPermissionPrompt: (toolName: string, args: unknown, preview?: string) => Promise<{ action: PermissionResponse }>,
+  showPermissionPrompt: ShowPermissionPrompt,
   agentContext: AgentContext,
   configStore: any, // ConfigStore instance
   apiClient: ApiClient,
@@ -388,6 +390,12 @@ export async function generateCliTools(
     'web_search',
     'web_fetch',
   ];
+  // Apply the caller's restriction before probing: a denied tool should not add network work.
+  const normalizedAllowed = toolFilter?.allowedTools?.map(normalizeToolName);
+  const normalizedDenied = toolFilter?.deniedTools?.map(normalizeToolName);
+  const allowsDecide =
+    !normalizedDenied?.includes('decide') && (!normalizedAllowed?.length || normalizedAllowed.includes('decide'));
+  if (allowsDecide && (await hasDecisionModels(apiClient))) enabledB4mToolNames.push('decide');
 
   // Filter the CLI-safe shared tools to only CLI-enabled ones, then merge with all
   // CLI-only tools. `cliSharedTools` (from the services cliTools entry) exposes just
@@ -454,12 +462,6 @@ export async function generateCliTools(
 
   // Apply tool filter if provided (for subagents)
   if (toolFilter) {
-    const { allowedTools, deniedTools } = toolFilter;
-
-    // Normalize tool names to B4M format
-    const normalizedAllowed = allowedTools?.map(normalizeToolName);
-    const normalizedDenied = deniedTools?.map(normalizeToolName);
-
     tools = tools.filter(tool => {
       const toolName = tool.toolSchema.name;
 

@@ -2,7 +2,8 @@
 //   - Authenticate using any service
 
 import { AuthStrategy } from '@bike4mind/common';
-import { authFailLogRepository, IUserObject } from '@bike4mind/database';
+import { authFailLogRepository } from '@bike4mind/database';
+import type { OAuthUser } from '@server/utils/auth/verifyCallback';
 import { issueBrowserSession } from '@server/auth/issueSession';
 import { verifyStateToken, BaseStatePayload } from '@server/auth/jwtStateStore';
 import { authSuccessRedirectQuery, mfaHandoffFragment } from '@server/auth/authSuccessRedirect';
@@ -17,7 +18,7 @@ import { logEvent } from '@server/utils/analyticsLog';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { readConsentedAcquisitionTouches } from '@server/analytics/acquisition';
 import { emitSignupForSourceProducts } from '@server/analytics/signupEvents';
-import { recordSignupAcquisition } from '@server/analytics/funnel';
+import { emitSignupFunnelEvents, recordSignupAcquisition } from '@server/analytics/funnel';
 import { AuthEvents } from '@bike4mind/common';
 import { resolveOAuthFailureReason, oauthFailureRedirectMessage } from '@server/utils/auth/oauthFailureReason';
 import { isLocalAppUrl } from '@server/utils/validators';
@@ -53,7 +54,7 @@ const handler = baseApi({ auth: false })
     }
 
     // Wrap passport authenticate callback in try-catch to handle async errors
-    passport.authenticate(strategy, authenticateOptions, async (err: string, user: IUserObject, info: unknown) => {
+    passport.authenticate(strategy, authenticateOptions, async (err: string, user: OAuthUser, info: unknown) => {
       try {
         const email = (info as any)?.email || undefined;
 
@@ -138,7 +139,7 @@ const handler = baseApi({ auth: false })
         // A brand-new account (flagged by verifyCallback's User.create branch)
         // also logs REGISTER, matching the OTC signup path (pages/api/otc/verify.ts)
         // - OAuth signups used to be indistinguishable from logins in the event log.
-        const isNewUser = Boolean((user as { isNewUser?: boolean }).isNewUser);
+        const isNewUser = Boolean(user.isNewUser);
         // Detected before any signup conversion so synthetic accounts stay out of the ad pixel
         // (fragment below) and the product signup emit, not just the funnel events.
         let isSyntheticSignup = false;
@@ -171,7 +172,19 @@ const handler = baseApi({ auth: false })
           // - a Lambda freeze after the redirect would drop it for good. The cost is bounded
           // and narrow: emitProductEvent has its own 2s timeout and per-emit catch, and a
           // signup naming no product resolves here immediately, which is most of them.
-          ({ isSynthetic: isSyntheticSignup } = await recordSignupAcquisition({ req, user, method: strategy }));
+          const signupFunnel = await recordSignupAcquisition({ req, user, method: strategy });
+          isSyntheticSignup = signupFunnel.isSynthetic;
+          const funnelUser = {
+            id: user.id,
+            acquisition: signupFunnel.acquisition,
+            isSynthetic: isSyntheticSignup,
+          };
+          await emitSignupFunnelEvents({
+            user: funnelUser,
+            method: strategy,
+            emailVerified: user.emailVerified === true,
+            creditsGranted: user.signupCreditsGranted ?? 0,
+          });
           if (!isSyntheticSignup) {
             await emitSignupForSourceProducts({
               userId: user.id,
@@ -190,7 +203,7 @@ const handler = baseApi({ auth: false })
 
         // Only a genuine new provider binding (flagged by verifyCallback) is an account-link.
         // Audited before the second-factor gate: verifyCallback has already persisted it.
-        if ((user as { isNewOAuthLink?: boolean }).isNewOAuthLink) {
+        if (user.isNewOAuthLink) {
           await logAuthAudit(req, { userId: user.id, event: 'oauth_link', strategy });
         }
 
