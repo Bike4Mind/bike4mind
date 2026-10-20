@@ -26,7 +26,7 @@ import type { GenerateImageToolCall, AudioGenerationToolCall, IChatHistoryItem }
 import type { Logger } from '@bike4mind/observability';
 import { credentialExecutionFields, type ApiKeyCredential } from '@server/dataLakes/dataLakeScopes';
 import type { ApiKeyInfo } from '@server/cli/auth';
-import { apiKeyBillingOrgId, resolveApiKeyBillingOrg } from '@server/billing/resolveMediaBillingOrgId';
+import { apiKeyBillingOrgId, resolveApiKeyBillingOrg } from '@server/billing/apiKeyBillingOrg';
 import { MAX_CONCURRENT_EXECUTIONS_PER_USER, STALE_ACTIVE_MS } from '@server/utils/executionLimits';
 import {
   dispatchAgentExecution,
@@ -488,6 +488,8 @@ type RunBillingOrg =
 async function resolveRunBillingOrg(input: StartAgentExecutionInput, logger: Logger): Promise<RunBillingOrg> {
   const { userId } = input;
 
+  // Also decides whether the user read below is needed: only an org-billed key can fail on billing
+  // before the membership check, and resolveApiKeyBillingOrg applies the same key test.
   if (apiKeyBillingOrgId(input.apiKeyInfo)) {
     const user = await userRepository.findById(userId);
     const billing = await resolveApiKeyBillingOrg({

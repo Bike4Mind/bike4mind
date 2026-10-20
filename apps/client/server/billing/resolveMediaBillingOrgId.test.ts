@@ -13,7 +13,8 @@ vi.mock('@bike4mind/services', async () => ({
   organizationService: await import('../../../../b4m-core/services/src/organizationService/orgAuthority'),
 }));
 
-import { resolveApiKeyBillingOrg, resolveMediaBillingOrgId } from './resolveMediaBillingOrgId';
+import { resolveApiKeyBillingOrg } from './apiKeyBillingOrg';
+import { resolveMediaBillingOrgId } from './resolveMediaBillingOrgId';
 
 const KEY_ORG = '64b000000000000000000001';
 const OTHER_ORG = '64b000000000000000000002';
