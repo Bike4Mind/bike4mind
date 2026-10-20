@@ -3277,3 +3277,42 @@ describe('GET /api/publish/serve - per-entry share-link view counts (#3255)', ()
     expect(perLinkCall()).toBeUndefined();
   });
 });
+
+describe('isolated origin and secondary document boundaries', () => {
+  it('refuses app viewer mode on a usercontent host', async () => {
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { host: 'pub1.usercontent.app.bike4mind.com' });
+    await promise;
+    expect(res._getStatusCode()).toBe(404);
+    expect(mockDownload).not.toHaveBeenCalled();
+  });
+  it('checks the artifact host before serving any bundle asset', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ manifest: [{ path: 'image.png', mimeType: 'image/png' }] }));
+    const { res, promise } = run(['u', 'scope123', 'my-slug', 'image.png'], { uc: 'another-artifact' });
+    await promise;
+    expect(res._getStatusCode()).toBe(404);
+    expect(mockDownload).not.toHaveBeenCalled();
+  });
+  it.each(['text/html', 'application/xhtml+xml', 'image/svg+xml'])(
+    'makes secondary %s documents inert attachments',
+    async mimeType => {
+      mockArtifactFindOne.mockReturnValue(bundle({ manifest: [{ path: 'secondary.html', mimeType }] }));
+      mockDownload.mockResolvedValue(
+        Buffer.from('<meta http-equiv="refresh" content="0;url=https://attacker.example">')
+      );
+      const { res, promise } = run(['u', 'scope123', 'my-slug', 'secondary.html']);
+      await promise;
+      expect(res._getStatusCode()).toBe(200);
+      expect(res.getHeader('Content-Disposition')).toBe('attachment');
+      expect(res.getHeader('Content-Security-Policy')).toMatch(/(?:^|; )sandbox(?:;|$)/);
+    }
+  );
+  it('loads blessed scripts from the app and never caches isolated responses across hosts', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle());
+    mockDownload.mockResolvedValue(Buffer.from('<script src="/static/lib/chart.js@4.x.js"></script>'));
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { uc: 'pub1' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData()).toContain('src="https://app.bike4mind.com/static/lib/chart.js@4.x.js"');
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
+  });
+});

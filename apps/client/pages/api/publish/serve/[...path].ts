@@ -43,6 +43,7 @@ import {
   usercontentHostFor,
   publicIdFromUsercontentHost,
   isAppWrapperHost,
+  isUsercontentHost,
   VIEWER_SANDBOX,
 } from '@server/services/publish/viewerSecurity';
 import {
@@ -223,6 +224,7 @@ const plainTitle = (title: string, artifact: { source: { kind: string }; rendere
 const withAppHost = (base: string) => (APP_HOST_SRC ? `${base} ${APP_HOST_SRC}` : base);
 const ASSET_CSP = [
   "default-src 'none'",
+  'sandbox',
   "script-src 'none'",
   withAppHost("style-src 'unsafe-inline'") + ' https://fonts.googleapis.com',
   withAppHost("img-src 'self' data:"),
@@ -308,6 +310,9 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // Approach B: set by the `/uc/*` rewrite - this request is for the bundle on
   // its per-artifact isolated origin ({publicId}.usercontent.app.<domain>), served AS the page.
   const isIsolated = !isShare && req.query.__uc === '1';
+  if (isUsercontentHost(req.headers.host) && !isIsolated) {
+    return res.status(404).json({ error: 'Not found' });
+  }
   // `?export=md|html` (issue #1142) - hand the artifact's CONTENT back as a downloaded
   // file. Distinct from `?format=raw` (a public plain-text alternate for agents and
   // unfurlers): an export is an attachment, is offered on share links and gated pages the
@@ -341,6 +346,12 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   if (!artifact) {
     // Unknown OR revoked token -> plain 404 (never 401/403), so a prober can't
     // distinguish a revoked/never-existed token from a private artifact.
+    return res.status(404).json({ error: 'Not found' });
+  }
+  if (
+    isIsolated &&
+    (artifact.source.kind !== 'bundle' || publicIdFromUsercontentHost(req.headers.host) !== artifact.publicId)
+  ) {
     return res.status(404).json({ error: 'Not found' });
   }
   // Nothing is served on behalf of a deleted, banned or suspended account - the same plain 404,
@@ -734,8 +745,14 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     try {
       const buf = await storage.download(`${artifact.storageKeyPrefix}${assetPath}`);
       res.setHeader('Content-Type', fileEntry.mimeType);
+      if (/^(text\/html|application\/xhtml\+xml|image\/svg\+xml)(?:;|$)/i.test(fileEntry.mimeType)) {
+        res.setHeader('Content-Disposition', 'attachment');
+      }
       res.setHeader('Content-Length', String(buf.length));
-      res.setHeader('Cache-Control', isShare ? SHARE_CACHE_CONTROL : cacheControlFor(effectiveVisibility));
+      res.setHeader(
+        'Cache-Control',
+        isShare || isIsolated ? SHARE_CACHE_CONTROL : cacheControlFor(effectiveVisibility)
+      );
       res.setHeader('X-Content-Type-Options', 'nosniff');
       // SECURITY: assets are served same-origin and validateBundle only vets
       // index.html - so an attacker could ship a second `evil.html` or `evil.svg`
@@ -871,6 +888,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     indexHtml,
     urlBase,
     origin: docOrigin,
+    scriptOrigin: isIsolated && PUBLISH_HOST ? `https://${PUBLISH_HOST}` : undefined,
     visibility: effectiveVisibility,
     assetMode: isShare ? (artifact.accessGate ? 'inline' : 'base') : undefined,
     assets: inlineAssets,
@@ -953,7 +971,8 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     }
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.setHeader('Content-Security-Policy', buildIsolatedBundleCsp(req, embedGrants));
-    res.setHeader('Cache-Control', bundleCacheControl);
+    // The CDN cache need not key on Host; never reuse one artifact's origin response on another.
+    res.setHeader('Cache-Control', 'private, no-store');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     // No bumpViewCount here: the isolated bundle is loaded as a sub-resource of the
     // app-origin wrapper, which already counts the view. Counting here too would

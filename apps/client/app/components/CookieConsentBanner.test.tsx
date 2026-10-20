@@ -496,7 +496,7 @@ describe('CookieConsentBanner', () => {
 
       expect(screen.getByText('Cookie settings.')).toBeInTheDocument();
       expect(screen.getByTestId('cookie-consent-banner')).toHaveTextContent(
-        'You are currently allowing advertising (Meta, Reddit), email marketing (MailerLite) and campaign attribution cookies.'
+        'You are currently allowing advertising (Meta, Reddit) and campaign attribution cookies.'
       );
       expect(screen.getByTestId('cookie-consent-banner')).toHaveTextContent('Declining reloads the page');
       expect(screen.getByTestId('cookie-consent-cancel-btn')).toBeInTheDocument();
@@ -557,7 +557,7 @@ describe('CookieConsentBanner', () => {
       renderAndReopen();
 
       expect(screen.getByTestId('cookie-consent-banner')).toHaveTextContent(
-        'You are currently declining advertising (Meta, Reddit), email marketing (MailerLite) and campaign attribution cookies.'
+        'You are currently declining advertising (Meta, Reddit) and campaign attribution cookies.'
       );
       expect(screen.getByTestId('cookie-consent-banner')).not.toHaveTextContent('reloads the page');
 
@@ -645,7 +645,7 @@ describe('CookieConsentBanner', () => {
         );
         const asked = screen.getByTestId('cookie-consent-banner').textContent;
         expect(asked).toContain(
-          'you consent to our use of analytics (Google Analytics), advertising (Meta, Reddit), email marketing (MailerLite) and campaign attribution cookies.'
+          'you consent to our use of analytics (Google Analytics), advertising (Meta, Reddit) and campaign attribution cookies.'
         );
 
         fireEvent.click(screen.getByTestId('cookie-consent-accept-btn'));
@@ -653,12 +653,10 @@ describe('CookieConsentBanner', () => {
         expect(mockGtag).toHaveBeenCalledWith('consent', 'update', { analytics_storage: 'granted' });
         expect(mockLoadMetaPixel).toHaveBeenCalledTimes(1);
         expect(mockLoadRedditPixel).toHaveBeenCalledTimes(1);
-        expect(document.getElementById('mailerlite')).not.toBeNull();
-        // The pixel loaders are mocked, so MailerLite is the only real script a grant may add. A
-        // loader called outside the consent registry that injects a script here fails this check;
-        // one gated on an env var not stubbed above adds nothing and passes.
+        expect(document.getElementById('mailerlite')).toBeNull();
+        // Pixel loaders are mocked; consent must not inject any additional vendor scripts.
         const added = [...document.querySelectorAll('script')].filter(script => !scriptsBefore.has(script));
-        expect(added.map(script => script.id)).toEqual(['mailerlite']);
+        expect(added.map(script => script.id)).toEqual([]);
       } finally {
         vi.unstubAllEnvs();
       }
@@ -929,7 +927,7 @@ describe('CookieConsentBanner', () => {
     });
   });
 
-  describe('tracking cookies and MailerLite', () => {
+  describe('tracking cookies and retired marketing loader', () => {
     const mailerLiteScript = () => document.querySelector('script[src="/scripts/ml.js"]');
     const ALL_NAMES = ['_fbp', '_fbc', '_rdt_uuid', '_rdt_em', '_rdt_cid', '_ga', '_gcl_au', '_ga_ABC123'];
     const trackingCookies = () =>
@@ -979,7 +977,7 @@ describe('CookieConsentBanner', () => {
       expect(trackingCookies()).toEqual([]);
     });
 
-    it('loads the MailerLite script only after consent is granted', () => {
+    it('does not load the retired marketing script after consent is granted', () => {
       render(
         <TestWrapper>
           <CookieConsentBanner />
@@ -989,10 +987,10 @@ describe('CookieConsentBanner', () => {
 
       fireEvent.click(screen.getByTestId('cookie-consent-accept-btn'));
 
-      expect(mailerLiteScript()).not.toBeNull();
+      expect(mailerLiteScript()).toBeNull();
     });
 
-    it('loads the MailerLite script in the auto-granted region with no stored decision', () => {
+    it('does not load the retired marketing script in the auto-granted region', () => {
       setRegion('row');
       render(
         <TestWrapper>
@@ -1000,7 +998,7 @@ describe('CookieConsentBanner', () => {
         </TestWrapper>
       );
 
-      expect(mailerLiteScript()).not.toBeNull();
+      expect(mailerLiteScript()).toBeNull();
     });
 
     it('does not load the MailerLite script when consent is denied', () => {

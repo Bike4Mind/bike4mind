@@ -3,6 +3,7 @@
 // callback (lazy evaluation, not at import time). Do NOT access `router` from waf.ts at module
 // scope — it would be undefined at that point.
 import { wafWebAcl } from './waf';
+import { allowsUsercontentRequest } from '../packages/server-utils/src/utils/usercontentRequest';
 
 // const isPermanentStage = ['production', 'dev'].includes($app.stage);
 
@@ -155,6 +156,14 @@ const originVerifyInjection = $interpolate`
   event.request.headers["${ORIGIN_VERIFY_HEADER}"] = { value: "${originVerifySecret.result}" };
 `;
 
+// Runs before SST routing AND cache lookup, including S3/static and cached SPA responses.
+const usercontentGateInjection = `
+  var __allowsUsercontentRequest = ${allowsUsercontentRequest.toString()};
+  if (!__allowsUsercontentRequest(event.request.headers.host.value, event.request.uri, event.request.method, ${JSON.stringify(domain ?? '')})) {
+    return { statusCode: 404, statusDescription: "Not Found", headers: { "cache-control": { value: "no-store" } } };
+  }
+`;
+
 // Applied ONLY to user-file responses so the SPA (default behavior) and the ALB API routes
 // (/api/ai/v1/completions, ...) are left untouched.
 const userFileCspInjection = `
@@ -225,7 +234,7 @@ const routerInstance = shouldUseSharedRouter
       // `sst dev` stages.
       edge: {
         viewerRequest: {
-          injection: $interpolate`${originVerifyInjection}${userFileMarkerInjection}`,
+          injection: $interpolate`${usercontentGateInjection}${originVerifyInjection}${userFileMarkerInjection}`,
         },
         viewerResponse: {
           injection: userFileCspInjection + ($dev ? devCorsInjection : ''),
