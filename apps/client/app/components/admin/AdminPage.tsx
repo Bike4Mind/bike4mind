@@ -306,7 +306,9 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
   const [activeTab, setActiveTab] = useAdminModal(useShallow(state => [state.activeTab, state.setActiveTab]));
   const hiddenNotifications = useAdminNotifications(state => state.hiddenNotifications);
   const { currentUser } = useUser();
-  const { tab: requestedTabSlug } = useSearch({ strict: false }) as { tab?: string };
+  // `select` keeps a keystroke in a tab's own search params (Admin Settings' `q`) from re-rendering
+  // the whole console through this page.
+  const requestedTabSlug = useSearch({ strict: false, select: search => (search as { tab?: string }).tab });
 
   // LiveOps Triage tab visibility - show everywhere except fork production environments
   const { data: liveopsEnvData, isError: isLiveOpsEnvError } = useQuery({
