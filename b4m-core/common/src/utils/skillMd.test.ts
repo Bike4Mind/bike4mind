@@ -96,9 +96,26 @@ describe('parseSkillMd', () => {
     ['[pr]', '[pr]'],
     ['[pr-number] [priority] [assignee]', '[pr-number] [priority] [assignee]'],
     ['[a, b]  ', '[a, b]'],
+    ['<optional: title>', '<optional: title>'],
+    ['[pr #123]', '[pr #123]'],
+    ['<file #line>', '<file #line>'],
+    ['[pr] # note', '[pr]'],
   ])('keeps an unquoted Claude Code argument-hint %j verbatim', (raw, hint) => {
     const result = parseSkillMd(`---\nname: review\nargument-hint: ${raw}\n---\nDo it.\n`);
     expect(result).toEqual({ ok: true, fields: { name: 'review', argumentHint: hint, body: 'Do it.' }, dropped: [] });
+  });
+
+  it('normalizes CRLF line endings so the body survives the install command', () => {
+    const result = parseSkillMd('---\r\nname: a\r\ndescription: d\r\nargument-hint: [pr]\r\n---\r\nline1\r\nline2\r\n');
+    expect(result).toEqual({
+      ok: true,
+      fields: { name: 'a', description: 'd', argumentHint: '[pr]', body: 'line1\nline2' },
+      dropped: [],
+    });
+    if (!result.ok) throw new Error(result.error);
+
+    const exported = toSkillMd({ name: 'a', description: 'd', body: result.fields.body ?? '' });
+    expect(() => buildClaudeCodeInstallCommand('a', exported)).not.toThrow();
   });
 
   it('treats a file without frontmatter as all body', () => {
@@ -143,6 +160,7 @@ describe('frontmatterHasSourceStamp', () => {
   it('only matches the stamp inside the frontmatter fence', () => {
     expect(frontmatterHasSourceStamp('---\n# Bike4Mind-Source: https://x/skills/1\nname: a\n---\nbody')).toBe(true);
     expect(frontmatterHasSourceStamp('\uFEFF---\n# Bike4Mind-Source: https://x\n---\nbody')).toBe(true);
+    expect(frontmatterHasSourceStamp('---\r\n# Bike4Mind-Source: https://x\r\nname: a\r\n---\r\nbody')).toBe(true);
     expect(frontmatterHasSourceStamp('---\nname: a\n---\n# Bike4Mind-Source: https://x\n')).toBe(false);
     expect(frontmatterHasSourceStamp('# Bike4Mind-Source: https://x\n')).toBe(false);
   });
@@ -188,6 +206,17 @@ describe('buildClaudeCodeInstallCommand', () => {
   it('rejects a name that is not path-safe', () => {
     expect(() => buildClaudeCodeInstallCommand('../evil', content)).toThrow();
     expect(() => buildClaudeCodeInstallCommand('a b', content)).toThrow();
+  });
+
+  it.each([['\u0003'], ['\r'], ['\u001b'], ['\u007f'], ['\u009b']])(
+    'rejects content with the control byte %j',
+    byte => {
+      expect(() => buildClaudeCodeInstallCommand('tricky', `${content}${byte}`)).toThrow();
+    }
+  );
+
+  it('accepts tabs and newlines', () => {
+    expect(() => buildClaudeCodeInstallCommand('tricky', 'a\tb\nc')).not.toThrow();
   });
 
   let hasBash = true;

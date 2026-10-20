@@ -13,7 +13,7 @@ import {
   Textarea,
   Typography,
 } from '@mui/joy';
-import { parseSkillMd, type ParseSkillMdResult } from '@bike4mind/common';
+import { parseSkillMd, type ParseSkillMdResult } from '@bike4mind/common/utils/skillMd';
 import { SkillFormInput } from '@client/app/hooks/data/skills';
 
 export interface SkillFormProps {
@@ -27,6 +27,18 @@ export interface SkillFormProps {
 }
 
 const SKILL_NAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+
+/** Bounds a local file read; the server accepts 50k characters, so this is already generous. */
+const MAX_IMPORT_BYTES = 200_000;
+
+/** Only a same-origin export gets a clickable provenance link; anything else stays plain text. */
+const isSameOrigin = (url: string): boolean => {
+  try {
+    return new URL(url).origin === window.location.origin;
+  } catch {
+    return false;
+  }
+};
 
 /**
  * Single MUI Joy form reused by `/skills/new` and `/skills/$id/edit`.
@@ -50,6 +62,8 @@ export const SkillForm: FC<SkillFormProps> = ({
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Bumped by every import so a slow earlier file read cannot overwrite a newer one.
+  const importReadId = useRef(0);
 
   // Overwrites only the fields the file sets; a malformed file touches nothing.
   const applySkillMd = (text: string) => {
@@ -69,15 +83,29 @@ export const SkillForm: FC<SkillFormProps> = ({
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
-    if (file) {
-      file
-        .text()
-        .then(applySkillMd)
-        .catch(() => setImportResult({ ok: false, error: 'The file could not be read.' }));
+    if (!file) return;
+    const readId = ++importReadId.current;
+    if (file.size > MAX_IMPORT_BYTES) {
+      setImportResult({ ok: false, error: 'The file is too large to import (200 KB maximum).' });
+      return;
     }
+    file
+      .text()
+      .then(text => {
+        if (readId === importReadId.current) applySkillMd(text);
+      })
+      .catch(() => {
+        if (readId === importReadId.current) setImportResult({ ok: false, error: 'The file could not be read.' });
+      });
+  };
+
+  const applyPasted = () => {
+    importReadId.current += 1;
+    applySkillMd(pasteText);
   };
 
   const source = importResult?.ok ? importResult.source : undefined;
+  const sourceIsSameOrigin = source ? isSameOrigin(source.url) : false;
 
   const nameError =
     name.length === 0
@@ -156,7 +184,7 @@ export const SkillForm: FC<SkillFormProps> = ({
                 <Button
                   size="sm"
                   sx={{ alignSelf: 'flex-start' }}
-                  onClick={() => applySkillMd(pasteText)}
+                  onClick={applyPasted}
                   disabled={!pasteText.trim()}
                   data-testid="skill-form-import-paste-apply"
                 >
@@ -171,15 +199,17 @@ export const SkillForm: FC<SkillFormProps> = ({
             ) : null}
             {source ? (
               <Alert
-                color={source.thirdParty ? 'warning' : 'primary'}
+                color={source.thirdParty || !sourceIsSameOrigin ? 'warning' : 'primary'}
                 variant="soft"
                 data-testid="skill-form-import-from-b4m"
               >
                 <span>
                   {source.thirdParty
                     ? "This is another author's Skill Market skill; import it from the market to keep updates and attribution: "
-                    : 'This skill came from Bike4Mind - open the original instead of making a copy: '}
-                  {/^https?:\/\//.test(source.url) ? (
+                    : sourceIsSameOrigin
+                      ? 'This skill came from Bike4Mind - open the original instead of making a copy: '
+                      : 'This file has a Bike4Mind source stamp from another site: '}
+                  {sourceIsSameOrigin ? (
                     <Link href={source.url} target="_blank" rel="noopener noreferrer">
                       {source.url}
                     </Link>

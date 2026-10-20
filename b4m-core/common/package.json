@@ -39,6 +39,16 @@
         "default": "./dist/jira/api.cjs"
       }
     },
+    "./utils/skillMd": {
+      "import": {
+        "types": "./dist/utils/skillMd.d.mts",
+        "default": "./dist/utils/skillMd.mjs"
+      },
+      "require": {
+        "types": "./dist/utils/skillMd.d.cts",
+        "default": "./dist/utils/skillMd.cjs"
+      }
+    },
     "./types/entities/RapidReplyTypes": {
       "import": {
         "types": "./dist/types/entities/RapidReplyTypes.d.mts",

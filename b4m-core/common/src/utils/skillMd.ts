@@ -17,6 +17,11 @@ const AGENT_MENTION = /(^|\s)@([a-z][a-z0-9_]+)/gm;
 
 const SKILL_NAME_PATH_SAFE = /^[a-z0-9-]+$/;
 
+// Bytes a terminal's line discipline may act on when the command is pasted: everything in C0 except
+// tab/LF, plus DEL and C1. A quoted heredoc does not protect against them.
+// eslint-disable-next-line no-control-regex -- rejecting these bytes is the point of the check.
+const UNSAFE_CONTROL_BYTES = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/;
+
 export interface SkillMdFields {
   name?: string;
   description?: string;
@@ -72,14 +77,28 @@ export function toSkillMd(skill: SkillMdSkill, opts: ToSkillMdOptions = {}): str
 }
 
 // Claude Code writes hints unquoted (`argument-hint: [pr-number] [priority]`), which YAML reads as a
-// flow sequence or rejects outright; quote the raw line so the hint survives verbatim.
-const UNQUOTED_ARGUMENT_HINT = /^(argument-hint:[ \t]*)(\[.*?)[ \t]*$/m;
+// flow sequence or rejects outright (`<optional: title>`); quote the raw value so the hint survives
+// verbatim. Already-quoted values and plain scalars are left alone.
+const ARGUMENT_HINT_LINE = /^(argument-hint:[ \t]*)([^\r\n]+?)[ \t]*$/gm;
+
+function quoteRawArgumentHint(frontmatter: string): string {
+  return frontmatter.replace(ARGUMENT_HINT_LINE, (line, key: string, raw: string) => {
+    if (/^["'|>]/.test(raw)) return line;
+    // A trailing comment only follows a closed bracket or a plain scalar; inside `[pr #123]` the `#`
+    // is part of the hint.
+    const hint = raw.replace(/([\]>])[ \t]+#.*$/, '$1').trimEnd();
+    return hint.startsWith('[') || hint.startsWith('<') || hint.includes(': ') ? `${key}${JSON.stringify(hint)}` : line;
+  });
+}
 
 const toText = (value: unknown): string | undefined =>
   typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' ? String(value) : undefined;
 
 /** Parses a SKILL.md into skill form fields. Never throws; a malformed file yields `ok: false`. */
-export function parseSkillMd(text: string): ParseSkillMdResult {
+export function parseSkillMd(input: string): ParseSkillMdResult {
+  // Normalize line endings so a Windows-authored file does not leave `\r` in the body, where the
+  // install command's control-byte guard would reject it.
+  const text = input.replace(/\r\n?/g, '\n');
   const split = splitSkillMdFrontmatter(text);
   if (!split) {
     if (/^\uFEFF?---/.test(text)) return { ok: false, error: 'The frontmatter block has no closing --- line.' };
@@ -93,10 +112,7 @@ export function parseSkillMd(text: string): ParseSkillMdResult {
 
   let data: unknown;
   try {
-    const frontmatter = split.frontmatter.replace(
-      UNQUOTED_ARGUMENT_HINT,
-      (_, key: string, hint: string) => `${key}${JSON.stringify(hint)}`
-    );
+    const frontmatter = quoteRawArgumentHint(split.frontmatter);
     data = YAML.parse(frontmatter) ?? {};
   } catch (error) {
     return { ok: false, error: `Invalid YAML frontmatter: ${error instanceof Error ? error.message : String(error)}` };
@@ -122,8 +138,8 @@ export function parseSkillMd(text: string): ParseSkillMdResult {
         fields.disableModelInvocation = value === true || value === 'true';
         break;
       // Everything else is reported as dropped, allowed-tools included: Claude Code tool names
-      // (Bash/Read/Edit) are not B4M tools. Keep this rule in step with the other SKILL.md
-      // importers (CLI push, desktop upload).
+      // (Bash/Read/Edit) are not B4M tools. Keep this rule in step with the CLI's SKILL.md parser
+      // (packages/cli/src/utils/commandParser.ts).
       default:
         dropped.push(key);
     }
@@ -153,10 +169,12 @@ export function b4mOnlyHints(skill: { body: string; allowedTools?: string[] }): 
 /**
  * One bash/zsh line that writes the skill to ~/.claude/skills/<name>/SKILL.md. The heredoc
  * delimiter is quoted (no expansion of `$` or backticks) and carries a random nonce that is
- * regenerated if the content happens to contain it.
+ * regenerated if the content happens to contain it. Content with terminal control bytes is
+ * rejected: a pasted heredoc cannot protect against them, and the Download path can.
  */
 export function buildClaudeCodeInstallCommand(name: string, content: string): string {
   if (!SKILL_NAME_PATH_SAFE.test(name)) throw new Error(`Skill name "${name}" is not path-safe`);
+  if (UNSAFE_CONTROL_BYTES.test(content)) throw new Error('Skill content has terminal control characters');
   let delimiter: string;
   do {
     const nonce = Array.from(globalThis.crypto.getRandomValues(new Uint8Array(6)), b =>
