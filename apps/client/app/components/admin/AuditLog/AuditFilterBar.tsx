@@ -20,7 +20,8 @@ const ANY = 'any';
 const ACTION_OPTIONS = Object.keys(ADMIN_AUDIT_CATALOGUE);
 const CATEGORY_OPTIONS = AdminAuditCategorySchema.options;
 const SEVERITY_OPTIONS = AdminAuditSeveritySchema.options;
-const SOURCE_OPTIONS = AuditContextSchema.shape.source.options;
+// 'user' only appears on merged security events (per-user Activity), never on AdminAuditLog rows.
+const SOURCE_OPTIONS = AuditContextSchema.shape.source.options.filter(option => option !== 'user');
 const TARGET_KIND_OPTIONS = AuditTargetSchema.shape.kind.options;
 
 /** The date inputs are local calendar days; `to` is inclusive, so it means end of day. */

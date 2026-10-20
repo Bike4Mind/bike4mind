@@ -236,6 +236,39 @@ export class CreditTransactionRepository
     return { data, total };
   }
 
+  async dailyNetCreditsForOwner(
+    ownerId: string,
+    ownerType: CreditHolderType,
+    from: Date
+  ): Promise<Array<{ day: string; netCredits: number }>> {
+    // Rides the {ownerId, ownerType, createdAt} index; usage rows are numerous, so sum server-side.
+    const rows = await this.model.aggregate<{ _id: string; netCredits: number }>([
+      { $match: { ownerId, ownerType, createdAt: { $gte: from } } },
+      {
+        $group: {
+          _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: 'UTC' } },
+          netCredits: { $sum: '$credits' },
+        },
+      },
+      { $sort: { _id: 1 } },
+    ]);
+    return rows.map(({ _id, netCredits }) => ({ day: _id, netCredits }));
+  }
+
+  async findAdminAdjustmentsForUser(userId: string, from: Date, limit: number): Promise<ICreditTransactionDocument[]> {
+    return this.model
+      .find({
+        ownerId: userId,
+        ownerType: CreditHolderType.User,
+        createdAt: { $gte: from },
+        type: { $in: ['generic_add', 'generic_deduct'] },
+        reason: 'admin_adjustment',
+      })
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .exec();
+  }
+
   async queryAdminAdjustmentsPage(options: { days?: number; limit: number; skip: number }): Promise<ILedgerPage> {
     // Admin adjustments are the generic_add / generic_deduct rows adminUpdateUser
     // writes with reason `admin_adjustment` against a User holder. Scoping to that

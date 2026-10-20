@@ -32,7 +32,8 @@ export const AuditContextSchema = z.object({
   ip: z.string().optional(),
   userAgent: z.string().optional(),
   requestId: z.string().optional(),
-  source: z.enum(['admin_ui', 'api_key', 'script', 'worker']),
+  // 'user' is the account holder's own session; only the security-store adapters emit it, never AdminAuditLog.
+  source: z.enum(['admin_ui', 'api_key', 'script', 'worker', 'user']),
   route: z.string().optional(),
 });
 export type AuditContext = z.infer<typeof AuditContextSchema>;
