@@ -1,6 +1,6 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { Subscriber } from '@bike4mind/database';
 
 const handler = baseApi().delete(

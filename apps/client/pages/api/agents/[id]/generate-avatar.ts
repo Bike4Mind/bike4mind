@@ -21,7 +21,7 @@ import { OperationsModelService } from '@client/services/operationsModelService'
 import { KnowledgeType } from '@bike4mind/common';
 import { fabFileRepository } from '@bike4mind/database';
 import axios from 'axios';
-import imageLogger from '@server/utils/imageLogger';
+import imageLogger from '@bike4mind/server-utils/utils/imageLogger';
 import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
 
 // System prompt for creating visual prompts from agent descriptions
@@ -370,7 +370,7 @@ const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
       const filePath = fileName; // Simple filename without directories
 
       // Import storage service
-      const { getFilesStorage } = await import('@server/utils/storage');
+      const { getFilesStorage } = await import('@bike4mind/server-utils/utils/storage/index');
 
       // Upload to S3 (returns just the file path)
       const uploadedPath = await getFilesStorage().upload(imageBuffer, filePath, { ContentType: 'image/png' });

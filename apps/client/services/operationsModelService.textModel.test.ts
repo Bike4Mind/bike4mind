@@ -38,7 +38,7 @@ vi.mock('@bike4mind/observability', () => ({
   }),
 }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
-vi.mock('../server/utils/modelResolvers', () => ({
+vi.mock('@bike4mind/server-utils/utils/modelResolvers', () => ({
   getDefaultImageModel: mockGetDefaultImageModel,
   getApiKeyTypeFromBackend: vi.fn(),
 }));

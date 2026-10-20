@@ -33,7 +33,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-923 routes: 48 contracted, 9 aliases of another route, 196 with no static caller in `apps/client/app`.
+921 routes: 48 contracted, 9 aliases of another route, 195 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -102,7 +102,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | notebooks | 6 | 0 | 6 | 0 | 0 | 0 | 2 |
 | oauth | 13 | 0 | 3 | 2 | 0 | 8 | 9 |
 | ollama | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
-| organizations | 37 | 0 | 36 | 1 | 0 | 0 | 2 |
+| organizations | 35 | 0 | 35 | 0 | 0 | 0 | 1 |
 | otc | 2 | 0 | 0 | 0 | 0 | 2 | 0 |
 | overwatch | 1 | 0 | 1 | 0 | 0 | 0 | 1 |
 | ping | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
@@ -1074,7 +1074,6 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/organizations/[id]/groups/[groupId]/members/[userId]` | DELETE | jwt+key | - | no | - | 1: `utils/groupsAPICalls.ts` |
 | `/api/organizations/[id]/integrations/slack` | GET, DELETE | jwt+key | - | no | - | 1: `hooks/data/useOrgSlackWorkspace.ts` |
 | `/api/organizations/[id]/integrations/slack/connect` | POST | jwt+key | - | no | - | 1: `hooks/data/useOrgSlackWorkspace.ts` |
-| `/api/organizations/[id]/manager` | POST, DELETE | jwt+key | - | no | - | 0 |
 | `/api/organizations/[id]/member-credit-budget` | PUT | jwt+key | `admin:*` | no | - | 1: `hooks/data/organizations.ts` |
 | `/api/organizations/[id]/members` | GET, POST, DELETE | jwt+key | - | no | - | 2: `hooks/data/organizations.ts`, `hooks/data/user.ts` |
 | `/api/organizations/[id]/members/[userId]` | DELETE | jwt+key | `datalake:share` | no | - | 1: `hooks/data/organizations.ts` |
@@ -1086,7 +1085,6 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/organizations/[id]/webhooks/github/rotate-secret` | POST | jwt+key | - | no | - | 1: `hooks/data/useOrgWebhooks.ts` |
 | `/api/organizations/[id]/webhooks/github/test` | POST | jwt+key | - | no | - | 1: `hooks/data/useOrgWebhooks.ts` |
 | `/api/organizations/create-dev` | POST | jwt+key | - | no | - | 1: `hooks/data/subscriptions.ts` |
-| `/api/organizations/managed` | GET | jwt | - | no | - | 1: `hooks/data/organizations.ts` |
 | `/api/organizations/stats` | GET | jwt+key | - | no | - | 1: `utils/organizationAPICalls.tsx` |
 | `/api/organizations/subscriptions/subscribe` | POST | jwt+key | - | no | - | 1: `hooks/data/subscriptions.ts` |
 | `/api/organizations/subscriptions/update-seats` | POST | jwt+key | - | no | - | 1: `hooks/data/subscriptions.ts` |

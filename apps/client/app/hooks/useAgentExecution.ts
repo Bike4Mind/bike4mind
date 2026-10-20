@@ -202,6 +202,20 @@ function notifyBackgroundCompletion(agentName: string, finalAnswer?: string, onV
   });
 }
 
+/**
+ * Prompt-bubble text for a `failed` run. A `tool_denied` stop is a decision (the user
+ * clicked Deny, or policy blocks the tool), not a crash, so it shows the server's denial
+ * text - the same text both deny paths persist on the Quest (`apps/client/server/websocket/agentExecute.ts`
+ * and `apps/workers/src/queueHandlers/agentExecutorUtils/toolPermissions.ts`), so the bubble
+ * keeps its wording when the persisted Quest replaces it. Every other reason stays generic
+ * and carries no internal details.
+ */
+export function failedRunReply(reason?: string, toolName?: string, message?: string): string {
+  if (reason !== 'tool_denied') return 'Agent execution failed.';
+  if (message) return message;
+  return toolName ? `Execution stopped: "${toolName}" was denied.` : 'Execution stopped: a tool call was denied.';
+}
+
 export function useAgentExecutionSubscriptions(): void {
   const { subscribeToAction, readyState } = useWebsocket();
   const { reconnect } = useAgentExecutionDispatch();
@@ -374,11 +388,15 @@ export function useAgentExecutionSubscriptions(): void {
         store().markFailed(msg.executionId, msg.reason, msg.message);
         // Same rationale as `completed` above: patch the prompt bubble so the
         // user sees a chat-history entry for the failed run without waiting
-        // on the change-stream subscriber. Generic message (no internal
-        // details) mirrors persistRunAsQuest's failure-path Quest body.
+        // on the change-stream subscriber.
         const sessionId = store().executions[msg.executionId]?.sessionId;
         if (sessionId) {
-          appendReplyToLatestOptimisticBubble(queryClient, sessionId, 'Agent execution failed.', msg.executionId);
+          appendReplyToLatestOptimisticBubble(
+            queryClient,
+            sessionId,
+            failedRunReply(msg.reason, msg.toolName, msg.message),
+            msg.executionId
+          );
         }
       })
     );

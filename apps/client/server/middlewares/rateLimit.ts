@@ -1,7 +1,7 @@
 import { cacheRepository } from '@bike4mind/database';
 import { TooManyRequestsError } from '@bike4mind/utils';
 import { RequestHandler } from 'express';
-import { getClientIp } from '@server/utils/ip';
+import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 
 interface IRateLimitOptions {
   /**

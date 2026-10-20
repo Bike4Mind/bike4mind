@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { securityDashboardSnapshotRepository } from '@bike4mind/database';
 import { getCooldownStatus } from '@bike4mind/server-utils/security/cooldown';
 import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';

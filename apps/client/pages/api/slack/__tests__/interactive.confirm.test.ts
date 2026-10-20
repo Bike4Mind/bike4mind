@@ -7,7 +7,7 @@ import { WebClient } from '@slack/web-api';
 
 vi.mock('sst', () => ({ Resource: {} }));
 vi.mock('@server/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { MONGODB_URI: 'mongodb://test', STAGE: 'test' },
   isDevelopment: () => false,
 }));

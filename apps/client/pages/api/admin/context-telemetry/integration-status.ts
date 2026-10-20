@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { adminSettingsRepository, slackDevWorkspaceRepository } from '@bike4mind/database';
 import { GitHubService } from '@server/services/githubService';
 import { ApiKeyScope, ContextTelemetryAlertsSchema, CHAT_MODELS } from '@bike4mind/common';

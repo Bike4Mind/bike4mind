@@ -33,7 +33,7 @@ const mockConfig: Record<string, string | undefined> = {
   SECRET_ENCRYPTION_KEY: currentKey,
   SECRET_ENCRYPTION_KEY_PREVIOUS: previousKey,
 };
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: new Proxy({}, { get: (_t, key: string) => mockConfig[key] }),
 }));
 

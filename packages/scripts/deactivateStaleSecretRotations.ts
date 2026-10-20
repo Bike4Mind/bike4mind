@@ -16,9 +16,9 @@
 
 import { connectDB, mongoose } from '@bike4mind/database';
 import { secretRotationRepository } from '@bike4mind/database/infra';
-import { SECRET_ROTATION_CONFIG } from '../../apps/client/lib/secretRotation/constants';
+import { SECRET_ROTATION_CONFIG } from '@bike4mind/server-utils/lib/secretRotation/constants';
 import { Resource } from 'sst';
-import { Config } from '../../apps/client/server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 
 const isDryRun = process.argv.includes('--dry-run');
 

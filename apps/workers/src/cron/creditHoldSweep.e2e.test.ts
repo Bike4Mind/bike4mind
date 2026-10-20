@@ -16,8 +16,8 @@ import {
   settleAutoIndexBuilds,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 
-vi.mock('@server/utils/cloudwatch', () => ({ emitMetrics: vi.fn() }));
-vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://host/%STAGE%' } }));
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetrics: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://host/%STAGE%' } }));
 vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
 
 import { runCreditHoldSweep } from './creditHoldSweep';

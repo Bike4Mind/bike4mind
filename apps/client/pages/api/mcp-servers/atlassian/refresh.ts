@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { userRepository, mcpServerRepository } from '@bike4mind/database';
 import { McpServerName } from '@bike4mind/common';
 import { getAtlassianOAuthConfig } from '@bike4mind/server-utils/integrations/jira/atlassianConfig';

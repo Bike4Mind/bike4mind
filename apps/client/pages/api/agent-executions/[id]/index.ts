@@ -14,7 +14,7 @@
 
 import type { Request } from 'express';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, NotFoundError, UnauthorizedError } from '@server/utils/errors';
+import { BadRequestError, NotFoundError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { loadAgentExecutionTrace } from '@server/utils/loadAgentExecutionTrace';
 import { buildChildExecutionSnapshots } from '@server/utils/childExecutionSnapshot';
 
@@ -46,6 +46,7 @@ const handler = baseApi().get(async (req: Request<{ id: string }>, res) => {
     id,
     status: trace.status,
     answer: trace.answer,
+    error: trace.error,
     steps: trace.steps,
     totalIterations: trace.totalIterations,
     children,

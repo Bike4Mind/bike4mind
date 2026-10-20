@@ -5,7 +5,7 @@ import {
   withTransaction,
 } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { creditService } from '@bike4mind/services';
 import { ApiKeyScope, CreditHolderType } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';

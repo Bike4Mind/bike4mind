@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { buildContentDisposition } from '@bike4mind/utils/contentDisposition';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 
 /**
  * Key prefix for staged audit-log CSV exports. It sits under `exports/`, which the fab-file bucket's

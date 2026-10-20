@@ -1,7 +1,7 @@
 import { ApiKeyScope, Permission } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { SecretRotation, secretRotationRepository } from '@bike4mind/database/infra';
-import { ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { toSafeSecretRotation } from '@client/lib/secretRotation/utils';
 import { z } from 'zod';
 

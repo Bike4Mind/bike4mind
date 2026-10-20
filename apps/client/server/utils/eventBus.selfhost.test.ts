@@ -6,7 +6,7 @@ const { sendToQueueMock, sendEmailMock, hostedSend } = vi.hoisted(() => ({
   hostedSend: vi.fn(),
 }));
 
-vi.mock('./sqs', () => ({ sendToQueue: sendToQueueMock }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: sendToQueueMock }));
 vi.mock('@aws-sdk/client-eventbridge', () => ({
   EventBridgeClient: class {
     send = hostedSend;

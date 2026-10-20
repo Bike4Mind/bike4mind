@@ -1697,6 +1697,7 @@ describe('AgentExecutionRepository', () => {
       expect(reloaded?.pendingPermission).toBeUndefined();
       expect(reloaded?.deniedTools).toContain('image_generation');
       expect(reloaded?.error?.message).toBe('Execution stopped: you denied "image_generation".');
+      expect(reloaded?.error?.callerSafe).toBe(true);
     });
 
     it('does not land when toolCallId names a different pause than the one persisted', async () => {

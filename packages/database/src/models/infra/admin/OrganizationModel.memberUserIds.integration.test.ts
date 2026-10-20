@@ -39,18 +39,18 @@ describe('OrganizationRepository.findMemberUserIds', () => {
   });
 
   it('keeps an author the ACL does not know about, and names them in stampOnly', async () => {
-    // The case an ACL-derived $in loses silently: a manager or appointed admin whose
+    // The case an ACL-derived $in loses silently: an appointed admin whose
     // User.organizationId points here but who holds no users[] row.
     const ownerId = oid();
-    const managerId = oid();
-    const org = await makeOrg('manager-only', { userId: ownerId, managerId, users: [] });
+    const adminId = oid();
+    const org = await makeOrg('admin-only', { userId: ownerId, adminUserIds: [adminId], users: [] });
     await makeUser(ownerId, String(org._id));
-    await makeUser(managerId, String(org._id));
+    await makeUser(adminId, String(org._id));
 
     const population = await organizationRepository.findMemberUserIds(String(org._id));
 
-    expect(population.userIds).toContain(managerId);
-    expect(population.stampOnly).toEqual([managerId]);
+    expect(population.userIds).toContain(adminId);
+    expect(population.stampOnly).toEqual([adminId]);
     expect(population.aclOnly).toEqual([]);
   });
 

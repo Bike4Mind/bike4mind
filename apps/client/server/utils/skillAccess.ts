@@ -1,6 +1,6 @@
 // apps/client/server/utils/skillAccess.ts
 import { organizationRepository } from '@bike4mind/database/infra';
-import { ISkill, IUserShare, IGroupShare, Permission } from '@bike4mind/common';
+import { ISkill, IUserShare, IGroupShare, Permission, canAdministerOrganization } from '@bike4mind/common';
 import { skillContentHash } from '@server/skillMarket/contentHash';
 
 /**
@@ -30,16 +30,12 @@ export type SkillActor = { id: string; isAdmin?: boolean };
 const hasSharePermission = (skill: ShareableSkill, actorId: string, permission: Permission): boolean =>
   skill.users?.some(u => u.userId === actorId && u.permissions?.includes(permission)) ?? false;
 
-/** Owner or legacy manager of the org. Deliberately excludes `adminUserIds` managers and platform admins. */
-export const isSkillOrgAdmin = (org: { userId: string; managerId?: string | null }, actor: SkillActor): boolean =>
-  org.userId === actor.id || org.managerId === actor.id;
-
 /** Is the actor the owner or manager of the org that owns an org-scoped skill? */
 const isOrgAdminFor = async (skill: ShareableSkill, actor: SkillActor): Promise<boolean> => {
   if (!skill.organizationId) return false;
   const org = await organizationRepository.findById(skill.organizationId);
   if (!org) return false;
-  return isSkillOrgAdmin(org, actor);
+  return canAdministerOrganization({ id: actor.id }, org);
 };
 
 /** View access - owner, admin, org-admin, any direct share, or global-read. */

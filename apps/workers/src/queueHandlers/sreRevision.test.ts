@@ -108,7 +108,7 @@ vi.mock('@server/queueHandlers/utils', () => ({
 }));
 
 const mockSendToQueue = vi.fn();
-vi.mock('@server/utils/sqs', () => ({
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({
   sendToQueue: (...args: unknown[]) => mockSendToQueue(...args),
 }));
 

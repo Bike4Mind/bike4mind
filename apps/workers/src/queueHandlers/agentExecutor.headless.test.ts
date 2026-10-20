@@ -10,7 +10,7 @@
  * reintroduce both with the rest of the suite green, so they are pinned here.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { HEADLESS_CONNECTION_ID } from '@server/utils/headlessConnection';
+import { HEADLESS_CONNECTION_ID } from '@bike4mind/server-utils/utils/headlessConnection';
 import { resolveGateDisposition } from './agentExecutorUtils/toolPermissions';
 
 const postToConnection = vi.fn().mockResolvedValue({});

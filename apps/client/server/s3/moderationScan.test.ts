@@ -22,7 +22,7 @@ vi.mock('@bike4mind/utils', () => ({
   getSettingsValue: h.getSettingsValue,
 }));
 vi.mock('@bike4mind/utils/imageModeration', () => ({ RekognitionImageModerationService: class {} }));
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ download: h.download, downloadRange: h.downloadRange, getMetadata: h.getMetadata }),
 }));
 vi.mock('@bike4mind/server-utils/s3/moderateUploadedFile', () => ({ moderateUploadedFile: h.moderateUploadedFile }));

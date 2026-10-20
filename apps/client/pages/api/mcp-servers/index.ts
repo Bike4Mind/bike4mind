@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
 import { MCPClient } from '@bike4mind/mcp';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
-import { BadRequestError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { respond } from '@server/utils/respond';
 import { assertMcpServerEnabled } from '@server/utils/mcpServerFlag';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
@@ -18,6 +18,12 @@ import { shouldLiveFetchTools, buildMcpToolCacheUpdate } from '@bike4mind/servic
 // on repeated Settings visits). Schemas are always refreshed after TTL expires to pick up newly
 // deployed MCP tools without manual reconnection.
 const SCHEMA_REFRESH_TTL_MS = 5 * 60 * 1000;
+
+// The record is written before the connect, so a failed connect still answers with the saved
+// server and says why it has no tools, instead of a 400 that reads as "nothing was saved".
+const mcpServerCreateResponseSchema = mcpServerResponseSchema.extend({
+  connectionError: z.string().optional(),
+});
 
 const handler = baseApi()
   .get(async (req, res) => {
@@ -111,6 +117,7 @@ const handler = baseApi()
         tools: [],
       });
     }
+    let connectionError: string | undefined;
     if (server) {
       try {
         const result = await invokeMcpHandler<MCPClient['tools']>({
@@ -122,8 +129,7 @@ const handler = baseApi()
         const tools = Array.isArray(result) ? result : [result].flat();
         server = await mcpServerRepository.update(buildMcpToolCacheUpdate(server.id, tools));
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to connect to MCP server.';
-        throw new BadRequestError('Unable to connect to MCP server', { reason: message });
+        connectionError = error instanceof Error ? error.message : 'Failed to connect to MCP server.';
       }
     }
     if (!server) {
@@ -131,7 +137,7 @@ const handler = baseApi()
       throw new NotFoundError('MCP Server not found');
     }
 
-    respond(res, mcpServerResponseSchema, server);
+    respond(res, mcpServerCreateResponseSchema, { ...server, connectionError });
   });
 
 export default handler;

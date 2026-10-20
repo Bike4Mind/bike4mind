@@ -1,7 +1,7 @@
 import { adminAuditLogRepository } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ensureAdmin, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, ensureAdmin, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
   ensureAdmin(req.user?.isAdmin);

@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { transformBatchRepository } from '@bike4mind/database';
 import { NotFoundError } from '@bike4mind/utils';
 import { AnthropicBatchService } from '@bike4mind/llm-adapters';

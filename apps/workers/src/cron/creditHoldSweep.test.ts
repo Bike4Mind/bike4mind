@@ -61,8 +61,8 @@ vi.mock('@bike4mind/observability', () => ({
     error() {}
   },
 }));
-vi.mock('@server/utils/cloudwatch', () => ({ emitMetrics }));
-vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://host/%STAGE%' } }));
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetrics }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://host/%STAGE%' } }));
 vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
 
 import { CREDIT_HOLD_SWEEP_LIMIT, runCreditHoldSweep } from './creditHoldSweep';

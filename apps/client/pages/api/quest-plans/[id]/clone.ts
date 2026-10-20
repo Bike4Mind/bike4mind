@@ -6,7 +6,7 @@ import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { respond } from '@server/utils/respond';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { isValidObjectId } from '@server/utils/objectId';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
 

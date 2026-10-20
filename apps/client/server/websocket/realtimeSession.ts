@@ -1,7 +1,7 @@
 import { isAuthSessionActive } from '@bike4mind/common';
 import { authSessionRepository } from '@bike4mind/database';
 import { REALTIME_CONNECTION_MAX_LIFETIME_MS } from '@bike4mind/database/social';
-import { UnauthorizedError } from '@server/utils/errors';
+import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 
 /** When a socket's credential is bounded by the gateway's own 2h cap rather than a token expiry:
  *  API-key sockets, and CLI JWT sockets (the CLI never reauths, so the token exp would cut them mid-stream). */

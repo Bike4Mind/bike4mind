@@ -7,7 +7,7 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
 import type { IUserSubscription } from '@client/lib/userSubscriptions/types';
 import type { ModelAnswerCost } from '@client/app/utils/creditEstimate';
-import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@client/lib/subscriptions/constants';
+import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@bike4mind/server-utils/lib/subscriptions/constants';
 import { PlansSection } from './PlansSection';
 
 /**

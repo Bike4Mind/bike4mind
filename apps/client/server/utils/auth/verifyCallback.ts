@@ -1,5 +1,5 @@
 import { AuthStrategy, IAuthProviders } from '@bike4mind/common';
-import { User, authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
+import { User, authSessionRepository, realtimeConnectionRepository, type IUserObject } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { authSessionService } from '@bike4mind/services';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
@@ -10,8 +10,9 @@ import {
   isEligibleForFreeCredits,
   releaseVerifiedPendingFreeCredits,
 } from '@server/auth/emailVerifiedGrants';
-import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
-import { ForbiddenError } from '@server/utils/errors';
+import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
+import { emitEmailVerifiedFunnelEvents } from '@server/analytics/funnel';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { isProviderEmailVerified, selectProviderEmail, decideAutoLink, applyAccountLink } from './oauthAccountLink';
 import { createUniqueOAuthUser, deriveOAuthUsername } from './createOAuthUser';
 import { OAuthFailureReason } from './oauthFailureReason';
@@ -27,6 +28,13 @@ import { applyOAuthSignupDomainGrant } from './oauthSignupGrants';
  * are invite-only for the public.
  */
 const SELF_SERVE_STRATEGIES: ReadonlySet<AuthStrategy> = new Set([AuthStrategy.Google, AuthStrategy.Github]);
+
+/** The user `done` hands the callback endpoints, with the transient flags this module sets (never persisted). */
+export type OAuthUser = IUserObject & {
+  isNewUser?: boolean;
+  isNewOAuthLink?: boolean;
+  signupCreditsGranted?: number;
+};
 
 // Core authentication logic shared by all strategies
 const authenticateUser = async (
@@ -154,12 +162,17 @@ const authenticateUser = async (
       // emailVerified is set, OTC login no longer releases them and Resend is refused. Promotion
       // implies the provider email matched the local one, so `email` is set; the check narrows it.
       if (promoteEmailVerified && email) {
-        await applyEmailVerifiedGrants({
+        const grants = await applyEmailVerifiedGrants({
           user: { id: String(user._id), tags: user.tags, pendingCreditGrant: user.pendingCreditGrant },
           verifiedEmail: email,
           trigger: 'oauth-link-verification',
           releaseReason: 'OAuth account link (email verified)',
           logger: Logger.globalInstance,
+        });
+        await emitEmailVerifiedFunnelEvents({
+          user,
+          method: strategy,
+          creditsGranted: grants.creditsGranted + grants.subscriptionCreditsGranted,
         });
       }
 
@@ -234,20 +247,29 @@ const authenticateUser = async (
         pendingFreeCredits,
       });
       const newUserId = String(user._id);
+      let creditsGranted = 0;
       if (pendingFreeCredits) {
-        await releaseVerifiedPendingFreeCredits(
+        const release = await releaseVerifiedPendingFreeCredits(
           { id: newUserId, tags: user.tags, pendingCreditGrant: user.pendingCreditGrant },
           'OAuth signup (provider-verified email)',
           Logger.globalInstance
         );
+        creditsGranted += release.creditsGranted;
       }
       // These accounts never reach /api/email/verify, so the domain grant runs here for every strategy.
-      if (emailForNewAccount) await applyOAuthSignupDomainGrant(newUserId, emailForNewAccount);
+      if (emailForNewAccount) {
+        const domainGrant = await applyOAuthSignupDomainGrant(newUserId, emailForNewAccount);
+        creditsGranted += domainGrant.creditsGranted + domainGrant.subscriptionCreditsGranted;
+      }
       // Transient flag (not persisted), mirroring isNewOAuthLink above: lets
       // the callback endpoint log the registration and forward a one-shot
       // signup signal to the client for ad-conversion tracking.
-      const createdUser = omit(user, ['password']) as typeof user & { isNewUser?: boolean };
+      const createdUser = omit(user, ['password']) as typeof user & {
+        isNewUser?: boolean;
+        signupCreditsGranted?: number;
+      };
       createdUser.isNewUser = true;
+      createdUser.signupCreditsGranted = creditsGranted;
       done(null, createdUser);
     }
   } catch (e) {

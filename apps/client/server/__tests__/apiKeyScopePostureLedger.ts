@@ -206,7 +206,6 @@ export const KNOWN_UNPOSTURED = new Set<string>([
   'organizations/[id]/index.ts',
   'organizations/[id]/integrations/slack/connect.ts',
   'organizations/[id]/integrations/slack/index.ts',
-  'organizations/[id]/manager.ts',
   'organizations/[id]/members/index.ts',
   'organizations/[id]/pendingUsers.ts',
   'organizations/[id]/upload-logo.ts',

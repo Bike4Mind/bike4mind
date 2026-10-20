@@ -47,7 +47,7 @@ vi.mock('@server/dataLakes/resolveAuditPrincipal', () => ({
   resolveAuditPrincipal: (user: { id: string }) => ({ principalKind: 'user', principalId: user.id }),
 }));
 
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ getSignedUrl: browserSigner }),
 }));
 

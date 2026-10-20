@@ -1,12 +1,12 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import {
   getAtlassianOAuthConfig,
   ATLASSIAN_OAUTH_SCOPES,
 } from '@bike4mind/server-utils/integrations/jira/atlassianConfig';
 import { userRepository } from '@bike4mind/database';
 import crypto from 'crypto';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { issueStateNonce } from '@server/auth/oauthFlowCookie';
 
 const handler = baseApi().get(async (req, res) => {

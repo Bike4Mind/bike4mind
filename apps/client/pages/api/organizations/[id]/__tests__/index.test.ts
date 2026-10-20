@@ -57,7 +57,7 @@ const update = vi.hoisted(() =>
     stripeCustomerId: 'cus_SECRET',
   }))
 );
-vi.mock('@server/utils/errors', () => ({
+vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   BadRequestError: class BadRequestError extends Error {},
 }));
 vi.mock('@bike4mind/services', () => ({ organizationService: { get, update } }));
@@ -66,7 +66,7 @@ vi.mock('@server/models/Subscription', () => ({ subscriptionRepository: {} }));
 vi.mock('@client/lib/subscriptions/types', () => ({ SubscriptionOwnerType: { Organization: 'organization' } }));
 
 import '@pages/api/organizations/[id]/index';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 function mocks(user: unknown, method: 'GET' | 'PUT' = 'GET') {
   const { req, res } = createMocks({ method, query: { id: 'org1' } });

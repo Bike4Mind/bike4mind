@@ -1,6 +1,6 @@
 import { BILLING_ORGANIZATION_MISMATCH_ERROR_CODE, CreditHolderType } from '@bike4mind/common';
 import { organizationRepository } from '@bike4mind/database';
-import { BadRequestError, ForbiddenError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { assertApiKeyOrgMembership } from '@server/billing/assertApiKeyOrgMembership';
 import { resolveBillingOrgId } from '@server/utils/orgAccess';
 import { resolveApiKeyOwnerType } from '@server/utils/resolveApiKeyOwnerType';

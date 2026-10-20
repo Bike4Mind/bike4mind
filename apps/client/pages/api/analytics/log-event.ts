@@ -2,7 +2,7 @@ import { CreditPurchaseEvents } from '@bike4mind/common';
 import { AnalyticsEventPayloads } from '@server/types/analytics';
 import { logEvent } from '@server/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { Request } from 'express';
 
 // Recorded only by start-payment and the Stripe webhook; support reads them as proof that an

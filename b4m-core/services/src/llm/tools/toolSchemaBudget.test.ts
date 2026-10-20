@@ -39,8 +39,12 @@ const PER_TOOL_CEILINGS: Record<string, number> = {
 const UNLISTED_TOOL_CEILING = 600;
 const AUTO_ADDED_CEILING = 1500;
 const AUTO_ADDED_PLUS_KNOWLEDGE_CEILING = 2300;
-/** Headroom for a few new tools, so legitimate growth does not force a ceiling bump. */
-const WHOLE_REGISTRY_CEILING = 10900;
+/**
+ * Headroom for a few new tools, so legitimate growth does not force a ceiling bump. Raised once,
+ * for `decide`, whose nested question schema is structure rather than prose: the per-tool ceiling
+ * below is what keeps a single description honest.
+ */
+const WHOLE_REGISTRY_CEILING = 11400;
 
 /**
  * Derived, never hand-copied: the knowledge offer drags its companions along via addPairedTool
@@ -69,6 +73,8 @@ function buildSchemas(enabledTools: string[]) {
     toolCreditsMap: new Map(),
     subagentTelemetryData: [],
     sendStatusUpdate: vi.fn(),
+    // buildSharedTools drops `decide` for a host that injects no seam; the budget measures schemas.
+    decide: vi.fn(),
   } as unknown as ToolBuilderConfig);
 
   return (

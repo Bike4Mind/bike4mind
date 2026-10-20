@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Config is module-scoped; mock it so tests can control analytics configuration state.
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: {
     B4M_ANALYTICS_ENABLED: 'true',
     OVERWATCH_INGEST_URL: 'https://app.bike4mind.com/api/overwatch/v1/events',
@@ -21,7 +21,7 @@ import {
 } from './emitActiveEvent';
 import { pseudonymize } from './pseudonymize';
 import { OVERWATCH_ANONYMOUS_USER_ID, OVERWATCH_UNKNOWN_SESSION_ID } from '@bike4mind/common';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 
 const CONFIGURED = {
   B4M_ANALYTICS_ENABLED: 'true',

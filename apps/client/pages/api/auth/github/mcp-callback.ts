@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { mcpServerRepository, userRepository } from '@bike4mind/database';
-import { Config } from '@server/utils/config';
-import { InternalServerError } from '@server/utils/errors';
+import { Config } from '@bike4mind/server-utils/utils/config';
+import { InternalServerError } from '@bike4mind/server-utils/utils/errors';
 import { McpServerName } from '@bike4mind/common';
 import jwt from 'jsonwebtoken';
 import { randomUUID } from 'crypto';

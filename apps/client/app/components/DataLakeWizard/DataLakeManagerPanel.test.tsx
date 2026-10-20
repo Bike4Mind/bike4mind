@@ -53,6 +53,8 @@ vi.mock('@client/app/components/datalake/LakeSyncStatus', () => ({ default: () =
 // The not-ingested chip has its own suite (LakeSkippedFilesChip.test.tsx).
 vi.mock('@client/app/components/datalake/LakeSkippedFilesChip', () => ({ default: () => null }));
 vi.mock('./manager/FinishSourceConnectBanner', () => ({ default: () => null }));
+// The source card has its own suite (LakeSourceConnectActions.test.tsx) and reads react-query hooks.
+vi.mock('./steps/LakeSourceConnectActions', () => ({ default: () => null }));
 // The repository picker has its own suite (GitHubRepositoryPickerModal.test.tsx) and reaches
 // react-query hooks this suite does not mock; here it is only mounted-once wiring, not behavior.
 vi.mock('./manager/GitHubRepositoryPickerModal', () => ({ default: () => null }));

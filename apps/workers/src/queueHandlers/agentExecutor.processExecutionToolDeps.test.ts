@@ -79,7 +79,7 @@ vi.mock('./agentExecutor.musicToolConfig', async () => {
   };
 });
 
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: vi.fn().mockReturnValue({}),
   getGeneratedImageStorage: vi.fn().mockReturnValue({}),
 }));
@@ -333,6 +333,28 @@ describe('processExecution tool deps', () => {
       const deps = await runWithSession({ ...baseSession, surface: 'settings-workspace' });
 
       expect(deps.agentStore).toBeDefined();
+    });
+
+    it('fails closed when the resolver throws: the run never reaches tool building', async () => {
+      resolveWorkspaceSettings.mockRejectedValue(new Error('workspace lookup failed'));
+      const { sessionRepository, agentExecutionRepository } = await import('@bike4mind/database');
+      vi.mocked(sessionRepository.findById).mockResolvedValue({
+        ...baseSession,
+        surface: 'settings-workspace',
+        disableUserIntegrations: false,
+      } as never);
+      const { handler } = await import('./agentExecutor');
+
+      await expect(handler(continuationEvent(), lambdaContext)).resolves.toEqual({ batchItemFailures: [] });
+
+      expect(resolveWorkspaceSettings).toHaveBeenCalledTimes(1);
+      expect(buildSharedToolsMock).not.toHaveBeenCalled();
+      expect(agentExecutionRepository.markFailed).toHaveBeenCalledExactlyOnceWith(
+        'exec-1',
+        expect.objectContaining({
+          message: 'Workspace session settings resolver for "settings-workspace" failed',
+        })
+      );
     });
 
     it('keeps the stored flag on a session outside any contributed workspace', async () => {

@@ -15,7 +15,7 @@
 import type { Request } from 'express';
 import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, UnauthorizedError } from '@server/utils/errors';
+import { BadRequestError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { agentExecutionRepository, AGENT_EXECUTION_STATUSES, type AgentExecutionStatus } from '@bike4mind/database';
 
 const DEFAULT_LIMIT = 25;

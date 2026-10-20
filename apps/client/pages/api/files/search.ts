@@ -1,7 +1,7 @@
 import { Permission } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { buildRequestFileScope } from '@server/utils/userFileScope';
 import { fabFilesService } from '@bike4mind/services';
 import qs from 'qs';
@@ -12,7 +12,7 @@ import {
   projectRepository,
   userRepository,
 } from '@bike4mind/database';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { FILES_READ_SCOPES } from '@server/files/fileScopes';
 
 const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(

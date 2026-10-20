@@ -1,9 +1,9 @@
 import { RequestHandler } from 'express';
 import { Logger } from '@bike4mind/observability';
 import { invert } from 'lodash';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { LEGACY_REQUEST_ID_HEADER, REQUEST_ID_HEADER, resolveRequestId } from '@bike4mind/common';
-import { getClientIp } from '@server/utils/ip';
+import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 
 export const logging: RequestHandler = (req, res, next) => {
   // TODO: This bit assumes that each function handler is only handling

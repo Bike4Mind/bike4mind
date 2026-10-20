@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 
 const { mockPublish } = vi.hoisted(() => ({ mockPublish: vi.fn() }));
 vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: mockPublish } } }));
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({
     upload: vi.fn().mockResolvedValue(undefined),
     getSignedUrl: vi.fn().mockResolvedValue('https://files.example.com/x'),

@@ -30,7 +30,7 @@ vi.mock('@server/auth/assertAccountStateUsable', () => ({
   assertAccountStateUsable: (...args: unknown[]) => mockAssertAccountStateUsable(...args),
 }));
 
-vi.mock('@server/utils/errors', () => ({
+vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   NotFoundError: class NotFoundError extends Error {},
   UnauthorizedError: class UnauthorizedError extends Error {},
   ForbiddenError: class ForbiddenError extends Error {},
@@ -44,7 +44,7 @@ vi.mock('@server/auth/mfaEnforcement', () => ({
 
 import { verifyWsAccessToken, verifyWsAccessTokenClaims } from './verifyWsAccessToken';
 import { configureSecretsAtRest, encryptAtRest, generateEncryptionKey } from '@bike4mind/utils/security';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 describe('verifyWsAccessToken', () => {
   beforeEach(() => {

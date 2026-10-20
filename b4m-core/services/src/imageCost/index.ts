@@ -69,8 +69,9 @@ export function computeImageUsdCostPerImage(modelId: string, input: CostInput): 
 
 /**
  * Credit cost of generating `n` images with `modelInfo`, using the SAME cost
- * path as charging (`validateUserCredits`) so a client-side preview always
- * matches what the user is billed. Returns the n-scaled USD alongside credits.
+ * path as charging (`validateUserCredits`). `requiredCredits` is the rounded-up
+ * gate/preview figure; the final debit settles `usdCost` with usdToCreditsStochastic.
+ * Returns the n-scaled USD alongside credits.
  * A GPT model's input images (`inputImageCount`) are added once, not per output image.
  */
 export function estimateImageCredits(

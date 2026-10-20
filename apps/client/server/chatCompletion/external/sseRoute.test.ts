@@ -90,7 +90,9 @@ vi.mock('@server/utils/logCompletionAnalytics', () => ({
   logCompletionAnalytics: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
+  Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' },
+}));
 
 const mockEmitProcessingFailed = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('../processingFailedMetric', () => ({ emitProcessingFailed: mockEmitProcessingFailed }));
@@ -373,6 +375,7 @@ describe('POST /api/ai/v1/completions - stream', () => {
         cacheReadInputTokens: 301_000,
         cacheCreationInputTokens: 500,
         turnUsage,
+        creditsUsed: 7,
       });
       // A trailing frame without the breakdown must not clear the latched one.
       await params.onChunk([''], { stopReason: 'end_turn' });
@@ -387,6 +390,7 @@ describe('POST /api/ai/v1/completions - stream', () => {
         finalCacheReadTokens: 301_000,
         finalCacheWriteTokens: 500,
         finalTurnUsage: turnUsage,
+        finalCreditsUsed: 7,
       })
     );
   });

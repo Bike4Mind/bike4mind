@@ -4,9 +4,8 @@ import { NotFoundError } from '@bike4mind/utils';
 import type { ResolvedDecisionInput, ResolvedDecisionInputPart } from '@bike4mind/utils/decisionProviders';
 import { ensureImageWithinDimensionLimit } from '@bike4mind/utils/imageResize';
 import { assertFilesReadScope } from '@server/files/fileScopes';
-import { loadAccessibleFabFile } from '@server/files/loadAccessibleFabFile';
-import { getFilesStorage } from '@server/utils/storage';
-import type { Request } from 'express';
+import { loadAccessibleFabFile, type FabFileAccessRequest } from '@server/files/loadAccessibleFabFile';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { isValidObjectId } from 'mongoose';
 
 const DECISION_IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
@@ -28,7 +27,7 @@ export class DecisionImageError extends Error {
 
 type ImageBytes = { bytes: Buffer; mimeType: string };
 
-const loadFileImage = async (req: Request, fileId: string, param: string): Promise<ImageBytes> => {
+const loadFileImage = async (req: FabFileAccessRequest, fileId: string, param: string): Promise<ImageBytes> => {
   const notFound = new DecisionImageError(404, 'input_image_not_found', param, `No readable file ${fileId}`);
   if (!isValidObjectId(fileId)) throw notFound;
   // The same scope and ACL gates as GET /api/v1/files/{id}, so this door cannot authorize differently: an
@@ -87,7 +86,7 @@ const toDownscaledDataUrl = async (
 
 /** Resolves every image to a data URL, downscaled where the format allows. Run after `validateDecisionRequest`, which fixes the part shapes. */
 export const resolveDecisionInput = async (
-  req: Request,
+  req: FabFileAccessRequest,
   input: DecisionInput,
   caps: DecisionModelCapabilities
 ): Promise<ResolvedDecisionInput> => {

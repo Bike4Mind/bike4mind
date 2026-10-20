@@ -707,6 +707,8 @@ export interface ChatMessageSkill {
   args?: string;
   /** 'project' means these instructions came out of the repository, not the user's own folder. */
   source: SkillSource;
+  /** A Skill Market import: the reply to this message starts as having read untrusted content. */
+  imported?: true;
 }
 
 export type BackgroundProcessStatus = 'running' | 'exited' | 'killed' | 'failed';

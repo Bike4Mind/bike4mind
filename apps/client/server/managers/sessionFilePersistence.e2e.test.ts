@@ -19,9 +19,9 @@ import { configureSlackPackage, sendMessageToNotebookAndGetResponse } from '@bik
 import defineAbilitiesFor from '@server/auth/ability';
 import { getOrCreateSession, addMessageToSession } from '@server/managers/sessionManager';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
-import { HEADLESS_CONNECTION_ID } from '@server/utils/headlessConnection';
+import { HEADLESS_CONNECTION_ID } from '@bike4mind/server-utils/utils/headlessConnection';
 
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({}) }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({}) }));
 // The session.created push needs a socket endpoint; nothing here listens.
 vi.mock('@server/managers/sessionSideEffects', async importOriginal => ({
   ...(await importOriginal<typeof import('@server/managers/sessionSideEffects')>()),

@@ -17,8 +17,8 @@
 
 import { adminSettingsRepository, connectDB, orgGitHubLakeConnectionRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
-import { Config } from '@server/utils/config';
-import { sendToQueue } from '@server/utils/sqs';
+import { Config } from '@bike4mind/server-utils/utils/config';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import {
   getBranchHeadSha,
   getGitHubLakeAppConfig,

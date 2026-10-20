@@ -132,6 +132,7 @@ import { buildToolEchoSources } from './toolEchoSources';
 import { appendStreamedChunk, shouldStampFirstVisibleToken } from './streamedReplyAccumulator';
 import { buildSystemPromptSourceFiles } from './buildSystemPromptSourceFiles';
 import { resolveCorrectionContext } from './buildCorrectionContext';
+import { resolveDataSourceStatus } from './dataSourceStatus';
 import { scrubMissingKnowledgeIds } from '../sessionService/scrubMissingKnowledgeIds';
 import { LATTICE_TOOL_NAMES } from './tools';
 import { createWebSearchBudget, MAX_WEB_SEARCHES_PER_TURN } from './tools/implementation/websearch';
@@ -1047,6 +1048,7 @@ export class ChatCompletionProcess {
   private _bedrockSvc: Map<string, BedrockGuardrailsService> = new Map();
   private onReplyStream?: IChatCompletionServiceOptions['onReplyStream'];
   private onToolPreamble?: IChatCompletionServiceOptions['onToolPreamble'];
+  private decide?: IChatCompletionServiceOptions['decide'];
   private verbose: boolean = false;
   // Per-name queue of each tool call's reserved credits, in call order (see
   // ToolBuilder.reserveToolCredits). Settled per-call below so a tool invoked more
@@ -1112,6 +1114,7 @@ export class ChatCompletionProcess {
     this.gpcSignalDetected = options.gpcSignalDetected ?? false;
     this.onReplyStream = options.onReplyStream;
     this.onToolPreamble = options.onToolPreamble;
+    this.decide = options.decide;
     this.statusManager = null;
     this.userAbility = null;
     this.systemFilesCache = null;
@@ -2964,7 +2967,17 @@ export class ChatCompletionProcess {
 
       // Step 3: Fetching and Converting Fab Files (Feature contexts already loaded above)
       timer.phase('data_sources');
-      this.sendStatusUpdate(quest, 'Gathering data sources...', { statusAt: new Date() });
+      this.sendStatusUpdate(
+        quest,
+        resolveDataSourceStatus({
+          message,
+          sessionFabFileIds,
+          messageFileIds,
+          knowledgeIds: session.knowledgeIds,
+          forceKnowledgeRetrieval: forcedRetrievalEnabled,
+        }),
+        { statusAt: new Date() }
+      );
       // Input-window limits, needed BEFORE building messages because the amount of
       // attached-file content we extract has to be derived from them.
       const contextLimit = effectiveContextWindow(modelInfo);
@@ -3137,6 +3150,7 @@ export class ChatCompletionProcess {
         subagentTelemetryData: this.subagentTelemetryData,
         sendStatusUpdate: (q, status, options) => this.sendStatusUpdate(q, status, options),
         onToolPreamble: this.onToolPreamble,
+        decide: this.decide,
       });
 
       const { mcpToolsByServer, serverAgentConfig } = await toolBuilder.buildMcpTools({

@@ -5,6 +5,8 @@ const h = vi.hoisted(() => ({
   update: vi.fn(),
   createUser: vi.fn(),
   publish: vi.fn(),
+  emitSignupFunnelEvents: vi.fn(),
+  recordSyntheticIdentity: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -19,9 +21,13 @@ vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown)
 vi.mock('@bike4mind/database', () => ({ userRepository: { update: h.update } }));
 vi.mock('@bike4mind/services', () => ({ userService: { createUser: h.createUser } }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@server/analytics/funnel', () => ({
+  emitSignupFunnelEvents: (...args: unknown[]) => h.emitSignupFunnelEvents(...args),
+  recordSyntheticIdentity: (...args: unknown[]) => h.recordSyntheticIdentity(...args),
+}));
 vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.publish } } }));
-vi.mock('@server/utils/mailer/emailHelpers', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/utils/mailer/emailHelpers')>()),
+vi.mock('@bike4mind/server-utils/utils/mailer/emailHelpers', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/mailer/emailHelpers')>()),
   getLogoUrl: () => 'logo',
   buildEmailLogoImg: () => '',
 }));
@@ -38,6 +44,7 @@ describe('POST /api/admin/bulk-create-users', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.createUser.mockResolvedValue({ id: 'new-1', email: 'a@b.test', name: 'a@b.test', storageLimit: 1000 });
+    h.recordSyntheticIdentity.mockResolvedValue(false);
   });
 
   it('writes exactly the storage limit and tags when both are given', async () => {
@@ -48,6 +55,28 @@ describe('POST /api/admin/bulk-create-users', () => {
 
     expect(h.update).toHaveBeenCalledTimes(1);
     expect(h.update.mock.calls[0][0]).toStrictEqual({ id: 'new-1', storageLimit: 5000, tags: ['x', 'y'] });
+    expect(h.emitSignupFunnelEvents).toHaveBeenCalledWith({
+      user: expect.objectContaining({ id: 'new-1', isSynthetic: false }),
+      method: 'admin',
+      emailVerified: false,
+      creditsGranted: 0,
+    });
+  });
+
+  it('passes a synthetic classification into the signup emitter', async () => {
+    const user = { id: 'new-synthetic', email: 'seed@test.example', name: 'Seed', storageLimit: 1000 };
+    h.createUser.mockResolvedValue(user);
+    h.recordSyntheticIdentity.mockResolvedValue(true);
+
+    await h.handler!(makeReq([{ email: 'seed@test.example' }]), {
+      status: vi.fn().mockReturnThis(),
+      json: vi.fn(),
+    });
+
+    expect(h.recordSyntheticIdentity).toHaveBeenCalledWith(user);
+    expect(h.emitSignupFunnelEvents).toHaveBeenCalledWith(
+      expect.objectContaining({ user: expect.objectContaining({ id: 'new-synthetic', isSynthetic: true }) })
+    );
   });
 
   it('writes the created defaults, with tags undefined, when neither is given', async () => {

@@ -19,7 +19,7 @@ import {
 } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { userService } from '@bike4mind/services';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { closeConnection } from '@bike4mind/server-utils/websocket/closeConnection';
 import { Resource } from 'sst';
 

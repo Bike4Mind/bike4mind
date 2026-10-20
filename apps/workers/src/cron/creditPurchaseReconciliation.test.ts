@@ -26,11 +26,11 @@ vi.mock('@server/integrations/slack/slack', () => ({
 }));
 
 const mockEmitMetric = vi.fn();
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   emitMetric: (...args: unknown[]) => mockEmitMetric(...args),
 }));
 
-vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://test/%STAGE%' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://test/%STAGE%' } }));
 vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
 
 const mockLoggerError = vi.fn();

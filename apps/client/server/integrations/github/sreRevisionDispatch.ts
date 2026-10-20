@@ -18,8 +18,8 @@ import {
   type SreJobType,
 } from '@bike4mind/common';
 import { adminSettingsRepository, cacheRepository, sreErrorTrackingRepository } from '@bike4mind/database';
-import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
-import { sendToQueue } from '@server/utils/sqs';
+import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { postSreRevisionEscalationMessage } from '@server/integrations/slack/sreSlackApproval';
 import { z } from 'zod';
 

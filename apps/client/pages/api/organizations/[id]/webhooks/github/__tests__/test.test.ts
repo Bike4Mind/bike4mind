@@ -27,8 +27,8 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({ decryptSecret: () => 'plain-secret' }));
 vi.mock('@server/utils/orgAccess', () => ({ verifyOrgOwner: h.verifyOrgOwner }));
-vi.mock('@server/utils/ssrfProtection', () => ({ validateTargetUrl: h.validateTargetUrl }));
-vi.mock('@server/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: 'test-key' } }));
+vi.mock('@bike4mind/server-utils/utils/ssrfProtection', () => ({ validateTargetUrl: h.validateTargetUrl }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: 'test-key' } }));
 
 await import('../test');
 

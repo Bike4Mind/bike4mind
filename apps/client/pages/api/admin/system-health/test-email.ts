@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, BadRequestError } from '@server/utils/errors';
+import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { MailService, type TestEmailResult } from '@server/utils/mailer';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';

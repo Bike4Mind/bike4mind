@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { parseTargetSurface } from './parseTargetSurface';
 
 describe('parseTargetSurface', () => {

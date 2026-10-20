@@ -1,7 +1,7 @@
 import { emailPreferencesRepository, emailSendAttemptRepository } from '@bike4mind/database';
 import { EmailCategory } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import * as z from 'zod';
 
 const unsubscribeBodySchema = z.object({

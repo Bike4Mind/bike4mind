@@ -5,7 +5,7 @@ import GroupAddIcon from '@mui/icons-material/GroupAdd';
 import NoteAddIcon from '@mui/icons-material/NoteAdd';
 import DeleteIcon from '@mui/icons-material/DeleteSweep';
 import { ActivityConfigMap } from '@bike4mind/common';
-import { ActivityType } from './activityType';
+import { ActivityType } from '@bike4mind/server-utils/config/activityType';
 
 export const ACTIVITY_CONFIG: ActivityConfigMap<typeof PersonAddIcon> = {
   [ActivityType.FRIEND_REQUESTED]: {

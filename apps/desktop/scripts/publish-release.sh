@@ -29,6 +29,7 @@ if [ "$latest" = true ]; then
   latest=$(gh api "repos/$GH_REPO/releases?per_page=100" --paginate --slurp |
     python3 "$(dirname "$0")/release_policy.py" "$DESKTOP_VERSION")
 fi
+python3 "$(dirname "$0")/reserve-distribution-tag.py"
 echo "Publishing $tag with latest=$latest"
 gh release edit "$tag" --draft=false "--latest=$latest"
 gh release view "$tag" --json isDraft,assets --jq '{isDraft,assets:[.assets[].name]}'

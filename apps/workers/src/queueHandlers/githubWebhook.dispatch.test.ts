@@ -30,7 +30,7 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: {
     MONGODB_URI: 'mongodb://localhost:27017/test-%STAGE%',
     STAGE: 'test',

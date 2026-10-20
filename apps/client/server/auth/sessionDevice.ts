@@ -1,5 +1,5 @@
 import { IAuthSessionDevice } from '@bike4mind/common';
-import { getClientIp, type ClientIpRequest } from '@server/utils/ip';
+import { getClientIp, type ClientIpRequest } from '@bike4mind/server-utils/utils/ip';
 
 type SessionDeviceRequest = ClientIpRequest & {
   headers: Record<string, string | string[] | undefined>;

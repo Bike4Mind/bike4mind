@@ -1,6 +1,6 @@
 import { emailSendAttemptRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { ApiKeyScope } from '@bike4mind/common';
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {

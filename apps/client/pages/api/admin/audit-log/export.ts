@@ -13,7 +13,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { stageAdminAuditExport } from '@server/utils/adminAuditExportStorage';
 import { parseAuditExportQuery } from '@server/utils/adminAuditQuery';
-import { ensureAdmin, InternalServerError } from '@server/utils/errors';
+import { ensureAdmin, InternalServerError } from '@bike4mind/server-utils/utils/errors';
 
 const EXPORT_PAGE_SIZE = 1000;
 

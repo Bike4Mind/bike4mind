@@ -5,7 +5,7 @@ import type { Logger } from '@bike4mind/observability';
 import type { SaveGeneratedAssetResult } from '@bike4mind/services';
 
 const { upload, getSignedUrl } = vi.hoisted(() => ({ upload: vi.fn(), getSignedUrl: vi.fn() }));
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ upload, getSignedUrl }),
 }));
 

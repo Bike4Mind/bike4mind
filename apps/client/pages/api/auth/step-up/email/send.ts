@@ -4,7 +4,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { stepUpMethodsFor, stepUpUnavailableError } from '@server/auth/stepUp';
 import { sendStepUpEmailCode } from '@server/auth/stepUpEmail';
-import { NotFoundError } from '@server/utils/errors';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 
 /**
  * Email a step-up code to the account's current address (read from the database, never from the

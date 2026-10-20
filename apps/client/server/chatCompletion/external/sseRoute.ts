@@ -42,10 +42,10 @@ import {
 import { checkRateLimit, checkApiKeyRateLimitOrThrow, type ApiKeyInfo } from '@server/cli/auth';
 import { resolveContractAuth } from '@server/cli/resolveContractAuth';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { flattenHeaders } from '@server/utils/flattenHeaders';
-import { serializeError } from '@server/utils/serializeError';
-import { createMethodGuard } from '@server/utils/allowedMethods';
+import { serializeError } from '@bike4mind/server-utils/utils/serializeError';
+import { createMethodGuard } from '@bike4mind/server-utils/utils/allowedMethods';
 import { buildErrorBody, httpErrorToResponse } from '@server/middlewares/errorHandler';
 import { emitProcessingFailed } from '../processingFailedMetric';
 import { fromZodError } from 'zod-validation-error';
@@ -266,6 +266,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       let finalCacheReadTokens = 0;
       let finalCacheWriteTokens = 0;
       let finalTurnUsage: TurnUsage[] | undefined;
+      let finalCreditsUsed: number | undefined;
       let hasToolCalls = false;
 
       timing?.phase('completionStarted');
@@ -302,6 +303,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
           if (info?.cacheReadInputTokens) finalCacheReadTokens = info.cacheReadInputTokens;
           if (info?.cacheCreationInputTokens) finalCacheWriteTokens = info.cacheCreationInputTokens;
           if (info?.turnUsage?.length) finalTurnUsage = info.turnUsage;
+          if (typeof info?.creditsUsed === 'number') finalCreditsUsed = info.creditsUsed;
           if (info?.toolsUsed && info.toolsUsed.length > 0) hasToolCalls = true;
           timing?.chunk(classifyChunk(text, info));
           write(serializeSSEEvent(buildCompletionStreamEvent(text, info)));
@@ -329,6 +331,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         finalCacheReadTokens,
         finalCacheWriteTokens,
         finalTurnUsage,
+        finalCreditsUsed,
         hasToolCalls,
         db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
         logger,

@@ -6,7 +6,7 @@
  */
 
 import { BadRequestError } from '@bike4mind/utils';
-import { toObjectIdString } from '@server/utils/objectId';
+import { toObjectIdString } from '@bike4mind/server-utils/utils/objectId';
 import { WORK_ITEM_STATUSES, type WorkItemStatus } from '@bike4mind/common';
 
 const TITLE_MAX = 300;

@@ -1,6 +1,5 @@
 import {
   billedMusicSeconds,
-  estimateMusicCostCredits,
   estimateMusicCostUsd,
   extensionFromMimeType,
   getMusicModelCapabilities,
@@ -10,6 +9,7 @@ import {
   type MusicJobPayload,
   type MusicModelCapabilities,
   type ValidatedMusicRequest,
+  usdToCreditsStochastic,
 } from '@bike4mind/common';
 import {
   mp3DurationSeconds,
@@ -186,9 +186,11 @@ export function createMusicJobHandler(deps: MusicJobDeps): GenerationJobHandler<
         durationSeconds: reported !== undefined && reported > 0 ? reported : request.durationSeconds,
       };
       const billed = { durationSeconds: billedMusicSeconds(request, reported) };
+      const billedUsd = estimateMusicCostUsd(caps, billed);
       return {
         seconds: delivered.durationSeconds,
-        credits: estimateMusicCostCredits(caps, billed),
+        // Unbiased settlement against the round-up hold. A non-finite price stays NaN: the draw would read it as free.
+        credits: Number.isFinite(billedUsd) ? usdToCreditsStochastic(billedUsd) : Number.NaN,
         usd: estimateMusicCostUsd(caps, delivered),
       };
     } catch (error) {

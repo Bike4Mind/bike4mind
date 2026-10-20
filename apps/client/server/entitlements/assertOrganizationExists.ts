@@ -1,5 +1,5 @@
 import { organizationRepository } from '@bike4mind/database';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 /**
  * Guard for the admin partner-signup-rule routes: a rule may only reference an org that

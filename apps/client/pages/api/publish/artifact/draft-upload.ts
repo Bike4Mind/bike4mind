@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { getPublishedArtifactsStorage } from '@server/utils/storage';
+import { getPublishedArtifactsStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { PUBLISH_LIMITS } from '@bike4mind/common';
 import { verifyDraftUploadToken } from '@server/services/publish';
 

@@ -229,7 +229,9 @@ export class AnthropicCachingAdapter implements ICachingAdapter {
     const messagesParam = modifiedParams.messages as unknown[] | undefined;
     if (strategy.cacheConversationHistory && Array.isArray(messagesParam) && messagesParam.length > 0) {
       const messages = [...messagesParam] as Record<string, unknown>[];
-      const anchorIndex = messages.length - 1 - (strategy.historyCacheExcludeTrailingCount ?? 0);
+      let anchorIndex = messages.length - 1 - (strategy.historyCacheExcludeTrailingCount ?? 0);
+      // A mid-conversation tool change is the only system message left in the list, and its blocks take no cache_control.
+      while (anchorIndex >= 0 && messages[anchorIndex].role === 'system') anchorIndex--;
 
       if (anchorIndex >= 0) {
         const anchorMsg = messages[anchorIndex];

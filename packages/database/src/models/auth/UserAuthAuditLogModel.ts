@@ -39,6 +39,7 @@ export type UserAuthAuditEvent =
   | 'trusted_device_used'
   | 'trusted_device_revoked'
   | 'oauth_grant_revoked'
+  | 'oauth_refresh_reuse_revoked'
   | 'step_up_success'
   | 'step_up_failed';
 
@@ -61,6 +62,7 @@ export const USER_AUTH_AUDIT_EVENTS: UserAuthAuditEvent[] = [
   'trusted_device_used',
   'trusted_device_revoked',
   'oauth_grant_revoked',
+  'oauth_refresh_reuse_revoked',
   'step_up_success',
   'step_up_failed',
 ];

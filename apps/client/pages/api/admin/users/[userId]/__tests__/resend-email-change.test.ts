@@ -22,8 +22,8 @@ vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: vi.fn() }
 vi.mock('@bike4mind/database', () => ({ userRepository: { findById: h.findById, update: h.update } }));
 vi.mock('@bike4mind/services', () => ({ userService: { cancelEmailChange: vi.fn() } }));
 vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.publish } } }));
-vi.mock('@server/utils/mailer/emailHelpers', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/utils/mailer/emailHelpers')>()),
+vi.mock('@bike4mind/server-utils/utils/mailer/emailHelpers', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/mailer/emailHelpers')>()),
   generateVerificationLink: () => 'http://x/verify-email?t=1',
   getLogoUrl: () => 'logo',
   buildEmailLogoImg: () => '',
