@@ -52,6 +52,9 @@ describe('OAuthClientSeeder', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    h.findOne.mockReset();
+    h.fetchPw.mockReset();
+    h.save.mockReset();
     h.fetchPw.mockResolvedValue('seeder-pw');
     h.save.mockResolvedValue(undefined);
     process.env.IS_PREVIEW = 'true';
@@ -168,5 +171,24 @@ describe('OAuthClientSeeder', () => {
 
     await expect(new OAuthClientSeeder(logger).seed()).resolves.toBeUndefined();
     expect(logger.error).toHaveBeenCalled();
+  });
+
+  it.each(['lookup', 'insert', 'update'] as const)('logs a failed client %s without throwing', async failure => {
+    const error = new Error(`client ${failure} failed`);
+    h.findOne.mockReturnValue(absent());
+    if (failure === 'lookup') {
+      h.findOne.mockReturnValue({ exec: () => Promise.reject(error) });
+    } else if (failure === 'insert') {
+      h.save.mockRejectedValue(error);
+    } else {
+      const row = { set: vi.fn(), save: vi.fn().mockRejectedValue(error) };
+      row.set.mockReturnValue(row);
+      h.findOne.mockReturnValue({ exec: () => Promise.resolve(row) });
+    }
+
+    await expect(new OAuthClientSeeder(logger).seed()).resolves.toBeUndefined();
+
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining(error.message));
+    expect(h.fetchPw).not.toHaveBeenCalled();
   });
 });

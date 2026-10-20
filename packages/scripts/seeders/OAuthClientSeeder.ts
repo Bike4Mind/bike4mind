@@ -55,6 +55,7 @@ export class OAuthClientSeeder {
       // consent path, not a full first-party session (the model default). Never left implicit.
       clientType: 'relying-party' as const,
       isActive: true,
+      federatedIdp: undefined,
       ...fields,
     };
     const existing = await OAuthClientModel.findOne({ clientId }).exec();

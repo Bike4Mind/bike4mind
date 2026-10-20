@@ -18,6 +18,8 @@ import {
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 const APP_URL = 'https://pr-1.preview.example.com';
+const priorIsPreview = process.env.IS_PREVIEW;
+const priorAppUrl = process.env.APP_URL;
 const logger = { info: vi.fn(), error: vi.fn() } as unknown as ConstructorParameters<typeof OAuthClientSeeder>[0];
 let server: Awaited<ReturnType<typeof createMongoServer>>;
 
@@ -30,8 +32,10 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  delete process.env.IS_PREVIEW;
-  delete process.env.APP_URL;
+  if (priorIsPreview === undefined) delete process.env.IS_PREVIEW;
+  else process.env.IS_PREVIEW = priorIsPreview;
+  if (priorAppUrl === undefined) delete process.env.APP_URL;
+  else process.env.APP_URL = priorAppUrl;
   await mongoose.disconnect();
   await server.stop();
 });
@@ -85,5 +89,60 @@ describe('OAuthClientSeeder (real DB)', () => {
     });
 
     await expect(doc.validate()).rejects.toThrow(/jwksUri/);
+  });
+
+  it('restores seeded fields and removes federation from the ordinary clients on re-run', async () => {
+    await new OAuthClientSeeder(logger).seed();
+    await OAuthClientModel.updateMany(
+      {},
+      {
+        name: 'Changed client',
+        redirectUris: ['https://changed.example.com/cb'],
+        allowedScopes: ['openid'],
+        clientType: 'first-party',
+        tokenEndpointAuthMethod: 'none',
+        isActive: false,
+        federatedIdp: {
+          issuer: 'https://changed.example.com',
+          audience: 'changed-audience',
+          jwksUri: 'https://changed.example.com/jwks',
+          subjectSource: 'sub',
+        },
+      }
+    );
+
+    await new OAuthClientSeeder(logger).seed();
+
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(await OAuthClientModel.countDocuments()).toBe(3);
+    for (const [clientId, name, tokenEndpointAuthMethod] of [
+      [PREVIEW_PUBLIC_CLIENT_ID, 'Preview Public Client', 'none'],
+      [PREVIEW_CONFIDENTIAL_CLIENT_ID, 'Preview Confidential Client', 'client_secret_post'],
+      [PREVIEW_FEDERATED_CLIENT_ID, 'Preview Federated Client', 'client_secret_post'],
+    ]) {
+      const client = await OAuthClientModel.findOne({ clientId }).lean();
+      expect(client).toMatchObject({
+        clientId,
+        name,
+        tokenEndpointAuthMethod,
+        redirectUris: ['https://example.com/cb'],
+        clientType: 'relying-party',
+        isActive: true,
+        allowedScopes:
+          clientId === PREVIEW_FEDERATED_CLIENT_ID
+            ? ['openid', 'email', 'profile', 'ai:generate']
+            : ['openid', 'email', 'profile'],
+      });
+      if (clientId === PREVIEW_FEDERATED_CLIENT_ID) {
+        expect(client?.federatedIdp).toMatchObject({
+          issuer: APP_URL,
+          audience: PREVIEW_FEDERATED_CLIENT_ID,
+          jwksUri: `${APP_URL}/api/oauth/jwks`,
+          subjectSource: 'sub',
+        });
+      } else {
+        expect(client?.federatedIdp).toBeUndefined();
+      }
+    }
   });
 });
