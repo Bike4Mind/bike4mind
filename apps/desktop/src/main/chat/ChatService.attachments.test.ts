@@ -55,7 +55,9 @@ describe('ChatService attachments', () => {
     const root = await mkdtemp(join(tmpdir(), 'b4m-chat-attach-'));
     store = new SessionStore(join(root, 'sessions'), 'vision-model');
     attachments = new AttachmentStore(join(root, 'attachments'), { debug: vi.fn(), warn: vi.fn() });
-    events = [];
+    // Bound per test: a previous service replying late must not push into this test's events.
+    const emitted: ChatStreamEvent[] = [];
+    events = emitted;
     streams = [];
     post = vi.fn().mockImplementation(() => {
       const stream = new PassThrough();
@@ -77,7 +79,7 @@ describe('ChatService attachments', () => {
           getAxiosInstance: () => ({ post }),
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
-      emit: event => events.push(event),
+      emit: event => emitted.push(event),
     });
   });
 

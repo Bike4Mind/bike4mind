@@ -60,7 +60,9 @@ describe('ChatService spawn placement', () => {
   beforeEach(async () => {
     await repository();
     store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-place-sessions-')), 'test-model');
-    events = [];
+    // Bound per test: a previous service replying late must not push into this test's events.
+    const emitted: ChatStreamEvent[] = [];
+    events = emitted;
     streams = [];
     post = vi.fn().mockImplementation(() => {
       const stream = new PassThrough();
@@ -79,7 +81,7 @@ describe('ChatService spawn placement', () => {
           getAxiosInstance: () => ({ post }),
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
-      emit: event => events.push(event),
+      emit: event => emitted.push(event),
     });
   });
 

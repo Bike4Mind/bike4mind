@@ -27,7 +27,9 @@ describe('ChatService project context', () => {
     await writeFile(join(project, 'CLAUDE.md'), 'Always update the nav map.', 'utf8');
     await writeFile(join(project, 'first.ts'), 'x', 'utf8');
 
-    events = [];
+    // Bound per test: a previous service replying late must not push into this test's events.
+    const emitted: ChatStreamEvent[] = [];
+    events = emitted;
     streams = [];
     post = vi.fn().mockImplementation(() => {
       const stream = new PassThrough();
@@ -45,7 +47,7 @@ describe('ChatService project context', () => {
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
       userInstructionsRoot: userRoot,
-      emit: event => events.push(event),
+      emit: event => emitted.push(event),
     });
   });
 

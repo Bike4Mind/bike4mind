@@ -61,7 +61,9 @@ describe('ChatService with an MCP server', () => {
   beforeEach(async () => {
     const logger = { debug: vi.fn(), warn: vi.fn() };
     approvals = new ApprovalGate();
-    events = [];
+    // Bound per test: a previous service replying late must not push into this test's events.
+    const emitted: ChatStreamEvent[] = [];
+    events = emitted;
     streams = [];
     post = vi.fn().mockImplementation(() => {
       const stream = new PassThrough();
@@ -84,7 +86,7 @@ describe('ChatService with an MCP server', () => {
           getAxiosInstance: () => ({ post }),
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
-      emit: event => events.push(event),
+      emit: event => emitted.push(event),
     });
   });
 

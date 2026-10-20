@@ -40,7 +40,9 @@ describe('ChatService context boundaries', () => {
   beforeEach(async () => {
     const root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-boundary-')));
     store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-boundary-sessions-')), 'test-model');
-    events = [];
+    // Bound per test: a previous service replying late must not push into this test's events.
+    const emitted: ChatStreamEvent[] = [];
+    events = emitted;
     streams = [];
     sent = [];
     failNextRequest = false;
@@ -68,7 +70,7 @@ describe('ChatService context boundaries', () => {
           getAxiosInstance: () => ({ post }),
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
-      emit: event => events.push(event),
+      emit: event => emitted.push(event),
       queue: new MessageQueue(() => undefined),
       models: {
         cached: () => catalog(),

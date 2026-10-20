@@ -41,7 +41,9 @@ describe('ChatService stale tool results', () => {
     await writeFile(join(root, 'b.ts'), body, 'utf8');
 
     store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-prune-sessions-')), 'test-model');
-    events = [];
+    // Bound per test: a previous service replying late must not push into this test's events.
+    const emitted: ChatStreamEvent[] = [];
+    events = emitted;
     streams = [];
     sent = [];
     const post = vi.fn().mockImplementation((_url: string, body: { messages: unknown[] }) => {
@@ -61,7 +63,7 @@ describe('ChatService stale tool results', () => {
           getAxiosInstance: () => ({ post }),
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
-      emit: event => events.push(event),
+      emit: event => emitted.push(event),
     });
   });
 

@@ -32,7 +32,9 @@ describe('ChatService artifacts', () => {
 
   beforeEach(async () => {
     store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-artifacts-')), 'test-model');
-    events = [];
+    // Bound per test: a previous service replying late must not push into this test's events.
+    const emitted: ChatStreamEvent[] = [];
+    events = emitted;
     stream = new PassThrough();
     // One axios instance serves both the completion stream and the artifact create; they are
     // told apart by endpoint, exactly as they are in the app.
@@ -53,7 +55,7 @@ describe('ChatService artifacts', () => {
       artifacts: new ArtifactPublisher(() => apiClient, { debug: vi.fn() }),
       getApiClient: () => apiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
-      emit: event => events.push(event),
+      emit: event => emitted.push(event),
     });
   });
 

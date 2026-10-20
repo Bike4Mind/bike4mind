@@ -67,7 +67,9 @@ describe('ChatService agent browser', () => {
     imported = [];
     approvals = new ApprovalGate();
     granted = [root];
-    events = [];
+    // Bound per test: a previous service replying late must not push into this test's events.
+    const emitted: ChatStreamEvent[] = [];
+    events = emitted;
     streams = [];
     closed = [];
     models = [{ id: 'test-model', name: 'Test', backend: 'openai' }];
@@ -107,7 +109,7 @@ describe('ChatService agent browser', () => {
           getAxiosInstance: () => ({ post }),
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
-      emit: event => events.push(event),
+      emit: event => emitted.push(event),
     });
   });
 

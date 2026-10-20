@@ -29,7 +29,9 @@ describe('ChatService generation tools', () => {
 
   async function build(options: { media: boolean; roots: string[] }): Promise<void> {
     const store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-media-sessions-')), 'test-model');
-    events = [];
+    // Bound per test: a previous service replying late must not push into this test's events.
+    const emitted: ChatStreamEvent[] = [];
+    events = emitted;
     streams = [];
     axiosPost = vi.fn().mockImplementation(() => {
       const stream = new PassThrough();
@@ -59,7 +61,7 @@ describe('ChatService generation tools', () => {
       ...(options.media ? { media: new MediaStore(await mkdtemp(join(tmpdir(), 'b4m-media-files-'))) } : {}),
       getApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
-      emit: event => events.push(event),
+      emit: event => emitted.push(event),
     });
   }
 
