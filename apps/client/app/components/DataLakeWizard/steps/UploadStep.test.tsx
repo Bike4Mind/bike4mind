@@ -68,6 +68,18 @@ describe('UploadStep — completion summary', () => {
     });
   });
 
+  it('does not log readiness while later files of the batch are still uploading', () => {
+    renderComplete({
+      status: 'uploading',
+      totalFiles: 5,
+      uploadedFiles: 2,
+      chunkedFiles: 2,
+      vectorizedFiles: 2,
+      startedAt: 1_000,
+    });
+    expect(logEvent).not.toHaveBeenCalled();
+  });
+
   it('claims chunked and vectorized only when both counts reach the total', () => {
     renderComplete({ totalFiles: 3, uploadedFiles: 3, chunkedFiles: 3, vectorizedFiles: 3 });
     expect(screen.getByText('3 files uploaded, chunked, and vectorized.')).toBeInTheDocument();

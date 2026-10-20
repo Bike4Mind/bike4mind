@@ -281,13 +281,16 @@ export default function UploadStep() {
   const fullyProcessed = uploadedFiles > 0 && chunkedFiles >= uploadedFiles && vectorizedFiles >= uploadedFiles;
 
   useEffect(() => {
-    if (!fullyProcessed || readyLoggedRef.current || progress.startedAt === undefined) return;
+    // Gate on 'complete': under the upload concurrency limit the first files can be vectorized
+    // before the rest have uploaded, which would log a partial batch.
+    if (progress.status !== 'complete' || !fullyProcessed || readyLoggedRef.current || progress.startedAt === undefined)
+      return;
     readyLoggedRef.current = true;
     logEvent({
       type: FirstRunEvents.FILE_READY_MS,
       metadata: { milliseconds: Math.max(0, Date.now() - progress.startedAt), files: uploadedFiles },
     });
-  }, [fullyProcessed, progress.startedAt, uploadedFiles, logEvent]);
+  }, [progress.status, fullyProcessed, progress.startedAt, uploadedFiles, logEvent]);
 
   // Subscribe to real-time chunk/vectorize progress from WebSocket
   useBatchProgressListener();
