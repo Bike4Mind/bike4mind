@@ -352,7 +352,12 @@ export async function getValidConnectionDriveAccessToken(
     if (connection.oauthRefreshToken) {
       const refreshToken = decryptConnectionRefreshToken(connection.oauthRefreshToken);
       if (refreshToken) {
-        const credentials = await refreshAccessToken(refreshToken);
+        // Same verdict as the user-grant path: raw invalid_grant would record Google's error string
+        // as lastError, and it is a reconnect (400) rather than a server fault.
+        const credentials = await refreshAccessToken(refreshToken).catch((e: unknown) => {
+          if (isInvalidGrantError(e)) throw new BadRequestError(DRIVE_RECONNECT_REQUIRED_MESSAGE);
+          throw e;
+        });
         if (credentials.access_token) return credentials.access_token;
       }
     }

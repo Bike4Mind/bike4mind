@@ -76,18 +76,34 @@ describe('getValidConnectionDriveAccessToken', () => {
     expect(h.updateHealth).toHaveBeenCalledWith('conn1', expect.objectContaining({ status: 'credential_error' }));
   });
 
-  it("marks an org connection credential_error when its own copy fails to refresh, without trying the user's", async () => {
-    h.findByIdWithCredentials.mockResolvedValue({
-      id: 'conn2',
-      connectedBy: 'user-1',
-      oauthRefreshToken: 'enc(org-refresh)',
-    });
-    h.refreshAccessToken.mockRejectedValue(new Error('invalid_grant'));
+  it.each([
+    [
+      'an OAuth invalid_grant body',
+      Object.assign(new Error('Token has been expired or revoked.'), {
+        response: { data: { error: 'invalid_grant' } },
+      }),
+    ],
+    ['a bare invalid_grant message', new Error('invalid_grant')],
+  ])(
+    "marks an org connection credential_error with the reconnect message when its own copy is revoked as %s, without trying the user's",
+    async (_label, error) => {
+      h.findByIdWithCredentials.mockResolvedValue({
+        id: 'conn2',
+        connectedBy: 'user-1',
+        oauthRefreshToken: 'enc(org-refresh)',
+      });
+      h.refreshAccessToken.mockRejectedValue(error);
 
-    await expect(getValidConnectionDriveAccessToken('conn2', orgOwner)).rejects.toThrow('invalid_grant');
-    expect(h.updateHealth).toHaveBeenCalledWith('conn2', { status: 'credential_error', lastError: 'invalid_grant' });
-    expect(h.userFindById).not.toHaveBeenCalled();
-  });
+      const failure = await getValidConnectionDriveAccessToken('conn2', orgOwner).catch((e: unknown) => e);
+      expect(failure).toBeInstanceOf(BadRequestError);
+      expect(failure).toHaveProperty('message', 'Google Drive access was revoked - reconnect required');
+      expect(h.updateHealth).toHaveBeenCalledWith('conn2', {
+        status: 'credential_error',
+        lastError: 'Google Drive access was revoked - reconnect required',
+      });
+      expect(h.userFindById).not.toHaveBeenCalled();
+    }
+  );
 
   it('marks credential_error on a revoked user grant surfaced as an OAuth invalid_grant body', async () => {
     h.findByIdWithCredentials.mockResolvedValue({ id: 'conn1', connectedBy: 'user-1' });
