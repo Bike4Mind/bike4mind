@@ -44,7 +44,7 @@ const pointerOf = async (userId: mongoose.Types.ObjectId) =>
 
 /**
  * One live org: owner, conferring ACL member, a users[] row without a conferring permission, a
- * removed member (once more with the pointer stored as a string), a managerId-only manager, a
+ * removed member (once more with the pointer stored as a string), an adminUserIds-only manager, a
  * groups[]-only member and a platform admin, each pointing at it. Plus a soft-deleted org, a
  * never-existing org id (stored once as ObjectId, once as a string, once by an admin), and a user
  * with no pointer.
@@ -74,7 +74,7 @@ async function seed() {
       _id: liveOrg,
       name: 'Live',
       userId: String(owner),
-      managerId: String(manager),
+      adminUserIds: [String(manager)],
       users: [
         { userId: String(member), permissions: ['read'] },
         { userId: String(noPermRow), permissions: [] },

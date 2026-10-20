@@ -44,8 +44,8 @@ export function isOrgOwnershipCandidate(
 
 /**
  * Whether `userId` currently holds ADMIN rights in `org` - the app-side `administeredOrgIds`
- * derivation (`organizationRepository.findIdsWithAdminRights`): the billing owner, the team manager,
- * or an appointed admin.
+ * derivation (`organizationRepository.findIdsWithAdminRights`): the billing owner or a manager
+ * (`adminUserIds`).
  *
  * Deliberately NARROWER than `isOrgOwnershipCandidate`, which answers "may RECEIVE the lake" and
  * admits anyone on the roster. This answers "may HAND IT AWAY", which `resolveLakeTransferAuthority`
@@ -53,12 +53,9 @@ export function isOrgOwnershipCandidate(
  * checking roster membership would let an admin demoted to plain member still authorize the transfer
  * their offer opened.
  */
-export function isOrgAdminOf(
-  org: Pick<IOrganizationDocument, 'userId' | 'managerId' | 'adminUserIds'>,
-  userId: string
-): boolean {
+export function isOrgAdminOf(org: Pick<IOrganizationDocument, 'userId' | 'adminUserIds'>, userId: string): boolean {
   if (!userId) return false;
-  return org.userId === userId || org.managerId === userId || (org.adminUserIds ?? []).includes(userId);
+  return org.userId === userId || (org.adminUserIds ?? []).includes(userId);
 }
 
 /**
@@ -100,7 +97,7 @@ export interface LakeTransferAuthority {
  * deletion), so an owner grant outlives the membership that motivated it - and without this check
  * that stale grant would keep answering "yes" here, which the candidate listing turns into a live
  * read of the org's present-day roster with work emails attached. Org-admin rights count as
- * membership on their own: an appointed admin (`adminUserIds`) or team manager need not sit on the
+ * membership on their own: a manager (`adminUserIds`) need not hold a membership row in the
  * org's `users[]` ACL, so requiring the ACL alone would close the succession path this rule exists
  * for. A platform admin is exempt (global superuser).
  *

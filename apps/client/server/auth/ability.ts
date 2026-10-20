@@ -81,9 +81,9 @@ function defineAbilitiesFor(user: IUserDocument | undefined) {
 
     applySharedShareableRules(allow, user, [Session, FabFile, Organization, Project]);
 
-    // Team Manager permissions for Organizations
-    // Managers can read and update organizations they manage (but not billing-related fields)
-    const managerPermission: MongoQuery = { managerId: user.id };
+    // Org manager permissions: read and update the orgs they manage (but not billing-related fields).
+    // Needs a roster row too, like canAdministerOrganization: a bare `adminUserIds` entry is not a member.
+    const managerPermission: MongoQuery = { adminUserIds: user.id, users: { $elemMatch: { userId: user.id } } };
     allow(Permission.read, Organization, managerPermission);
     allow(Permission.update, Organization, managerPermission);
     allow('addUser', Organization, managerPermission);

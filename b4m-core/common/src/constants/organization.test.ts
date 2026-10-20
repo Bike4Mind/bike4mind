@@ -35,7 +35,7 @@ describe('isOrgOwnerOrCurrentAdmin', () => {
 
   // A spending limit on the owner's pool is a billing decision, like billingContact.
   it('refuses a manager who is not also an appointed admin', () => {
-    expect(isOrgOwnerOrCurrentAdmin({ id: 'manager-id' }, { ...org, managerId: 'manager-id' })).toBe(false);
+    expect(isOrgOwnerOrCurrentAdmin({ id: 'manager-id' }, org)).toBe(false);
   });
 
   it('refuses a plain member', () => {
@@ -52,7 +52,11 @@ describe('isOrgOwnerOrCurrentAdmin', () => {
 });
 
 describe('canAdministerOrganization', () => {
-  const org = { userId: 'owner-id', managerId: 'manager-id' };
+  const org = {
+    userId: 'owner-id',
+    adminUserIds: ['manager-id'],
+    users: [{ userId: 'manager-id' }],
+  };
 
   it('admits the billing owner', () => {
     expect(canAdministerOrganization({ id: 'owner-id' }, org)).toBe(true);
@@ -76,20 +80,9 @@ describe('canAdministerOrganization', () => {
     expect(canAdministerOrganization({ id: 'nobody' }, org)).toBe(false);
   });
 
-  // A null managerId must not match a caller whose id is somehow also nullish - fail closed on a
-  // blank identity rather than admitting on `undefined === undefined`.
-  it('does not admit on a null managerId', () => {
-    expect(
-      canAdministerOrganization({ id: undefined as unknown as string }, { userId: 'owner-id', managerId: null })
-    ).toBe(false);
-  });
-
-  it('refuses a non-owner when the org has no managerId', () => {
-    expect(canAdministerOrganization({ id: 'manager-id' }, { userId: 'owner-id' })).toBe(false);
-  });
-
-  it('does not admit on an empty-string managerId', () => {
-    expect(canAdministerOrganization({ id: '' }, { userId: 'owner-id', managerId: '' })).toBe(false);
+  it('does not admit a blank caller id', () => {
+    expect(canAdministerOrganization({ id: undefined as unknown as string }, { userId: 'owner-id' })).toBe(false);
+    expect(canAdministerOrganization({ id: '' }, { userId: 'owner-id' })).toBe(false);
   });
 
   it('refuses an explicit isAdmin false or null', () => {
@@ -107,33 +100,26 @@ describe('canAdministerOrganization', () => {
     expect(canAdministerOrganization({ id: 'org-admin-id' }, roster)).toBe(false);
   });
 
-  // The legacy single managerId is the only actor that passes this but not isOrgOwnerOrCurrentAdmin.
-  it('is a superset of isOrgOwnerOrCurrentAdmin only by the legacy managerId', () => {
-    const roster = { ...org, adminUserIds: ['org-admin-id'], users: [{ userId: 'org-admin-id' }] };
-    expect(canAdministerOrganization({ id: 'manager-id' }, roster)).toBe(true);
-    expect(isOrgOwnerOrCurrentAdmin({ id: 'manager-id' }, roster)).toBe(false);
-    expect(canAdministerOrganization({ id: 'org-admin-id' }, roster)).toBe(true);
-    expect(isOrgOwnerOrCurrentAdmin({ id: 'org-admin-id' }, roster)).toBe(true);
+  it('agrees with isOrgOwnerOrCurrentAdmin', () => {
+    const actors = [{ id: 'manager-id' }, { id: 'owner-id' }, { id: 'member-id' }, { id: 'x', isAdmin: true }];
+    for (const actor of actors) {
+      expect(canAdministerOrganization(actor, org)).toBe(isOrgOwnerOrCurrentAdmin(actor, org));
+    }
   });
 });
 
 describe('canRevokeOrgMember', () => {
   const org = {
     userId: 'owner-id',
-    managerId: 'legacy-id',
     adminUserIds: ['mgr-id'],
     users: [{ userId: 'mgr-id' }, { userId: 'member-id' }],
   };
 
   it.each([
     ['platform admin', { id: 'root', isAdmin: true }, 'mgr-id', true],
-    ['owner', { id: 'owner-id' }, 'legacy-id', true],
     ['owner', { id: 'owner-id' }, 'mgr-id', true],
-    ['roster manager', { id: 'mgr-id' }, 'legacy-id', false],
     ['roster manager', { id: 'mgr-id' }, 'mgr-id', false],
     ['roster manager', { id: 'mgr-id' }, 'member-id', true],
-    ['legacy manager', { id: 'legacy-id' }, 'mgr-id', false],
-    ['legacy manager', { id: 'legacy-id' }, 'member-id', true],
     ['plain member', { id: 'member-id' }, 'member-id', false],
   ])('%s revoking %s target %s -> %s', (_label, actor, target, expected) => {
     expect(canRevokeOrgMember(actor, org, target)).toBe(expected);

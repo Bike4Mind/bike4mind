@@ -1103,7 +1103,7 @@ describe('listDataLakes - pending proposal count is the queue discovery surface'
     };
 
     // administeredOrgIds ONLY, with an empty membership set - exactly the principal #2005 describes
-    // (a team manager or appointed admin who sits on no read/write users[] ACL row).
+    // (an org manager who sits on no read/write users[] ACL row).
     const result = await listDataLakes(ctx({ userId: 'manager', administeredOrgIds: ['org-a'] }), { db });
 
     expect(result.find(l => l.id === 'org-lake')?.canManage).toBe(true);
