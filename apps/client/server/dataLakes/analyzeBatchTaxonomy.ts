@@ -11,7 +11,10 @@ import { getAvailableModels } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import {
   ApiKeyType,
+  BadRequestError,
   ChatModels,
+  CreditHolderType,
+  ForbiddenError,
   getQuestErrorCode,
   type IUserDocument,
   MAX_TAXONOMY_TAGS,
@@ -122,14 +125,38 @@ export async function analyzeBatchTaxonomy(
   const lake = await dataLakeRepository.findById(dataLakeId);
   if (!lake) return fail('Data lake not found');
 
-  // Billed to the uploader, or on a re-analyze to the owner the request bills (an API key may bill its org).
+  // A re-analyze bills its current requester; queued work keeps the upload's payer even if the
+  // uploader changes seats before analysis runs. Legacy batches retain the previous fallback.
   const user = (await userRepository.findById(userId)) as IUserDocument | null;
   if (!user) return fail('User not found');
   const models = await getAvailableModels({ openai: openaiApiKey });
   const modelInfo = models.find(m => m.id === ChatModels.GPT4o_MINI);
   if (!modelInfo) return fail('Taxonomy model is not available');
-  const meter = options.req
-    ? createRequestCompletionMeter(options.req, 'data lake taxonomy', { systemModel: true })
+  const batch = options.req ? null : await dataLakeBatchRepository.findById(batchId);
+  if (!options.req && !batch) return fail('Batch not found');
+  const billing = batch?.taxonomyBilling;
+  const meteredRequest: MeteredRequest | undefined =
+    options.req ??
+    (billing
+      ? {
+          user,
+          logger,
+          headers: {},
+          usageSource: billing.source,
+          apiKeyInfo: billing.apiKeyId
+            ? {
+                keyId: billing.apiKeyId,
+                billingOwnerType: billing.organizationId ? CreditHolderType.Organization : CreditHolderType.User,
+                organizationId: billing.organizationId ?? undefined,
+              }
+            : undefined,
+        }
+      : undefined);
+  const meter = meteredRequest
+    ? createRequestCompletionMeter(meteredRequest, 'data lake taxonomy', {
+        systemModel: true,
+        ...(!options.req && billing ? { organizationId: billing.organizationId } : {}),
+      })
     : createCompletionMeter(user, logger, 'data lake taxonomy', { systemModel: true });
 
   const folderTree = sampleFabFilesForTaxonomy(files);
@@ -143,6 +170,7 @@ export async function analyzeBatchTaxonomy(
   } catch (err) {
     // Not retryable: a redelivery would be refused the same way.
     if (getQuestErrorCode(err) === 'insufficient_credits') return fail('Not enough credits to analyze this batch');
+    if (err instanceof BadRequestError || err instanceof ForbiddenError) return fail(err.message);
     throw err;
   }
 

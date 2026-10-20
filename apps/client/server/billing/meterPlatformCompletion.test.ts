@@ -130,6 +130,32 @@ describe('meterPlatformCompletion credits', () => {
     expect(m.deductCredits).not.toHaveBeenCalled();
   });
 
+  it('keeps the captured API-key source when asynchronous work no longer has request headers', async () => {
+    const queuedRequest = {
+      user: user(),
+      apiKeyInfo: { keyId: 'k1', billingOwnerType: CreditHolderType.User },
+      logger,
+      headers: {},
+      usageSource: 'cli' as const,
+    };
+    const reservation = await reserveCompletionCredits(queuedRequest as never, 0.1, 'taxonomy');
+
+    await settleCompletion(reservation, queuedRequest as never, {
+      model: 'sonnet',
+      provider: 'anthropic',
+      usd: 0.01,
+      inputTokens: 100,
+      outputTokens: 20,
+    });
+
+    expect(m.deductCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKeyId: 'k1', source: 'cli' }),
+      expect.anything(),
+      expect.anything()
+    );
+    expect(m.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({ apiKeyId: 'k1', source: 'cli' }));
+  });
+
   it('bills the organization, not the user, for an org-billed API key', async () => {
     let orgBalance = 500;
     m.orgFindById.mockResolvedValue({ id: 'o1', currentCredits: 500, userDetails: [], users: [{ userId: 'u1' }] });

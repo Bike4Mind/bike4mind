@@ -12,6 +12,9 @@ import type { Logger } from '@bike4mind/observability';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { assertApiKeyOrgMembership } from '@server/billing/assertApiKeyOrgMembership';
 
+import { resolveRequestBillingOrgId } from './resolveRequestBillingOrgId';
+
+export { resolveRequestBillingOrgId } from './resolveRequestBillingOrgId';
 export type { CreditLedgerEntry };
 
 /**
@@ -73,24 +76,6 @@ type ReserveRequestCreditsParams = {
   /** How long the hold may stay unsettled before the sweep refunds it; defaults to CREDIT_HOLD_TTL_MS. */
   holdTtlMs?: number;
 };
-
-/**
- * The organization a request bills, or undefined when it bills the user. Precedence: org-billed API key
- * -> its org; user-billed API key -> the user; JWT caller -> `organizationId` when given (null = the
- * user), else the user's own org seat.
- */
-export function resolveRequestBillingOrgId(
-  req: Pick<BillingRequest, 'user' | 'apiKeyInfo'>,
-  organizationId?: string | null
-): string | undefined {
-  if (req.apiKeyInfo) {
-    return req.apiKeyInfo.billingOwnerType === CreditHolderType.Organization
-      ? req.apiKeyInfo.organizationId
-      : undefined;
-  }
-  if (organizationId !== undefined) return organizationId ?? undefined;
-  return req.user?.organizationId?.toString() ?? undefined;
-}
 
 /**
  * Reserve a request's cost BEFORE any provider cost is incurred, for the stateless paid API routes

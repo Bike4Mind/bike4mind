@@ -7,6 +7,7 @@ import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
 import { deductTtsCredits } from '@server/utils/deductTtsCredits';
 import { assertPreflightCredits, InsufficientCreditsPreflightError } from '@server/utils/creditPreflight';
 import { isCreditsEnforced } from '@server/billing/meterPlatformCompletion';
+import { resolveAudioBillingOrgId } from '@server/billing/resolveAudioBillingOrgId';
 
 const TTS_MODEL = 'tts-1-hd';
 
@@ -55,12 +56,14 @@ const handler = baseApi().post(async (req, res) => {
   // Same credit gate as pages/api/ai/tts.ts: refuse before the provider call, charge after it. Unlike
   // tts.ts the charge is skipped when enforceCredits is off, so a credits-off deployment moves no balance.
   const userId = req.user?.id;
+  const billingOrganizationId = await resolveAudioBillingOrgId(req, undefined, 'user');
   if (userId) {
     try {
       await assertPreflightCredits({
         userId,
         estimatedCredits: estimateTtsCreditCost('openai', TTS_MODEL, text.length),
         featureLabel: 'voice preview',
+        billingOrganizationId,
       });
     } catch (error) {
       if (error instanceof InsufficientCreditsPreflightError) {
@@ -97,6 +100,7 @@ const handler = baseApi().post(async (req, res) => {
         vendor: 'openai',
         model: TTS_MODEL,
         characters: text.length,
+        billingOrganizationId,
         logger: req.logger,
       });
     }

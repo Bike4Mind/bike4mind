@@ -7,6 +7,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { insufficientCreditsError } from '@bike4mind/common';
+import { usdToCredits } from '@bike4mind/utils';
 
 const m = vi.hoisted(() => ({
   enforce: true,
@@ -16,6 +17,7 @@ const m = vi.hoisted(() => ({
   settle: vi.fn(),
   complete: vi.fn(),
   cached: vi.fn(),
+  canThink: false,
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -85,7 +87,17 @@ vi.mock('@server/billing/meterPlatformCompletion', async importOriginal => {
 });
 
 const MODEL = { id: 'ops-model', backend: 'openai', pricing: { 200_000: { input: 1e-6, output: 2e-6 } } };
-vi.mock('@bike4mind/llm-adapters', () => ({ getAvailableModels: async () => [MODEL] }));
+vi.mock('@bike4mind/llm-adapters', async () => {
+  const { geminiThinkingOutputCap, usesGeminiThinkingOutputCap } =
+    await import('../../../../../../b4m-core/llm-adapters/src/thinkingParams');
+  return {
+    geminiThinkingOutputCap,
+    usesGeminiThinkingOutputCap,
+    getAvailableModels: async () => [
+      m.canThink ? { ...MODEL, backend: 'gemini', can_think: true, max_tokens: 20000 } : MODEL,
+    ],
+  };
+});
 // The classifier is the provider seam here: m.complete stands in for the whole cascade.
 vi.mock('@bike4mind/services/llm/intentClassifier', () => ({
   // An empty cascade is the route's cache-only probe; m.cached answers it, as the real cache would.
@@ -116,6 +128,7 @@ async function call() {
 beforeEach(() => {
   vi.clearAllMocks();
   m.enforce = true;
+  m.canThink = false;
   m.hold.mockResolvedValue({ ownerId: 'u1', ownerType: 'user', reservedCredits: 50 });
   m.settleHold.mockImplementation(async (_hold, credits: number) => credits);
   m.cached.mockRejectedValue(new Error('intentClassifier: cascade is empty'));
@@ -176,6 +189,15 @@ describe('POST /api/ai/classify-intent metering', () => {
     expect(m.settle).toHaveBeenCalledWith(
       expect.objectContaining({ usd: expect.closeTo(1000 * 1e-6 + 300 * 2e-6, 12) })
     );
+  });
+
+  it('reserves Gemini thinking headroom for every classifier attempt', async () => {
+    m.canThink = true;
+
+    await call();
+
+    const perAttemptUsd = 1000 * 1e-6 + (300 + 16000) * 2e-6;
+    expect(m.hold.mock.calls[0][0].requiredCredits).toBeCloseTo(usdToCredits(perAttemptUsd * 2), 12);
   });
 
   it('refunds the hold when the provider throws', async () => {

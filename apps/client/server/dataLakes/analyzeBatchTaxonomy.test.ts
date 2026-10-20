@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { BadRequestError, ForbiddenError } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   setTaxonomyStatusIfActive: vi.fn(),
@@ -10,10 +11,11 @@ const h = vi.hoisted(() => ({
   meter: vi.fn(),
   requestMeter: vi.fn(),
   createRequestCompletionMeter: vi.fn(),
+  batchFindById: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
-  dataLakeBatchRepository: { setTaxonomyStatusIfActive: h.setTaxonomyStatusIfActive },
+  dataLakeBatchRepository: { setTaxonomyStatusIfActive: h.setTaxonomyStatusIfActive, findById: h.batchFindById },
   dataLakeRepository: { findById: h.lakeFindById },
   fabFileRepository: { findByBatchId: h.fabFindByBatchId },
   apiKeyRepository: {},
@@ -40,6 +42,7 @@ const logger = { error: vi.fn(), warn: vi.fn() };
 describe('analyzeBatchTaxonomy', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    h.batchFindById.mockResolvedValue({ id: 'b1' });
     h.sendToClient.mockResolvedValue(undefined);
     h.fabFindByBatchId.mockResolvedValue([{ relativePath: 'legal/a.pdf', fileName: 'a.pdf', fileSize: 10 }]);
     h.lakeFindById.mockResolvedValue({ id: 'lake1', fileTagPrefix: 'acme:' });
@@ -286,4 +289,62 @@ describe('analyzeBatchTaxonomy', () => {
     expect(h.requestMeter).toHaveBeenCalled();
     expect(h.meter).not.toHaveBeenCalled();
   });
+
+  it.each(['orgB', null])(
+    'keeps the upload payer %s for queued analysis rather than the current seat',
+    async organizationId => {
+      h.batchFindById.mockResolvedValue({
+        id: 'b1',
+        taxonomyBilling: { organizationId, apiKeyId: 'key1', source: 'cli' },
+      });
+      h.createRequestCompletionMeter.mockReturnValue(h.requestMeter);
+      h.setTaxonomyStatusIfActive.mockResolvedValue({ id: 'b1' });
+
+      await analyzeBatchTaxonomy('b1', 'lake1', 'u1', logger as never, { from: ['queued'] });
+      await h.runTaxonomyInference.mock.calls[0][2].reserve([], 10);
+
+      expect(h.createRequestCompletionMeter).toHaveBeenCalledWith(
+        expect.objectContaining({
+          user: { id: 'u1' },
+          usageSource: 'cli',
+          apiKeyInfo: {
+            keyId: 'key1',
+            billingOwnerType: organizationId ? 'Organization' : 'User',
+            organizationId: organizationId ?? undefined,
+          },
+        }),
+        'data lake taxonomy',
+        { systemModel: true, organizationId }
+      );
+      expect(h.requestMeter).toHaveBeenCalled();
+      expect(h.meter).not.toHaveBeenCalled();
+    }
+  );
+
+  it('uses the current re-analyze requester instead of the upload snapshot', async () => {
+    h.batchFindById.mockResolvedValue({ taxonomyBilling: { organizationId: 'oldOrg' } });
+    h.createRequestCompletionMeter.mockReturnValue(h.requestMeter);
+    h.setTaxonomyStatusIfActive.mockResolvedValue({ id: 'b1' });
+    const req = { user: { id: 'u2' }, headers: {} };
+
+    await analyzeBatchTaxonomy('b1', 'lake1', 'u2', logger as never, { claimHeldByCaller: true, req: req as never });
+
+    expect(h.batchFindById).not.toHaveBeenCalled();
+    expect(h.createRequestCompletionMeter).toHaveBeenCalledWith(req, 'data lake taxonomy', { systemModel: true });
+  });
+
+  it.each([new BadRequestError('Key holder left the org'), new ForbiddenError('Model is unavailable')])(
+    'records a permanent billing refusal as failed instead of retrying it: %s',
+    async error => {
+      h.setTaxonomyStatusIfActive.mockResolvedValue({ id: 'b1' });
+      h.runTaxonomyInference.mockRejectedValue(error);
+
+      await expect(
+        analyzeBatchTaxonomy('b1', 'lake1', 'u1', logger as never, { from: ['queued'] })
+      ).resolves.toMatchObject({ outcome: 'failed', error: error.message });
+      expect(h.setTaxonomyStatusIfActive).toHaveBeenLastCalledWith('b1', ['analyzing'], 'failed', {
+        taxonomyError: error.message,
+      });
+    }
+  );
 });

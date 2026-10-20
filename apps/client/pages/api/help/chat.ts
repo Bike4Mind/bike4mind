@@ -180,6 +180,14 @@ const handler = baseApi()
       let responseText = '';
       let relevantArticles: RelevantArticle[];
       const usage: CompletionUsage = {};
+      const settleUsage = (usd: number) =>
+        settleCompletion(reservation, req, {
+          model: modelInfo.id,
+          provider: modelInfo.backend,
+          usd,
+          inputTokens: usage.inputTokens ?? 0,
+          outputTokens: usage.outputTokens ?? 0,
+        });
       try {
         // Retrieve relevant documentation (vector search -> keyword fallback) and wrap it in the
         // help-assistant system prompt.
@@ -252,19 +260,18 @@ const handler = baseApi()
           }
         );
       } catch (error) {
-        await reservation.refund();
+        // A stream can report billable usage before a later provider failure.
+        if (usage.inputTokens || usage.outputTokens || usage.turnUsage?.length) {
+          await settleUsage(completionUsd(modelInfo, usage));
+        } else {
+          await reservation.refund();
+        }
         throw error;
       }
 
       // An adapter that reports no usage is charged the reservation ceiling rather than nothing.
       const reported = Boolean(usage.inputTokens || usage.outputTokens || usage.turnUsage?.length);
-      await settleCompletion(reservation, req, {
-        model: modelInfo.id,
-        provider: modelInfo.backend,
-        usd: reported ? completionUsd(modelInfo, usage) : ceilingUsd,
-        inputTokens: usage.inputTokens ?? 0,
-        outputTokens: usage.outputTokens ?? 0,
-      });
+      await settleUsage(reported ? completionUsd(modelInfo, usage) : ceilingUsd);
 
       const latency = Date.now() - startTime;
       req.logger.info(`[HelpChat] Completed in ${latency}ms`);

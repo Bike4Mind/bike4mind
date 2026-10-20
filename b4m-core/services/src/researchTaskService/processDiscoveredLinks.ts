@@ -6,6 +6,7 @@ import {
   IResearchTaskRepository,
   ResearchTaskStatus,
   ResearchTaskType,
+  getQuestErrorCode,
 } from '@bike4mind/common';
 import { NotFoundError, secureParameters, UnprocessableEntityError, FunctionQueueRunner } from '@bike4mind/utils';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
@@ -82,8 +83,10 @@ export const processDiscoveredLinks = async (
   });
 
   const totalPendingLinks = researchTask.discoveredLinks?.filter(l => l.status === 'pending').length || 0;
+  let creditRefusal: unknown;
 
   const processLinks = async (url: string, urlIndex: number) => {
+    if (creditRefusal) throw creditRefusal;
     const links = researchTask.discoveredLinks?.filter(l => l.status === 'pending' && l.sourceUrl === url);
 
     if (!links || links.length === 0) return;
@@ -152,9 +155,10 @@ export const processDiscoveredLinks = async (
       0
     );
 
-    await Promise.allSettled(
+    const batchResults = await Promise.allSettled(
       batches.map((batch, batchIndex) =>
         concurrencyLimit(async () => {
+          if (creditRefusal) throw creditRefusal;
           const index = batchIndex + 1;
           logger?.info(`** RUNNING BATCH ${index}/${batches.length}**`);
 
@@ -169,6 +173,7 @@ export const processDiscoveredLinks = async (
 
           let retry = 0;
           while (retry < 2) {
+            if (creditRefusal) throw creditRefusal;
             try {
               const linkExtractionPrompt: IMessage[] = [
                 {
@@ -287,6 +292,12 @@ export const processDiscoveredLinks = async (
 
               break;
             } catch (e) {
+              // A credit refusal is about the owner, not the links. Preserve them for a later run
+              // and let the queue handler fail the task rather than retrying each unpaid batch.
+              if (getQuestErrorCode(e) === 'insufficient_credits') {
+                creditRefusal = e;
+                throw e;
+              }
               retry += 1;
               logger?.info(`RETRY: Failed to extract links for batch ${index}/${batches.length}`);
 
@@ -327,6 +338,12 @@ export const processDiscoveredLinks = async (
       )
     );
 
+    for (const result of batchResults) {
+      if (result.status === 'rejected' && getQuestErrorCode(result.reason) === 'insufficient_credits') {
+        throw result.reason;
+      }
+    }
+
     logger?.info(`***OVERALL TOTAL LINKS EXTRACTED: ${stats.updated}/${links.length}***`);
     if (stats.failed > 0) {
       logger?.warn(`***OVERALL TOTAL LINKS FAILED: ${stats.failed}/${links.length}***`);
@@ -355,6 +372,13 @@ export const processDiscoveredLinks = async (
 
     await jobs.researchTasks.downloadRelevantLinks(id, researchTask.userId);
   } catch (e) {
+    await queueRunner.close();
+    // Keep completed, paid batches when another batch is refused, so retrying the task does not
+    // pay for those batches again. The queue handler owns the task's credit-refusal failure state.
+    if (getQuestErrorCode(e) === 'insufficient_credits') {
+      await db.researchTasks.update({ id: researchTask.id, discoveredLinks: researchTask.discoveredLinks });
+      throw e;
+    }
     if (e instanceof NotFoundError || e instanceof UnprocessableEntityError) {
       researchTask.status = ResearchTaskStatus.FAILED;
       researchTask.statusFailedMessage = e.message;

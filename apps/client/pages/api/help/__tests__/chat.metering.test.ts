@@ -150,6 +150,26 @@ describe('POST /api/help/chat metering', () => {
     expect(m.settleHold).not.toHaveBeenCalled();
   });
 
+  it('settles reported usage when a stream fails after generation starts', async () => {
+    m.complete.mockImplementation(async (_model, _messages, _opts, callback) => {
+      await callback(['Partial answer'], { inputTokens: 200, outputTokens: 10 });
+      throw new Error('stream disconnected');
+    });
+
+    const res = await call();
+
+    expect(res._getStatusCode()).toBe(500);
+    expect(m.release).not.toHaveBeenCalled();
+    expect(m.settleHold).toHaveBeenCalledOnce();
+    expect(m.settle).toHaveBeenCalledExactlyOnceWith({
+      model: 'ops-model',
+      provider: 'openai',
+      usd: expect.closeTo(200 * 1e-6 + 10 * 2e-6, 12),
+      inputTokens: 200,
+      outputTokens: 10,
+    });
+  });
+
   it('runs without any hold when credits are not enforced', async () => {
     m.enforce = false;
 

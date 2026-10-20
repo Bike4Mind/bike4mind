@@ -11,7 +11,7 @@ import {
   type IntentClassifierCallUsage,
 } from '@bike4mind/services/llm/intentClassifier';
 import { getSettingsByNames } from '@bike4mind/utils';
-import { getAvailableModels } from '@bike4mind/llm-adapters';
+import { geminiThinkingOutputCap, getAvailableModels, usesGeminiThinkingOutputCap } from '@bike4mind/llm-adapters';
 import { IntentClassifierConfigSchema } from '@bike4mind/common';
 import {
   completionCeilingUsd,
@@ -101,9 +101,12 @@ const handler = baseApi()
     const messages = buildIntentClassifierMessages(input);
     const modelCeilingUsd = (modelId: string) => {
       const modelInfo = availableModels.find(m => m.id === modelId);
-      return modelInfo
-        ? completionCeilingUsd(modelInfo, messages, INTENT_CLASSIFIER_MAX_TOKENS) * INTENT_CLASSIFIER_CALLS_PER_MODEL
-        : 0;
+      if (!modelInfo) return 0;
+      // The Gemini adapter adds thinking headroom to the classifier's visible-output cap.
+      const heldMaxTokens = usesGeminiThinkingOutputCap(modelInfo)
+        ? geminiThinkingOutputCap(modelInfo, INTENT_CLASSIFIER_MAX_TOKENS).maxOutputTokens
+        : INTENT_CLASSIFIER_MAX_TOKENS;
+      return completionCeilingUsd(modelInfo, messages, heldMaxTokens) * INTENT_CLASSIFIER_CALLS_PER_MODEL;
     };
     const ceilingUsd = [classifierConfig.primaryModel, ...classifierConfig.fallbackModels].reduce(
       (sum, modelId) => sum + modelCeilingUsd(modelId),

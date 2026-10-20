@@ -108,6 +108,24 @@ describe('POST /api/lattice/chat metering', () => {
     expect(m.settle).not.toHaveBeenCalled();
   });
 
+  it('settles reported usage when a stream fails after generation starts', async () => {
+    m.complete.mockImplementation(async (_model, _messages, _opts, callback) => {
+      await callback(['Partial answer'], { inputTokens: 100, outputTokens: 50 });
+      throw new Error('stream disconnected');
+    });
+
+    await expect(call()).rejects.toThrow('stream disconnected');
+
+    expect(m.refund).not.toHaveBeenCalled();
+    expect(m.settle).toHaveBeenCalledExactlyOnceWith({
+      model: ChatModels.CLAUDE_4_6_SONNET,
+      provider: 'anthropic',
+      usd: 100 * 0.001 + 50 * 0.002,
+      inputTokens: 100,
+      outputTokens: 50,
+    });
+  });
+
   it('skips a preferred model the user is not admitted to', async () => {
     m.denied.add(ChatModels.CLAUDE_4_6_SONNET);
 

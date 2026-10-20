@@ -7,6 +7,7 @@ import {
   type IMessage,
   type IUserDocument,
   type ModelInfo,
+  type ApiKeyCompletionSource,
 } from '@bike4mind/common';
 import { adminSettingsRepository, organizationRepository, usageEventRepository } from '@bike4mind/database';
 import { estimateInputTokens } from '@bike4mind/services/cliCompletions';
@@ -42,6 +43,8 @@ import {
 export type MeteredRequest = Parameters<typeof reserveRequestCredits>[0]['req'] & {
   apiKeyInfo?: { keyId?: string };
   headers: IncomingHttpHeaders;
+  /** Captured source for asynchronous work whose original request is no longer available. */
+  usageSource?: ApiKeyCompletionSource;
 };
 
 /**
@@ -143,7 +146,7 @@ export async function settleCompletion(
   // Per call, never the session id: UsageEvent rollups group by requestId, so one id shared across a
   // session's calls would merge them.
   const requestId = randomUUID();
-  const source = req.apiKeyInfo ? resolveRequestUsageSource(req) : undefined;
+  const source = req.apiKeyInfo ? (req.usageSource ?? resolveRequestUsageSource(req)) : undefined;
   const creditsCharged = await reservation.settle(usdToCreditsStochastic(charge.usd), {
     type: 'completion_api_usage',
     sessionId: charge.sessionId ?? requestId,

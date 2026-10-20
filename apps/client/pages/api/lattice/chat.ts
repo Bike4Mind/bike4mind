@@ -385,6 +385,14 @@ const handler = baseApi({ auth: true }).post(
     let assistantMessage = '';
     let lastCompletionInfo: CompletionInfo | undefined;
     const usage: CompletionUsage = {};
+    const settleUsage = (usd: number) =>
+      settleCompletion(reservation, req, {
+        model: modelInfo.id,
+        provider: modelInfo.backend,
+        usd,
+        inputTokens: usage.inputTokens ?? 0,
+        outputTokens: usage.outputTokens ?? 0,
+      });
     try {
       await llm.complete(
         modelInfo.id,
@@ -407,20 +415,19 @@ const handler = baseApi({ auth: true }).post(
       );
     } catch (error) {
       logger.error('[Lattice Chat] LLM call failed:', error);
-      await reservation.refund();
+      // A stream can report billable usage before a later provider failure.
+      if (usage.inputTokens || usage.outputTokens || usage.turnUsage?.length) {
+        await settleUsage(completionUsd(modelInfo, usage));
+      } else {
+        await reservation.refund();
+      }
       throw error;
     }
 
     // An adapter that reports no usage is charged the reservation ceiling rather than nothing.
     const reported = Boolean(usage.inputTokens || usage.outputTokens || usage.turnUsage?.length);
     if (!reported) logger.warn(`[Lattice Chat] ${modelInfo.id} reported no usage; charging the reservation ceiling`);
-    await settleCompletion(reservation, req, {
-      model: modelInfo.id,
-      provider: modelInfo.backend,
-      usd: reported ? completionUsd(modelInfo, usage) : ceilingUsd,
-      inputTokens: usage.inputTokens ?? 0,
-      outputTokens: usage.outputTokens ?? 0,
-    });
+    await settleUsage(reported ? completionUsd(modelInfo, usage) : ceilingUsd);
 
     const toolCalls: Array<{
       id: string;
