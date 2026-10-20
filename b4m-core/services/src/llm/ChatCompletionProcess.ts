@@ -132,6 +132,7 @@ import { buildToolEchoSources } from './toolEchoSources';
 import { appendStreamedChunk, shouldStampFirstVisibleToken } from './streamedReplyAccumulator';
 import { buildSystemPromptSourceFiles } from './buildSystemPromptSourceFiles';
 import { resolveCorrectionContext } from './buildCorrectionContext';
+import { resolveDataSourceStatus } from './dataSourceStatus';
 import { scrubMissingKnowledgeIds } from '../sessionService/scrubMissingKnowledgeIds';
 import { LATTICE_TOOL_NAMES } from './tools';
 import { createWebSearchBudget, MAX_WEB_SEARCHES_PER_TURN } from './tools/implementation/websearch';
@@ -2996,7 +2997,17 @@ export class ChatCompletionProcess {
 
       // Step 3: Fetching and Converting Fab Files (Feature contexts already loaded above)
       timer.phase('data_sources');
-      this.sendStatusUpdate(quest, 'Gathering data sources...', { statusAt: new Date() });
+      this.sendStatusUpdate(
+        quest,
+        resolveDataSourceStatus({
+          message,
+          sessionFabFileIds,
+          messageFileIds,
+          knowledgeIds: session.knowledgeIds,
+          forceKnowledgeRetrieval: forcedRetrievalEnabled,
+        }),
+        { statusAt: new Date() }
+      );
       // Input-window limits, needed BEFORE building messages because the amount of
       // attached-file content we extract has to be derived from them.
       const contextLimit = effectiveContextWindow(modelInfo);
