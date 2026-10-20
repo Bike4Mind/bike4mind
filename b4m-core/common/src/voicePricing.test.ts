@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { CREDITS_PER_USD_COST, usdToCredits } from './pricing';
 import { computeTtsUsd, estimateTtsCreditCost, ttsUsdPer1kChars } from './voicePricing';
 
 describe('ttsUsdPer1kChars', () => {
@@ -47,5 +48,12 @@ describe('estimateTtsCreditCost', () => {
 
   it('never estimates below the 1-credit floor for non-empty input', () => {
     expect(estimateTtsCreditCost('openai', 'tts-1', 1)).toBeGreaterThanOrEqual(1);
+  });
+
+  it('stays the rounded-up gate figure, never below the exact credits the final debit draws on', () => {
+    // 7 chars at $0.015 per 1k: 0.21 credits at the default rate.
+    const usd = computeTtsUsd('openai', 'tts-1', 7);
+    expect(estimateTtsCreditCost('openai', 'tts-1', 7)).toBe(usdToCredits(usd));
+    expect(estimateTtsCreditCost('openai', 'tts-1', 7)).toBeGreaterThan(usd * CREDITS_PER_USD_COST);
   });
 });
