@@ -96,6 +96,11 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
+# Figures are captured after the run, so the plt.show() a script ends with is not a mistake
+# here - without this, its Agg warning is all the stderr a plotting script produces.
+import warnings
+warnings.filterwarnings('ignore', message='.*non-GUI backend.*')
+
 def _capture_plot():
     """Capture current matplotlib figure as base64 PNG"""
     import base64
@@ -258,11 +263,12 @@ _result
         error: string | null;
       };
 
-      const hasError = resultObj.error || resultObj.stderr;
+      // Only an exception fails a run. Stderr alone is warnings and diagnostics, so it reads
+      // as output after stdout rather than turning a working script into an error.
       const executionResult: ExecutionResult = {
-        success: !hasError,
-        output: resultObj.stdout || '',
-        error: resultObj.error || resultObj.stderr || undefined,
+        success: !resultObj.error,
+        output: (resultObj.stdout || '') + (resultObj.stderr || ''),
+        error: resultObj.error || undefined,
         plots: resultObj.plots || [],
         executionTime: performance.now() - startTime,
       };

@@ -133,6 +133,36 @@ describe('pyodideSandboxWorkerBody package loading', () => {
     expect(install).toHaveBeenCalledWith('scikit-learn');
   });
 
+  it('reports a run that only wrote to stderr as a success, with stderr as output', async () => {
+    const { posted, pyodide, send } = startWorker();
+    await send({ type: 'initialize' });
+    pyodide.runPythonAsync.mockResolvedValueOnce({
+      toJs: () => ({ stdout: 'ok\n', stderr: 'DeprecationWarning: x\n', plots: [], error: null }),
+    });
+
+    await send({ type: 'execute', code: 'print(1)', packages: [], timeoutMs: 1000 });
+
+    expect(posted.at(-1)).toMatchObject({
+      type: 'result',
+      result: { success: true, output: 'ok\nDeprecationWarning: x\n', error: undefined },
+    });
+  });
+
+  it('reports a raised exception as a failure', async () => {
+    const { posted, pyodide, send } = startWorker();
+    await send({ type: 'initialize' });
+    pyodide.runPythonAsync.mockResolvedValueOnce({
+      toJs: () => ({ stdout: '', stderr: '', plots: [], error: 'Traceback ... ZeroDivisionError' }),
+    });
+
+    await send({ type: 'execute', code: '1/0', packages: [], timeoutMs: 1000 });
+
+    expect(posted.at(-1)).toMatchObject({
+      type: 'result',
+      result: { success: false, error: 'Traceback ... ZeroDivisionError' },
+    });
+  });
+
   it('still runs the code when the import scan fails', async () => {
     const { posted, pyodide, send } = startWorker();
     await send({ type: 'initialize' });
