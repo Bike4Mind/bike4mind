@@ -153,7 +153,7 @@ describe('POST /api/admin/organizations/[id]/top-up', () => {
 
 describe('POST /api/admin/organizations/[id]/top-up credit kind', () => {
   const body = { credits: 100, idempotencyKey: 'idem-key-12345' };
-  const dedupeKey = 'admin_top_up_org-1_idem-key-12345';
+  const dedupeKey = 'admin_topup_org-1_idem-key-12345';
   const refundKey = 'admin_refund_org-1_idem-key-12345';
 
   beforeEach(() => {

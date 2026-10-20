@@ -50,8 +50,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
     const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
     const isRefund = kind === 'refund';
     // The key is scoped to the kind: a top-up dedupes on stripePaymentIntentId and a refund on
-    // transactionId, so a key reused across kinds would slip past both.
-    const dedupeKey = `admin_${kind}_${id}_${idempotencyKey}`;
+    // transactionId, so a key reused across kinds would slip past both. Top-ups keep the
+    // `admin_topup_` infix so keys written before refunds existed still dedupe.
+    const dedupeKey = `admin_${isRefund ? 'refund' : 'topup'}_${id}_${idempotencyKey}`;
 
     const organization = await organizationRepository.findById(id);
     if (!organization) throw new NotFoundError('Organization not found');
