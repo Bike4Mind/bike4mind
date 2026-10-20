@@ -279,7 +279,8 @@ const McpServerForm = () => {
 
 const AdminSettingsTab: React.FC = () => {
   const { section, setSection, searchTerm, setSearchTerm } = useAdminSettingsSearchParams();
-  // Widened so the MCP pseudo-tab checks below still type-check against the SETTING_TABS keys.
+  // Widened for the legacy 'MCP' pseudo-tab checks below: SETTING_TABS has no MCP entry, so they
+  // never match and renderMcpContent is unreachable.
   const activeTab: string = section;
   const [allTabs, setAllTabs] = useState<boolean>(false);
   const settingsFromServer = useSettingsFromServer();
