@@ -300,7 +300,10 @@ describe('SkillMarket', () => {
         fields: { name: 'guide' },
       });
       expect(localSkill).toHaveBeenCalledWith('s1', 'guide');
-      expect(await market.readLocalSkill({ sessionId: 's1', name: 'acct' })).toMatchObject({ ok: false });
+      expect(await market.readLocalSkill({ sessionId: 's1', name: 'acct' })).toMatchObject({
+        ok: false,
+        error: 'That skill is not a file on this machine.',
+      });
       expect(await market.readLocalSkill({ sessionId: 's1', name: 'nope', filePath: file } as never)).toMatchObject({
         ok: false,
         error: 'That skill is not a file on this machine.',
@@ -490,6 +493,43 @@ describe('SkillMarket', () => {
         code: 'exact_content',
       });
       expect(put).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses a new version for a listing that is not the caller's", async () => {
+      get.mockResolvedValue(mineBody([{ id: 'other', name: 'x', sourceSkillId: 'src', status: 'approved' }]));
+      expect(await market.submitVersion({ listingId: 'l1', fields: FIELDS })).toEqual({
+        ok: false,
+        error: 'That listing is not one of yours.',
+      });
+      expect(put).not.toHaveBeenCalled();
+      expect(post).not.toHaveBeenCalled();
+    });
+
+    it('reports a failed skill PUT without posting a version', async () => {
+      get.mockResolvedValue(mineBody([{ id: 'l1', name: 'x', sourceSkillId: 'src', status: 'approved' }]));
+      put.mockRejectedValueOnce(httpError(400, { error: 'Skill body is required' }));
+      const result = await market.submitVersion({ listingId: 'l1', fields: FIELDS });
+      expect(result).toMatchObject({ ok: false, error: 'Skill body is required' });
+      expect(result).not.toHaveProperty('skillUpdated');
+      expect(post).not.toHaveBeenCalled();
+    });
+
+    it("surfaces a failed listings read instead of claiming the listing is not the caller's", async () => {
+      get.mockRejectedValueOnce(httpError(500));
+      const result = await market.submitVersion({ listingId: 'l1', fields: FIELDS });
+      expect(result).toMatchObject({ ok: false });
+      expect(result).not.toEqual({ ok: false, error: 'That listing is not one of yours.' });
+      expect(put).not.toHaveBeenCalled();
+      expect(post).not.toHaveBeenCalled();
+    });
+
+    it('refuses a new version for a withdrawn listing before touching the skill', async () => {
+      get.mockResolvedValue(mineBody([{ id: 'l1', name: 'x', sourceSkillId: 'src', status: 'withdrawn' }]));
+      expect(await market.submitVersion({ listingId: 'l1', fields: FIELDS })).toEqual({
+        ok: false,
+        error: 'That listing no longer accepts new versions.',
+      });
+      expect(put).not.toHaveBeenCalled();
     });
 
     it('withdraws with a DELETE and passes a 409 through', async () => {

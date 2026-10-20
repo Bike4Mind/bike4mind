@@ -313,8 +313,13 @@ export class SkillMarket {
 
     let skillUpdated = false;
     if (fields) {
-      const listing = (await this.mineRows()).find(row => row.id === request.listingId);
+      const read = await this.get(`${MARKET}/mine`);
+      if ('error' in read) return { ok: false, error: read.error };
+      const listing = asArray(asRecord(read.data)?.data)
+        .map(asRecord)
+        .find(row => row?.id === request.listingId);
       if (typeof listing?.sourceSkillId !== 'string') return { ok: false, error: 'That listing is not one of yours.' };
+      if (!isOpen(listing.status)) return { ok: false, error: 'That listing no longer accepts new versions.' };
       const put = await this.send('put', `/api/skills/${encodeURIComponent(listing.sourceSkillId)}`, fields);
       if ('error' in put) return failure(put);
       skillUpdated = true;
