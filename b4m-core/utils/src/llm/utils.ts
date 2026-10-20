@@ -652,7 +652,10 @@ export async function fetchAndProcessPreviousMessages(
       fetchTime?: number;
       itemCount?: number;
       oldestIncludedQuestId?: string | null;
-      /** Older turns dropped from the verbatim window by verbatimTokenBudget (0 when none). */
+      /**
+       * Older turns verbatimTokenBudget leaves out of the window (0 when none). Reported before the
+       * cache-grid snap, so the snap cannot hide token pressure from summarization.
+       */
       excludedOlderQuestCount?: number;
       /** Recently generated images (bare storage keys + originating prompt), newest first. */
       recentGeneratedImages?: { key: string; prompt: string }[];
@@ -772,14 +775,24 @@ export async function fetchAndProcessPreviousMessages(
       // Snap the window start to the same step grid the count window uses. The budget is sized from
       // this turn's message and tool list, so it moves every turn; left unaligned, this trim slides
       // the window start one quest per turn and busts the cache in exactly the long sessions the
-      // alignment above exists for. Snapped DOWN, so the window holds up to a step's worth of turns
-      // more than the budget estimated rather than dropping the turns the budget would keep - the
-      // end of the window is fixed at the newest quest, so rounding up can empty it outright.
+      // alignment above exists for. Prefer the next grid point at or above the trim, so the window
+      // never holds more than the budget estimated; fall back to the one below only when stepping up
+      // would drop the newest turn (the end of the window is fixed at the newest quest).
+      const rawTrim = keepFromIndex;
       if (windowStartIndex !== null) {
         const step = historyWindowStep(limit);
-        keepFromIndex = Math.floor((windowStartIndex + keepFromIndex) / step) * step - windowStartIndex;
+        const absoluteStart = windowStartIndex + rawTrim;
+        const snappedUp = Math.ceil(absoluteStart / step) * step - windowStartIndex;
+        keepFromIndex =
+          snappedUp <= chatHistoryItems.length - 1
+            ? snappedUp
+            : Math.max(0, Math.floor(absoluteStart / step) * step - windowStartIndex);
       }
-      excludedOlderQuestCount = keepFromIndex;
+      // Report the pre-snap trim. Snapping down can erase the trim outright - a session with fewer
+      // than `step` heavy quests leaves it at 0, and a summary boundary off the grid can push it
+      // negative - and a 0 here reads downstream as "no token pressure", so summarization would
+      // never fire for exactly the short, heavy sessions this trim exists for.
+      excludedOlderQuestCount = Math.max(rawTrim, keepFromIndex);
       chatHistoryItems.splice(0, keepFromIndex);
     }
   }

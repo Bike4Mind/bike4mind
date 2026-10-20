@@ -4558,7 +4558,7 @@ describe('history window alignment', () => {
       expect(meta.oldestIncludedQuestId).toBe(makeItem(4).id);
     });
 
-    it('rounds a binding token budget up to the same step grid as the count window', async () => {
+    it('snaps a binding token budget to the same step grid as the count window', async () => {
       // ~400 estimated tokens per quest, so a 1200-token budget keeps about three of them.
       const longItem = (n: number) => ({ ...makeItem(n), prompt: 'p'.repeat(700), reply: 'r'.repeat(700) });
       const starts: number[] = [];
@@ -4577,9 +4577,69 @@ describe('history window alignment', () => {
       }
 
       // A budget that binds moves by one quest a turn, so an unaligned trim would slide the window
-      // (and rewrite the prompt prefix) on every turn. Rounded up, the start holds between boundaries.
+      // (and rewrite the prompt prefix) on every turn. Snapped to the grid, the start holds between
+      // boundaries.
       for (const start of starts) expect(start % STEP).toBe(0);
       expect(new Set(starts).size).toBeLessThan(starts.length);
+    });
+
+    it('still reports excluded turns when the grid has no point inside a small trim', async () => {
+      // Five heavy quests, fewer than one step: the trim wants to drop four, but the only grid
+      // points are 0 and 10, and 10 would drop the newest turn. The window stays unaligned, but the
+      // excluded count must survive or summarization never fires for a short, heavy session.
+      const heavyItem = (n: number) => ({
+        ...makeItem(n),
+        prompt: 'x'.repeat(4000),
+        reply: `reply ${n}`,
+        replies: [`reply ${n}`],
+      });
+      const all = [6, 5, 4, 3, 2, 1].map(heavyItem);
+
+      const [, count, meta] = await fetchAndProcessPreviousMessages(makeSession(), LIMIT, {
+        db: {
+          quests: {
+            getMostRecentChatHistory: async (_sessionId: string, limit: number) => all.slice(-limit).reverse(),
+            countBySessionId: async () => all.length,
+          },
+        },
+        // ~1146 tokens per quest: fits the newest turn only.
+        verbatimTokenBudget: 1500,
+      });
+
+      expect(meta.excludedOlderQuestCount).toBe(4);
+      expect(count).toBeGreaterThan(1);
+    });
+
+    it('clamps the snapped trim when the summary boundary is off the step grid', async () => {
+      // Fifteen heavy quests, summary covering the first three: after the filter the window starts at
+      // absolute index 3, so the trim at absolute index 7 sits between grid points. Snapping down
+      // would land below the window start; the trim must snap up instead and never go negative.
+      const heavyItem = (n: number) => ({
+        ...makeItem(n),
+        prompt: 'x'.repeat(4000),
+        reply: `reply ${n}`,
+        replies: [`reply ${n}`],
+      });
+      const all = Array.from({ length: 16 }, (_, i) => heavyItem(i + 1));
+
+      const [, count, meta] = await fetchAndProcessPreviousMessages(
+        makeSession({ contextSummaryUpToQuestId: makeItem(3).id }),
+        LIMIT,
+        {
+          db: {
+            quests: {
+              getMostRecentChatHistory: async (_sessionId: string, limit: number) => all.slice(-limit).reverse(),
+              countBySessionId: async () => all.length,
+            },
+          },
+          // ~1146 tokens per quest: fits eight of the twelve in the window.
+          verbatimTokenBudget: 10_000,
+        }
+      );
+
+      expect(meta.excludedOlderQuestCount).toBeGreaterThan(0);
+      expect(count).toBeLessThan(12);
+      expect(meta.oldestIncludedQuestId).toBe(makeItem(11).id);
     });
 
     describe('with a context summary', () => {
