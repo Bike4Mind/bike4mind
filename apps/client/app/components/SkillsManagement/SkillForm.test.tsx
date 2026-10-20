@@ -76,6 +76,8 @@ describe('SkillForm SKILL.md import', () => {
     const alert = screen.getByTestId('skill-form-import-from-b4m');
     expect(alert.querySelector('a')).toBeNull();
     expect(alert).toHaveTextContent('https://evil.example/x');
+    expect(alert).toHaveTextContent('source stamp from another site');
+    expect(alert).not.toHaveTextContent('exported from Bike4Mind');
     expect(alert).not.toHaveTextContent('came from Bike4Mind');
   });
 
