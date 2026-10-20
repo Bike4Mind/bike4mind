@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { MAX_TOOL_CALLS_CEILING } from '@bike4mind/common';
 import { snipSession } from './snip';
 
 describe('snipSession', () => {
@@ -104,6 +105,22 @@ describe('snipSession', () => {
     expect(db.sessions.create).toHaveBeenCalledWith(
       expect.objectContaining({ systemPromptText: 'Answer like a pirate.', temperature: 0.2, maxToolCalls: 7 })
     );
+  });
+
+  it('clamps a stored maxToolCalls past MAX_TOOL_CALLS_CEILING instead of failing the snip', async () => {
+    const { db } = makeAdapters();
+    db.sessions.findByIdAndUserId.mockResolvedValueOnce({
+      id: 'session-1',
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      maxToolCalls: 1000,
+    });
+    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+
+    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+
+    expect(db.sessions.create.mock.calls[0][0].maxToolCalls).toBe(MAX_TOOL_CALLS_CEILING);
   });
 
   // Create-only (not in SessionUpdateRequestSchema), so a snip that drops them can never get them back.

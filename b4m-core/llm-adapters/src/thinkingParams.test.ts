@@ -79,6 +79,12 @@ describe('buildThinkingParams', () => {
       expect(result.maxTokens).toBe(17000);
     });
 
+    it('clamps a budget past MAX_THINKING_BUDGET_TOKENS, so it cannot raise max_tokens past that ceiling', () => {
+      const result = buildThinkingParams(ChatModels.CLAUDE_4_6_OPUS, legacyModel, 10_000_000, 4096);
+      expect(result.thinkingConfig.thinking).toEqual({ type: 'enabled', budget_tokens: 32_000 });
+      expect(result.maxTokens).toBe(33_000);
+    });
+
     it('keeps caller max_tokens when already larger than budget + 1000', () => {
       const result = buildThinkingParams(ChatModels.CLAUDE_4_6_OPUS, legacyModel, 8000, 32000);
       expect(result.maxTokens).toBe(32000);

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { MAX_THINKING_BUDGET_TOKENS } from '../constants/llmLimits';
 // Specific file, not the `../types` barrel - this module is imported by
 // completions.contract.ts, which must stay off the barrel (see the note there).
 import { QUEST_ERROR_CODES } from '../types/entities/SessionTypes';
@@ -175,11 +176,11 @@ export const CompletionRequestSchema = z.object({
         .object({
           enabled: z.boolean(),
           // 1024 is the smallest legacy thinking budget the Anthropic API accepts.
-          budget_tokens: z.number().int().min(1024).optional(),
+          budget_tokens: z.number().int().min(1024).max(MAX_THINKING_BUDGET_TOKENS).optional(),
         })
         .optional()
         .describe(
-          'Ask a model that can think to think on this turn. On Claude, `reasoningEffort` then sets how much it thinks, and `budget_tokens` (default 16000, minimum 1024) sizes thinking on older Claude models. Ignored by models that cannot think, and on the direct Anthropic API when a json_schema `response_format` is served by a forced tool, which cannot run alongside thinking.'
+          'Ask a model that can think to think on this turn. On Claude, `reasoningEffort` then sets how much it thinks, and `budget_tokens` (default 16000, minimum 1024, maximum 32000) sizes thinking on older Claude models. Ignored by models that cannot think, and on the direct Anthropic API when a json_schema `response_format` is served by a forced tool, which cannot run alongside thinking.'
         ),
     })
     .optional(),

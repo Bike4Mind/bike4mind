@@ -38,7 +38,12 @@ import {
 import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
 import type { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import { z } from 'zod';
-import { GenerateImageToolCallSchema, AudioGenerationToolCallSchema, PROMPT_TEXT_MAX } from '@bike4mind/common';
+import {
+  GenerateImageToolCallSchema,
+  AudioGenerationToolCallSchema,
+  MAX_THINKING_BUDGET_TOKENS,
+  PROMPT_TEXT_MAX,
+} from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 
 /**
@@ -109,7 +114,7 @@ const StartCommandSchema = BaseMessageSchema.extend({
       // can dial up to 32000 via the slider and Anthropic rejects (rather
       // than clamps) oversized budgets - keeping these in sync prevents
       // a silent `agent_error` toast for values the UI accepts.
-      budget_tokens: z.number().int().positive().max(32000).optional(),
+      budget_tokens: z.number().int().positive().max(MAX_THINKING_BUDGET_TOKENS).optional(),
     })
     .optional(),
   // Feature parity with chat_completion. When true, the executor

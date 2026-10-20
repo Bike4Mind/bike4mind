@@ -24,7 +24,10 @@ import type { DegenerateStreamGuardOptions } from './degenerateStreamGuard';
 import type { RecordableToolUse } from './recordToolResult';
 import type { DowngradedToolChoice } from './forcedToolChoice';
 
-/** Maximum number of recursive tool calls to prevent infinite loops */
+/**
+ * Maximum number of recursive tool calls to prevent infinite loops. A session may raise it up to
+ * MAX_TOOL_CALLS_CEILING (@bike4mind/common constants/llmLimits.ts).
+ */
 export const DEFAULT_MAX_TOOL_CALLS = 10;
 
 export interface ITokenizingBackend {}

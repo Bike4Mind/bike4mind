@@ -715,58 +715,72 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     await onChunk(text, info);
   };
 
+  // A Stop or client disconnect (res 'close' -> abort) that makes the adapter throw mid-stream still
+  // spent what it streamed: it settles below like an abort the adapter resolves on, and is rethrown
+  // once settled. Any other failure refunds the reservation here.
+  let abortError: unknown;
   try {
     await params.onReady?.();
     await llm.complete(model, messages, completionOptions, wrappedOnChunk);
   } catch (error) {
-    // If completion fails, refund the reserved credits to whichever pool paid
-    if (reservedCredits > 0) {
-      logger?.info?.(`[CLI_CREDITS] Completion failed, refunding ${reservedCredits} reserved credits`);
-      const refund = async () => {
-        await holderMethods.incrementCredits(holderId, reservedCredits);
-      };
-      if (params.creditHolds) await params.creditHolds.refund(refund);
-      else await refund();
+    if (params.abortSignal?.aborted && streamedOutputChars > 0) {
+      abortError = error;
+    } else {
+      // If completion fails, refund the reserved credits to whichever pool paid
+      if (reservedCredits > 0) {
+        logger?.info?.(`[CLI_CREDITS] Completion failed, refunding ${reservedCredits} reserved credits`);
+        const refund = async () => {
+          await holderMethods.incrementCredits(holderId, reservedCredits);
+        };
+        if (params.creditHolds) await params.creditHolds.refund(refund);
+        else await refund();
+      }
+      // The success-path settlement/metering below is now unreachable, so an
+      // alwaysRecordUsage caller (embed) would otherwise have NO ledger trace of a run
+      // the provider already partially billed - most visibly on a client disconnect
+      // (res 'close' -> abort -> AbortError here) before anything streamed. Record the partial spend
+      // as an errored event so org metering stays complete. creditsCharged is 0: the
+      // reservation was refunded above and nothing settled. Status 'error' (no 'aborted'
+      // in USAGE_EVENT_STATUSES; a disconnect is an errored completion). A safety-classifier
+      // refusal is recorded as 'refusal' under the same gate as the settled success row
+      // (enforceCredits or alwaysRecordUsage), so Refusal Rate = refusals / calls stays unskewed;
+      // this path has no fallback loop, so the refused call is the whole request.
+      const isRefusal = error instanceof Error && isSafetyRefusalError(error);
+      const recordsUsage = enforceCredits || params.alwaysRecordUsage;
+      if (
+        modelInfo &&
+        ((isRefusal && recordsUsage) || (params.alwaysRecordUsage && (finalInputTokens > 0 || finalOutputTokens > 0)))
+      ) {
+        db.usageEvents
+          ?.record({
+            requestId: params.requestId ?? `completion-${apiKeyInfo?.keyId ?? userId}-${Date.now()}`,
+            userId,
+            ownerId: holderId,
+            ownerType: holderType,
+            feature: 'completion_api',
+            source,
+            apiKeyId: apiKeyInfo?.keyId,
+            provider: modelInfo.backend,
+            model,
+            inputTokens: finalInputTokens,
+            outputTokens: finalOutputTokens,
+            cachedInputTokens: finalCacheReadTokens,
+            cacheWriteTokens: finalCacheCreationTokens,
+            costUsd: settledUsdCost(modelInfo),
+            creditsCharged: 0,
+            status: isRefusal ? 'refusal' : 'error',
+            latencyMs: Date.now() - completionStartTime,
+          })
+          .catch(err => logger?.warn?.('Failed to record aborted usage event', err));
+      }
+      throw error;
     }
-    // The success-path settlement/metering below is now unreachable, so an
-    // alwaysRecordUsage caller (embed) would otherwise have NO ledger trace of a run
-    // the provider already partially billed - most visibly on a client disconnect
-    // (res 'close' -> abort -> AbortError here) mid tool-loop. Record the partial spend
-    // as an errored event so org metering stays complete. creditsCharged is 0: the
-    // reservation was refunded above and nothing settled. Status 'error' (no 'aborted'
-    // in USAGE_EVENT_STATUSES; a disconnect is an errored completion). A safety-classifier
-    // refusal is recorded as 'refusal' under the same gate as the settled success row
-    // (enforceCredits or alwaysRecordUsage), so Refusal Rate = refusals / calls stays unskewed;
-    // this path has no fallback loop, so the refused call is the whole request.
-    const isRefusal = error instanceof Error && isSafetyRefusalError(error);
-    const recordsUsage = enforceCredits || params.alwaysRecordUsage;
-    if (
-      modelInfo &&
-      ((isRefusal && recordsUsage) || (params.alwaysRecordUsage && (finalInputTokens > 0 || finalOutputTokens > 0)))
-    ) {
-      db.usageEvents
-        ?.record({
-          requestId: params.requestId ?? `completion-${apiKeyInfo?.keyId ?? userId}-${Date.now()}`,
-          userId,
-          ownerId: holderId,
-          ownerType: holderType,
-          feature: 'completion_api',
-          source,
-          apiKeyId: apiKeyInfo?.keyId,
-          provider: modelInfo.backend,
-          model,
-          inputTokens: finalInputTokens,
-          outputTokens: finalOutputTokens,
-          cachedInputTokens: finalCacheReadTokens,
-          cacheWriteTokens: finalCacheCreationTokens,
-          costUsd: settledUsdCost(modelInfo),
-          creditsCharged: 0,
-          status: isRefusal ? 'refusal' : 'error',
-          latencyMs: Date.now() - completionStartTime,
-        })
-        .catch(err => logger?.warn?.('Failed to record aborted usage event', err));
-    }
-    throw error;
+  }
+
+  // An abort that threw before any usage frame reported nothing: price its prompt on the local
+  // estimate, so the output estimate below has an input to go with.
+  if (abortError !== undefined && finalInputTokens + finalCacheReadTokens + finalCacheCreationTokens === 0) {
+    finalInputTokens = estimateInputTokens(messages);
   }
 
   // Any adapter reporting a prompt but 0 output on a Stop or degenerate abort lands here (today only
@@ -806,17 +820,18 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         `, $${finalUsdCost.toFixed(6)} USD)`
     );
 
-    // Send empty text with final credit info
-    await onChunk([], {
-      inputTokens: finalInputTokens,
-      outputTokens: finalOutputTokens,
-      ...(finalReasoningTokens !== undefined ? { reasoningTokens: finalReasoningTokens } : {}),
-      cacheReadInputTokens: finalCacheReadTokens || undefined,
-      cacheCreationInputTokens: finalCacheCreationTokens || undefined,
-      creditsUsed: finalCredits,
-      usdCost: finalUsdCost,
-      stopReason: finalStopReason,
-    });
+    // Send empty text with final credit info; an aborted caller is no longer listening.
+    if (abortError === undefined)
+      await onChunk([], {
+        inputTokens: finalInputTokens,
+        outputTokens: finalOutputTokens,
+        ...(finalReasoningTokens !== undefined ? { reasoningTokens: finalReasoningTokens } : {}),
+        cacheReadInputTokens: finalCacheReadTokens || undefined,
+        cacheCreationInputTokens: finalCacheCreationTokens || undefined,
+        creditsUsed: finalCredits,
+        usdCost: finalUsdCost,
+        stopReason: finalStopReason,
+      });
   } else {
     logger?.warn?.('[CLI_CREDITS] Cannot send credits - modelInfo is undefined');
   }
@@ -849,7 +864,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         // Same refund key the web chat path records: a stream aborted as degenerate is
         // priced normally (the provider tokens were spent) but must not read as a clean,
         // fully-valued success. See usageEventStatusForFinish.
-        status: usageEventStatusForFinish(finalStopReason),
+        status: abortError !== undefined ? 'error' : usageEventStatusForFinish(finalStopReason),
         latencyMs: Date.now() - completionStartTime,
       })
       .catch(err => logger?.warn?.('Failed to record usage event', err));
@@ -1062,4 +1077,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       .incrementSpend(keyId, finalCredits)
       .catch(err => logger?.warn?.('[CLI_CREDITS] Failed to increment per-key spend', { keyId, err }));
   }
+
+  // Settled and metered above; the caller still sees the abort it caused.
+  if (abortError !== undefined) throw abortError;
 }

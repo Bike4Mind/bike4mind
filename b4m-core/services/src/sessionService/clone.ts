@@ -7,6 +7,7 @@ import {
   rebindPromptMetaSession,
   redactPromptMetaForViewer,
   toPersistedSummaryTrigger,
+  MAX_TOOL_CALLS_CEILING,
 } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
 import { secureParameters } from '@bike4mind/utils';
@@ -74,7 +75,8 @@ export const cloneSession = async (
     citationStyle: session.citationStyle,
     // temperature and maxToolCalls are plain numeric tuning knobs, safe for a share holder to inherit.
     temperature: session.temperature,
-    maxToolCalls: session.maxToolCalls,
+    // A stored value can predate MAX_TOOL_CALLS_CEILING, which createSession enforces.
+    maxToolCalls: session.maxToolCalls && Math.min(session.maxToolCalls, MAX_TOOL_CALLS_CEILING),
     retrievalExcludeFilenameMarkers: session.retrievalExcludeFilenameMarkers,
     retrievalVectorizedOnly: session.retrievalVectorizedOnly,
     // Also outside the gate. disabledTools/disableUserIntegrations only restrict. enabledTools and
