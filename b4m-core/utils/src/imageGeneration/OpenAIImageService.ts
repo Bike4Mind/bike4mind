@@ -99,7 +99,23 @@ const truncatePromptForLog = (prompt: string): string => (prompt.length > 100 ? 
  */
 const CONTENT_POLICY_ERROR_CODES = ['moderation_blocked', 'content_policy_violation'];
 
-export function buildModerationBlockedError(error: InstanceType<typeof OpenAI.APIError>): Error | null {
+/**
+ * The provider refused the prompt on content-policy grounds. An expected, user-caused outcome:
+ * callers log it below error level so it does not page the on-call alert channel.
+ */
+export class ImageModerationBlockedError extends Error {
+  constructor(
+    message: string,
+    readonly requestId: string
+  ) {
+    super(message);
+    this.name = 'ImageModerationBlockedError';
+  }
+}
+
+export function buildModerationBlockedError(
+  error: InstanceType<typeof OpenAI.APIError>
+): ImageModerationBlockedError | null {
   const isModerationBlocked = typeof error.code === 'string' && CONTENT_POLICY_ERROR_CODES.includes(error.code);
   const isUnspecified400 = error.status === 400 && !error.code;
   if (!isModerationBlocked && !isUnspecified400) {
@@ -107,13 +123,14 @@ export function buildModerationBlockedError(error: InstanceType<typeof OpenAI.AP
   }
 
   const requestId = (error as { requestID?: string }).requestID || 'unknown';
-  return new Error(
+  return new ImageModerationBlockedError(
     `⚠️ Your image request was blocked by OpenAI's content policy. This can happen for various reasons:\n\n` +
       `1. The prompt may contain terms that trigger safety filters\n` +
       `2. Try rephrasing your prompt with more neutral language\n` +
       `3. Avoid potentially sensitive topics or explicit content\n\n` +
       `Tip: Switch to an alternative model with different content policies — e.g. ${ALTERNATIVE_IMAGE_MODELS} — which may accept this prompt.\n\n` +
-      `If you believe this is an error, you can report it to OpenAI with request ID: ${requestId}`
+      `If you believe this is an error, you can report it to OpenAI with request ID: ${requestId}`,
+    requestId
   );
 }
 
@@ -412,6 +429,16 @@ export class OpenAIImageService extends AIImageService {
 
       return images;
     } catch (error) {
+      // Before any error-level log: those forward to the Slack alert channel, and a content-policy
+      // block is the user's prompt being refused, not an incident.
+      if (error instanceof OpenAI.APIError) {
+        const moderationError = buildModerationBlockedError(error);
+        if (moderationError) {
+          this.logModerationBlocked(options.model, error);
+          throw moderationError;
+        }
+      }
+
       Logger.globalInstance.error('[DEBUG] Error in OpenAI image generation:', {
         model: options.model,
         error: error,
@@ -426,12 +453,6 @@ export class OpenAIImageService extends AIImageService {
           type: error.type,
           param: error.param,
         });
-
-        // Handle moderation errors with user-friendly message
-        const moderationError = buildModerationBlockedError(error);
-        if (moderationError) {
-          throw moderationError;
-        }
 
         // Surface billing/auth/rate-limit failures with an actionable message instead of the raw
         // "Request failed with status code 402" the SDK throws. GPT Image models in particular
@@ -453,6 +474,16 @@ export class OpenAIImageService extends AIImageService {
 
       throw error instanceof Error ? error : new Error('OpenAI image generation error: Unknown error');
     }
+  }
+
+  /** Warn level keeps it out of the Slack alert channel; no prompt or provider body is logged. */
+  private logModerationBlocked(model: string | null | undefined, error: InstanceType<typeof OpenAI.APIError>): void {
+    this.logger.warn('OpenAI image request blocked by content policy:', {
+      model,
+      status: error.status,
+      code: error.code,
+      requestId: error.requestID,
+    });
   }
 
   private imageResponseToUrl(response: OpenAI.Images.ImagesResponse): string[] {
@@ -621,17 +652,18 @@ export class OpenAIImageService extends AIImageService {
       throw new Error('No image was generated');
     } catch (error) {
       if (error instanceof OpenAI.APIError) {
+        // Same guidance as generate(), checked before the error-level log for the same reason.
+        const moderationError = buildModerationBlockedError(error);
+        if (moderationError) {
+          this.logModerationBlocked(model, error);
+          throw moderationError;
+        }
+
         Logger.globalInstance.error('[DEBUG] OpenAI API error details:', {
           status: error.status,
           message: error.message,
           code: error.code,
         });
-
-        // Handle moderation errors with the same user-friendly guidance as generate()
-        const moderationError = buildModerationBlockedError(error);
-        if (moderationError) {
-          throw moderationError;
-        }
       }
       throw error instanceof Error ? error : new Error('OpenAI image edit error: Unknown error');
     }

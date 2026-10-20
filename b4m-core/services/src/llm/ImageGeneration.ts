@@ -66,6 +66,7 @@ import {
   XAIImageService,
   GeminiImageService,
   ImageEditResponse,
+  ImageModerationBlockedError,
   BaseStorage,
   getSettingsByNames,
   downloadImageAsBuffer,
@@ -1642,7 +1643,12 @@ export class ImageGenerationService {
         )
       );
     } catch (error) {
-      logger.error('Error processing image generation:', error);
+      if (error instanceof ImageModerationBlockedError) {
+        // The user's prompt was refused: expected, so keep it out of the error-level Slack alerts.
+        logger.warn('Image generation blocked by content policy:', { requestId: error.requestId });
+      } else {
+        logger.error('Error processing image generation:', error);
+      }
       this.addStatusToQuest(quest, `Error: ${(error as Error).message}`, userId);
       quest.reply = (error as Error).message;
       quest.type = 'error';

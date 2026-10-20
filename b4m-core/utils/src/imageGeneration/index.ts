@@ -1,5 +1,5 @@
 import { ImageGenerationVendor } from '@bike4mind/common';
-import { OpenAIImageService } from './OpenAIImageService';
+import { ImageModerationBlockedError, OpenAIImageService } from './OpenAIImageService';
 import { TestImageService } from './TestImageService';
 import { BFLImageService } from './BFLImageService';
 import { XAIImageService } from './XAIImageService';
@@ -9,6 +9,7 @@ import { Logger } from '@bike4mind/observability';
 
 // Export the individual classes
 export {
+  ImageModerationBlockedError,
   OpenAIImageService,
   TestImageService,
   BFLImageService,

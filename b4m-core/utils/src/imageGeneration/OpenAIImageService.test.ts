@@ -27,7 +27,12 @@ vi.mock('./imageProcessorUtils', () => ({
   downloadImageAsBuffer: vi.fn(),
 }));
 
-import { buildModerationBlockedError, OpenAIImageService, resolveGptImageOutputOptions } from './OpenAIImageService';
+import {
+  buildModerationBlockedError,
+  ImageModerationBlockedError,
+  OpenAIImageService,
+  resolveGptImageOutputOptions,
+} from './OpenAIImageService';
 import { downloadImageAsBuffer } from './imageProcessorUtils';
 
 // The helper only reads `code`, `status`, and `requestID` off the error, so a
@@ -62,6 +67,15 @@ describe('buildModerationBlockedError', () => {
     expect(result?.message).toMatch(/alternative model/i);
   });
 
+  it('returns a typed error carrying the request ID so callers can classify the block', () => {
+    const result = buildModerationBlockedError(
+      makeApiError({ status: 400, code: 'moderation_blocked', requestID: 'req_abc123' })
+    );
+
+    expect(result).toBeInstanceOf(ImageModerationBlockedError);
+    expect(result?.requestId).toBe('req_abc123');
+  });
+
   it('includes the OpenAI request ID when present so users can report false positives', () => {
     const result = buildModerationBlockedError(
       makeApiError({ status: 400, code: 'moderation_blocked', requestID: 'req_abc123' })
@@ -92,6 +106,72 @@ describe('buildModerationBlockedError', () => {
   it('returns null for non-400 errors (e.g. rate limits, server errors)', () => {
     expect(buildModerationBlockedError(makeApiError({ status: 429, code: 'rate_limit_exceeded' }))).toBeNull();
     expect(buildModerationBlockedError(makeApiError({ status: 500 }))).toBeNull();
+  });
+});
+
+describe('content-policy block logging (only error level forwards to the Slack alert channel)', () => {
+  const PROMPT = 'a private prompt that must stay out of the logs';
+  // instanceof OpenAI.APIError must hold against the mocked SDK class.
+  const moderationApiError = () =>
+    Object.assign(Object.create(OpenAI.APIError.prototype) as APIErrorLike, {
+      status: 400,
+      code: 'moderation_blocked',
+      requestID: 'req_abc123',
+      message: '400 Your request was rejected by the safety system.',
+    });
+
+  let logger: Logger;
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    imagesGenerate.mockReset();
+    imagesEdit.mockReset();
+    logger = new Logger();
+    vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(Logger.globalInstance, 'error').mockImplementation(() => undefined);
+  });
+
+  const expectWarnedNotErrored = () => {
+    expect(Logger.globalInstance.error).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith('OpenAI image request blocked by content policy:', {
+      model: ImageModels.GPT_IMAGE_2,
+      status: 400,
+      code: 'moderation_blocked',
+      requestId: 'req_abc123',
+    });
+    expect(JSON.stringify(vi.mocked(logger.warn).mock.calls)).not.toContain(PROMPT);
+  };
+
+  it('generate() throws the typed error and logs only at warn', async () => {
+    imagesGenerate.mockRejectedValue(moderationApiError());
+
+    await expect(
+      new OpenAIImageService('test-key', logger).generate(PROMPT, { model: ImageModels.GPT_IMAGE_2 })
+    ).rejects.toBeInstanceOf(ImageModerationBlockedError);
+    expectWarnedNotErrored();
+  });
+
+  it('edit() throws the typed error and logs only at warn', async () => {
+    imagesEdit.mockRejectedValue(moderationApiError());
+
+    await expect(
+      new OpenAIImageService('test-key', logger, 'image-processor-lambda').edit(PNG_DATA_URL, PROMPT, {
+        model: ImageModels.GPT_IMAGE_2,
+      })
+    ).rejects.toBeInstanceOf(ImageModerationBlockedError);
+    expectWarnedNotErrored();
+  });
+
+  it('still logs a non-moderation API failure at error', async () => {
+    imagesGenerate.mockRejectedValue(
+      Object.assign(Object.create(OpenAI.APIError.prototype) as APIErrorLike, { status: 500, message: 'boom' })
+    );
+
+    await expect(
+      new OpenAIImageService('test-key', logger).generate(PROMPT, { model: ImageModels.GPT_IMAGE_2 })
+    ).rejects.toBeDefined();
+    expect(Logger.globalInstance.error).toHaveBeenCalled();
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 });
 
