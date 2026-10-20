@@ -425,7 +425,7 @@ describe('ChatPage reply reader', () => {
       .filter(line => !/^\s*(\/\/|\*|\/\*)/.test(line))
       .join('\n');
     expect(code).not.toMatch(/getByTestId\(\s*['"`]ai-response['"`]/);
-    expect(code).not.toMatch(/locator\(\s*['"`]\[data-testid=['"]?ai-response['"]?\]/);
+    expect(code).not.toMatch(/data-testid=['"]?ai-response['"\]]/);
     expect(code).toMatch(/getByTestId\(\s*['"`]ai-response-body['"`]/);
     expect(code).toMatch(/isStreamComplete\(/);
     // The reader falls back to the whole root when the body id is absent, so renaming the test id
