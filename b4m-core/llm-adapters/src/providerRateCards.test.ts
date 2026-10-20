@@ -178,6 +178,15 @@ describe('billed USD and credits per request', () => {
     expect(credits(bill(50_001))).toBe(1_601);
   });
 
+  it('bills the us. Bedrock Sonnet 4.5 at the 10% regional premium', async () => {
+    const model = (await staticTextModels()).get(ChatModels.CLAUDE_4_5_SONNET_BEDROCK)!;
+
+    // 100K in at $3.30 + 10K out at $16.50.
+    const cost = getTextModelCost(model, 100_000, 10_000);
+    expect(cost).toBeCloseTo(0.33 + 0.165, 10);
+    expect(credits(cost)).toBe(990);
+  });
+
   it('bills the us. Bedrock Haiku 4.5 at the 10% regional premium', async () => {
     const model = (await staticTextModels()).get(ChatModels.CLAUDE_4_5_HAIKU_BEDROCK)!;
 
