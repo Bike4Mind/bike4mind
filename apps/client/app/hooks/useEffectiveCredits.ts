@@ -36,8 +36,9 @@ export function useEffectiveCredits(options?: UseEffectiveCreditsOptions): numbe
   const isAnyStreaming = useStreamingState(state => state.isAnyStreaming());
   const syncCount = useCreditSyncSignal(state => state.syncCount);
 
-  const liveCredits =
-    selectedAccount && !selectedAccount.personal ? selectedAccount.credits : currentUser?.currentCredits || 0;
+  const isTeamAccount = !!selectedAccount && !selectedAccount.personal;
+  const liveCredits = isTeamAccount ? selectedAccount.credits : currentUser?.currentCredits || 0;
+  const accountKey = isTeamAccount ? selectedAccount.id : 'personal';
 
   // "Adjusting state when a prop changes" pattern (react.dev) - tracking the
   // previous streaming flag alongside the frozen value lets the snapshot/release
@@ -47,8 +48,15 @@ export function useEffectiveCredits(options?: UseEffectiveCreditsOptions): numbe
   const [frozenCredits, setFrozenCredits] = useState<number | null>(null);
   // Live value and sync count at the moment streaming ended; non-null while awaiting settlement.
   const [settleBaseline, setSettleBaseline] = useState<{ credits: number; syncCount: number } | null>(null);
+  const [heldAccountKey, setHeldAccountKey] = useState(accountKey);
 
-  if (isAnyStreaming !== prevIsStreaming) {
+  if (accountKey !== heldAccountKey) {
+    // A held value belongs to the previous account; mid-stream, re-snapshot the new one instead.
+    setHeldAccountKey(accountKey);
+    setPrevIsStreaming(isAnyStreaming);
+    setFrozenCredits(isAnyStreaming ? liveCredits : null);
+    setSettleBaseline(null);
+  } else if (isAnyStreaming !== prevIsStreaming) {
     setPrevIsStreaming(isAnyStreaming);
     if (isAnyStreaming) {
       // A new turn starting before the last one settled must keep the older pre-turn value:

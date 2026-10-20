@@ -222,8 +222,7 @@ describe('useEffectiveCredits', () => {
       act(() => useSelectedAccount.setState({ selectedAccount: account }));
     };
 
-    // Known gap: the frozen value is not keyed by account, so a mid-stream switch shows the old account's balance.
-    it.skip('shows the new account live balance, not the held value, when switching accounts mid-stream', () => {
+    it('shows the new account live balance, not the held value, when switching accounts mid-stream', () => {
       useSelectedAccount.setState({ selectedAccount: personal });
       const { result } = renderHook(() => useEffectiveCredits());
       act(() => useStreamingState.getState().startStreaming('session-1'));
@@ -248,7 +247,25 @@ describe('useEffectiveCredits', () => {
       act(() => useStreamingState.getState().completeStreaming('session-1'));
       act(() => useSelectedAccount.setState({ selectedAccount: { ...team, credits: 8800 } }));
 
-      expect(committed.slice(committed.indexOf(9000))).not.toContain(1500);
+      const switchedAt = committed.indexOf(9000);
+      expect(switchedAt).toBeGreaterThan(-1);
+      expect(committed.slice(switchedAt)).not.toContain(1500);
+      expect(committed[committed.length - 1]).toBe(8800);
+    });
+
+    it('holds the new account balance for the rest of the turn after a mid-stream switch', () => {
+      useSelectedAccount.setState({ selectedAccount: personal });
+      const { result } = renderHook(() => useEffectiveCredits());
+      act(() => useStreamingState.getState().startStreaming('session-1'));
+      selectAccount(team);
+      act(() => useSelectedAccount.setState({ selectedAccount: { ...team, credits: 400 } }));
+      expect(result.current).toBe(9000);
+
+      act(() => useStreamingState.getState().completeStreaming('session-1'));
+      expect(result.current).toBe(9000);
+
+      act(() => useSelectedAccount.setState({ selectedAccount: { ...team, credits: 8700 } }));
+      expect(result.current).toBe(8700);
     });
 
     it('shows the new account live balance when switching accounts during the post-turn hold', () => {
