@@ -106,8 +106,8 @@ const MAX_REASSIGN_ATTEMPTS = 3;
  * transaction; a crash between them drifts the counters until the storage reconciliation runs. The
  * stamp itself is NOT re-derived by that reconciliation (it recomputes counters FROM the stamp), so
  * every caller runs this unconditionally after its tag write rather than only when the write changed
- * something. That recovers a failed reassign on an add door or inside a caller transaction; a removal
- * that throws after its pull is repaired by its retry, which restamps before refusing the non-member.
+ * something. A retried add or remove door repairs a failed reassign (a removal restamps before refusing
+ * the non-member); a retried toggle flips the tag instead, so toggleTags relies on its route's transaction.
  */
 export async function reassignStorageOwner(
   fabFileId: string,

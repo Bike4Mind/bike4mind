@@ -137,9 +137,9 @@ const matchingStoredNames = (storedNames: readonly string[], tag: string): strin
  * from the document, and a new name is written as the caller spelled it rather than lowercased.
  *
  * The accessibility check, the prefix-arm manage gate and the admission contract (#1680) are all
- * all-or-nothing and run before any write, but the writes themselves are not transactional: if one
- * file fails mid-batch, the files already written stay written. Every write is idempotent, so
- * retrying the same call converges rather than double-applying.
+ * all-or-nothing and run before any write. The writes are atomic only inside the route's
+ * `withTransaction`: without one, a file that fails mid-batch leaves the files already written, and
+ * retrying the same call toggles them back rather than converging.
  */
 export const toggleTags = async (
   userId: string,
@@ -193,8 +193,8 @@ export const toggleTags = async (
   // toggleLakeMembership above, which only recognizes `datalake:*` names - so dropping that
   // file's last tag under the lake's prefix here would otherwise skip both the manage-rights
   // gate and the stats recompute. Resolved and gated for the WHOLE batch up front, before any
-  // write: files are toggled concurrently below, so a mid-batch throw would leave one file
-  // half-toggled while this gate is meant to be all-or-nothing (mirrors reconcileLakeTags).
+  // write, so a mid-batch throw cannot leave earlier files toggled while this gate is meant to be
+  // all-or-nothing (mirrors reconcileLakeTags).
   //
   // `toggleOrdinaryTag` itself stays lake-unaware: "is this the file's last prefix signal" is not
   // a per-tag property when a request can drop two tags under the same prefix at once.
@@ -220,23 +220,21 @@ export const toggleTags = async (
       fabFiles.map(f => f.userId),
       { db }
     );
-    await Promise.all(
-      fabFiles.map(async file => {
-        const currentTagNames = storedTagNames(file);
-        const resultingTagNames = predictToggleResult(currentTagNames, tags);
-        // Gate only tags NEWLY becoming present: a non-admin toggling OFF a legacy tag they
-        // already carry under a registry prefix (predating this gate) must still be able to,
-        // matching reconcileLakeTags' whole-array counterpart.
-        const newlyAppearing = resultingTagNames.filter(name => !currentTagNames.includes(name));
-        assertCanWriteStaticRegistryTags(actor, newlyAppearing);
-        const { leaves, joins } = await findPrefixArmChanges(
-          { fileOwnerUserId: file.userId, currentTagNames, resultingTagNames },
-          { db, candidateLakes }
-        );
-        if (leaves.length > 0) prefixLeavesByFile.set(file.id, leaves);
-        if (joins.length > 0) prefixJoinsByFile.set(file.id, joins);
-      })
-    );
+    for (const file of fabFiles) {
+      const currentTagNames = storedTagNames(file);
+      const resultingTagNames = predictToggleResult(currentTagNames, tags);
+      // Gate only tags NEWLY becoming present: a non-admin toggling OFF a legacy tag they
+      // already carry under a registry prefix (predating this gate) must still be able to,
+      // matching reconcileLakeTags' whole-array counterpart.
+      const newlyAppearing = resultingTagNames.filter(name => !currentTagNames.includes(name));
+      assertCanWriteStaticRegistryTags(actor, newlyAppearing);
+      const { leaves, joins } = await findPrefixArmChanges(
+        { fileOwnerUserId: file.userId, currentTagNames, resultingTagNames },
+        { db, candidateLakes }
+      );
+      if (leaves.length > 0) prefixLeavesByFile.set(file.id, leaves);
+      if (joins.length > 0) prefixJoinsByFile.set(file.id, joins);
+    }
     const gatedLeaveLakes = [...prefixLeavesByFile.values()].flat().map(({ lake }) => lake);
     const gatedJoinLakes = [...prefixJoinsByFile.values()].flat().map(({ lake }) => lake);
     // Only the prefix arm reaches here with no route-level scope check yet - see
@@ -255,7 +253,7 @@ export const toggleTags = async (
     // The admission contract (#1680) for the OTHER membership signal. A prefix-arm join makes a
     // file a member with no `datalake:*` meta-tag involved, so gating only the meta-tag path would
     // leave half the door open. Run in this same all-or-nothing pre-write pass as the leave gate
-    // above: the writes below are concurrent, so refusing mid-batch would leave some files written.
+    // above: refusing mid-batch would leave earlier files written.
     // Only JOINS are graded - a leave is never refused for a contract the file is exiting.
     //
     // ONE CALL PER FILE, deliberately: `assertLakeAdmission` grades every member it is handed
@@ -284,9 +282,7 @@ export const toggleTags = async (
   // into one lake costs a single extra read, not one per file.
   const applyFallbackTags = createDataLakeFallbackTagger({ db, logger });
 
-  // One lookup per distinct meta-tag rather than one per (file, tag) pair. The PROMISE is cached,
-  // not its result: files are processed concurrently, so caching only on resolve would let every
-  // file in the batch issue its own lookup before the first one came back.
+  // One lookup per distinct meta-tag rather than one per (file, tag) pair.
   const resolveLake = (tag: string): Promise<MembershipLake> => {
     // datalakeTag values are canonically lowercase, so a mixed-case meta-tag still resolves to
     // its real lake - the same normalization the route-level gate applies.
@@ -307,9 +303,8 @@ export const toggleTags = async (
   };
 
   // The admission contract (#1680) for the meta-tag arm, in the same all-or-nothing pre-write pass
-  // the prefix-arm gate above uses and for the same reason: files are toggled CONCURRENTLY below,
-  // so a refusal raised next to the write would leave earlier files already joined behind a throw
-  // that reads to the caller as "nothing happened".
+  // the prefix-arm gate above uses and for the same reason: a refusal raised next to the write would
+  // leave earlier files already joined behind a throw that reads to the caller as "nothing happened".
   //
   // Hoisting cannot disagree with `toggleLakeMembership` about which toggles are joins: that
   // function decides direction from `storedTagNames(file)` - the same pre-write snapshot read here,
@@ -357,8 +352,7 @@ export const toggleTags = async (
 
     // A meta-tag join moves the file's charged bytes onto the lake's owner (reassignStorageOwner).
     // Graded here, over the WHOLE batch and summed per destination, for the same reason as the gates
-    // above: the writes below are concurrent and non-transactional, so a refusal raised inside
-    // addFileToLake would land after earlier files in the batch had already joined. Summing also
+    // above: a refusal raised inside addFileToLake would land after earlier files had already joined. Summing also
     // catches a batch that only overflows the destination together.
     const joiningBytesByOwner = new Map<string, { organizationId?: string; userId: string; bytes: number }>();
     for (const file of fabFiles) {
@@ -517,12 +511,11 @@ export const toggleTags = async (
     if (toRemove.length > 0) await db.fabFiles.pullTagsByFabFileId(file.id, toRemove);
   };
 
-  // Tags are applied one at a time within a file - they mutate the same document - while files
-  // are processed concurrently. allSettled rather than all, so every write has finished before
-  // the stats below are recomputed: a rejection must not let the recompute race a write that is
-  // still in flight.
-  const outcomes = await Promise.allSettled(
-    fabFiles.map(async file => {
+  // Sequential, not Promise.all: the route runs this inside `withTransaction`, whose ambient session
+  // does not accept concurrent operations. A failed file does not stop the rest.
+  let failure: { reason: unknown } | undefined;
+  for (const file of fabFiles) {
+    try {
       for (const tag of tags) {
         if (isDataLakeTag(tag)) {
           await toggleLakeMembership(file, tag);
@@ -532,8 +525,10 @@ export const toggleTags = async (
       }
       await finalizePrefixArmLeaves(file);
       await backfillLakeContentTags(file);
-    })
-  );
+    } catch (reason) {
+      failure ??= { reason };
+    }
+  }
 
   for (const lake of touchedLakes.values()) {
     await recomputeLakeStats(lake, { db, logger });
@@ -541,9 +536,10 @@ export const toggleTags = async (
 
   // Lake meta-tags are deliberately absent from this set: they are lake membership, not entries in
   // the user's own tag list, and no other lake door touches the tag registry.
-  await Promise.all([...touchedTags].map(tag => db.fileTags.touchLastActivityBy({ name: tag, userId })));
+  for (const tag of touchedTags) {
+    await db.fileTags.touchLastActivityBy({ name: tag, userId });
+  }
 
-  const failure = outcomes.find((outcome): outcome is PromiseRejectedResult => outcome.status === 'rejected');
   if (failure) throw failure.reason;
 
   // Re-read: the writes above are element-level, so the documents loaded earlier no longer

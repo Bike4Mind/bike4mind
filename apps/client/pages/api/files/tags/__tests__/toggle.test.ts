@@ -4,6 +4,7 @@ const h = vi.hoisted(() => ({
   assertCanWriteDataLakeTags: vi.fn(),
   toggleTags: vi.fn(),
   baseApiOptions: undefined as unknown,
+  tx: [] as string[],
 }));
 
 // baseApi mock: callable chain routed by req.method (same shape as the data-lake route tests).
@@ -35,6 +36,14 @@ vi.mock('@bike4mind/services', async importOriginal => {
   };
 });
 vi.mock('@bike4mind/database', () => ({
+  withTransaction: async (fn: () => unknown) => {
+    h.tx.push('enter');
+    try {
+      return await fn();
+    } finally {
+      h.tx.push('exit');
+    }
+  },
   // The config-audit repos the code under test now wires (see lakeConfigAuditDb). Stubbed
   // rather than omitted because this mock REPLACES the whole module: a missing export is an
   // import-time failure, not a silent undefined.
@@ -97,8 +106,21 @@ const call = (r: unknown, res: unknown) => (handler as (req: unknown, res: unkno
 describe('POST /api/files/tags/toggle', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    h.tx.length = 0;
     h.assertCanWriteDataLakeTags.mockResolvedValue(undefined);
     h.toggleTags.mockResolvedValue([{ id: 'f1' }]);
+  });
+
+  it('runs the toggle inside a transaction, so a failed owner move rolls back its tag write', async () => {
+    h.toggleTags.mockImplementation(async () => {
+      h.tx.push('toggle');
+      return [{ id: 'f1' }];
+    });
+    const { res } = makeRes();
+
+    await call(req({ ids: ['f1'], tags: ['datalake:lake'] }), res);
+
+    expect(h.tx).toEqual(['enter', 'toggle', 'exit']);
   });
 
   it('gives the service the data-lake repository so lake toggles reach the membership path', async () => {

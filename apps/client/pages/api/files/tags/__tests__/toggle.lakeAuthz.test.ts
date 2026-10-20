@@ -39,6 +39,7 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
 // `addFileToLake` both have to admit the caller, and only the second of those is what a narrowed
 // actor breaks on this door.
 vi.mock('@bike4mind/database', () => ({
+  withTransaction: async (fn: () => unknown) => fn(),
   lakeConfigChangeEventRepository: { record: h.recordConfigChange },
   lakeMembershipChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
   dataLakeRepository: {

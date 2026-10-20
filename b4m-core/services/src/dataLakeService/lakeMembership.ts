@@ -209,7 +209,8 @@ export const removeFileFromLake = async (
     // ever softened (e.g. to make a retry "quietly" tolerate a non-member), the restore path's
     // absent ownership test becomes an unbounded add door. Do not soften it without re-deriving
     // that authorization from scratch.
-    // The refusal still restamps first: a retry after a reassign that threw post-pull lands here.
+    // Restamps so a retried remove repairs a post-pull reassign throw (rolled back on transactional
+    // routes); costs a findById + findByDatalakeTags per expected NotFound in finalizePrefixArmLeaves.
     if (file) await reassignStorageOwner(file.id, db);
     throw new NotFoundError('File not found in this data lake');
   }
@@ -228,8 +229,8 @@ export const removeFileFromLake = async (
     await recordLakeMembershipChange({ actor, lake, fabFileId: file.id, action: 'removed', origin }, { db, logger });
   }
   // Unconditional, unlike the event above: the losing half of two concurrent removals has already
-  // pulled the tags and would otherwise never recompute the owner. Outside a transaction a throw here
-  // is repaired by a retry, which restamps in the non-member refusal above.
+  // pulled the tags and would otherwise never recompute the owner. A throw here is repaired by
+  // retrying a remove door (the refusal above restamps), but not a toggle, whose retry re-adds.
   await reassignStorageOwner(file.id, db);
   return { contentTags };
 };
@@ -282,7 +283,7 @@ export const addFileToLake = async (
     await recordLakeMembershipChange({ actor, lake, fabFileId, action: 'added', origin }, { db, logger });
   }
   // After the event, so a reassign that throws cannot lose it (a retry sees a null pre-image). And
-  // unconditional: `priorState === null` is also the state that retry finds, so only recomputing on
-  // a fresh insert would leave that file's stamp wrong for good.
+  // unconditional: `priorState === null` is also the state an add-door retry finds. A toggle retry
+  // removes instead, so that door relies on its route's transaction to undo the push.
   await reassignStorageOwner(fabFileId, db);
 };
