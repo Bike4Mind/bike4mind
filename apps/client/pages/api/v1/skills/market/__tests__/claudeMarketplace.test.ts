@@ -216,6 +216,17 @@ describe('GET /api/v1/skills/market/claude-marketplace.json', () => {
     const { res } = await call(feedHandler, { orgId: ORG_ID });
     expect(res._getJSONData().plugins).toEqual([]);
   });
+
+  it('omits only the listing whose naming throws, serving the rest', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockFind.mockReturnValue({
+      sort: async () => [doc(listing(LISTING_A, { claudePluginName: undefined })), doc(listing(LISTING_B))],
+    });
+    mockAssignName.mockRejectedValueOnce(new Error('boom'));
+    const { error, res } = await call(feedHandler, { orgId: ORG_ID });
+    expect(error).toBeNull();
+    expect(res._getJSONData().plugins.map((p: { name: string }) => p.name)).toEqual(['review-pr-000002']);
+  });
 });
 
 describe('GET /api/v1/skills/market/{id}/claude-plugin.zip', () => {

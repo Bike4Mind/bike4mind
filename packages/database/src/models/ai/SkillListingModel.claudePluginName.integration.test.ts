@@ -91,6 +91,56 @@ describe('claudePluginName', () => {
     expect(await pluginName(unlisted)).toBeUndefined();
   });
 
+  it('rejects when both the slug and the id-suffixed fallback are taken', async () => {
+    const id = await listing('Foo');
+    await SkillListing.create({
+      sourceSkillId: 's-a',
+      authorUserId: 'a',
+      visibility: 'organization',
+      organizationId: 'org1',
+      name: 'x',
+      description: 'd',
+      claudePluginName: 'foo',
+    });
+    await SkillListing.create({
+      sourceSkillId: 's-b',
+      authorUserId: 'a',
+      visibility: 'organization',
+      organizationId: 'org1',
+      name: 'x',
+      description: 'd',
+      claudePluginName: `foo-${id.slice(-6)}`,
+    });
+    await expect(assignClaudePluginName(id, 'Foo')).rejects.toMatchObject({ code: 11000 });
+    expect(await pluginName(id)).toBeUndefined();
+  });
+
+  it('still approves when naming fails, and logs it', async () => {
+    const id = await listing('Foo');
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const updateOne = SkillListing.updateOne.bind(SkillListing);
+    const spy = vi
+      .spyOn(SkillListing, 'updateOne')
+      .mockImplementationOnce(updateOne as never)
+      .mockImplementationOnce(updateOne as never)
+      .mockRejectedValueOnce(new Error('boom'));
+    await approve(id, 'Foo', 1);
+    spy.mockRestore();
+    expect(error).toHaveBeenCalled();
+    error.mockRestore();
+    expect((await SkillListing.findById(id).lean())?.status).toBe('approved');
+    expect(await pluginName(id)).toBeUndefined();
+  });
+
+  it('does not name a listing whose approve CAS loses', async () => {
+    const id = await listing('Foo');
+    await SkillListing.updateOne({ _id: id }, { $set: { pendingVersionId: 'current', pendingVersion: 1 } });
+    expect(
+      await approvePendingListingVersion(id, 'stale', 1, { name: 'Foo', description: 'd' } as SkillListingDenorm)
+    ).toBe(false);
+    expect(await pluginName(id)).toBeUndefined();
+  });
+
   it('scopes collisions to the org', async () => {
     const a = await listing('Foo', { organizationId: 'org1' });
     const b = await listing('Foo', { organizationId: 'org2' });

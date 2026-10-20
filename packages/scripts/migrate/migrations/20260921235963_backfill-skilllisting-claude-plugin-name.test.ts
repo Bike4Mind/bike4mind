@@ -42,6 +42,14 @@ describe('backfill-skilllisting-claude-plugin-name', () => {
     expect(mockCreateIndexes.mock.invocationCallOrder[0]).toBeLessThan(mockFind.mock.invocationCallOrder[0]);
   });
 
+  it('keeps going when one listing fails to be named', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockAssign.mockRejectedValueOnce(new Error('boom'));
+    await migration.up();
+    expect(mockAssign).toHaveBeenCalledTimes(2);
+    expect(console.error).toHaveBeenCalled();
+  });
+
   it('down writes nothing', async () => {
     await migration.down();
     expect(mockAssign).not.toHaveBeenCalled();

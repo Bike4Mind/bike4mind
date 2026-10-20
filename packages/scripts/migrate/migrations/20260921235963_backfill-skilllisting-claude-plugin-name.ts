@@ -24,10 +24,17 @@ const migration: MigrationFile = {
     })
       .sort({ _id: 1 })
       .select('_id name');
+    let failed = 0;
     for (const listing of listings) {
-      await assignClaudePluginName(String(listing._id), listing.name);
+      try {
+        await assignClaudePluginName(String(listing._id), listing.name);
+      } catch (err) {
+        // Don't stall the migration chain; the Claude Code feed names leftovers on its next build.
+        failed++;
+        console.error(`${LOG} failed to name ${listing._id}`, err);
+      }
     }
-    console.log(`${LOG} named ${listings.length} listing(s)`);
+    console.log(`${LOG} named ${listings.length - failed} listing(s), ${failed} failed`);
   },
 
   // No-op: a name is harmless to the old code, and unsetting it would let a re-run assign a

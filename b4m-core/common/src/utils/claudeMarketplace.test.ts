@@ -10,6 +10,6 @@ describe('claudeMarketplaceNameFor', () => {
 describe('claudeSkillNameFor', () => {
   it('falls back to skill when the name has nothing to slug', () => {
     expect(claudeSkillNameFor('Review PR')).toBe('review-pr');
-    expect(claudeSkillNameFor('レビュー')).toBe('skill');
+    expect(claudeSkillNameFor('\u30ec\u30d3\u30e5\u30fc')).toBe('skill');
   });
 });

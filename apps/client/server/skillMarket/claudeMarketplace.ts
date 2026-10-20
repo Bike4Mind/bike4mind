@@ -104,8 +104,13 @@ export async function buildClaudeMarketplace(
   for (const listing of listings) {
     const version = servable(versions.get(String(listing.currentApprovedVersionId)));
     if (listing.claudePluginName || !version) continue;
-    await assignClaudePluginName(String(listing.id), version.snapshot.name);
-    listing.claudePluginName = (await SkillListing.findById(listing.id).select('claudePluginName'))?.claudePluginName;
+    try {
+      await assignClaudePluginName(String(listing.id), version.snapshot.name);
+      listing.claudePluginName = (await SkillListing.findById(listing.id).select('claudePluginName'))?.claudePluginName;
+    } catch (err) {
+      // Omit just this listing; one unnamable listing must not take down the whole org feed.
+      console.error('[claudeMarketplace] assigning claudePluginName failed', listing.id, err);
+    }
   }
 
   // ponytail: builds every zip per fetch; cache the sha on the version doc if an org has hundreds of listings.
