@@ -52,12 +52,13 @@ const lastWrittenSearch = (previous: SearchRecord) => {
   return call.search(previous);
 };
 
-const renderSettings = () =>
-  render(
-    <CssVarsProvider theme={appTheme}>
-      <AdminSettingsTab />
-    </CssVarsProvider>
-  );
+const settingsView = () => (
+  <CssVarsProvider theme={appTheme}>
+    <AdminSettingsTab />
+  </CssVarsProvider>
+);
+
+const renderSettings = () => render(settingsView());
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
@@ -130,6 +131,18 @@ describe('AdminSettingsTab URL state', () => {
       tab: 'admin-settings',
       q: undefined,
     });
+  });
+
+  it('re-seeds the search box when ?q= changes from outside while mounted', () => {
+    router.search = { tab: 'admin-settings', q: 'slack' };
+    const { rerender } = renderSettings();
+    const input = screen.getByTestId('admin-settings-search-input') as HTMLInputElement;
+    expect(input.value).toBe('slack');
+
+    // e.g. back/forward landing on the same tab with no q.
+    router.search = { tab: 'admin-settings' };
+    rerender(settingsView());
+    expect(input.value).toBe('');
   });
 });
 

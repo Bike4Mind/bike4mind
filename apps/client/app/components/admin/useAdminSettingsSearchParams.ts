@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { SETTING_TABS } from '@bike4mind/common';
 import { ADMIN_SETTINGS_SEARCH_PARAM, ADMIN_SETTINGS_SECTION_PARAM, type AdminSearch } from './adminTabParams';
@@ -27,7 +27,18 @@ const sectionFromId = (id: string | undefined): SettingSectionKey =>
 export const useAdminSettingsSearchParams = () => {
   const search = useSearch({ strict: false }) as AdminSearch;
   const navigate = useNavigate();
-  const [searchTerm, setSearchTermState] = useState(() => search[ADMIN_SETTINGS_SEARCH_PARAM] ?? '');
+  const urlSearchTerm = search[ADMIN_SETTINGS_SEARCH_PARAM] ?? '';
+  const [searchTerm, setSearchTermState] = useState(() => urlSearchTerm);
+  // The last term this hook pushed to the URL, so its own echo does not re-seed the box.
+  const writtenTermRef = useRef(urlSearchTerm);
+
+  // Follow a `q` that changed from outside while the tab stayed mounted (back/forward, a
+  // navigation from another surface): the box and the URL must not disagree.
+  useEffect(() => {
+    if (urlSearchTerm === writtenTermRef.current) return;
+    writtenTermRef.current = urlSearchTerm;
+    setSearchTermState(urlSearchTerm);
+  }, [urlSearchTerm]);
 
   const section = sectionFromId(search[ADMIN_SETTINGS_SECTION_PARAM]);
 
@@ -45,6 +56,7 @@ export const useAdminSettingsSearchParams = () => {
 
   const setSearchTerm = useCallback(
     (term: string) => {
+      writtenTermRef.current = term;
       setSearchTermState(term);
       writeSearch({ [ADMIN_SETTINGS_SEARCH_PARAM]: term || undefined });
     },
