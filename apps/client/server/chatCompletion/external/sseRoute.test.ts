@@ -423,7 +423,7 @@ describe('POST /api/ai/v1/completions - stream', () => {
   it.each([
     [404, 'provider_error', 'Model provider returned an error (upstream 404)'],
     [401, 'provider_rejected', 'Model provider rejected our credentials'],
-    [403, 'provider_rejected', 'Model provider rejected our credentials'],
+    [403, 'provider_rejected', 'Model provider denied access to this model'],
     [undefined, 'provider_error', 'Model provider returned an error'],
   ] as const)(
     'classifies an upstream %s after the stream opened as %s, with no raw body',
@@ -765,6 +765,11 @@ describe('POST /api/ai/v1/completions - failures after the stream opened', () =>
     ['axios 429', { response: { status: 429 } }, 'Model provider returned an error (upstream 429)'],
     ['axios 500', { response: { status: 500 } }, 'Model provider returned an error (upstream 500)'],
     ['aws sdk 429', { $metadata: { httpStatusCode: 429 } }, 'Model provider returned an error (upstream 429)'],
+    [
+      'bedrock 400 without $metadata',
+      { name: 'ValidationException', $fault: 'client' },
+      'Model provider returned an error (upstream 400)',
+    ],
   ])('sanitizes an %s into a provider_error frame without the raw message', async (_name, shape, message) => {
     const upstream = Object.assign(new Error(RAW), shape, { isAxiosError: 'response' in shape });
     mockExecuteCompletion.mockImplementationOnce(failAfterReady(upstream));
@@ -774,6 +779,26 @@ describe('POST /api/ai/v1/completions - failures after the stream opened', () =>
     const text = await res.text();
     expect(errorFrame(text)).toMatchObject({ code: 'provider_error', message });
     expect(text).not.toContain('secret-model-name');
+  });
+
+  it('classifies a Bedrock AccessDeniedException as provider_rejected and logs its status', async () => {
+    const legacy = 'Access denied. This Model is marked by provider as Legacy';
+    const upstream = Object.assign(new Error(legacy), { name: 'AccessDeniedException', $fault: 'client' });
+    mockExecuteCompletion.mockImplementationOnce(failAfterReady(upstream));
+
+    const text = await (await post()).text();
+    expect(errorFrame(text)).toMatchObject({
+      code: 'provider_rejected',
+      message: 'Model provider denied access to this model',
+    });
+    expect(text).not.toContain('Legacy');
+    expect(mockLoggerError).toHaveBeenCalledWith(
+      '[CLI_LLM] Handler error',
+      expect.objectContaining({
+        upstreamStatus: 403,
+        error: expect.objectContaining({ name: 'AccessDeniedException', message: legacy }),
+      })
+    );
   });
 });
 
@@ -837,6 +862,17 @@ describe('POST /api/ai/v1/completions - failure analytics', () => {
           error: expect.objectContaining({ message: 'analytics down' }),
         })
       )
+    );
+  });
+
+  it('logs an undefined upstreamStatus when a non-Error is thrown', async () => {
+    mockExecuteCompletion.mockImplementationOnce(failAfterReady('boom' as unknown as Error));
+
+    const text = await (await post()).text();
+    expect(errorFrame(text)).toMatchObject({ code: 'provider_error', message: 'Model provider returned an error' });
+    expect(mockLoggerError).toHaveBeenCalledWith(
+      '[CLI_LLM] Handler error',
+      expect.objectContaining({ upstreamStatus: undefined })
     );
   });
 });

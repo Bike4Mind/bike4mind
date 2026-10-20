@@ -695,8 +695,6 @@ export class GeminiBackend implements ICompletionBackend {
       },
     };
 
-    this.logger.debug('[Gemini] Request config:', { request });
-
     const toolCalls: ToolCall[] = [];
 
     // This turn's token counts. Populated inside the streaming and non-streaming
