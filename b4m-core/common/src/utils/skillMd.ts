@@ -84,7 +84,9 @@ const ARGUMENT_HINT_LINE = /^(argument-hint:[ \t]*)([^\r\n]+?)[ \t]*$/gm;
 function quoteRawArgumentHint(frontmatter: string): string {
   return frontmatter.replace(ARGUMENT_HINT_LINE, (line, key: string, raw: string) => {
     if (/^["'|>]/.test(raw)) return line;
-    const hint = raw.replace(/[ \t]+#.*$/, '').trimEnd();
+    // A trailing comment only follows a closed bracket or a plain scalar; inside `[pr #123]` the `#`
+    // is part of the hint.
+    const hint = raw.replace(/([\]>])[ \t]+#.*$/, '$1').trimEnd();
     return hint.startsWith('[') || hint.startsWith('<') || hint.includes(': ') ? `${key}${JSON.stringify(hint)}` : line;
   });
 }
@@ -93,7 +95,10 @@ const toText = (value: unknown): string | undefined =>
   typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' ? String(value) : undefined;
 
 /** Parses a SKILL.md into skill form fields. Never throws; a malformed file yields `ok: false`. */
-export function parseSkillMd(text: string): ParseSkillMdResult {
+export function parseSkillMd(input: string): ParseSkillMdResult {
+  // Normalize line endings so a Windows-authored file does not leave `\r` in the body, where the
+  // install command's control-byte guard would reject it.
+  const text = input.replace(/\r\n?/g, '\n');
   const split = splitSkillMdFrontmatter(text);
   if (!split) {
     if (/^\uFEFF?---/.test(text)) return { ok: false, error: 'The frontmatter block has no closing --- line.' };

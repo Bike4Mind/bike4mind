@@ -97,10 +97,25 @@ describe('parseSkillMd', () => {
     ['[pr-number] [priority] [assignee]', '[pr-number] [priority] [assignee]'],
     ['[a, b]  ', '[a, b]'],
     ['<optional: title>', '<optional: title>'],
+    ['[pr #123]', '[pr #123]'],
+    ['<file #line>', '<file #line>'],
     ['[pr] # note', '[pr]'],
   ])('keeps an unquoted Claude Code argument-hint %j verbatim', (raw, hint) => {
     const result = parseSkillMd(`---\nname: review\nargument-hint: ${raw}\n---\nDo it.\n`);
     expect(result).toEqual({ ok: true, fields: { name: 'review', argumentHint: hint, body: 'Do it.' }, dropped: [] });
+  });
+
+  it('normalizes CRLF line endings so the body survives the install command', () => {
+    const result = parseSkillMd('---\r\nname: a\r\ndescription: d\r\nargument-hint: [pr]\r\n---\r\nline1\r\nline2\r\n');
+    expect(result).toEqual({
+      ok: true,
+      fields: { name: 'a', description: 'd', argumentHint: '[pr]', body: 'line1\nline2' },
+      dropped: [],
+    });
+    if (!result.ok) throw new Error(result.error);
+
+    const exported = toSkillMd({ name: 'a', description: 'd', body: result.fields.body ?? '' });
+    expect(() => buildClaudeCodeInstallCommand('a', exported)).not.toThrow();
   });
 
   it('treats a file without frontmatter as all body', () => {
