@@ -474,7 +474,7 @@ describe('executeCompletion - pre-flight reservation size', () => {
       expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
     });
 
-    it.each([['Bedrock (this path never enables its caching)', BEDROCK_MODEL_ID, BEDROCK_MODEL_INFO]])(
+    it.each([['Bedrock (the hold never discounts it)', BEDROCK_MODEL_ID, BEDROCK_MODEL_INFO]])(
       'leaves a %s conversation uncached despite a published cache_read',
       async (_name, id, info) => {
         const { db, users } = buildDb();
