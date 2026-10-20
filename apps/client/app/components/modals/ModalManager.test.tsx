@@ -4,8 +4,11 @@ import { act, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ModalManager from './ModalManager';
 import { releaseNoteToModal } from './releaseNoteSlides';
-import { markFirstSignupSession, FIRST_SIGNUP_SESSION_KEY } from '@client/app/utils/firstSignupSession';
-import { NEW_ACCOUNT_GRACE_MS } from '@client/app/utils/onboarding';
+import {
+  markFirstSignupSession,
+  FIRST_SIGNUP_SESSION_KEY,
+  FIRST_SIGNUP_SESSION_TTL_MS,
+} from '@client/app/utils/firstSignupSession';
 import type { IModal } from '@bike4mind/common';
 
 const mocks = vi.hoisted(() => ({
@@ -133,7 +136,7 @@ describe('ModalManager new-account suppression', () => {
     expect(screen.queryByTestId('generic-modal')).not.toBeInTheDocument();
     expect(screen.queryByTestId('banner-modal')).not.toBeInTheDocument();
 
-    act(() => vi.advanceTimersByTime(NEW_ACCOUNT_GRACE_MS));
+    act(() => vi.advanceTimersByTime(11 * 60 * 1000));
     rerender(<Manager tick={1} />);
     act(() => vi.advanceTimersByTime(3000));
     expect(screen.queryByTestId('generic-modal')).not.toBeInTheDocument();
@@ -143,11 +146,26 @@ describe('ModalManager new-account suppression', () => {
   it('keeps suppressing after a reload beyond the grace window', () => {
     const firstVisit = render(<ModalManager />);
     firstVisit.unmount();
-    act(() => vi.advanceTimersByTime(NEW_ACCOUNT_GRACE_MS));
+    act(() => vi.advanceTimersByTime(11 * 60 * 1000));
     render(<ModalManager />);
     act(() => vi.advanceTimersByTime(3000));
     expect(screen.queryByTestId('generic-modal')).not.toBeInTheDocument();
     expect(screen.queryByTestId('banner-modal')).not.toBeInTheDocument();
+  });
+
+  it('honours the marker just before the TTL and ignores it after', () => {
+    act(() => vi.advanceTimersByTime(FIRST_SIGNUP_SESSION_TTL_MS - 1000));
+    const early = render(<ModalManager />);
+    act(() => vi.advanceTimersByTime(500));
+    expect(screen.queryByTestId('generic-modal')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('banner-modal')).not.toBeInTheDocument();
+    early.unmount();
+
+    act(() => vi.advanceTimersByTime(1000));
+    render(<ModalManager />);
+    expect(screen.getByTestId('banner-modal')).toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(3000));
+    expect(screen.getByTestId('generic-modal')).toBeInTheDocument();
   });
 
   it('shows the same announcements on a later visit', () => {

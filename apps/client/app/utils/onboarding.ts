@@ -7,7 +7,7 @@ export const NEW_ACCOUNT_GRACE_MS = 10 * 60 * 1000; // 10 minutes
 
 /**
  * True when the account was created within the grace window, used to give brand-new users a clean
- * first run (no "What's New" changelog of releases that predate them). When `createdAt` is absent
+ * first run. When `createdAt` is absent
  * or unparseable this returns false, which is correct: an account with no usable createdAt is not
  * treated as brand-new (it has already lived past its first in-memory session).
  */

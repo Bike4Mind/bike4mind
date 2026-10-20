@@ -267,6 +267,7 @@ describe('/api/auth/okta/callback — account-link email-equality gate', () => {
     });
 
     expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
+    expect(res._getRedirectUrl()).not.toContain('firstSignupSession');
     expect(mockAuthFailCreate).not.toHaveBeenCalled();
     // Routine refresh must NOT bump tokenVersion nor revoke existing sessions.
     const updateArg = mockUpdateOne.mock.calls[0]?.[1] ?? {};

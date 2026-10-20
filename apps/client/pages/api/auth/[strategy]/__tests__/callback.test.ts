@@ -188,6 +188,7 @@ describe('[strategy]/callback - banned user gate', () => {
 
     expect(mockIssueBrowserSession).toHaveBeenCalled();
     expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
+    expect(res._getRedirectUrl()).not.toContain('firstSignupSession');
   });
 });
 
@@ -375,6 +376,7 @@ describe('[strategy]/callback - second factor gate', () => {
     expect(res._getRedirectUrl()).not.toContain('#token=');
     expect(mockIssueBrowserSession).not.toHaveBeenCalled();
     expect(mockLogSignInSuccess).not.toHaveBeenCalled();
+    expect(res._getRedirectUrl()).not.toContain('firstSignupSession');
   });
 
   it('keeps the requested redirectTo ahead of the MFA handoff fragment', async () => {

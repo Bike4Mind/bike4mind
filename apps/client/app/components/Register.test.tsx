@@ -196,7 +196,7 @@ describe('Register - second-factor handoff', () => {
     renderRegister();
     await submitCode(userEvent.setup());
     await waitFor(() => expect(mocks.setCurrentUser).toHaveBeenCalledWith({ id: 'new-user' }));
-    expect(localStorage.getItem(FIRST_SIGNUP_SESSION_KEY)).toBe('new-user');
+    expect(JSON.parse(localStorage.getItem(FIRST_SIGNUP_SESSION_KEY) as string).userId).toBe('new-user');
     expect(mocks.setVerifiedSession).toHaveBeenCalledWith('full');
   });
 
