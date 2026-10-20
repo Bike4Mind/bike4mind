@@ -187,6 +187,15 @@ describe('keyTestPath', () => {
   });
 });
 
+describe('UserApiKeysTab - key table scopes', () => {
+  it('shows the full scope so keys with different read scopes stay distinguishable', () => {
+    h.keys = [{ ...activeKey, scopes: [ApiKeyScope.SKILLS_READ, ApiKeyScope.READ_NOTEBOOKS] }];
+    renderTab();
+    expect(screen.getByText('skills:read')).toBeTruthy();
+    expect(screen.getByText('notebooks:read')).toBeTruthy();
+  });
+});
+
 describe('UserApiKeysTab - scope chip state', () => {
   beforeEach(() => {
     h.keys = [activeKey];
