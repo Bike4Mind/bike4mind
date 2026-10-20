@@ -279,6 +279,19 @@ describe('useEffectiveCredits', () => {
       expect(result.current).toBe(9000);
     });
 
+    it('shows the new account balance when it equals the live balance captured at stream end', () => {
+      useSelectedAccount.setState({ selectedAccount: personal });
+      const { result, rerender } = renderHook(() => useEffectiveCredits());
+      act(() => useStreamingState.getState().startStreaming('session-1'));
+      mockUseUser.mockReturnValue({ currentUser: { id: 'user-1', currentCredits: 227 } });
+      rerender();
+      act(() => useStreamingState.getState().completeStreaming('session-1'));
+      expect(result.current).toBe(1500);
+
+      selectAccount({ ...team, credits: 227 });
+      expect(result.current).toBe(227);
+    });
+
     it('releases a team hold when the team balance changes in the organization cache', () => {
       useSelectedAccount.setState({ selectedAccount: team });
       const { result } = renderHook(() => useEffectiveCredits());
