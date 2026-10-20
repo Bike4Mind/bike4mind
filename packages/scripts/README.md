@@ -270,6 +270,10 @@ The dates above are examples, not an agreed production baseline. The signup wind
 `[since, until)`. `until` defaults to now; use explicit cutoffs for comparisons. D7+ is activity
 on or after UTC signup day + 7 through the last completed UTC day, among accounts old enough
 to observe that day. It is distinct from the exact-day D7 shown by the external activity report.
+Activity means successful usage events, original message attempts (including failed sends),
+or non-API agent activity. Logins and navigation events appear in the census timeline but do
+not count toward D7+ retention. Treat this definition as the post-fix baseline; exact comparison
+with older published numbers requires their original query definitions.
 A cohort can gain first messages and D7+ returners as observation time grows; compare cohorts
 with equivalent follow-up. Counts are descriptive, with cohort/path mix and concurrent changes
 printed as caveats. Do not attribute changes in retention to a rollout from these counts alone.
