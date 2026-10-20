@@ -13,7 +13,7 @@ vi.mock('@bike4mind/services', async () => ({
   organizationService: await import('../../../../b4m-core/services/src/organizationService/orgAuthority'),
 }));
 
-import { resolveApiKeyBillingOrg } from './apiKeyBillingOrg';
+import { resolveApiKeyBillingOrg, resolveRequestBillingOrgId } from './apiKeyBillingOrg';
 import { resolveMediaBillingOrgId } from './resolveMediaBillingOrgId';
 
 const KEY_ORG = '64b000000000000000000001';
@@ -34,7 +34,7 @@ const orgKeyRequest = {
   apiKeyInfo: { billingOwnerType: CreditHolderType.Organization, organizationId: KEY_ORG },
 };
 
-describe('resolveMediaBillingOrgId', () => {
+describe('resolveRequestBillingOrgId', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockFindById.mockResolvedValue(orgWithMembers('u1'));
@@ -46,7 +46,7 @@ describe('resolveMediaBillingOrgId', () => {
       ['no organization', undefined],
       ["the key's own organization", KEY_ORG],
     ])("bills the key's organization when the body names %s", async (_label, requested) => {
-      await expect(resolveMediaBillingOrgId(orgKeyRequest, requested)).resolves.toBe(KEY_ORG);
+      await expect(resolveRequestBillingOrgId(orgKeyRequest, requested)).resolves.toBe(KEY_ORG);
       expect(mockResolveBillingOrgId).not.toHaveBeenCalled();
       expect(mockFindById).toHaveBeenCalledWith(KEY_ORG);
     });
@@ -55,7 +55,7 @@ describe('resolveMediaBillingOrgId', () => {
       ['another organization', OTHER_ORG],
       ['personal credits (null)', null],
     ])('refuses a body naming %s with a 403 billing_organization_mismatch', async (_label, requested) => {
-      await expect(resolveMediaBillingOrgId(orgKeyRequest, requested)).rejects.toMatchObject({
+      await expect(resolveRequestBillingOrgId(orgKeyRequest, requested)).rejects.toMatchObject({
         statusCode: 403,
         additionalInfo: { errorCode: 'billing_organization_mismatch' },
       });
@@ -65,7 +65,7 @@ describe('resolveMediaBillingOrgId', () => {
     it('refuses with a 400 when the organization no longer exists', async () => {
       mockFindById.mockResolvedValue(null);
 
-      await expect(resolveMediaBillingOrgId(orgKeyRequest, undefined)).rejects.toMatchObject({
+      await expect(resolveRequestBillingOrgId(orgKeyRequest, undefined)).rejects.toMatchObject({
         statusCode: 400,
         message: expect.stringMatching(/no longer exists/),
       });
@@ -75,7 +75,7 @@ describe('resolveMediaBillingOrgId', () => {
     it("refuses with a 400 when the key's holder has left the organization", async () => {
       mockFindById.mockResolvedValue(orgWithMembers());
 
-      await expect(resolveMediaBillingOrgId(orgKeyRequest, undefined)).rejects.toMatchObject({
+      await expect(resolveRequestBillingOrgId(orgKeyRequest, undefined)).rejects.toMatchObject({
         statusCode: 400,
         message: expect.stringMatching(/no longer a member/),
       });
@@ -86,7 +86,7 @@ describe('resolveMediaBillingOrgId', () => {
       mockFindById.mockResolvedValue(orgWithMembers());
       const adminRequest = { ...orgKeyRequest, user: { id: 'admin', isAdmin: true } as IUserDocument };
 
-      await expect(resolveMediaBillingOrgId(adminRequest, undefined)).resolves.toBe(KEY_ORG);
+      await expect(resolveRequestBillingOrgId(adminRequest, undefined)).resolves.toBe(KEY_ORG);
     });
   });
 
@@ -97,9 +97,13 @@ describe('resolveMediaBillingOrgId', () => {
   ])('leaves %s on the session billing rules', async (_label, apiKeyInfo) => {
     const req = { user, logger, apiKeyInfo };
 
-    await expect(resolveMediaBillingOrgId(req, OTHER_ORG)).resolves.toBe('resolved-by-session-rules');
+    await expect(resolveRequestBillingOrgId(req, OTHER_ORG)).resolves.toBe('resolved-by-session-rules');
     expect(mockResolveBillingOrgId).toHaveBeenCalledWith(req, OTHER_ORG);
     expect(mockFindById).not.toHaveBeenCalled();
+  });
+
+  it('is the function the media routes import under their own name', () => {
+    expect(resolveMediaBillingOrgId).toBe(resolveRequestBillingOrgId);
   });
 });
 
