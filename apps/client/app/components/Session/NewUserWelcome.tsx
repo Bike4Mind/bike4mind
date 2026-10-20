@@ -133,6 +133,11 @@ const NewUserWelcome = () => {
           {answersEstimate}
         </Typography>
       )}
+      {!canStart && !creditsLine && (
+        <Typography level="body-sm" data-testid="new-user-welcome-out-of-credits">
+          You&apos;re out of credits. The options below show how to continue.
+        </Typography>
+      )}
       {canStart && (
         <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
           Pick a prompt to start your first chat, or type your own below.
