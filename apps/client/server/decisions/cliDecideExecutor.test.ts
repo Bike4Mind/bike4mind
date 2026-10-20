@@ -14,15 +14,15 @@ vi.mock('@bike4mind/database', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/database')>()),
   userRepository: { findById: (...args: unknown[]) => findById(...args) },
 }));
-vi.mock('./runDecision', () => ({
-  runDecision: (...args: unknown[]) => runDecision(...args),
+vi.mock('./runDecisionTool', () => ({
+  runDecisionTool: (...args: unknown[]) => runDecision(...args),
 }));
 
 const executor = () => buildDecideExecutor({} as never);
 const request = {
   toolName: 'decide' as const,
   userId: 'user-1',
-  input: { input: 'Payouts are failing', questions: [{ type: 'predicate', name: 'urgent' }] },
+  input: { input: 'Payouts are failing', questions: [{ type: 'predicate', name: 'urgent', instructions: 'Urgent?' }] },
 };
 
 beforeEach(() => {
@@ -43,6 +43,16 @@ describe('buildDecideExecutor', () => {
       model: 'gpt-6-luna',
       answers: [{ type: 'predicate', name: 'urgent', probability: 0.9 }],
     });
+    expect(findById).toHaveBeenCalledWith('user-1');
+    expect(runDecision).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-1',
+        user: { _id: 'user-1' },
+        authOrigin: 'session',
+        source: 'cli',
+        request: request.input,
+      })
+    );
   });
 
   it('rethrows a provider failure as its class, never the vendor message', async () => {
@@ -60,5 +70,12 @@ describe('buildDecideExecutor', () => {
 
     const failure = await executor()(request).catch(error => error);
     expect(failure.message).toBe('decision_request_error: invalid_request');
+  });
+
+  it('refuses image arrays before running the text-only CLI tool', async () => {
+    await expect(
+      executor()({ ...request, input: { ...request.input, input: [{ type: 'image', file_id: 'file-1' }] } })
+    ).rejects.toThrow('ZodError');
+    expect(runDecision).not.toHaveBeenCalled();
   });
 });

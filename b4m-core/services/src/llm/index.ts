@@ -68,3 +68,5 @@ export type {
   DagNodeHandle,
 } from './tools/implementation/coordinateTask';
 export * from './toolEchoSources';
+export { DecisionToolRequestSchema } from './tools/implementation/decide';
+export type { DecideToolFn, DecisionToolRequest } from './tools/base/types';

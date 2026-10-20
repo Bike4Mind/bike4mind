@@ -15,6 +15,7 @@ import {
   generateCliTools,
   type CliToolListInput,
   type HookWrapperContext,
+  type ToolFilter,
 } from './toolsAdapter.js';
 import { ConfigStore } from '../storage/ConfigStore.js';
 import { PermissionManager } from './PermissionManager.js';
@@ -715,7 +716,7 @@ describe('generateCliTools checkpoint wiring', () => {
 describe('generateCliTools decide availability', () => {
   const modelProbeClient = (models: unknown[]) => ({ get: vi.fn(async () => ({ models })) }) as unknown as ApiClient;
 
-  const build = (apiClient: ApiClient) =>
+  const build = (apiClient: ApiClient, toolFilter?: ToolFilter) =>
     generateCliTools(
       'user-1',
       {} as never, // llm: not exercised while tool schemas are built
@@ -725,9 +726,21 @@ describe('generateCliTools decide availability', () => {
       { currentAgent: null },
       {} as ConfigStore,
       apiClient,
-      undefined, // toolFilter
+      toolFilter,
       undefined // showUserQuestion
     );
+
+  it.each([
+    { deniedTools: ['decide'] },
+    { allowedTools: ['file_read'] },
+    { allowedTools: ['decide'], deniedTools: ['decide'] },
+  ])('skips the decision-model lookup when the filter excludes decide: %j', async toolFilter => {
+    const apiClient = modelProbeClient([{ id: 'gpt-6-luna' }]);
+    const { tools } = await build(apiClient, toolFilter);
+
+    expect(apiClient.get).not.toHaveBeenCalled();
+    expect(tools.map(tool => tool.toolSchema.name)).not.toContain('decide');
+  });
 
   it('offers decide only when the deployment reports a callable decision model', async () => {
     // The probe caches a yes for the process, so the empty-list case has to run first.

@@ -1,10 +1,13 @@
 import type { ApiClient } from '../auth/ApiClient';
+import { logger } from './Logger';
 
 const probeDecisionModels = async (apiClient: Pick<ApiClient, 'get'>): Promise<boolean> => {
   try {
     const body = await apiClient.get<{ models?: unknown[] }>('/api/v1/decision-models');
     return Array.isArray(body?.models) && body.models.length > 0;
   } catch {
+    // Keep provider responses and request credentials out of diagnostics.
+    logger.debug('[decide] Decision-model availability lookup failed; hiding the tool until the next build.');
     return false;
   }
 };

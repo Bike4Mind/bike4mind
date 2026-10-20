@@ -23,9 +23,19 @@ describe('agentExecutor toolDeps wiring', () => {
   // `decide` is an optional ToolBuilderDeps prop, so dropping either line typechecks and leaves the
   // agent surface offering a tool that only throws. buildSharedTools drops it when absent.
   it('wires the decide tool seam into both toolDeps', () => {
-    expect(
-      source.match(/decide: \(\{ userId, user: decisionUser, logger: decisionLogger, request \}\) =>/g)
-    ).toHaveLength(2);
+    for (const run of ['execution', 'child']) {
+      const start = source.indexOf(
+        'const toolDeps: ToolBuilderDeps = {',
+        run === 'child' ? source.indexOf('async function processSubagentDispatch') : 0
+      );
+      const end = source.indexOf('\n      db: {', start);
+      expect(start).toBeGreaterThan(-1);
+      expect(end).toBeGreaterThan(start);
+      const toolDeps = source.slice(start, end);
+      expect(toolDeps).toContain(`organizationId: ${run}.organizationId,`);
+      expect(toolDeps).toContain(`...executionTurnAuth(${run}),`);
+      expect(toolDeps).toContain("decide: params => runDecisionTool({ ...params, source: 'agent' }),");
+    }
   });
 
   // Both are optional on ToolContext.db, so dropping either typechecks and edit_image then refuses

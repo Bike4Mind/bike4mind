@@ -64,7 +64,12 @@ describe('buildSharedTools: decide host hook', () => {
       input: 'Help! Payouts have been failing.',
       questions: [
         { type: 'predicate', name: 'is_urgent', instructions: 'Needs a reply within 24h.' },
-        { type: 'choice', name: 'team', instructions: 'Which team?', choices: [{ value: 'billing' }] },
+        {
+          type: 'choice',
+          name: 'team',
+          instructions: 'Which team?',
+          choices: [{ value: 'billing' }, { value: 'support' }],
+        },
       ],
     });
 
@@ -83,6 +88,31 @@ describe('buildSharedTools: decide host hook', () => {
   it('is dropped from the built list when availability says no model can answer', () => {
     const tools = buildSharedTools(deps, callbacks, { enabledTools: ['decide'], toolAvailability: { decide: false } });
     expect(tools?.some(entry => entry.toolSchema.name === 'decide')).toBe(false);
+  });
+
+  it('preserves the API-key principal and active account through the builder', async () => {
+    const runDecision = vi.fn(async () => answer);
+    const tools = buildSharedTools(
+      { ...deps, authOrigin: 'apiKey', apiKeyId: 'key-1', organizationId: 'org-2', decide: runDecision },
+      callbacks,
+      { enabledTools: ['decide'] }
+    );
+    const tool = tools?.find(entry => entry.toolSchema.name === 'decide');
+    expect(tool).toBeDefined();
+
+    await tool!.toolFn({
+      input: 'x',
+      questions: [{ type: 'predicate', name: 'urgent', instructions: 'Is it urgent?' }],
+    });
+
+    expect(runDecision).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'test-user',
+        authOrigin: 'apiKey',
+        apiKeyId: 'key-1',
+        organizationId: 'org-2',
+      })
+    );
   });
 
   it('is dropped when the host injects no hook, even with availability wide open', () => {

@@ -390,8 +390,12 @@ export async function generateCliTools(
     'web_search',
     'web_fetch',
   ];
-  // `decide` is offered only where a decision model is actually callable.
-  if (await hasDecisionModels(apiClient)) enabledB4mToolNames.push('decide');
+  // Apply the caller's restriction before probing: a denied tool should not add network work.
+  const normalizedAllowed = toolFilter?.allowedTools?.map(normalizeToolName);
+  const normalizedDenied = toolFilter?.deniedTools?.map(normalizeToolName);
+  const allowsDecide =
+    !normalizedDenied?.includes('decide') && (!normalizedAllowed?.length || normalizedAllowed.includes('decide'));
+  if (allowsDecide && (await hasDecisionModels(apiClient))) enabledB4mToolNames.push('decide');
 
   // Filter the CLI-safe shared tools to only CLI-enabled ones, then merge with all
   // CLI-only tools. `cliSharedTools` (from the services cliTools entry) exposes just
@@ -458,12 +462,6 @@ export async function generateCliTools(
 
   // Apply tool filter if provided (for subagents)
   if (toolFilter) {
-    const { allowedTools, deniedTools } = toolFilter;
-
-    // Normalize tool names to B4M format
-    const normalizedAllowed = allowedTools?.map(normalizeToolName);
-    const normalizedDenied = deniedTools?.map(normalizeToolName);
-
     tools = tools.filter(tool => {
       const toolName = tool.toolSchema.name;
 

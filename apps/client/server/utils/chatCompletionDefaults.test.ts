@@ -10,6 +10,9 @@ const { getEffectiveLLMApiKeysMock, getAvailableModelsMock, getLlmByModelMock } 
   getLlmByModelMock: vi.fn(),
 }));
 
+const runDecisionToolMock = vi.hoisted(() => vi.fn());
+vi.mock('@server/decisions/runDecisionTool', () => ({ runDecisionTool: runDecisionToolMock }));
+
 vi.mock('@bike4mind/services', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/services')>();
   return {
@@ -353,7 +356,23 @@ describe('isChatModelUsable', () => {
 describe('getDefaultChatCompletionOptions', () => {
   beforeEach(() => {
     vi.resetModules();
+    runDecisionToolMock.mockReset();
   });
+
+  it('forwards the trusted key and active workspace into the decision host', async () => {
+    const { getDefaultChatCompletionOptions } = await import('./chatCompletionDefaults');
+    const params = {
+      userId: 'user-1',
+      user: { id: 'user-1' } as never,
+      logger: {} as never,
+      authOrigin: 'apiKey' as const,
+      apiKeyId: 'key-1',
+      organizationId: 'active-org',
+      request: { input: 'text', questions: [{ type: 'predicate' as const, name: 'urgent', instructions: 'Urgent?' }] },
+    };
+    await getDefaultChatCompletionOptions().decide!(params);
+    expect(runDecisionToolMock).toHaveBeenCalledWith({ ...params, source: 'api' });
+  }, 20000);
 
   it('wires the save_content_to_data_lake audit adapters', async () => {
     const { getDefaultChatCompletionOptions } = await import('./chatCompletionDefaults');

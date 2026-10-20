@@ -63,6 +63,8 @@ export type DecisionCaller = {
   apiKeyId?: string;
   /** The key's scope + billing slice, when one authenticated the turn. */
   apiKeyInfo?: Pick<Express.ApiKeyInfo, 'keyId' | 'scopes' | 'billingOwnerType' | 'organizationId'>;
+  /** Validated active workspace for a tool turn; null explicitly selects personal credits. */
+  billingOrganizationId?: string | null;
 };
 
 /** The request body, with `model` optional: a tool caller lets the deployment pick the first callable one. */
@@ -163,6 +165,7 @@ export async function runDecision({
     requiredCredits: maxCostUsd > 0 ? usdToCredits(maxCostUsd) : 0,
     enforceCredits: getSettingsValue('enforceCredits', settings),
     featureLabel: 'decisions',
+    billingOrganizationId: caller.billingOrganizationId,
   });
 
   const decisionId = `dec_${randomUUID().replace(/-/g, '')}`;

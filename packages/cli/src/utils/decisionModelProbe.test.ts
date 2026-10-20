@@ -6,6 +6,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { ApiClient } from '../auth/ApiClient';
 
+const debug = vi.hoisted(() => vi.fn());
+vi.mock('./Logger', () => ({ logger: { debug } }));
+
 const load = async () => {
   vi.resetModules();
   return import('./decisionModelProbe.js');
@@ -39,7 +42,11 @@ describe('hasDecisionModels', () => {
         .mockResolvedValueOnce({ models: [{ id: 'gpt-6-luna' }] }),
     };
 
+    debug.mockClear();
     expect(await hasDecisionModels(apiClient)).toBe(false);
+    expect(debug).toHaveBeenCalledExactlyOnceWith(
+      '[decide] Decision-model availability lookup failed; hiding the tool until the next build.'
+    );
     // The retry proves the failed probe cleared the cache instead of pinning a no for the process.
     expect(await hasDecisionModels(apiClient)).toBe(true);
     expect(apiClient.get).toHaveBeenCalledTimes(2);

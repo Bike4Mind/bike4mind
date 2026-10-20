@@ -1,4 +1,4 @@
-import { CreditHolderType } from '@bike4mind/common';
+import { ApiKeyScope, CreditHolderType } from '@bike4mind/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { resolveKey, callableProviders, registeredModels, providerSpy, recordUsage, reserve, refund, settle } =
@@ -138,6 +138,21 @@ describe('runDecision', () => {
     resolveKey.mockResolvedValue(null);
     await expect(run()).rejects.toMatchObject({ errorCode: 'provider_not_configured', status: 503 });
     expect(reserve).not.toHaveBeenCalled();
+  });
+
+  it('preserves the key policy and an explicit personal workspace through the billing seam', async () => {
+    const apiKeyInfo = { keyId: 'key-1', scopes: [ApiKeyScope.AI_CHAT], billingOwnerType: CreditHolderType.User };
+    await runDecision({
+      caller: { ...caller(), apiKeyId: 'key-1', apiKeyInfo, billingOrganizationId: null },
+      body: { input: 'text', questions: QUESTIONS },
+    });
+    expect(reserve).toHaveBeenCalledWith(
+      expect.objectContaining({
+        req: expect.objectContaining({ apiKeyInfo }),
+        billingOrganizationId: null,
+      })
+    );
+    expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ apiKeyId: 'key-1' }));
   });
 
   it('refuses model_unavailable for a model this deployment does not serve', async () => {

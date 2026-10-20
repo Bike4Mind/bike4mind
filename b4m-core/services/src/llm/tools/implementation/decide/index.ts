@@ -1,5 +1,6 @@
-import type { DecisionQuestion } from '@bike4mind/common';
 import { ToolDefinition } from '../../base/types';
+import { DecisionToolRequestSchema } from './request';
+export { DecisionToolRequestSchema } from './request';
 
 /**
  * Typed decision checks (predicate / choice / score) answered with calibrated probabilities,
@@ -12,16 +13,14 @@ export const decideTool: ToolDefinition = {
     toolFn: async value => {
       const run = context.decide;
       if (!run) throw new Error('decide is not available on this surface');
-      const { input, questions, model } = value as {
-        input: string;
-        questions: DecisionQuestion[];
-        model?: string;
-      };
+      const { input, questions, model } = DecisionToolRequestSchema.parse(value);
       const result = await run({
         userId: context.userId,
         user: context.user,
         logger: context.logger,
         authOrigin: context.authOrigin,
+        apiKeyId: context.apiKeyId,
+        organizationId: context.organizationId,
         request: { model, input, questions },
       });
       return JSON.stringify({ id: result.id, model: result.model, answers: result.answers });

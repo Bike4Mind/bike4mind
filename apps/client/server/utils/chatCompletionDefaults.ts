@@ -50,7 +50,7 @@ import { ApiKeyTable, getAvailableModels, getLlmByModel } from '@bike4mind/llm-a
 import { getSettingsByNames, ITokenizer, TiktokenTokenizer } from '@bike4mind/utils';
 import { ILogger, Logger } from '@bike4mind/observability';
 import { accessibleBy } from '@casl/mongoose';
-import { runDecision } from '@server/decisions/runDecision';
+import { runDecisionTool } from '@server/decisions/runDecisionTool';
 import { logEvent } from '@server/utils/analyticsLog';
 import { recallMementosV2 } from '@server/memory/recallMementosV2';
 import { recallLakeMemoryForSession } from '@server/memory/lakeMemoryRecall';
@@ -283,11 +283,7 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
     },
     // The `decide` tool's host seam: the same runner, credit hold and retry the public decisions
     // route uses, so a tool answer and an API answer are one code path.
-    decide: ({ userId, user, logger, authOrigin, request }) =>
-      runDecision({
-        caller: { userId, user, logger, source: authOrigin === 'apiKey' ? 'api' : 'web' },
-        body: request,
-      }),
+    decide: params => runDecisionTool({ ...params, source: params.authOrigin === 'apiKey' ? 'api' : 'web' }),
     logEvent: logEvent,
     cacheRepository: cacheRepository,
     publishTelemetryAlert: publishTelemetryAlertCallback,

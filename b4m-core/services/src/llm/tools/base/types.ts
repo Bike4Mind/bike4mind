@@ -1,6 +1,7 @@
 import { BaseStorage } from '@bike4mind/utils';
 import type { RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import { type ICompletionBackend, type ICompletionOptionTools } from '@bike4mind/llm-adapters';
+import type { DecisionToolRequest } from '../implementation/decide/request';
 import type { Logger } from '@bike4mind/observability';
 import { GetEffectiveApiKeyAdapters } from '../../../apiKeyService';
 import type { GeneratedImageCounter } from '../../recordGeneratedImages';
@@ -29,7 +30,6 @@ import {
   ModelInfo,
   type AuthOrigin,
   type CitableSource,
-  type DecisionQuestion,
   type DecisionResponse,
 } from '@bike4mind/common';
 
@@ -74,13 +74,7 @@ export type ToolLlmUsage = {
   costUsd: number;
 };
 
-/** One `decide` call's request. Text input only: the tool adds no image arm over the route. */
-export type DecisionToolRequest = {
-  /** Omit to let the host pick the first model it can call; a pinned id must be catalog-known. */
-  model?: string;
-  input: string;
-  questions: DecisionQuestion[];
-};
+export type { DecisionToolRequest } from '../implementation/decide/request';
 
 /**
  * The host's execution seam for `decide`. Returns the same envelope the public route serializes,
@@ -91,6 +85,9 @@ export type DecideToolFn = (params: {
   user: IUserDocument;
   logger: Logger;
   authOrigin: AuthOrigin;
+  /** Trusted turn principal and active billing account, never model-authored arguments. */
+  apiKeyId?: string;
+  organizationId?: string;
   request: DecisionToolRequest;
 }) => Promise<DecisionResponse>;
 

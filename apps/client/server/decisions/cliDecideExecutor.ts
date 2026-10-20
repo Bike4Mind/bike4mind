@@ -1,8 +1,9 @@
 import { userRepository } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import type { ServerToolExecutor } from '@bike4mind/services';
+import { DecisionToolRequestSchema } from '@bike4mind/services/llm';
 import { describeDecisionFailure } from '@server/decisions/decisionErrors';
-import { runDecision, type DecisionRunBody } from '@server/decisions/runDecision';
+import { runDecisionTool } from '@server/decisions/runDecisionTool';
 
 /**
  * The `decide` server-tool executor, shared by the CLI Lambda and the local-dev Next route. It lives
@@ -18,9 +19,14 @@ export const buildDecideExecutor =
     const user = await userRepository.findById(request.userId);
     if (!user) throw new Error('No such user');
     try {
-      const result = await runDecision({
-        caller: { userId: request.userId, user, logger, source: 'cli' },
-        body: request.input as unknown as DecisionRunBody,
+      const result = await runDecisionTool({
+        userId: request.userId,
+        user,
+        logger,
+        source: 'cli',
+        authOrigin: 'session',
+        organizationId: user.organizationId?.toString(),
+        request: DecisionToolRequestSchema.parse(request.input),
       });
       return JSON.stringify({ id: result.id, model: result.model, answers: result.answers });
     } catch (error) {
