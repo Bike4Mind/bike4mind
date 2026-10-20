@@ -9,7 +9,7 @@ import {
 } from '@server/entitlements/activeSubscriptions';
 import { getEntitlingPlanByPriceId } from '@client/lib/userSubscriptions/utils';
 import { UserSubscriptionTier } from '@client/lib/userSubscriptions/types';
-import { isDevelopment } from '@server/utils/config';
+import { isDevelopment } from '@bike4mind/server-utils/utils/config';
 
 /**
  * The rate-limit tier a request is charged against. Derived from the

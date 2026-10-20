@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mockSafeFetch } = vi.hoisted(() => ({ mockSafeFetch: vi.fn() }));
-vi.mock('@server/utils/ssrfProtection', () => ({ safeFetch: mockSafeFetch }));
+vi.mock('@bike4mind/server-utils/utils/ssrfProtection', () => ({ safeFetch: mockSafeFetch }));
 
 import { clearUpstreamFeedCache, fetchUpstreamFeed, getWhatsNewFeedUrl } from './upstreamFeed';
 

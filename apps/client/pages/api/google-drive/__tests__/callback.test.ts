@@ -28,7 +28,7 @@ vi.mock('@server/security/tokenEncryption', () => ({
   decryptToken: (v: string) => v,
 }));
 
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { JWT_SECRET: 'test-secret', GOOGLE_CLIENT_ID: 'cid', GOOGLE_CLIENT_SECRET: 'csecret' },
 }));
 
@@ -51,7 +51,7 @@ import errorHandler from '@server/middlewares/errorHandler';
 import { getTokens } from '@server/integrations/google/drive/common';
 import { issueStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
 import { createStateToken } from '@server/auth/jwtStateStore';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { GOOGLE_DRIVE_STATE_OPTIONS } from '@server/integrations/google/drive/common';
 
 /** Mint a genuine state token bound to a fresh nonce, returning both the state and the browser's cookie. */

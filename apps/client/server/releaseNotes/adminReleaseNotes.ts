@@ -14,7 +14,7 @@ import {
 } from '@bike4mind/common';
 import { getSettingsByNames } from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
-import { BadRequestError, ConflictError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, ConflictError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 
 export const RELEASE_NOTES_SETTING = 'releaseNotesConfig';
 

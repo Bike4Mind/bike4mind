@@ -7,7 +7,7 @@ import { userRepository } from '@bike4mind/database/auth';
 import { organizationService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { NotFoundError } from '@server/utils/errors';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { respond } from '@server/utils/respond';
 import { organizationGroupWithMembersResponseSchema } from '@bike4mind/common';
 import { z } from 'zod';

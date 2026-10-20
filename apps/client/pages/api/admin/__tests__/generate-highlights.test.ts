@@ -32,7 +32,7 @@ vi.mock('@server/releaseNotes/adminReleaseNotes', async importOriginal => {
 });
 
 const mockSendToQueue = vi.fn();
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => mockSendToQueue(...a) }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => mockSendToQueue(...a) }));
 vi.mock('sst', () => ({ Resource: { App: { stage: 'dev' } } }));
 
 import handler from '../generate-highlights';

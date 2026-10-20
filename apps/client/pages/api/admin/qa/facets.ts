@@ -1,6 +1,6 @@
 import { ApiKeyScope, QA_SLUG_PATTERN } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ensureAdmin } from '@server/utils/errors';
+import { ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 import { getQaFacets } from '@server/qa/reads';
 
 /** GET /api/admin/qa/facets?product= . Filter options for /status. */

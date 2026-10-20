@@ -25,7 +25,7 @@ vi.mock('@server/services/telemetryFingerprint', () => ({
   formatPrimaryAnomaly: vi.fn((s: string) => s.replace('_', ' ')),
 }));
 
-vi.mock('@server/utils/markdownEscape', () => ({
+vi.mock('@bike4mind/server-utils/utils/markdownEscape', () => ({
   escapeMarkdown: vi.fn((s: string) => s),
 }));
 

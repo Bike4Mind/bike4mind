@@ -9,7 +9,7 @@ vi.mock('sst', () => ({
 }));
 
 const mockEmitMetrics = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-vi.mock('@server/utils/cloudwatch', () => ({ emitMetrics: mockEmitMetrics }));
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetrics: mockEmitMetrics }));
 
 const mockCategorizeToolError = vi.hoisted(() => vi.fn().mockReturnValue('rate_limit'));
 vi.mock('@bike4mind/services', () => ({ categorizeToolError: mockCategorizeToolError }));

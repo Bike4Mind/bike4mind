@@ -25,8 +25,8 @@ import {
 import { WebhookDeliveryStatus } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { decryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
-import { validateTargetUrl } from '@server/utils/ssrfProtection';
-import { Config } from '@server/utils/config';
+import { validateTargetUrl } from '@bike4mind/server-utils/utils/ssrfProtection';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import {
   buildSignedWebhookHeaders,
   PERMANENT_FAILURE_CODES,
@@ -37,7 +37,7 @@ import {
   recordWebhookDeliverySuccess,
   recordWebhookDeliveryFailure,
   recordWebhookDeliverySkipped,
-} from '@server/utils/cloudwatch';
+} from '@bike4mind/server-utils/utils/cloudwatch';
 
 /**
  * Schema for webhook delivery messages

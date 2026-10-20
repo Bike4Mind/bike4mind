@@ -79,7 +79,7 @@ describe('AdminModalVideoFields', () => {
       })
     );
     expect(mocks.upload).toHaveBeenCalledWith(
-      expect.objectContaining({ public: true, prefix: 'modals', mimeType: 'video/mp4' }),
+      expect.objectContaining({ public: true, purpose: 'modal-media', mimeType: 'video/mp4' }),
       expect.any(File)
     );
   });

@@ -637,7 +637,7 @@ const EditModalNew: React.FC<EditModalProps> = ({ isOpen, onClose, modalData, on
                                 mimeType: file.type,
                                 fileSize: file.size,
                                 public: true,
-                                prefix: 'modals',
+                                purpose: 'modal-media',
                               },
                               file,
                               abortController.signal

@@ -93,8 +93,6 @@ export default class TitanBedrockBackend extends BaseBedrockBackend {
       textGenerationConfig,
     };
 
-    Logger.globalInstance.log('[TitanBedrockBackend] Request payload:', JSON.stringify(payload, null, 2));
-
     return {
       modelId: model,
       contentType: 'application/json',

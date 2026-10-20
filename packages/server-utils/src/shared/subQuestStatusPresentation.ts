@@ -3,7 +3,7 @@ import type { SubQuestStatus } from '@bike4mind/common';
 /**
  * The one glyph/label vocabulary for a sub-quest status, shared by the client-side export
  * (apps/client/app/utils/questExport.ts) and the queued server-side export
- * (apps/workers/src/queueHandlers/questExport.ts). It lives in apps/client/shared because
+ * (apps/workers/src/queueHandlers/questExport.ts). It lives in @bike4mind/server-utils because
  * apps/workers may not import apps/client/app.
  *
  * Both maps used to be declared separately in those two files. Being `Record<SubQuestStatus, …>`

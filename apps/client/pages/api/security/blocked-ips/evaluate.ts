@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { blockedIPRepository, authFailLogRepository } from '@bike4mind/database';
-import { ensureAdmin } from '@server/utils/errors';
+import { ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 
 // POST /api/security/blocked-ips/evaluate
 // Evaluates last 10 minutes and auto-blocks IPs with >=10 attempts.

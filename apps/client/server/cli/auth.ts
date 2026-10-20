@@ -1,5 +1,5 @@
 import jwt from 'jsonwebtoken';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import {
   IUserDocument,
   ApiKeyScope,
@@ -14,7 +14,7 @@ import { extractApiKeyFromHeaders, checkApiKeyRateLimit } from '@server/utils/ap
 import { hasAcceptedPolicy } from '@bike4mind/server-utils/auth/consentGate';
 import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
 import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@server/auth/mfaEnforcement';
-import { UnauthorizedError, ForbiddenError, TooManyRequestsError } from '@server/utils/errors';
+import { UnauthorizedError, ForbiddenError, TooManyRequestsError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 
 /** `additionalInfo` of a rate-limit TooManyRequestsError; transports turn it into response headers. */

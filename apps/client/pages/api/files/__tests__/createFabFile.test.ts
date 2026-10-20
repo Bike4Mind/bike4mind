@@ -32,7 +32,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@server/utils/browserUploadUrl', () => ({ resolveBrowserUploadUrl: (_id: string, url: string) => url }));
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ upload: vi.fn(), getSignedUrl: h.signUrl }),
 }));
 
@@ -400,6 +400,17 @@ describe('POST /api/files/createFabFile - signing boundaries', () => {
     expect(h.signUrl.mock.calls[0][1]).toBe('get');
   });
 
+  it.each(['tmp', 'temp', 'x/backups', 'text-edit-backups'])(
+    'ignores a caller-chosen %s prefix, so the object stays under a tracked key',
+    async prefix => {
+      const { res } = makeRes();
+      await run(body({ prefix }), res);
+      const persisted = h.fabFileCreate.mock.calls[0][0] as { filePath: string; prefix?: string };
+      expect(persisted.prefix).toBeUndefined();
+      expect(persisted.filePath).toMatch(/^[0-9a-f-]{36}\.txt$/);
+    }
+  );
+
   it('keeps URL-less uploads on private PUT signing without a browser GET', async () => {
     const { res, json } = makeRes();
     await run(body(), res);
@@ -407,6 +418,8 @@ describe('POST /api/files/createFabFile - signing boundaries', () => {
     expect(json.mock.calls[0][0].fileUrl).toBeUndefined();
     expect(h.signUrl).toHaveBeenCalledTimes(1);
     expect(h.signUrl.mock.calls[0][1]).toBe('put');
+    // Bound to the declared fileSize, so S3 refuses a PUT of any other length.
+    expect(h.signUrl.mock.calls[0][2]).toMatchObject({ ContentLength: 10 });
   });
 });
 
@@ -420,10 +433,10 @@ describe('POST /api/files/createFabFile - admin modal video', () => {
   });
 
   const mp4 = (overrides: Record<string, unknown> = {}) =>
-    body({ fileName: 'demo.mp4', mimeType: 'video/mp4', fileSize: 1000, prefix: 'modals', ...overrides });
+    body({ fileName: 'demo.mp4', mimeType: 'video/mp4', fileSize: 1000, purpose: 'modal-media', ...overrides });
   const asAdmin = { user: { id: 'u1', isAdmin: true } };
 
-  it('admits an admin mp4 under the modals prefix', async () => {
+  it('admits an admin mp4 under the server-chosen modals prefix', async () => {
     const { res } = makeRes();
     await run(mp4(), res, asAdmin);
 
@@ -432,10 +445,26 @@ describe('POST /api/files/createFabFile - admin modal video', () => {
     expect(persisted.filePath).toMatch(/^modals\/.+\.mp4$/);
   });
 
+  it('stores an admin modal poster under the modals prefix with the usual type rules', async () => {
+    const { res } = makeRes();
+    await run(mp4({ fileName: 'poster.jpg', mimeType: 'image/jpeg' }), res, asAdmin);
+
+    const persisted = h.fabFileCreate.mock.calls[0][0] as { filePath: string };
+    expect(persisted.filePath).toMatch(/^modals\/.+\.jpg$/);
+  });
+
+  it('ignores the purpose for a non-admin poster', async () => {
+    const { res } = makeRes();
+    await run(mp4({ fileName: 'poster.jpg', mimeType: 'image/jpeg' }), res, { user: { id: 'u1', isAdmin: false } });
+
+    const persisted = h.fabFileCreate.mock.calls[0][0] as { filePath: string };
+    expect(persisted.filePath).not.toMatch(/^modals\//);
+  });
+
   it.each([
     ['a non-admin', mp4(), { user: { id: 'u1', isAdmin: false } }],
-    ['an admin under another prefix', mp4({ prefix: 'uploads' }), asAdmin],
-    ['an admin with no prefix', mp4({ prefix: undefined }), asAdmin],
+    ['an admin naming the prefix instead of the purpose', mp4({ purpose: undefined, prefix: 'modals' }), asAdmin],
+    ['an admin with another purpose', mp4({ purpose: 'other' }), asAdmin],
     ['an admin claiming another video type', mp4({ mimeType: 'video/quicktime' }), asAdmin],
     ['an admin with a non-mp4 name', mp4({ fileName: 'demo.mov' }), asAdmin],
   ])('refuses %s with the usual 400', async (_case, payload, overrides) => {

@@ -10,7 +10,7 @@ import { normalizeId } from '@bike4mind/utils/normalizeId';
 import { grantingLakes, resolveAccessibleLakes } from '@server/dataLakes';
 import { holdsDataLakeReadScope } from '@server/dataLakes/dataLakeScopes';
 import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import type { Request } from 'express';
 
 /** Storage and repository adapter shared by the file read doors. */

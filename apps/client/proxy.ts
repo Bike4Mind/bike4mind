@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { resolvePyodideMirrorOrigin } from '@client/app/utils/pyodideDistribution';
-import { getTrustedHeaderClientIp } from '@client/server/utils/trustedClientIpHeaders';
+import { getTrustedHeaderClientIp } from '@bike4mind/server-utils/utils/trustedClientIpHeaders';
 import { resolveFilesOrigin, resolveObjectStoreOrigin } from '@client/server/utils/deploymentMediaOrigins';
 import type { NextRequest } from 'next/server';
 

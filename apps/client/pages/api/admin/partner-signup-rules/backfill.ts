@@ -1,7 +1,7 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { BadRequestError, ensureAdmin } from '@server/utils/errors';
+import { BadRequestError, ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 import { loadTeamPlanSettings, NotFoundError } from '@bike4mind/utils';
 import {
   adminSettingsRepository,

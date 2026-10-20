@@ -57,7 +57,7 @@ const update = vi.hoisted(() =>
     stripeCustomerId: 'cus_SECRET',
   }))
 );
-vi.mock('@server/utils/errors', () => ({
+vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   BadRequestError: class BadRequestError extends Error {},
 }));
 vi.mock('@bike4mind/services', () => ({ organizationService: { get, update } }));
@@ -66,7 +66,7 @@ vi.mock('@server/models/Subscription', () => ({ subscriptionRepository: {} }));
 vi.mock('@client/lib/subscriptions/types', () => ({ SubscriptionOwnerType: { Organization: 'organization' } }));
 
 import '@pages/api/organizations/[id]/index';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 function mocks(user: unknown, method: 'GET' | 'PUT' = 'GET') {
   const { req, res } = createMocks({ method, query: { id: 'org1' } });
@@ -107,6 +107,25 @@ describe('PUT /api/organizations/[id] - URL id wins', () => {
     const [, params] = update.mock.calls[0];
     expect(params.id).toBe('org1');
     expect(params.name).toBe('renamed');
+  });
+
+  it('forwards storageLimit (including a fractional MB and null) instead of stripping it', async () => {
+    for (const storageLimit of [0.5, null]) {
+      update.mockClear();
+      const { req, res } = mocks({ id: 'caller', isAdmin: true }, 'PUT');
+      (req as any).body = { storageLimit };
+      await mockRefs.putHandler!(req, res);
+      const [, params] = update.mock.calls[0];
+      expect(params.storageLimit).toBe(storageLimit);
+    }
+  });
+
+  it.each([-5, 1e303])('rejects an out-of-range storageLimit (%d) before reaching the service', async storageLimit => {
+    update.mockClear();
+    const { req, res } = mocks({ id: 'caller', isAdmin: true }, 'PUT');
+    (req as any).body = { storageLimit };
+    await expect(mockRefs.putHandler!(req, res)).rejects.toThrow();
+    expect(update).not.toHaveBeenCalled();
   });
 
   it('rejects a missing id with BadRequestError before reaching the service', async () => {

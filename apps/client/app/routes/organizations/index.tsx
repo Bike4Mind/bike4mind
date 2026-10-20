@@ -8,7 +8,7 @@ import {
 } from '@client/app/hooks/data/organizations';
 import { useGetSubscriptionsByOwner } from '@client/app/hooks/data/subscriptions';
 import { useTeamPlanAvailable } from '@client/app/hooks/data/teamPlanSettings';
-import { TEAM_PLAN_UNAVAILABLE_MESSAGE } from '@client/lib/subscriptions/constants';
+import { TEAM_PLAN_UNAVAILABLE_MESSAGE } from '@bike4mind/server-utils/lib/subscriptions/constants';
 import {
   SubscriptionOwnerType,
   isDelinquentSubscriptionStatus,

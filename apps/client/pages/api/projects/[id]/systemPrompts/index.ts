@@ -5,7 +5,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { PROJECTS_WRITE_SCOPES } from '@server/projects/projectScopes';
 import { logEvent } from '@server/utils/analyticsLog';
 import { ProjectEvents } from '@bike4mind/common';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { ProjectFilesRequestBody } from '../../../../../types/api';
 
 const handler = baseApi({ requiredScopes: PROJECTS_WRITE_SCOPES })

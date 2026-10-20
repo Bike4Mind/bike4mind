@@ -36,8 +36,8 @@ import {
 } from '@bike4mind/database';
 import { organizationService, userService } from '@bike4mind/services';
 import { postMessageToSlack } from '@server/integrations/slack/slack';
-import { emitMetrics } from '@server/utils/cloudwatch';
-import { Config } from '@server/utils/config';
+import { emitMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
 
 const CLOUDWATCH_NAMESPACE = 'Lumina5/Storage';

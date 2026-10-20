@@ -3,7 +3,7 @@ import { ApiKeyScope, type AuditLogPage } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { baseApi } from '@server/middlewares/baseApi';
 import { encodeAuditCursor, parseAuditListQuery } from '@server/utils/adminAuditQuery';
-import { ensureAdmin } from '@server/utils/errors';
+import { ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
   ensureAdmin(req.user?.isAdmin);

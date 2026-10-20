@@ -50,7 +50,7 @@ vi.mock('@server/services/whatsNewDistribution', () => ({
   },
 }));
 
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   emitModalGenerationMetrics: vi.fn(async () => undefined),
 }));
 

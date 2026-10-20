@@ -10,7 +10,7 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: { shareable: { findAccessibleById: vi.fn() } },
 }));
 
-vi.mock('@server/utils/storage', () => {
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => {
   const storage = { download: vi.fn().mockResolvedValue(Buffer.from('file-bytes')) };
   return { getFilesStorage: () => storage };
 });
@@ -35,7 +35,7 @@ vi.mock('@bike4mind/slack', () => {
 });
 
 import { fabFileRepository, Quest, Session } from '@bike4mind/database';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
 import { downloadAttachmentUrl } from '@server/utils/downloadAttachmentUrl';
 import { isFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';

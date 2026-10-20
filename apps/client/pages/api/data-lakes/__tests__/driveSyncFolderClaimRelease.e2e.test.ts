@@ -64,7 +64,7 @@ vi.mock('@server/integrations/google/drive/driveClient', async importOriginal =>
 });
 vi.mock('@server/security/tokenEncryption', () => ({ decryptToken: () => 'plaintext-refresh-token' }));
 vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({ isEncrypted: () => true }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('sst', () => ({
   Resource: {
     get driveLakeIngestQueue() {

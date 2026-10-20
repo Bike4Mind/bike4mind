@@ -16,7 +16,7 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: { findById: (...a: unknown[]) => mockFindFile(...a) },
 }));
 vi.mock('@bike4mind/services', () => ({ notebookCurationService: {} }));
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ download: vi.fn().mockResolvedValue(Buffer.from('x')) }),
 }));
 const mockSend = vi.fn();

@@ -1,6 +1,5 @@
-import { ForbiddenError, NotFoundError } from '@bike4mind/common';
+import { ForbiddenError, NotFoundError, type IUserDocument } from '@bike4mind/common';
 import { organizationRepository } from '@bike4mind/database';
-import type { Request } from 'express';
 
 /**
  * Turns a client-supplied "active org" selection (the org id the caller sends with a request)
@@ -32,16 +31,19 @@ import type { Request } from 'express';
  * change both together.
  */
 export async function resolveActiveOrg(
-  req: Request,
+  // Only `user` is read; a structural type keeps the package free of the client's Express augmentation.
+  req: { user?: IUserDocument },
   requestedOrgId: string | undefined | null
 ): Promise<string | undefined> {
   const orgId = requestedOrgId?.trim();
   if (!orgId) return undefined; // no active org selected -> personal scope
+  // Every caller sits behind auth, which sets `user`; Express's own typing leaves it optional.
+  const user = req.user as IUserDocument;
 
   // Admins can scope to any org, but the org must still exist - otherwise a typo in an admin
   // flow would stamp a garbage organizationId. A membership read would wrongly reject an admin
   // acting on behalf of an org, so verify existence instead.
-  if (req.user.isAdmin) {
+  if (user.isAdmin) {
     let org;
     try {
       org = await organizationRepository.findById(orgId);
@@ -61,7 +63,7 @@ export async function resolveActiveOrg(
 
   // Non-admins: the share-access gate grants only orgs they belong to and returns null for a
   // non-existent org, so this both authorizes and fails closed on a bad id.
-  const org = await organizationRepository.shareable.findAccessibleById(req.user, orgId);
+  const org = await organizationRepository.shareable.findAccessibleById(user, orgId);
   if (!org) {
     throw new ForbiddenError('You are not a member of the selected organization.');
   }

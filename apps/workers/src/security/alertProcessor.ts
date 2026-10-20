@@ -5,7 +5,7 @@ import { contextToLogs } from '@server/utils/logger';
 import { Context } from 'aws-lambda';
 import { Resource } from 'sst';
 import { EmailEvents } from '@server/utils/eventBus';
-import { escapeHtml } from '@server/utils/mailer/emailHelpers';
+import { escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 
 interface IUserData {
   username: string;

@@ -15,8 +15,8 @@ import { formatPlanPrice, pricePerThousandCredits, sharedPackRate } from './bill
 
 const creditPackages = Object.values(CREDIT_PACKAGES);
 const packRate = sharedPackRate(creditPackages);
-// The middle pack starts selected: a neutral default, not a recommendation, so it carries no badge.
-const DEFAULT_PACKAGE_ID: CreditPackageId = creditPackages[Math.floor(creditPackages.length / 2)].id;
+// The $20 pack starts selected: a neutral default, not a recommendation, so it carries no badge.
+const DEFAULT_PACKAGE_ID: CreditPackageId = CreditPackageId.Usd20;
 
 interface CreditsSectionProps {
   transactions: ICreditTransaction[];

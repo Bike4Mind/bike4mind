@@ -29,7 +29,7 @@ vi.mock('@server/utils/analyticsLog', () => ({
 }));
 // The real module builds an S3 client and reads SST resources at import, so it is replaced whole.
 vi.mock('@server/transcribe/transcribe', async () => {
-  const { BadRequestError } = await import('@server/utils/errors');
+  const { BadRequestError } = await import('@bike4mind/server-utils/utils/errors');
   class TranscribeRequestError extends BadRequestError {
     constructor(
       public kind: string,

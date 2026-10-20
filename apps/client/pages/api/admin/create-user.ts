@@ -3,11 +3,11 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { userRepository, pendingOtcTokenRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { BadRequestError, ForbiddenError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { requireStepUp } from '@server/auth/stepUp';
 import { EmailEvents } from '@server/utils/eventBus';
-import { getLogoUrl, buildEmailLogoImg } from '@server/utils/mailer/emailHelpers';
-import { Config } from '@server/utils/config';
+import { getLogoUrl, buildEmailLogoImg } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 

@@ -1,13 +1,13 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { FILES_READ_SCOPES } from '@server/files/fileScopes';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import { Request } from 'express';
 import { FabFile, fabFileRepository } from '@bike4mind/database';
 import { isImageServeable } from '@bike4mind/common';
 import { isFileInAccessibleLake, resolveAccessibleLakes } from '@server/dataLakes';
 import { holdsDataLakeReadScope } from '@server/dataLakes/dataLakeScopes';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 
 const GetPresignedUrlRequestInput = z.object({
   filePaths: z.array(z.string()),

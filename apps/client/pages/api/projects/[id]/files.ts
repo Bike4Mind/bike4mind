@@ -16,7 +16,7 @@ import {
 } from '@server/projects/projectScopes';
 import { logEvent } from '@server/utils/analyticsLog';
 import { ProjectEvents } from '@bike4mind/common';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 
 const addFileIdsBodySchema = z.object({
   fileIds: z.array(z.string()).min(1),

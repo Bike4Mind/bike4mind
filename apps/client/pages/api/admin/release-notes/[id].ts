@@ -9,8 +9,8 @@ import {
 } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { deploymentMediaOrigins } from '@server/utils/deploymentMediaOrigins';
-import { isValidObjectId } from '@server/utils/objectId';
-import { BadRequestError, ForbiddenError } from '@server/utils/errors';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
+import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { loadDenylistOrThrow, noteOrThrow, toAdminReleaseNote } from '@server/releaseNotes/adminReleaseNotes';
 
 const EditSchema = z

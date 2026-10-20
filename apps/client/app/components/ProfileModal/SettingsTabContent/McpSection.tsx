@@ -68,7 +68,8 @@ const McpSection = () => {
   const { data: servers, isLoading } = useMcpServers();
 
   const createMutation = useMutation({
-    mutationFn: (data: Omit<McpServer, 'id'>) => api.post('/api/mcp-servers', data),
+    mutationFn: (data: Omit<McpServer, 'id'>) =>
+      api.post<IMcpServerResponse & { connectionError?: string }>('/api/mcp-servers', data),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: mcpServerKeys.list() }),
   });
 
@@ -125,7 +126,10 @@ const McpSection = () => {
       if (editingId) {
         await updateMutation.mutateAsync({ ...formData, id: editingId });
       } else {
-        await createMutation.mutateAsync(formData);
+        const { data } = await createMutation.mutateAsync(formData);
+        if (data?.connectionError) {
+          toast.warning(`Saved, but could not connect: ${data.connectionError}`);
+        }
       }
       handleCancelEdit();
       setIsModalOpen(false);
@@ -337,7 +341,7 @@ const McpSection = () => {
               </Button>
 
               <Stack direction="row" spacing={2}>
-                <Button variant="solid" type="submit">
+                <Button variant="solid" type="submit" data-testid="mcp-server-submit-btn">
                   {editingId ? 'Update Server' : 'Create Server'}
                 </Button>
                 <Button

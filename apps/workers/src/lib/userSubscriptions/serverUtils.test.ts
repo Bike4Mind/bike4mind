@@ -3,7 +3,7 @@ import Stripe from 'stripe';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { creditTransactionRepository, organizationRepository, userRepository } from '@bike4mind/database';
 import { creditService, organizationService } from '@bike4mind/services';
-import { emitMetric } from '@server/utils/cloudwatch';
+import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import {
   handleOrganizationSubscriptionInvoice,
   handleUserSubscriptionInvoice,
@@ -63,7 +63,7 @@ vi.mock('@server/websocket/utils', () => ({
 vi.mock('@bike4mind/server-utils/services/teamPlanSettings', () => ({
   getTeamPlanSettings: vi.fn(async () => ({ minSeats: 4, maxSeats: 100, creditsPerSeat: 50000 })),
 }));
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   emitMetric: vi.fn().mockResolvedValue(undefined),
 }));
 

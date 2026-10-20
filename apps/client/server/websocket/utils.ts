@@ -8,7 +8,7 @@ import { MessageDataToClient } from '@bike4mind/common';
 import { Connection } from '@bike4mind/database/social';
 import { Logger } from '@bike4mind/observability';
 import { Context } from 'aws-lambda';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { connectDB } from '@bike4mind/database';
 import { contextToLogs } from '@server/utils/logger';
 import { JsonWebTokenError } from 'jsonwebtoken';

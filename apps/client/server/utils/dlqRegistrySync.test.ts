@@ -25,7 +25,7 @@ describe('DLQ registry sync', () => {
   }
 
   const repoRoot = path.resolve(__dirname, '../../../../');
-  const registryPath = path.join(repoRoot, 'apps/client/server/utils/dlqRegistry.ts');
+  const registryPath = path.join(repoRoot, 'packages/server-utils/src/utils/dlqRegistry.ts');
   const alarmsPath = path.join(repoRoot, 'infra/dlqAlarms.ts');
 
   it('DLQ_REGISTRY and DLQ_DESCRIPTORS have the same labels', () => {

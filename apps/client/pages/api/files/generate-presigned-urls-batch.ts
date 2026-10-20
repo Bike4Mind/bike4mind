@@ -30,8 +30,8 @@ import {
   getSettingsValue,
   resolveSupportedMimeType,
 } from '@bike4mind/utils';
-import { MAX_FILE_SIZE_DEFAULT_MB } from '@server/utils/maxFileSizeDefault';
-import { BadRequestError } from '@server/utils/errors';
+import { MAX_FILE_SIZE_DEFAULT_MB } from '@bike4mind/server-utils/utils/maxFileSizeDefault';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
 import { Request } from 'express';
@@ -286,6 +286,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(async (req:
           // through. This web upload door is the common case the lake previously could not identify
           // (sourceType left unset); the connector and chat-platform doors already stamp their own.
           sourceType: FabFileSourceType.MANUAL_UPLOAD,
+          clientUpload: true,
           ...(ownerOrganizationId && { organizationId: ownerOrganizationId }),
           ...(fileItem.contentHash && { contentHash: fileItem.contentHash }),
           ...(fileItem.relativePath && { relativePath: fileItem.relativePath }),
@@ -294,15 +295,20 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(async (req:
         req.ability!
       );
 
+      // Bound to the declared size the size and storage checks above ran on: S3 refuses any other length.
       const command = new PutObjectCommand({
         Bucket: Resource.fabFileBucket.name,
         Key: fileKey,
+        ContentLength: fileItem.fileSize,
       });
 
       // Hosted returns the direct S3 presign; self-host returns a same-origin proxy URL
       // (S3/MinIO isn't browser-reachable). Shared with the single-file path (createFabFile)
       // so the two upload entry points can't diverge.
-      const presignedUrl = await getSignedUrl(s3Client, command, { expiresIn: EXPIRES });
+      const presignedUrl = await getSignedUrl(s3Client, command, {
+        expiresIn: EXPIRES,
+        signableHeaders: new Set(['content-length']),
+      });
       const url = resolveBrowserUploadUrl(file.id, presignedUrl);
 
       return {

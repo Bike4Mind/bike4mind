@@ -1,5 +1,5 @@
 import type { Request } from 'express';
-import { APP_DECISION_COOKIE, DECISION_COOKIE } from '@client/lib/consentCookies';
+import { APP_DECISION_COOKIE, DECISION_COOKIE } from '@bike4mind/server-utils/lib/consentCookies';
 import { parseCookies } from './cookies';
 
 /**

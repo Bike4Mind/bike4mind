@@ -2,7 +2,7 @@ import { ApiKeyScope, describeRequestedIntegration, type IntegrationDemandRespon
 import { integrationRequestRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 /**
  * GET /api/admin/integrations/demand - roadmap requests per integration, most requested first,

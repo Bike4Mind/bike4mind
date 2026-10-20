@@ -1,6 +1,6 @@
 import { fromPublicReleaseNoteVideo, type IModalDocument, type PublicReleaseNote } from '@bike4mind/common';
 import { formatDisplayDate } from '@client/app/utils/dateUtils';
-import { groupReleaseNoteItems } from '@client/app/utils/releaseNoteItems';
+import { groupReleaseNoteItems } from '@bike4mind/server-utils/app/utils/releaseNoteItems';
 
 // Seen-tracking keys on modal._id, so the prefix keeps a note's id from colliding with a Modal ObjectId.
 export const RELEASE_NOTE_SLIDE_PREFIX = 'release-note:';

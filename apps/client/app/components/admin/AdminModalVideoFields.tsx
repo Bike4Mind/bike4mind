@@ -137,7 +137,7 @@ const AdminModalVideoFields: React.FC<AdminModalVideoFieldsProps> = ({
           mimeType: file.type,
           fileSize: file.size,
           public: true,
-          prefix: 'modals',
+          purpose: 'modal-media',
         },
         file
       );

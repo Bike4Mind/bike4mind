@@ -6,7 +6,7 @@ import {
 } from '@bike4mind/database';
 import type { IntegrationName, IntegrationHealthStatus, IIntegrationHealthCheckDocument } from '@bike4mind/database';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
-import { emitMetrics } from '@server/utils/cloudwatch';
+import { emitMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
 
 const INTEGRATION_HEALTH_NAMESPACE = 'Lumina5/IntegrationHealth';
 

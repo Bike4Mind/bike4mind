@@ -14,7 +14,7 @@ import { logEvent } from '@server/utils/analyticsLog';
 import { unpublishUserArtifactsBySource } from '@server/services/publish/purgeUserPublishedArtifacts';
 import { baseApi } from '@server/middlewares/baseApi';
 import { adjustOwnerStorageInSession } from '@bike4mind/server-utils/s3/storageCharge';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { getGeneratedCopyStore } from '@server/files/generatedCopyStore';
 import { assertFilesReadScope, assertFilesWriteScope, FILES_READ_OR_WRITE_SCOPES } from '@server/files/fileScopes';
 import qs from 'qs';

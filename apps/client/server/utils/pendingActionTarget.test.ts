@@ -7,13 +7,13 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: { shareable: { findAccessibleById: vi.fn() } },
 }));
 
-vi.mock('@server/utils/storage', () => {
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => {
   const storage = { download: vi.fn() };
   return { getFilesStorage: () => storage };
 });
 
 import { fabFileRepository } from '@bike4mind/database';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { ConfluenceResource, GitHubResource, JiraResource } from '@bike4mind/slack';
 import { loadFabFileAttachment, resolvePendingActionTarget } from './pendingActionTarget';
 

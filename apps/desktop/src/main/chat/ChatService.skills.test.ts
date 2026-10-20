@@ -14,6 +14,9 @@ import { SkillCatalog, type RemoteSkills } from './skills/SkillCatalog';
 import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
 
+// Skill authorization tests must not depend on the user's login-shell startup.
+vi.mock('./tools/userPath', () => ({ resolveUserPath: async () => process.env.PATH ?? '' }));
+
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
 }
@@ -116,7 +119,8 @@ describe('ChatService and skills', () => {
   });
 
   async function turn(sessionId: string, text: string, expectedPosts: number): Promise<Record<string, unknown>> {
-    await service.send(sessionId, text);
+    const result = await service.send(sessionId, text);
+    if (!result.ok) throw new Error(result.error);
     await vi.waitUntil(() => post.mock.calls.length === expectedPosts, { timeout: 5000, interval: 5 });
     const stream = streams[expectedPosts - 1];
     stream.write(frame({ type: 'content', text: 'ok', stopReason: 'end_turn' }));
@@ -125,6 +129,8 @@ describe('ChatService and skills', () => {
       timeout: 5000,
       interval: 5,
     });
+    // The done event precedes cleanup of the active turn.
+    await vi.waitUntil(() => !service.isSessionBusy(sessionId), { timeout: 5000, interval: 5 });
     return post.mock.calls[expectedPosts - 1][1];
   }
 

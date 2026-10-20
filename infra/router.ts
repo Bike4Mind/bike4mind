@@ -287,7 +287,7 @@ const routerInstance = shouldUseSharedRouter
 /**
  * The base URL path for the local dev file proxy.
  * Must match LOCAL_FILE_PROXY_BASE in
- * apps/client/server/utils/appFileProxy.ts — kept in sync so the
+ * packages/server-utils/src/utils/appFileProxy.ts - kept in sync so the
  * runtime gate and infra always agree on the same string.
  */
 export const LOCAL_FILE_PROXY_BASE = '/api/app-files/serve';
@@ -332,7 +332,7 @@ export const router = routerInstance;
  *   - `oauthServer.ts` uses it as the OIDC issuer, where the exact string is a
  *     spec-level identity rather than a formatting detail.
  *
- * Normalizing once here keeps all four injection sites agreeing on one value, rather
+ * Normalizing once here keeps every injection site agreeing on one value, rather
  * than each deciding for itself.
  */
 export function appUrlForLambdaEnv() {

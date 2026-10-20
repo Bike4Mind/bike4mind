@@ -14,7 +14,7 @@
 
 import type { Request } from 'express';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, NotFoundError, UnauthorizedError } from '@server/utils/errors';
+import { BadRequestError, NotFoundError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { loadAgentExecutionTrace } from '@server/utils/loadAgentExecutionTrace';
 import { buildChildExecutionSnapshots } from '@server/utils/childExecutionSnapshot';
 

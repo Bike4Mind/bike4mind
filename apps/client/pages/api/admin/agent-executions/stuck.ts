@@ -1,6 +1,6 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ensureAdmin, BadRequestError } from '@server/utils/errors';
+import { ensureAdmin, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import {
   agentExecutionRepository,
   ACTIVE_AGENT_EXECUTION_STATUSES,

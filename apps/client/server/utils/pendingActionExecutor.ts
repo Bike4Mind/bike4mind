@@ -1,7 +1,7 @@
 import { Logger } from '@bike4mind/observability';
 import { IUserDocument } from '@bike4mind/common';
 import { Quest, Session } from '@bike4mind/database';
-import { isValidObjectId } from '@server/utils/objectId';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { downloadAttachmentUrl } from '@server/utils/downloadAttachmentUrl';
 import { isFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';

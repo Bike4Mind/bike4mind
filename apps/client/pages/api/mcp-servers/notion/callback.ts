@@ -8,7 +8,7 @@ import {
   NOTION_VERSION,
 } from '@server/integrations/notion';
 import { NotionTokenManager } from '@server/integrations/notion/notionTokenManager';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import crypto from 'crypto';
 import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
 import { encryptToken } from '@server/security/tokenEncryption';

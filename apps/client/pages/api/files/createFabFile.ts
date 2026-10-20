@@ -18,23 +18,22 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
-import { BadRequestError, ForbiddenError } from '@server/utils/errors';
-import { getFilesStorage } from '@server/utils/storage';
+import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { resolveBrowserUploadUrl } from '@server/utils/browserUploadUrl';
 import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
 
-const createFabFileSchema = fabFilesService.createFabFileSchema;
+// No caller-chosen `prefix`: the key namespace decides how the S3 upload hook treats an object,
+// and a prefix such as `tmp` lands in one it skips (`isUntrackedFabFileKey`), so the object
+// would escape the storage charge, size check and moderation. Server-side callers still set it.
+const createFabFileSchema = fabFilesService.createFabFileSchema.omit({ prefix: true });
 
-// mp4 stays off the global allowlist (non-image uploads skip the content scan); only the admin
-// What's New video upload (AdminModalVideoFields) under `modals/` is admitted.
-const isAdminModalVideoUpload = (
-  isAdmin: boolean | undefined,
-  params: { prefix?: string | null; mimeType?: string | null; fileName: string }
-) =>
-  !!isAdmin &&
-  params.prefix === 'modals' &&
-  params.mimeType === 'video/mp4' &&
-  getFileExtension(params.fileName) === 'mp4';
+// The admin What's New media upload (AdminModalVideoFields) lands under `modals/`, chosen here, not
+// by the caller. mp4 stays off the global allowlist (non-image uploads skip the content scan), so
+// only that admin upload admits it.
+const MODAL_MEDIA_PREFIX = 'modals';
+const isModalVideo = (params: { mimeType?: string | null; fileName: string }) =>
+  params.mimeType === 'video/mp4' && getFileExtension(params.fileName) === 'mp4';
 
 const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
   .use((req, res, next) => {
@@ -47,7 +46,9 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
     asyncHandler<unknown, unknown, CreateFabFileRequestInputType>(async (req, res) => {
       const { user } = req;
 
-      const params = createFabFileSchema.parse(req.body);
+      const parsed = createFabFileSchema.parse(req.body);
+      const adminModalMedia = !!user.isAdmin && req.body?.purpose === 'modal-media';
+      const params = adminModalMedia ? { ...parsed, prefix: MODAL_MEDIA_PREFIX } : parsed;
 
       // NOTE: unlike the presign siblings (generate-presigned-url.ts) we do NOT reject executable
       // upload types (html/xhtml/svg) here. Those siblings write to appFilesBucket, which IS routed
@@ -131,9 +132,15 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
               });
               return filepath;
             },
-            generateSignedUrl: (filepath: string, expireInSeconds: number, mode?: 'get' | 'put') =>
+            generateSignedUrl: (
+              filepath: string,
+              expireInSeconds: number,
+              mode?: 'get' | 'put',
+              options?: { ContentLength?: number }
+            ) =>
               getFilesStorage().getSignedUrl(filepath, mode ?? 'get', {
                 expiresIn: expireInSeconds,
+                ContentLength: options?.ContentLength,
               }),
           },
           // Admission provenance (#1679): a direct-API upload is a manual door. Passed as the
@@ -144,7 +151,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
           // org rungs need the actor's administered-org set, which the service cannot read off a
           // user document.
           administeredOrgIds: ctx.administeredOrgIds,
-          ...(isAdminModalVideoUpload(user.isAdmin, params) && { mimeTypePrecedence: 'claim-first' as const }),
+          ...(adminModalMedia && isModalVideo(params) && { mimeTypePrecedence: 'claim-first' as const }),
         });
       });
 

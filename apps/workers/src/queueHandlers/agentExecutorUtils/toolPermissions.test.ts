@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { GatedToolCall } from '@bike4mind/agents';
-import { HEADLESS_CONNECTION_ID } from '@server/utils/headlessConnection';
+import { HEADLESS_CONNECTION_ID } from '@bike4mind/server-utils/utils/headlessConnection';
 import {
   classifyToolPermission,
   selectGatedToolCall,

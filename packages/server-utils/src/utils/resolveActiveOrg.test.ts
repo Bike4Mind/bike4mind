@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { Request } from 'express';
 
 // Hoisted so the vi.mock factory (itself hoisted above imports) can reference them safely.
 const { mockFindAccessibleById, mockFindById } = vi.hoisted(() => ({
@@ -21,7 +20,8 @@ import { ForbiddenError, NotFoundError } from '@bike4mind/common';
 
 // Minimal principal - resolveActiveOrg only reads `isAdmin` and passes the user through to
 // the share-access gate, so a partial cast is enough.
-const asReq = (user: { id: string; isAdmin?: boolean }): Request => ({ user }) as unknown as Request;
+type Req = Parameters<typeof resolveActiveOrg>[0];
+const asReq = (user: { id: string; isAdmin?: boolean }): Req => ({ user }) as unknown as Req;
 
 describe('resolveActiveOrg', () => {
   beforeEach(() => {

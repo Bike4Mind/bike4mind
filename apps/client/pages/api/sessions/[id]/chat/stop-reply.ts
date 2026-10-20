@@ -1,8 +1,8 @@
 import { stopReply } from '@server/managers/sessionManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, NotFoundError } from '@server/utils/errors';
-import { isValidObjectId } from '@server/utils/objectId';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { Logger } from '@bike4mind/observability';
 import { dispatchQuestCallback } from '@server/generationCallback/dispatchQuestCallback';
 

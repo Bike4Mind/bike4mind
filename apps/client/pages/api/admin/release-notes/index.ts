@@ -3,7 +3,7 @@ import { releaseNoteRepository } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { decodeTimeIdCursor, encodeTimeIdCursor } from '@server/utils/cursorPagination';
-import { ForbiddenError, UnprocessableEntityError } from '@server/utils/errors';
+import { ForbiddenError, UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
 import { loadReleaseNotesConfig, toAdminReleaseNote } from '@server/releaseNotes/adminReleaseNotes';
 
 const QuerySchema = z.object({

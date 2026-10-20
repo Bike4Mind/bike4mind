@@ -89,6 +89,7 @@ export const IPC_CHANNELS = {
   /** main -> renderer push of the integration's state; never carries the key. */
   fleetStateChanged: 'fleet:state-changed',
   chatListModels: 'chat:list-models',
+  chatListSuggestionModels: 'chat:list-suggestion-models',
   chatSetSessionModel: 'chat:set-session-model',
   chatSetSessionReasoningEffort: 'chat:set-session-reasoning-effort',
   chatSetSessionPinned: 'chat:set-session-pinned',
@@ -483,6 +484,8 @@ export interface DesktopApi {
      * the main-process cache, which is what a "try again" affordance needs.
      */
     listModels(force?: boolean): Promise<ChatModelCatalog>;
+    /** The models Settings may pin the next-prompt hint to: small hosted ones, then local ones. */
+    listSuggestionModels(): Promise<ChatModelCatalog>;
     /** Pin a conversation to a model. Null when the session is gone. */
     setSessionModel(sessionId: string, model: string): Promise<ChatSessionSummary | null>;
     /** How hard this conversation's model should think. Null when the session is gone. */
@@ -558,8 +561,9 @@ export interface DesktopApi {
      * whether to call is the renderer's decision (see promptSuggestions.ts).
      *
      * The result is a DRAFT for the input box. Nothing on this channel can send a message.
+     * `model` is the Settings pick; null or omitted is automatic.
      */
-    suggestNextPrompt(sessionId: string): Promise<string | null>;
+    suggestNextPrompt(sessionId: string, model?: string | null): Promise<string | null>;
     /**
      * Messages typed ahead for this conversation, waiting for the live turn to finish. Read on
      * open for the same reason as getSessionStatuses: the pushes below carry only CHANGES, and

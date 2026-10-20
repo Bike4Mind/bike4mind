@@ -10,7 +10,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
 vi.mock('@server/middlewares/embedCors', () => ({ embedCors: () => () => {} }));
-vi.mock('@server/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' } }));
 
 const mockTryIncrement = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/database', () => ({ cacheRepository: { tryIncrementWithinLimitFixedWindow: mockTryIncrement } }));

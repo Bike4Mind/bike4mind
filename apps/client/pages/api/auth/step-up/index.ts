@@ -25,7 +25,7 @@ import {
 } from '@server/auth/stepUp';
 import { verifyStepUpEmailCode } from '@server/auth/stepUpEmail';
 import { logAuthAudit } from '@server/utils/authAudit';
-import { NotFoundError } from '@server/utils/errors';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 
 const bodySchema = z.discriminatedUnion('method', [
   z.object({

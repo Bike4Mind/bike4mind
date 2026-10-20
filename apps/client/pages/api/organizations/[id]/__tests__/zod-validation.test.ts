@@ -34,7 +34,10 @@ vi.mock('@bike4mind/database', () => ({
   withTransaction: (fn: any) => fn(),
 }));
 vi.mock('@bike4mind/database/social', () => ({ groupRepository: {} }));
-vi.mock('@bike4mind/common', () => ({ toSafeOrganization: (org: any) => org }));
+vi.mock('@bike4mind/common', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/common')>()),
+  toSafeOrganization: (org: any) => org,
+}));
 vi.mock('@server/entitlements/partnerRules', () => ({ invalidatePartnerRuleCache: vi.fn() }));
 vi.mock('@server/models/Subscription', () => ({ subscriptionRepository: {} }));
 vi.mock('@client/lib/subscriptions/types', () => ({ SubscriptionOwnerType: {} }));

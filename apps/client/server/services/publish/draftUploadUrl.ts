@@ -1,6 +1,6 @@
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 
 /**
  * Draft-upload URL minting for step 2 of the publish flow.
@@ -29,6 +29,8 @@ export const DRAFT_UPLOAD_EXPIRY_SECONDS = 600;
 const DraftUploadClaimsSchema = z.object({
   draftId: z.string().min(1),
   path: z.string().min(1),
+  // Declared byte length: the proxy holds the body to it, as the hosted presign's signature does.
+  size: z.number().int().nonnegative(),
 });
 
 export type DraftUploadClaims = z.infer<typeof DraftUploadClaimsSchema>;
@@ -68,7 +70,11 @@ export function verifyDraftUploadToken(token: string): DraftUploadClaims | null 
  *  satisfied structurally by S3Storage (fab-pipeline), so this module stays
  *  decoupled from the concrete storage class and is trivial to unit-test. */
 export interface DraftUploadStorage {
-  getSignedUrl(path: string, method: 'put', options: { expiresIn: number; ContentType: string }): Promise<string>;
+  getSignedUrl(
+    path: string,
+    method: 'put',
+    options: { expiresIn: number; ContentType: string; ContentLength: number }
+  ): Promise<string>;
 }
 
 export interface MintDraftUploadUrlInput {
@@ -78,6 +84,8 @@ export interface MintDraftUploadUrlInput {
   draftId: string;
   path: string;
   mimeType: string;
+  /** Declared byte length, the one the size and quota checks ran on; the hosted PUT is bound to it. */
+  size: number;
   expiresIn: number;
 }
 
@@ -88,12 +96,13 @@ export interface MintDraftUploadUrlInput {
  */
 export async function mintDraftUploadUrl(input: MintDraftUploadUrlInput): Promise<string> {
   if (process.env.B4M_SELF_HOST === 'true') {
-    const token = signDraftUploadToken({ draftId: input.draftId, path: input.path }, input.expiresIn);
+    const token = signDraftUploadToken({ draftId: input.draftId, path: input.path, size: input.size }, input.expiresIn);
     const params = new URLSearchParams({ draftId: input.draftId, path: input.path, token });
     return `/api/publish/artifact/draft-upload?${params.toString()}`;
   }
   return input.storage.getSignedUrl(input.key, 'put', {
     expiresIn: input.expiresIn,
     ContentType: input.mimeType,
+    ContentLength: input.size,
   });
 }

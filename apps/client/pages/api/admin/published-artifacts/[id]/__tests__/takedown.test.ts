@@ -24,7 +24,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 // ForbiddenError: a throwable the handler propagates; we assert it's thrown (the real
 // baseApi error middleware maps it to 403, out of scope for a unit test).
-vi.mock('@server/utils/errors', () => ({
+vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   ForbiddenError: class ForbiddenError extends Error {},
 }));
 

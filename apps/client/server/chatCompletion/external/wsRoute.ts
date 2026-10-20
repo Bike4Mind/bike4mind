@@ -32,9 +32,9 @@ import {
   type ApiKeyInfo,
 } from '@server/cli/auth';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { sendToConnection } from '@server/websocket/utils';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { cliCompletionErrorFields, sanitizeErrorMessage } from '@server/utils/errorSanitization';
 import { emitProcessingFailed } from '../processingFailedMetric';
 import { Resource } from 'sst';

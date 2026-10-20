@@ -85,7 +85,7 @@ vi.mock('@bike4mind/server-utils/s3/storageCharge', () => ({
   stampImportedKnowledgeRows: h.stampImportedKnowledgeRows,
   chargeStampedKnowledgeStorage: h.chargeStampedKnowledgeStorage,
 }));
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ delete: h.deleteFile, upload: vi.fn(), getContentAsBuffer: vi.fn() }),
 }));
 vi.mock('@server/utils/importHistoryProgress', () => ({

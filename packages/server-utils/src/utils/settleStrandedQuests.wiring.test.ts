@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url';
  * the next one.
  */
 
-// apps/client/server/utils -> the repo root is four levels up. apps/workers/src is walked too:
+// packages/server-utils/src/utils -> the repo root is four levels up. apps/workers/src is walked too:
 // the hosted abandoned-execution sweep lives there, and it is one of the terminators.
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 const SEARCH_ROOTS = ['apps/client/server', 'apps/client/pages', 'apps/workers/src'];

@@ -32,7 +32,7 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (handler: (...args: unknown[]) => unknown) => handler,
 }));
 
-vi.mock('@server/utils/errors', () => ({
+vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   ForbiddenError: class ForbiddenError extends Error {},
   BadRequestError: class BadRequestError extends Error {},
 }));
@@ -41,12 +41,12 @@ vi.mock('@server/utils/eventBus', () => ({
   EmailEvents: { Send: { publish: vi.fn() } },
 }));
 
-vi.mock('@server/utils/mailer/emailHelpers', () => ({
+vi.mock('@bike4mind/server-utils/utils/mailer/emailHelpers', () => ({
   getLogoUrl: () => 'https://example.com/logo.png',
   buildEmailLogoImg: () => '',
 }));
 
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { JWT_SECRET: 'test-secret' },
 }));
 

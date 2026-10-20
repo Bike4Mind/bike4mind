@@ -7,7 +7,7 @@ import {
   type PublicReleaseNote,
 } from '@bike4mind/common';
 import { deploymentMediaOrigins } from '@server/utils/deploymentMediaOrigins';
-import { safeFetch } from '@server/utils/ssrfProtection';
+import { safeFetch } from '@bike4mind/server-utils/utils/ssrfProtection';
 import { decodeCursor, encodeCursor } from '@server/utils/cursorPagination';
 
 export type UpstreamFeedPage = { data: PublicReleaseNote[]; next_cursor: string | null };

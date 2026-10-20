@@ -86,7 +86,7 @@ vi.mock('@server/mcpConnections/customMcpAccess', async importOriginal => {
 vi.mock('@server/middlewares/featureFlag', () => ({ isFeatureEnabled: vi.fn(async () => true) }));
 vi.mock('@bike4mind/services', () => ({ scopedSettingsService: {} }));
 vi.mock('sst', () => ({ Resource: {} }));
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   recordCircuitBreakerRejection: vi.fn(async () => undefined),
   recordCircuitBreakerTransition: vi.fn(async () => undefined),
 }));

@@ -32,7 +32,7 @@ vi.mock('@server/utils/mailer', () => ({
 vi.mock('mongoose', () => ({
   default: { connection: { readyState: 1, db: { admin: () => ({ ping: mocks.ping }) } } },
 }));
-vi.mock('@server/utils/config', () => ({ Config: {} }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: {} }));
 vi.mock('@server/auth/oktaOidcClient', () => ({ getOktaConfigStatus: vi.fn() }));
 
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';

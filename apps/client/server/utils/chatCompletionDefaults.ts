@@ -56,8 +56,8 @@ import { recallLakeMemoryForSession } from '@server/memory/lakeMemoryRecall';
 import { loadSystemPromptById } from '@server/utils/sessionSystemPromptResolver';
 import { summarizeSession, contextSummarizeSession } from '@server/managers/sessionManager';
 import { getUserEntitlements } from '@server/entitlements';
-import { Config } from '@server/utils/config';
-import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
+import { Config } from '@bike4mind/server-utils/utils/config';
+import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { Resource } from 'sst';
 import { premiumWorkspaceDeniedTools } from '@server/premium-generated/premiumWorkspaceDeniedTools.generated';
 import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
@@ -125,7 +125,7 @@ type DefaultChatCompletionOptions = Omit<
 // pulled this file in (e.g. just to grab `getSharedTokenizer`).
 //
 // The factory below defers all Resource access to first invocation, matching the lazy
-// pattern in `@server/utils/storage` and the queueHandler service factories. Memoization
+// pattern in `@bike4mind/server-utils/utils/storage` and the queueHandler service factories. Memoization
 // preserves the prior reference-equality semantics for callers that spread the object.
 let _defaultChatCompletionOptions: DefaultChatCompletionOptions | undefined;
 

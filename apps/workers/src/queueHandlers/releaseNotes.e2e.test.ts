@@ -20,7 +20,7 @@ const h = vi.hoisted(() => ({
 vi.mock('@server/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...args: unknown[]) => unknown) => fn,
 }));
-vi.mock('@server/utils/cloudwatch', () => ({ emitModalGenerationMetrics: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitModalGenerationMetrics: vi.fn() }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: h.getSettingsByNames }));
 vi.mock('./releaseNotes/generate', () => ({
   triageReleaseNotes: vi.fn(async () => ({
