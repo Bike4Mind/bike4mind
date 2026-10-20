@@ -8,9 +8,9 @@ import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../packages/database/src/__test__/createMongoServer';
-import { CounterLog, UsageEvent, User } from '@bike4mind/database';
+import { connectDB, CounterLog, UsageEvent, User } from '@bike4mind/database';
 import { FLEET_USAGE_MAX_ROWS, resolveApiCompletionSource } from '@bike4mind/common';
-import handler from '../fleet-export';
+import handler, { __resetMisconfiguredWarning } from '../fleet-export';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'unused', STAGE: 'test' } }));
@@ -211,12 +211,64 @@ describe('Fleet export route against real Mongo', () => {
     expect((await call()).body.days.every((day: { rows: unknown[] }) => day.rows.length === 0)).toBe(true);
   });
 
-  it('denies wrong/missing/default credentials and scope and persists denial audits', async () => {
+  it('denies wrong/missing credentials into one aggregated denial audit per hour window', async () => {
     await UsageEvent.collection.insertOne(event());
     const read = vi.spyOn(UsageEvent, 'find');
-    for (const authorization of ['', 'Bearer wrong', 'Bearer ordinary-api-key']) {
-      expect((await call({ authorization })).status).toBe(401);
+    const firstWindow = new Date('2026-01-05T10:00:00.000Z');
+    const secondWindow = new Date('2026-01-05T11:00:00.000Z');
+    let lastRequestId = '';
+    const firstWindowIds: string[] = [];
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-01-05T10:15:00.000Z'));
+      for (const authorization of ['', 'Bearer wrong']) {
+        const denied = await call({ authorization });
+        expect(denied.status).toBe(401);
+        firstWindowIds.push(denied.body.request_id);
+      }
+      vi.setSystemTime(new Date('2026-01-05T11:59:59.999Z'));
+      const last = await call({ authorization: 'Bearer ordinary-api-key' });
+      expect(last.status).toBe(401);
+      lastRequestId = last.body.request_id;
+    } finally {
+      vi.useRealTimers();
     }
+    expect(read).not.toHaveBeenCalled();
+    const denials = await CounterLog.find({ 'metadata.outcome': 'deny' }).sort({ datetime: 1 }).lean();
+    expect(denials).toMatchObject([
+      {
+        counterName: 'Fleet Usage Export Access',
+        userId: 'fleet-usage-export',
+        datetime: firstWindow,
+        counterValue: 2,
+      },
+      {
+        counterName: 'Fleet Usage Export Access',
+        userId: 'fleet-usage-export',
+        datetime: secondWindow,
+        counterValue: 1,
+      },
+    ]);
+    expect(denials[0].metadata).toMatchObject({ outcome: 'deny', lastRequestId: firstWindowIds[1] });
+    expect(denials[1].metadata).toMatchObject({ outcome: 'deny', lastRequestId: lastRequestId });
+  });
+
+  it('answers 500 without data or an audit row when the denial audit write fails', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(CounterLog, 'updateOne').mockRejectedValueOnce(new Error('audit unavailable'));
+    const { status, body } = await call({ authorization: 'Bearer wrong' });
+    expect(status).toBe(500);
+    expect(body.days).toBeUndefined();
+    expect(body.request_id).toBeTruthy();
+    expect(error).toHaveBeenCalled();
+    expect(await CounterLog.countDocuments({ 'metadata.outcome': 'deny' })).toBe(0);
+  });
+
+  it('answers 404 without connecting or auditing when the route is not provisioned', async () => {
+    __resetMisconfiguredWarning();
+    vi.mocked(connectDB).mockClear();
+    const logError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const read = vi.spyOn(UsageEvent, 'find');
     for (const config of [
       '',
       '{}',
@@ -225,13 +277,24 @@ describe('Fleet export route against real Mongo', () => {
       JSON.stringify({ ...scope, owners: [] }),
     ]) {
       vi.stubEnv('FLEET_USAGE_EXPORT_SCOPE', config);
-      expect((await call()).status).toBe(401);
+      expect((await call()).status).toBe(404);
+    }
+    for (const misconfiguredToken of ['short', ` ${token}`, `${token}\t`, 'x'.repeat(4097)]) {
+      vi.stubEnv('FLEET_USAGE_EXPORT_SCOPE', JSON.stringify(scope));
+      vi.stubEnv('FLEET_USAGE_EXPORT_TOKEN', misconfiguredToken);
+      expect((await call()).status).toBe(404);
     }
     vi.stubEnv('FLEET_USAGE_EXPORT_SCOPE', JSON.stringify(scope));
     vi.stubEnv('FLEET_USAGE_EXPORT_TOKEN', undefined);
-    expect((await call()).status).toBe(401);
+    expect((await call()).status).toBe(404);
+    expect((await call({ authorization: '' })).status).toBe(404);
+    expect((await call({ method: 'POST' })).status).toBe(404);
     expect(read).not.toHaveBeenCalled();
-    expect(await CounterLog.countDocuments({ 'metadata.outcome': 'deny' })).toBe(9);
+    expect(connectDB).not.toHaveBeenCalled();
+    expect(await CounterLog.countDocuments({})).toBe(0);
+    // Misconfigured scopes log once per process; an unset token is not a misconfiguration.
+    expect(logError).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(logError.mock.calls)).not.toContain(token);
   });
 
   it('refuses caller-selected scope, invalid ranges, and non-GET methods before reading usage', async () => {
