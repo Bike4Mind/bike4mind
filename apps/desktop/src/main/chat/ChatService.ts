@@ -1463,6 +1463,7 @@ export class ChatService {
         name: skillCommand.name,
         source: skillSource(skillCommand),
         ...(invocation.args ? { args: invocation.args } : {}),
+        ...(skillCommand.untrusted ? { imported: true as const } : {}),
       };
     }
 
@@ -2027,6 +2028,11 @@ export class ChatService {
         declined: [],
         granted: [],
         ...(resume ? resumedUntrusted(resume.toolCalls) : {}),
+        // A `/name` import's body IS this reply's prompt, so the reply starts as having read it.
+        // Read off the stored message rather than passed in, so a resumed reply re-taints too.
+        ...(session.messages.findLast(message => message.role === 'user')?.skill?.imported
+          ? { untrusted: 'skill' }
+          : {}),
       };
       const project = session.mode === 'code' ? session.project : undefined;
       // Started before the wire messages are built so the instruction files are read alongside

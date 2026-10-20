@@ -76,9 +76,11 @@ export const skillTool: ToolDefinition = {
     // an allowlist so a source added to CustomCommand later is not trusted by default.
     if (command.source === 'global' || command.source === 'project') context.report?.ownContent();
 
-    return [`Instructions for the skill "${name}", from ${command.filePath}. Follow them.`, '', expanded.body].join(
-      '\n'
-    );
+    // An import's body is already wrapped as untrusted and carries its own framing.
+    const header = command.untrusted
+      ? `The skill "${name}", from ${command.filePath}, is a Skill Market import written by someone else.`
+      : `Instructions for the skill "${name}", from ${command.filePath}. Follow them.`;
+    return [header, '', expanded.body].join('\n');
   },
 };
 

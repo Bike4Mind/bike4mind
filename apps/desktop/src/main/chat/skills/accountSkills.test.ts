@@ -17,11 +17,7 @@ const USER = 'u1';
  * they exist at all, and it runs inside `registerChat`, which nothing test-loads. So it is
  * exercised here directly, over a stub AuthService - the same shape the renderer path relies on.
  */
-function authStub(state: {
-  api: AuthenticatedApiClient | null;
-  userId: string | undefined;
-  url?: string;
-}): SkillsAuth {
+function authStub(state: { api: AuthenticatedApiClient | null; userId: string | undefined; url?: string }): SkillsAuth {
   return {
     getApiClient: () => state.api,
     getState: () =>
@@ -155,5 +151,26 @@ describe('accountSkillsProvider', () => {
     expect((await catalog.state(null)).skills.map(skill => `${skill.source}:${skill.name}`)).toContain(
       'account:web-summary'
     );
+  });
+
+  it('keeps a Skill Market import, flagged imported, and shows a fresh import at once after invalidateAccount', async () => {
+    const own = { id: 'a1', name: 'web-summary', description: 'Summarise', body: 'Body.', userId: USER };
+    const imported = { ...own, id: 'a2', name: 'market-pick', importedFrom: { listingId: 'l1', versionId: 'v1' } };
+    const get = vi
+      .fn()
+      .mockResolvedValueOnce({ data: [own] })
+      .mockResolvedValue({ data: [own, imported] });
+    const provider = accountSkillsProvider(authStub({ api: client({ get }), userId: USER }), userData);
+    const catalog = new SkillCatalog(new ProjectTrustStore(join(userData, 'trust.json')), provider);
+
+    expect((await catalog.state(null)).skills.map(skill => skill.name)).toEqual(['web-summary']);
+    const before = catalog.revision;
+    catalog.invalidateAccount();
+
+    const after = (await catalog.state(null)).skills;
+    expect(after.find(skill => skill.name === 'market-pick')).toMatchObject({ source: 'account', imported: true });
+    expect(after.find(skill => skill.name === 'web-summary')?.imported).toBeUndefined();
+    expect(catalog.revision).not.toBe(before);
+    expect((await catalog.get(null, 'market-pick'))?.untrusted).toBe(true);
   });
 });

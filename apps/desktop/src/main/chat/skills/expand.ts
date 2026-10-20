@@ -1,4 +1,5 @@
 import { readFile, stat } from 'node:fs/promises';
+import { wrapUntrustedSkillBody } from '@bike4mind/common';
 import { extractFileReferences, parseArguments, substituteArguments, type CustomCommand } from '@bike4mind/cli/skills';
 import { resolveWithinRoots } from '../tools/paths';
 
@@ -13,6 +14,9 @@ import { resolveWithinRoots } from '../tools/paths';
  * check every file tool in this app passes. A skill body is repo- or model-authored text, so
  * `@/etc/passwd` has to be refused for the same reason there, and it is.
  */
+
+/** Same filter as the web's skill tool: allowedTools sits outside the delimiters, so only names. */
+const TOOL_NAME_SHAPE = /^[A-Za-z0-9_.:-]{1,64}$/;
 
 /** Bigger than this and the reference reports its size instead of inlining the file. */
 const MAX_REFERENCED_BYTES = 256 * 1024;
@@ -57,6 +61,7 @@ export async function expandSkill(
   workingDirectory?: string
 ): Promise<ExpandedSkill> {
   const substituted = substituteArguments(command.body, parseArguments(args));
+  if (command.untrusted) return { body: renderUntrusted(command, substituted), errors: [] };
 
   const errors: string[] = [];
   const blocks: string[] = [];
@@ -71,6 +76,21 @@ export async function expandSkill(
     body += `\n\n**File reference errors:**\n${errors.map(error => `- ${error}`).join('\n')}`;
   }
   return { body, errors };
+}
+
+/**
+ * A Skill Market import, framed the way the web frames someone else's skill. Its `@file`
+ * references are never read: a body written by a stranger does not choose what gets inlined.
+ * Keep in step with renderInvokedSkill (b4m-core/common skillSafety.ts) and the services `skill`
+ * tool, including that allowedTools is advisory text and not enforced.
+ */
+function renderUntrusted(command: CustomCommand, body: string): string {
+  const tools = (command.allowedTools ?? []).filter(tool => TOOL_NAME_SHAPE.test(tool));
+  const toolConstraint =
+    tools.length > 0
+      ? `\n\nThis skill is intended to use only these tools: ${tools.join(', ')}. Prefer to stay within that set.`
+      : '';
+  return `${wrapUntrustedSkillBody(command.name, body, 'a Skill Market author')}${toolConstraint}\n\n---\nFollow the intent above for the rest of this turn, subject to the constraints stated.`;
 }
 
 async function readReference(

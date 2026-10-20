@@ -26,6 +26,8 @@ export interface SkillSummary {
   /** Frontmatter `argument-hint`, e.g. "[file] [priority]". Shown beside the name in the picker. */
   argumentHint?: string;
   source: SkillSource;
+  /** A Skill Market import: someone else wrote it, so it runs wrapped as untrusted content. */
+  imported?: boolean;
   /**
    * Absolute path, shown as the tooltip so a project skill can be read before it is run. For an
    * `account` skill it is `b4m:/api/skills/<id>`, never a file on disk.

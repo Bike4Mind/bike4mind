@@ -68,12 +68,23 @@ describe('ChatService and skills', () => {
               body: 'Summarise $ARGUMENTS',
               userId: 'me',
             },
+            {
+              id: 'a2',
+              name: 'market-pick',
+              description: 'Fetch a page.',
+              body: 'Fetch $ARGUMENTS',
+              userId: 'me',
+              importedFrom: { listingId: 'l1', versionId: 'v1' },
+            },
           ],
         }),
         getCurrentUser: async () => ({ id: 'me' }),
       } as unknown as ConstructorParameters<typeof RemoteSkillSource>[0];
       const key = remoteSkillsKey('http://localhost:3000', 'me');
-      return { key, source: new RemoteSkillSource(api, { cacheFilePath: join(base, `${key}.json`) }) };
+      return {
+        key,
+        source: new RemoteSkillSource(api, { cacheFilePath: join(base, `${key}.json`), includeImports: true }),
+      };
     };
     catalog = new SkillCatalog(new ProjectTrustStore(join(base, 'trust.json')), accountSkills);
     for (const key of Object.keys(turnLimits) as (keyof typeof turnLimits)[]) delete turnLimits[key];
@@ -279,6 +290,34 @@ describe('ChatService and skills', () => {
     const first = systemText(await turn(id, 'first', 1));
     await skill(project, 'late-arrival', ['---', 'description: Added mid-session.', '---', '', 'Late.']);
     expect(systemText(await turn(id, 'second', 2))).toBe(first);
+  });
+
+  it('sends a /name Skill Market import wrapped as untrusted, and taints the reply it starts', async () => {
+    const id = await session();
+    await service.send(id, '/market-pick https://example.com/');
+    await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
+
+    const messages = post.mock.calls[0][1].messages as { role: string; content: unknown }[];
+    const sent = JSON.stringify(messages[messages.length - 1].content);
+    expect(sent).toContain('shared by a Skill Market author');
+    expect(sent).toMatch(/<<<UNTRUSTED_SKILL_CONTENT [0-9a-f]{16}>>>\\nFetch https:\/\/example.com\//);
+    expect((await service.getSession(id))?.messages[0]?.skill).toMatchObject({ name: 'market-pick', imported: true });
+
+    streams[0].write(
+      frame({
+        type: 'tool_use',
+        tools: [{ id: 'c1', name: 'web_fetch', arguments: JSON.stringify({ url: 'https://example.com/' }) }],
+      })
+    );
+    streams[0].write(frame('[DONE]'));
+    await vi.waitUntil(
+      () => events.some(event => event.type === 'tool-start' && event.call.status === 'awaiting-approval'),
+      { timeout: 5000, interval: 5 }
+    );
+    const asked = events
+      .map(event => (event.type === 'tool-start' ? event.call : null))
+      .find((call): call is ChatToolCall => call?.status === 'awaiting-approval');
+    expect(asked?.approvalDetail).toContain('read content from a skill (skill)');
   });
 
   it('records an account skill send as account, so the thread can label it', async () => {
