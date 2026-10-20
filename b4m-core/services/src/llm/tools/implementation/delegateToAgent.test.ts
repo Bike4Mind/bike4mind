@@ -574,6 +574,45 @@ describe('createDelegateToAgentTool — usage-event cost basis (#151)', () => {
     expect(captured!.cacheWriteTokens).toBe(0);
   });
 
+  it('still reports a delegation that settled at 0 credits, so its usage event carries the real cost', async () => {
+    mockDelegation(makeResult({ totalCredits: 0 }));
+
+    const onCredits = vi.fn();
+    const tool = createDelegateToAgentTool({
+      userId: 'u1',
+      llm: makeLlm(),
+      logger: makeLogger(),
+      parentTools: [],
+      agentStore: makeStore(),
+      availableModels: [model],
+      onCredits,
+    });
+
+    await tool.toolFn({ task: 'research', agent: 'researcher' });
+
+    expect(onCredits).toHaveBeenCalledTimes(1);
+    expect(onCredits).toHaveBeenCalledWith(0, expect.objectContaining({ model: MODEL_ID }));
+  });
+
+  it('reports nothing when no credits were computed at all', async () => {
+    mockDelegation(makeResult({ totalCredits: undefined }));
+
+    const onCredits = vi.fn();
+    const tool = createDelegateToAgentTool({
+      userId: 'u1',
+      llm: makeLlm(),
+      logger: makeLogger(),
+      parentTools: [],
+      agentStore: makeStore(),
+      availableModels: [model],
+      onCredits,
+    });
+
+    await tool.toolFn({ task: 'research', agent: 'researcher' });
+
+    expect(onCredits).not.toHaveBeenCalled();
+  });
+
   it('drops the usage meta and warns when the model is not in availableModels (#152)', async () => {
     mockDelegation(makeResult({}));
 

@@ -19,7 +19,7 @@ import {
 import { speechToTextService } from '@bike4mind/services';
 import { Resource } from 'sst';
 import { type ILogger } from '@bike4mind/observability';
-import { GatewayTimeoutError, type IUserDocument } from '@bike4mind/common';
+import { GatewayTimeoutError, usdToCreditsStochastic, type IUserDocument } from '@bike4mind/common';
 import { usageEventRepository } from '@bike4mind/database';
 import type { PreflightCreditHold } from '@server/utils/creditPreflight';
 import { v4 as uuidv4 } from 'uuid';
@@ -37,7 +37,7 @@ export class TranscribeRequestError extends BadRequestError {
 }
 
 export const PRESIGNED_POST_EXPIRY_SECONDS = 300; // 5 minutes
-// The hosted web Lambda stops at 60s. Leave time to refund and clean up after cancelling the provider.
+// infra/web.ts sets the hosted web Lambda timeout to 60s. Leave time to refund and clean up after cancelling the provider.
 const TRANSCRIPTION_REQUEST_TIMEOUT_MS = 45_000;
 
 const s3Client = new S3Client();
@@ -231,14 +231,13 @@ interface DeductArgs {
 
 // Settles the hold; a billing failure is logged inside hold.settle, never surfaced (transcription succeeded).
 async function deductTranscriptionCredits({ hold, userId, backend, contentLength, logger }: DeductArgs): Promise<void> {
-  const {
-    durationMinutes,
-    costUsd,
-    credits: cost,
-  } = estimateTranscriptionCost(contentLength, transcriptionUsdPerMinute(backend));
+  const { durationMinutes, costUsd } = estimateTranscriptionCost(contentLength, transcriptionUsdPerMinute(backend));
   const sessionId = `transcribe-${userId}-${Date.now()}`;
-  const credits = await hold.settle(cost, { type: 'speech_to_text_usage', model: backend, sessionId });
-  if (credits <= 0) return;
+  const credits = await hold.settle(usdToCreditsStochastic(costUsd), {
+    type: 'speech_to_text_usage',
+    model: backend,
+    sessionId,
+  });
 
   // Dual-write usage event: analytics only, never billing.
   usageEventRepository

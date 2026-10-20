@@ -163,7 +163,7 @@ export async function reportSubagentCredits(
   deps: Pick<DelegateToAgentToolDeps, 'onCredits' | 'availableModels' | 'logger'>
 ): Promise<void> {
   const credits = result.completionInfo.totalCredits;
-  if (!credits || !deps.onCredits || result.billedByTracker) return;
+  if (credits === undefined || !deps.onCredits || result.billedByTracker) return;
   const modelInfo = deps.availableModels?.find(m => m.id === result.model);
   const inputTokens = result.completionInfo.totalInputTokens ?? 0;
   const outputTokens = result.completionInfo.totalOutputTokens ?? 0;

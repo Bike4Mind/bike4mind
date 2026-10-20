@@ -194,8 +194,12 @@ describe('processExecution iteration-gate wiring', () => {
       /maxIterations = clampMaxIterationsForUnrunnableAggregationWake\(\{([\s\S]*?)\n {4}\}\);/
     );
     expect(clampCall).not.toBeNull();
-    expect(clampCall![1]).toContain('isRunnable: !modelInfo || modelRunnable,');
-    expect(source).toContain('aggregationGraceReason: aggregationGraceReasonOf({');
+    expect(clampCall![1]).toContain('isRunnable: !modelInfo || (modelAccess.ok && modelRunnable),');
+    const reasonCall = source.match(/aggregationGraceReason: aggregationGraceReasonOf\(\{([^{}]*?)\}\)/);
+    expect(reasonCall).not.toBeNull();
+    expect(reasonCall![1]).toContain('modelAccessOk: modelAccess.ok,');
+    expect(reasonCall![1]).toContain('hasModel: Boolean(modelInfo),');
+    expect(reasonCall![1]).toContain('isRunnable: modelRunnable,');
   });
 });
 
@@ -210,7 +214,32 @@ describe('aggregationGraceReasonOf', () => {
   ] as const)(
     'selects the actual clamp reason (%s, %s, %s, %s)',
     (isAggregationOnlyWake, hasModel, isRunnable, isOverCap, expected) => {
-      expect(aggregationGraceReasonOf({ isAggregationOnlyWake, hasModel, isRunnable, isOverCap })).toBe(expected);
+      expect(
+        aggregationGraceReasonOf({ isAggregationOnlyWake, hasModel, isRunnable, isOverCap, modelAccessOk: true })
+      ).toBe(expected);
     }
   );
+});
+
+describe('aggregation model configuration failures', () => {
+  it('distinguishes a transient lookup failure from a disabled model', () => {
+    expect(
+      aggregationGraceReasonOf({
+        isAggregationOnlyWake: true,
+        hasModel: true,
+        isRunnable: false,
+        isOverCap: false,
+        modelAccessOk: false,
+      })
+    ).toBe('model-configuration-unavailable');
+    expect(
+      aggregationGraceReasonOf({
+        isAggregationOnlyWake: false,
+        hasModel: true,
+        isRunnable: false,
+        isOverCap: false,
+        modelAccessOk: false,
+      })
+    ).toBeUndefined();
+  });
 });

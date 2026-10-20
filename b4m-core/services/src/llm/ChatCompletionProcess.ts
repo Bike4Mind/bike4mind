@@ -6795,7 +6795,7 @@ export class ChatCompletionProcess {
    * the full actual. A failed balance update restores the claim for the caller's rollback to refund.
    */
   private async settleReservation(
-    quest: { id: string; sessionId: string },
+    quest: { id: string; sessionId: string; creditsUsed?: number | null },
     usages: ReservationUsage[],
     processStartTime: number,
     logger: Logger,
@@ -6838,6 +6838,7 @@ export class ChatCompletionProcess {
     }
     logger.info(`Credits settled for quest ${quest.id}: reserved=${reserved}, actual=${totalCredits}, delta=${delta}`);
     this.reservedCreditHolder = null;
+    quest.creditsUsed = totalCredits;
 
     for (const usage of priced) {
       this.db.usageEvents
@@ -6921,7 +6922,7 @@ export class ChatCompletionProcess {
    * billable, and the caller's rollback refunds the whole hold.
    */
   private async settleAbortedReservation(
-    quest: { id: string; sessionId: string; replies?: string[] | null; reply?: string | null },
+    quest: IChatHistoryItemDocument,
     processStartTime: number,
     logger: Logger
   ): Promise<void> {
@@ -6954,6 +6955,17 @@ export class ChatCompletionProcess {
             cacheCreationInputTokens,
           }
         : { modelInfo: basis.modelInfo, inputTokens: basis.inputTokens, outputTokens };
+    if (quest.promptMeta) {
+      const calls = [...(quest.promptMeta.functionCalls ?? [])];
+      // A thrown tool call may prevent the backend's final toolsUsed callback. Keep delivered charges visible.
+      for (const [name, charges] of this.toolCreditsMap) {
+        const recordedCalls = calls.filter(call => call.name === name).length;
+        for (let index = recordedCalls; index < charges.length; index++) {
+          calls.push({ name, parameters: {} });
+        }
+      }
+      quest.promptMeta.functionCalls = settleToolCallCredits(calls, this.toolCreditsMap);
+    }
     await this.settleReservation(quest, [usage], processStartTime, logger, 'error', toolCredits);
   }
 

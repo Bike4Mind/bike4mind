@@ -229,6 +229,32 @@ describe('processSubagentDispatch admission and billing', () => {
     );
   });
 
+  it('awaits grandchild settlement before returning control to the next delegation', async () => {
+    await dispatch();
+    const callbacks = buildSharedToolsMock.mock.calls[0][1] as {
+      onSubagentCredits(
+        credits: number,
+        meta: { model: string; inputTokens: number; outputTokens: number }
+      ): Promise<void>;
+    };
+    const debit = Promise.withResolvers<void>();
+    deductCreditsMock.mockImplementationOnce(() => debit.promise);
+    const completed = vi.fn();
+    const charge = callbacks.onSubagentCredits(4, { model: 'test-model', inputTokens: 2, outputTokens: 1 });
+    const observe = async () => {
+      await charge;
+      completed();
+    };
+    const observed = observe();
+    await vi.waitFor(() =>
+      expect(deductCreditsMock).toHaveBeenCalledWith(expect.objectContaining({ credits: 4 }), expect.anything())
+    );
+    expect(completed).not.toHaveBeenCalled();
+    debit.resolve();
+    await observed;
+    expect(completed).toHaveBeenCalledOnce();
+  });
+
   it.each([false, true])('includes a stopped child charge in the parent total (user abort: %s)', async userAborted => {
     const { agentExecutionRepository } = await import('@bike4mind/database');
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });

@@ -5,9 +5,10 @@ import { uncoveredIterationCredits } from './agentExecutor.billing';
 import type { AggregationGraceReason } from './agentExecutorUtils/truncatedReply';
 
 export function aggregationGraceReasonOf(
-  policy: UnrunnableModelPolicy & { isOverCap: boolean }
+  policy: UnrunnableModelPolicy & { isOverCap: boolean; modelAccessOk: boolean }
 ): AggregationGraceReason | undefined {
   if (!policy.isAggregationOnlyWake) return undefined;
+  if (!policy.modelAccessOk) return 'model-configuration-unavailable';
   if (policy.hasModel && !policy.isRunnable) return 'model-unavailable';
   return policy.isOverCap ? 'credit-cap' : undefined;
 }

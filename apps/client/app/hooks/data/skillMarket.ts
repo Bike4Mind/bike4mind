@@ -170,6 +170,18 @@ const useInvalidateMarket = () => {
   };
 };
 
+/** AI tag suggestions for the publish dialog. Keyed outside `['skill-market']` so a publish's
+ * invalidation does not re-run the LLM call. */
+export const useSuggestListingTags = (skillId: string, enabled = true) =>
+  useQuery({
+    queryKey: ['skill-market-suggest-tags', skillId],
+    queryFn: async () => (await api.post<{ tags: string[] }>('/api/skills/market/suggest-tags', { skillId })).data.tags,
+    enabled: Boolean(skillId) && enabled,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
+
 export const usePublishSkill = () => {
   const invalidate = useInvalidateMarket();
   return useMutation({

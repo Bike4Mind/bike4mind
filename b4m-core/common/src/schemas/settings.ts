@@ -1068,19 +1068,22 @@ function makeNumberSetting(config: { defaultValue?: number; min?: number; max?: 
   };
 }
 
-function makeBooleanSetting(config: { defaultValue?: boolean } & BaseSetting) {
+function makeBooleanSetting({
+  acceptNumeric = false,
+  ...config
+}: { defaultValue?: boolean; acceptNumeric?: boolean } & BaseSetting) {
   return {
     ...config,
     type: 'boolean' as const,
     schema: z
       .preprocess(val => {
         if (typeof val === 'string') {
-          if (val.toLowerCase() === 'true' || val === '1') return true;
-          if (val.toLowerCase() === 'false' || val === '0') return false;
+          if (val.toLowerCase() === 'true' || (acceptNumeric && val === '1')) return true;
+          if (val.toLowerCase() === 'false' || (acceptNumeric && val === '0')) return false;
         }
-        // Legacy admin rows also store numeric toggles. Do not coerce other truthy values.
-        if (val === 1) return true;
-        if (val === 0) return false;
+        // Numeric compatibility is opt-in so existing billing and security defaults cannot flip.
+        if (acceptNumeric && val === 1) return true;
+        if (acceptNumeric && val === 0) return false;
         return val;
       }, z.boolean())
       .prefault(config.defaultValue ?? false),
@@ -3467,6 +3470,7 @@ export const settingsMap = {
     category: 'Users',
   }),
   enableTeamPlan: makeBooleanSetting({
+    acceptNumeric: true,
     key: 'enableTeamPlan',
     userReadable: true,
     name: 'Enable Team Plan',

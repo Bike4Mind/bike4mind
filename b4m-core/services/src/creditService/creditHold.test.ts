@@ -170,6 +170,18 @@ describe('settleCreditHold', () => {
     );
   });
 
+  it('refunds the whole hold and writes no ledger row when the settled charge is 0', async () => {
+    const { adapters, state } = makeAdapters({ user: 100 });
+    const hold = await holdCredits(
+      { userId: 'u1', organizationId: null, requiredCredits: 30, featureLabel: 'video', logger },
+      adapters
+    );
+    const charged = await settleCreditHold(hold, 0, entry, { featureLabel: 'video', logger }, adapters);
+    expect(charged).toBe(0);
+    expect(state.user).toBe(100);
+    expect(deductCreditsWithOrgSupport).not.toHaveBeenCalled();
+  });
+
   it('never keeps more than it reserved', async () => {
     const { adapters, state } = makeAdapters({ user: 100 });
     const hold = await holdCredits(

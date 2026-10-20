@@ -6,13 +6,22 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { toast } from 'sonner';
 import { LakeInfoPanel } from './LakeInfoPanel';
+import DriveConnectAction from '../steps/DriveConnectAction';
 import { DATA_LAKES, REBUILD_PENDING_STALE_MS } from '@bike4mind/common';
 import type { ManagerLake } from './shared';
+import type { LakeDriveConnection } from '@client/app/hooks/data/googleDrive';
 
-// LakeInfoPanel's Drive chip reaches this hook directly - stub it so the chip renders nothing
-// rather than needing a QueryClientProvider.
+const sourceCard = vi.hoisted(() => ({
+  renderDrive: false,
+  connection: null as LakeDriveConnection | null,
+  disconnect: vi.fn(),
+}));
+
+// Share the Drive response between the status chip and the real source panel without query providers.
 vi.mock('@client/app/hooks/data/googleDrive', () => ({
-  useLakeDriveConnection: () => ({ data: null, isError: false, isLoading: false }),
+  useLakeDriveConnection: () => ({ data: sourceCard.connection, isError: false, isLoading: false }),
+  useLakeDriveCanManage: () => ({ data: true }),
+  useDisconnectLakeDrive: () => ({ mutate: sourceCard.disconnect, isPending: false }),
 }));
 // The GitHub chip reads the flag cache and its own query; it has its own suite (LakeGitHubStatusChip.test.tsx).
 vi.mock('@client/app/components/datalake/LakeGitHubStatusChip', () => ({ default: () => null }));
@@ -22,6 +31,25 @@ vi.mock('@client/app/components/datalake/LakeSyncStatus', () => ({
 }));
 vi.mock('@client/app/components/datalake/LakeSkippedFilesChip', () => ({ default: () => null }));
 vi.mock('./FinishSourceConnectBanner', () => ({ default: () => null }));
+// Render the real Drive panel for selection-lifecycle coverage; other tests only need the mount gate.
+vi.mock('../steps/LakeSourceConnectActions', () => ({
+  default: ({ lake }: { lake: { id: string } }) =>
+    sourceCard.renderDrive ? (
+      <DriveConnectAction lake={lake} />
+    ) : (
+      <span data-testid="lake-source-connect-actions-stub" />
+    ),
+}));
+vi.mock('@client/app/hooks/data/useLakeDriveFolderConnect', () => ({
+  useLakeDriveFolderConnect: () => ({
+    openFolderPicker: vi.fn(),
+    resync: vi.fn(),
+    reconnect: vi.fn(),
+    isPicking: false,
+    isCheckingGrant: false,
+    isConnecting: false,
+  }),
+}));
 
 // "Start chat" pulls in SessionsContext/react-router/react-query transitively - irrelevant to this
 // suite (build/rebuild + state chips + purge), so stub it to a no-op, same as DataLakeManagerPanel's suite.
@@ -151,6 +179,9 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  sourceCard.renderDrive = false;
+  sourceCard.connection = null;
+  sourceCard.disconnect.mockReset();
   useGetLakeMemoryHealth.mockReset();
   useGetLakeMemoryHealth.mockReturnValue({ data: undefined });
   useUnderChunkedCount.mockReset();
@@ -208,6 +239,76 @@ describe('LakeInfoPanel - header title', () => {
     expect(title).toHaveTextContent(name);
     const startChat = screen.getByTestId('datalake-startchat-btn-lake-1');
     expect(title.parentElement).not.toBe(startChat.parentElement);
+  });
+});
+
+describe('LakeInfoPanel - source card', () => {
+  it('keeps a disconnect confirmation on refresh but resets it when another lake is selected', async () => {
+    sourceCard.renderDrive = true;
+    sourceCard.connection = {
+      id: 'drive-1',
+      driveFolderId: 'folder-1',
+      folderName: 'Documents',
+      status: 'connected',
+      syncStale: false,
+      enabled: true,
+      lastError: null,
+      lastUsedAt: null,
+      connectedAt: null,
+      lastPolledAt: null,
+      syncSchedule: { mode: 'manual' },
+      fileCount: 3,
+      disconnecting: false,
+      disconnectStalled: false,
+    };
+    const lake = { ...baseLake, organizationId: 'org-1', canManage: true };
+    const user = userEvent.setup();
+    const { rerender } = renderPanel(lake);
+
+    await user.click(screen.getByTestId('drive-disconnect-btn'));
+    expect(sourceCard.disconnect).not.toHaveBeenCalled();
+    rerender(
+      <Wrapper>
+        <LakeInfoPanel lake={{ ...lake, name: 'Renamed lake' }} {...noopProps} />
+      </Wrapper>
+    );
+    expect(screen.getByTestId('drive-disconnect-confirm-btn')).toBeInTheDocument();
+
+    sourceCard.connection = { ...sourceCard.connection, id: 'drive-2', driveFolderId: 'folder-2' };
+    rerender(
+      <Wrapper>
+        <LakeInfoPanel lake={{ ...lake, id: 'lake-2' }} {...noopProps} />
+      </Wrapper>
+    );
+    expect(screen.queryByTestId('drive-disconnect-confirm-btn')).not.toBeInTheDocument();
+    expect(sourceCard.disconnect).not.toHaveBeenCalled();
+    await user.click(screen.getByTestId('drive-disconnect-btn'));
+    await user.click(screen.getByTestId('drive-disconnect-confirm-btn'));
+    expect(sourceCard.disconnect).toHaveBeenCalledWith('lake-2', expect.anything());
+  });
+
+  it('mounts the source card for the manager of an org lake', () => {
+    renderPanel({ ...baseLake, organizationId: 'org-1', canManage: true } as ManagerLake);
+    expect(screen.getByTestId('datalake-selected-lake-source')).toContainElement(
+      screen.getByTestId('lake-source-connect-actions-stub')
+    );
+  });
+
+  it('mounts the source card for the creator of a personal lake', () => {
+    renderPanel({ ...baseLake, organizationId: '', isCreator: true } as ManagerLake);
+    expect(screen.getByTestId('datalake-selected-lake-source')).toContainElement(
+      screen.getByTestId('lake-source-connect-actions-stub')
+    );
+  });
+
+  it('omits the source card for an org lake the caller cannot manage', () => {
+    renderPanel({ ...baseLake, organizationId: 'org-1', canManage: false } as ManagerLake);
+    expect(screen.queryByTestId('datalake-selected-lake-source')).not.toBeInTheDocument();
+  });
+
+  it('omits the source card for a personal lake the caller did not create', () => {
+    renderPanel({ ...baseLake, organizationId: '', isCreator: false } as ManagerLake);
+    expect(screen.queryByTestId('datalake-selected-lake-source')).not.toBeInTheDocument();
   });
 });
 

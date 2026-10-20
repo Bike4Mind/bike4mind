@@ -8,11 +8,11 @@ import {
   shouldPersistGeneratedAudio,
   type ApiErrorCode,
 } from '@bike4mind/common';
-import { TtsProviderNotConfiguredError } from '@server/utils/resolveTtsProvider';
+import { hasTtsProviderKey, TtsProviderNotConfiguredError } from '@server/utils/resolveTtsProvider';
 import { synthesizeTts, upstreamStatus, isCredentialRejection } from '@server/utils/synthesizeTts';
 import { deductTtsCredits } from '@server/utils/deductTtsCredits';
 import { resolveAudioBillingOrgId } from '@server/billing/resolveAudioBillingOrgId';
-import { estimateTtsHoldCredits } from '@server/utils/ttsCandidates';
+import { ttsCandidates, estimateTtsHoldCredits } from '@server/utils/ttsCandidates';
 import {
   holdPreflightCredits,
   InsufficientCreditsPreflightError,
@@ -80,12 +80,19 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
   // (resolveAudioBillingOrgId 403s any other target).
   const billingOrganizationId = await resolveAudioBillingOrgId(req, organization_id, 'user');
   const userId = req.user?.id;
+  const candidateAvailability = await Promise.all(
+    ttsCandidates(vendor, text.length).map(async candidate => ({
+      vendor: candidate,
+      available: candidate === vendor || (userId !== undefined && (await hasTtsProviderKey(candidate, userId))),
+    }))
+  );
+  const candidates = candidateAvailability.filter(candidate => candidate.available).map(candidate => candidate.vendor);
   let hold: PreflightCreditHold | undefined;
   if (userId && req.user) {
     try {
       hold = await holdPreflightCredits({
         req: { user: req.user, apiKeyInfo: req.apiKeyInfo, logger: req.logger },
-        requiredCredits: estimateTtsHoldCredits(vendor, model, text.length),
+        requiredCredits: estimateTtsHoldCredits(vendor, model, text.length, candidates),
         featureLabel: 'text-to-speech',
         billingOrganizationId,
       });
@@ -108,6 +115,7 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
   try {
     const synthesized = await synthesizeTts({
       provider: vendor,
+      candidates,
       text,
       userId,
       requestedVoice: voice,

@@ -15,7 +15,8 @@ export interface MusicCost {
 
 /**
  * Computes the raw provider cost of a single music generation.
- * Conversion to internal credits happens downstream via `usdToCredits`.
+ * Conversion to internal credits happens downstream: `usdToCredits` for gates
+ * and reservations (round-up), `usdToCreditsStochastic` for the final debit.
  */
 export interface MusicCostCalculator<T extends MusicCostInput> {
   getCost(input: T): MusicCost;

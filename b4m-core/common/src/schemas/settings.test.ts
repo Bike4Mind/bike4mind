@@ -55,10 +55,6 @@ describe('boolean setting legacy representations', () => {
     ['TRUE', true],
     ['false', false],
     ['FALSE', false],
-    ['1', true],
-    ['0', false],
-    [1, true],
-    [0, false],
   ])('parses %j as %j without changing its meaning', (stored, expected) => {
     expect(settingsMap.EnableMCPServer.schema.parse(stored)).toBe(expected);
     expect(settingsMap.enforceCredits.schema.parse(stored)).toBe(expected);
@@ -67,6 +63,15 @@ describe('boolean setting legacy representations', () => {
   it.each(['', ' ', 'yes', 'no', '01', ' 1 ', 2, -1, null, {}, []])('rejects unsupported stored value %j', stored => {
     expect(settingsMap.EnableMCPServer.schema.safeParse(stored).success).toBe(false);
     expect(settingsMap.enforceCredits.schema.safeParse(stored).success).toBe(false);
+  });
+
+  it.each([1, 0, '1', '0'])('limits numeric compatibility to Team plans: %j', stored => {
+    expect(settingsMap.enableTeamPlan.schema.parse(stored)).toBe(stored === 1 || stored === '1');
+    for (const setting of Object.values(settingsMap)) {
+      if (setting.type === 'boolean' && setting.key !== 'enableTeamPlan') {
+        expect(setting.schema.safeParse(stored).success, setting.key).toBe(false);
+      }
+    }
   });
 
   it('preserves the declared default for an absent setting', () => {

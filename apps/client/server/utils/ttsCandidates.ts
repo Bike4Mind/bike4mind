@@ -19,10 +19,11 @@ export function ttsCandidates(provider: VoiceGenerationVendor, characters: numbe
 export function estimateTtsHoldCredits(
   provider: VoiceGenerationVendor,
   model: string | undefined,
-  characters: number
+  characters: number,
+  candidates: readonly VoiceGenerationVendor[] = ttsCandidates(provider, characters)
 ): number {
   return Math.max(
-    ...ttsCandidates(provider, characters).map(vendor =>
+    ...candidates.map(vendor =>
       estimateTtsCreditCost(
         vendor,
         vendor === provider ? (model ?? TTS_DEFAULT_MODEL[vendor]) : TTS_DEFAULT_MODEL[vendor],

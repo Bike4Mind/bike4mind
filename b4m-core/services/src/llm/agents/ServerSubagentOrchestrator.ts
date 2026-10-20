@@ -10,7 +10,7 @@ import {
 import { resolveDeprecatedModelId } from '@bike4mind/llm-adapters';
 import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
-import { usdToCredits } from '@bike4mind/utils';
+import { usdToCreditsStochastic } from '@bike4mind/utils';
 import { MemberCreditCapError } from '../../creditService';
 import { confirmingServerOf, withoutConfirmPrompt } from '../mcpPendingAction';
 
@@ -514,7 +514,7 @@ export class ServerSubagentOrchestrator {
 
   /** Fills `totalCredits` from token usage when the agent did not report it (priced on `model`). */
   private priceCompletion(completionInfo: AgentResult['completionInfo'], effectiveModel: string): void {
-    if (!completionInfo.totalCredits && this.deps.availableModels) {
+    if (completionInfo.totalCredits === undefined && this.deps.availableModels) {
       const modelInfo = this.deps.availableModels.find(m => m.id === effectiveModel);
       if (modelInfo) {
         const { totalInputTokens, totalOutputTokens, totalCacheReadTokens, totalCacheWriteTokens, turnUsage } =
@@ -522,11 +522,6 @@ export class ServerSubagentOrchestrator {
         // Cache-aware so this fallback stays on the same basis as the cache-aware
         // costUsd recorded by delegateToAgent's onCredits (see #151) - otherwise a
         // fallback-computed credit sits next to a cache-aware cost in the same row.
-        // NB (OpenAI): OpenAI's prompt_tokens already includes cached_tokens, so
-        // passing the cache-read count again here double-counts the cached portion.
-        // That shape is shared with the main cliCompletions credit path, so credits
-        // stay consistent across the two paths rather than diverging - matching the
-        // primary path is deliberate; do not "fix" it here in isolation.
         // Per request when the agent reports it: long-context tiers are chosen per request.
         const usdCost = turnUsage?.length
           ? getTurnsCost(modelInfo, turnUsage)
@@ -538,7 +533,7 @@ export class ServerSubagentOrchestrator {
               totalCacheWriteTokens ?? 0,
               totalInputTokens + (totalCacheReadTokens ?? 0) + (totalCacheWriteTokens ?? 0)
             );
-        completionInfo.totalCredits = usdToCredits(usdCost);
+        completionInfo.totalCredits = usdToCreditsStochastic(usdCost);
       } else {
         // Model absent from availableModels: credits stay unset and the delegation's
         // cost is lost from the usage events. Warn so the miss rate is observable (#152).
@@ -1132,7 +1127,13 @@ export class ServerSubagentOrchestrator {
         totalOutputTokens: 0,
         iterations: result?.iterations ?? 0,
         toolCalls: 0,
-        totalCredits: result?.totalCredits,
+        // The dispatched child persists a coerced 0 when it reports nothing, so 0 here is
+        // indistinguishable from "not reported". Forward only a positive value to keep
+        // zero-credit usage events out of analytics.
+        totalCredits:
+          typeof result?.totalCredits === 'number' && Number.isFinite(result.totalCredits) && result.totalCredits > 0
+            ? result.totalCredits
+            : undefined,
         reachedMaxIterations: false,
       },
     };

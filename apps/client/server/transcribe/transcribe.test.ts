@@ -14,6 +14,8 @@ const {
   mockAssertCredits,
   mockHoldCredits,
   mockPresign,
+  mockUsageRecord,
+  settlementDraw,
   hold,
 } = vi.hoisted(() => ({
   mockSend: vi.fn(),
@@ -24,8 +26,18 @@ const {
   mockAssertCredits: vi.fn(),
   mockHoldCredits: vi.fn(),
   mockPresign: vi.fn(),
+  mockUsageRecord: vi.fn(),
+  settlementDraw: vi.fn(() => 0.5),
   hold: { ownerId: 'u1', ownerType: 'User', settle: vi.fn(), release: vi.fn() },
 }));
+
+vi.mock('@bike4mind/common', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/common')>();
+  return {
+    ...actual,
+    usdToCreditsStochastic: (usd: number) => actual.usdToCreditsStochastic(usd, () => settlementDraw()),
+  };
+});
 
 vi.mock('@aws-sdk/client-s3', () => ({
   S3Client: class {
@@ -56,7 +68,7 @@ vi.mock('@bike4mind/database', () => ({
   organizationRepository: {},
   adminSettingsRepository: {},
   creditTransactionRepository: {},
-  usageEventRepository: { record: vi.fn() },
+  usageEventRepository: { record: mockUsageRecord },
 }));
 vi.mock('@bike4mind/services', async orig => {
   const actual = await orig<typeof import('@bike4mind/services')>();
@@ -91,6 +103,8 @@ const deletes = () => mockSend.mock.calls.filter(([cmd]) => cmd.kind === 'delete
 
 beforeEach(() => {
   vi.clearAllMocks();
+  settlementDraw.mockReturnValue(0.5);
+  mockUsageRecord.mockResolvedValue(undefined);
   mockOpenAI.mockReset().mockResolvedValue({ text: 'hello' });
   mockAWS.mockReset().mockResolvedValue({ text: 'hello' });
   mockHoldCredits.mockReset();
@@ -172,6 +186,23 @@ describe('transcribeUpload credit hold', () => {
     await expect(result).rejects.toMatchObject({ statusCode: 504 });
     expect(mockHoldCredits).not.toHaveBeenCalled();
     expect(mockSend.mock.calls.filter(([command]) => command.kind === 'head')).toHaveLength(0);
+  });
+
+  it('preserves the deadline error when HEAD is aborted', async () => {
+    vi.useFakeTimers();
+    mockSend.mockImplementation((command: { kind: string }, options: { abortSignal: AbortSignal }) => {
+      if (command.kind !== 'head') return Promise.resolve({});
+      return new Promise((_, reject) => {
+        options.abortSignal.addEventListener('abort', () => reject(new Error('HEAD aborted')), { once: true });
+      });
+    });
+    const result = run().catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(45_000);
+    expect(await result).toMatchObject({ statusCode: 504 });
+    expect(await result).not.toBeInstanceOf(TranscribeRequestError);
+    expect(mockHoldCredits).not.toHaveBeenCalled();
+    expect(mockOpenAI).not.toHaveBeenCalled();
+    expect(deletes()).toHaveLength(1);
   });
 
   it.each(['openai', 'aws'])('aborts %s and refunds before the server deadline, without settling', async backend => {
@@ -258,8 +289,25 @@ describe('transcribeUpload credit hold', () => {
 
     const [, heldCredits] = mockHoldCredits.mock.calls[0];
     expect(heldCredits).toBeGreaterThan(0);
-    expect(hold.settle).toHaveBeenCalledWith(heldCredits, expect.objectContaining({ type: 'speech_to_text_usage' }));
+    expect(hold.settle).toHaveBeenCalledWith(
+      expect.any(Number),
+      expect.objectContaining({ type: 'speech_to_text_usage' })
+    );
+    expect(hold.settle.mock.calls[0][0]).toBeLessThanOrEqual(heldCredits);
     expect(hold.release).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [0, 1],
+    [0.999, 0],
+  ])('settles a fractional cost once and records zero draws (%s -> %s)', async (draw, expected) => {
+    settlementDraw.mockReturnValue(draw);
+    hold.settle.mockImplementation(async (credits: number) => credits);
+    await run();
+    expect(hold.settle).toHaveBeenCalledWith(expected, expect.objectContaining({ type: 'speech_to_text_usage' }));
+    expect(mockUsageRecord).toHaveBeenCalledWith(
+      expect.objectContaining({ creditsCharged: expected, feature: 'transcription' })
+    );
   });
 
   it('releases the hold when the provider fails, and never settles it', async () => {

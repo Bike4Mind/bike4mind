@@ -5,10 +5,11 @@ import { AdminSettingsCache } from './cache/AdminSettingsCache';
 import { Logger } from '@bike4mind/observability';
 
 describe('getSettingsValue - legacy numeric boolean rows', () => {
-  it.each(['1', '0'])('preserves the stored %s instead of substituting a default', stored => {
+  it.each(['1', '0'])('accepts numeric values only for the opted-in setting: %s', stored => {
     const expected = stored === '1';
-    expect(getSettingsValue('EnableMCPServer', { EnableMCPServer: stored })).toBe(expected);
-    expect(getSettingsValue('enforceCredits', { enforceCredits: stored })).toBe(expected);
+    expect(getSettingsValue('enableTeamPlan', { enableTeamPlan: stored })).toBe(expected);
+    expect(getSettingsValue('EnableMCPServer', { EnableMCPServer: stored })).toBe(false);
+    expect(getSettingsValue('enforceCredits', { enforceCredits: stored })).toBe(true);
   });
 
   it('keeps opposite defaults for missing or rejected values', () => {

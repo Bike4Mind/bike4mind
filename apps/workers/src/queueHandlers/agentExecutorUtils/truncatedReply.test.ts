@@ -210,3 +210,18 @@ it('gives an honest model-unavailable notice when neither answer nor summary exi
   expect(answer).not.toContain('iteration limit');
   expect(answer).not.toMatch(/send a follow-up/i);
 });
+
+it('keeps the paid report and retry guidance after a transient configuration lookup failure', () => {
+  const reply = resolveDisplayAnswer({
+    reachedMaxIterations: true,
+    ranAnyIteration: true,
+    finalAnswer: 'synthetic wrap-up',
+    dagAggregationFallbackSummary: 'paid child report',
+    configuredMaxIterations: 25,
+    aggregationGraceReason: 'model-configuration-unavailable',
+  });
+  expect(reply).toContain('paid child report');
+  expect(reply).toContain('model configuration could not be loaded');
+  expect(reply).toContain('Please retry');
+  expect(reply).not.toContain('no longer available');
+});

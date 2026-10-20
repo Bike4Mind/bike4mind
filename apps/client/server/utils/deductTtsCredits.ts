@@ -1,5 +1,5 @@
 import { VoiceGenerationVendor, computeTtsUsd } from '@bike4mind/common';
-import { usdToCredits } from '@bike4mind/utils';
+import { usdToCreditsStochastic } from '@bike4mind/utils';
 import { usageEventRepository } from '@bike4mind/database';
 import { type ILogger } from '@bike4mind/observability';
 import type { PreflightCreditHold } from '@server/utils/creditPreflight';
@@ -33,8 +33,11 @@ export async function deductTtsCredits({
 }: DeductTtsArgs): Promise<void> {
   const costUsd = computeTtsUsd(vendor, model, characters);
   const sessionId = `tts-${userId}-${Date.now()}`;
-  const credits = await hold.settle(usdToCredits(costUsd), { type: 'text_to_speech_usage', model, sessionId });
-  if (credits <= 0) return;
+  const credits = await hold.settle(usdToCreditsStochastic(costUsd), {
+    type: 'text_to_speech_usage',
+    model,
+    sessionId,
+  });
 
   // Dual-write usage event: analytics only, never billing.
   usageEventRepository

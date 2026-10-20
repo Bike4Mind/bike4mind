@@ -2564,7 +2564,7 @@ async function processExecution(
     // wrap-up returns the children's results, and nothing re-checks the model inside the loop.
     maxIterations = clampMaxIterationsForUnrunnableAggregationWake({
       isAggregationOnlyWake,
-      isRunnable: !modelInfo || modelRunnable,
+      isRunnable: !modelInfo || (modelAccess.ok && modelRunnable),
       maxIterations,
       iterationIndex,
     });
@@ -3238,6 +3238,7 @@ async function processExecution(
       dagAggregationFallbackSummary,
       configuredMaxIterations,
       aggregationGraceReason: aggregationGraceReasonOf({
+        modelAccessOk: modelAccess.ok,
         isAggregationOnlyWake,
         hasModel: Boolean(modelInfo),
         isRunnable: modelRunnable,
@@ -3996,14 +3997,14 @@ async function processSubagentDispatch(
       questId: child.linkedQuestId,
       // This subagent's own in-process delegations (no tracker is wired here, so the
       // orchestrator never dispatches them and this is their only charge).
-      onSubagentCredits: (credits, meta) => {
-        grandchildCharges.push(
-          settleTokenCost(meta?.model ?? childModel, {
-            totalCredits: credits,
-            totalInputTokens: meta?.inputTokens ?? 0,
-            totalOutputTokens: meta?.outputTokens ?? 0,
-          })
-        );
+      onSubagentCredits: async (credits, meta) => {
+        const charge = settleTokenCost(meta?.model ?? childModel, {
+          totalCredits: credits,
+          totalInputTokens: meta?.inputTokens ?? 0,
+          totalOutputTokens: meta?.outputTokens ?? 0,
+        });
+        grandchildCharges.push(charge);
+        await charge;
       },
     };
     const subagentToolConfig = buildSubagentToolConfig({

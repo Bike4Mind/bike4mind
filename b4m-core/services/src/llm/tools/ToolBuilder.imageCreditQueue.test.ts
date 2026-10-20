@@ -1,9 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { ModelInfo } from '@bike4mind/common';
+import { CREDITS_PER_USD_COST, type ModelInfo } from '@bike4mind/common';
 import { ToolBuilder, type ToolBuilderConfig } from './ToolBuilder';
 import { validateImageCredits } from './base/utils';
 import { estimateImageCredits } from '../../imageCost';
 import { settleToolCallCredits } from '../settleToolCredits';
+
+// The real stochastic rounding, with its draw pinned so the reserved charge is assertable.
+const { settlementDraw } = vi.hoisted(() => ({ settlementDraw: vi.fn(() => 0.5) }));
+vi.mock('@bike4mind/common', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/common')>();
+  return {
+    ...actual,
+    usdToCreditsStochastic: (usd: number) => actual.usdToCreditsStochastic(usd, () => settlementDraw()),
+  };
+});
 
 // Stub the image cost calculator so these tests exercise the gate/settle wiring (one queue entry
 // per delivered call, guard conditions) without an image-pricing fixture.
@@ -49,9 +59,13 @@ type TestQuest = { id: string; sessionId: string; creditsUsed: number; images: s
 const quest = (): TestQuest => ({ id: 'q1', sessionId: 's1', creditsUsed: 0, images: [] });
 const asQuest = (q: TestQuest) => q as never;
 
+// The estimate's USD must agree with its credits: the charge is drawn on the USD.
+const usdFor = (credits: number) => credits / CREDITS_PER_USD_COST;
+
 beforeEach(() => {
-  mockValidateImageCredits.mockReset().mockReturnValue({ requiredCredits: 400, usdCost: 0.08 });
-  mockEstimateImageCredits.mockReset().mockReturnValue({ requiredCredits: 400, usdCost: 0.08 } as never);
+  settlementDraw.mockReturnValue(0.5);
+  mockValidateImageCredits.mockReset().mockReturnValue({ requiredCredits: 400, usdCost: usdFor(400) });
+  mockEstimateImageCredits.mockReset().mockReturnValue({ requiredCredits: 400, usdCost: usdFor(400) } as never);
 });
 
 describe('ToolBuilder.gateImageCredits', () => {
@@ -131,8 +145,8 @@ describe('ToolBuilder.gateImageCredits', () => {
 describe('ToolBuilder.settleImageCredits', () => {
   it('reserves one queue entry per delivered call so two image calls sum instead of doubling', () => {
     mockEstimateImageCredits
-      .mockReturnValueOnce({ requiredCredits: 400, usdCost: 0.08 } as never)
-      .mockReturnValueOnce({ requiredCredits: 900, usdCost: 0.18 } as never);
+      .mockReturnValueOnce({ requiredCredits: 400, usdCost: usdFor(400) } as never)
+      .mockReturnValueOnce({ requiredCredits: 900, usdCost: usdFor(900) } as never);
     const { builder, toolCreditsMap } = makeBuilder();
     const q = quest();
 
@@ -142,6 +156,38 @@ describe('ToolBuilder.settleImageCredits', () => {
     expect(toolCreditsMap.get('image_generation')).toEqual([400, 900]);
     expect(q.creditsUsed).toBe(1300);
     expect(q.images).toEqual(['a.png', 'b.png']);
+  });
+
+  it.each([
+    [0.25, 41],
+    [0.75, 40],
+  ])('charges N or N+1 for a cost of N + 0.5 credits (draw %s -> %s)', (draw, expected) => {
+    settlementDraw.mockReturnValue(draw);
+    mockEstimateImageCredits.mockReturnValueOnce({ requiredCredits: 41, usdCost: usdFor(40.5) } as never);
+    const { builder, toolCreditsMap, toolCreditModels, record } = makeBuilder();
+    const q = quest();
+
+    builder.settleImageCredits('image_generation', asQuest(q), { ...COST_INPUT, paths: ['a.png'] }, true, null, MODELS);
+
+    expect(toolCreditsMap.get('image_generation')).toEqual([expected]);
+    expect(q.creditsUsed).toBe(expected);
+    expect(record.mock.calls[0][0]).toMatchObject({ creditsCharged: expected });
+    expect(Array.from(toolCreditModels)).toEqual(['gpt-image-1']);
+  });
+
+  it('can charge 0 for a tiny cost: the usage event is still written, but no model is recorded as charging', () => {
+    mockEstimateImageCredits.mockReturnValueOnce({ requiredCredits: 1, usdCost: 0.00001 } as never);
+    const { builder, toolCreditsMap, toolCreditModels, record } = makeBuilder();
+    const q = quest();
+
+    builder.settleImageCredits('image_generation', asQuest(q), { ...COST_INPUT, paths: ['a.png'] }, true, null, MODELS);
+
+    expect(toolCreditsMap.get('image_generation')).toEqual([0]);
+    expect(q.creditsUsed).toBe(0);
+    expect(record).toHaveBeenCalledTimes(1);
+    expect(record.mock.calls[0][0]).toMatchObject({ creditsCharged: 0, costUsd: 0.00001 });
+    expect(toolCreditModels.size).toBe(0);
+    expect(q.images).toEqual(['a.png']);
   });
 
   it.each([

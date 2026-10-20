@@ -1,6 +1,5 @@
 import {
   billedVideoRequest,
-  estimateVideoCostCredits,
   estimateVideoCostUsd,
   getVideoModelCapabilities,
   MAX_INLINE_PROVIDER_OUTPUT_BYTES,
@@ -12,6 +11,7 @@ import {
   type ValidatedVideoRequest,
   type VideoJobOutput,
   type VideoJobPayload,
+  usdToCreditsStochastic,
 } from '@bike4mind/common';
 import {
   ProviderSubmitError,
@@ -93,7 +93,9 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler<
       // A billed block has no output to measure, so it is charged at the requested duration.
       const reported = job.state === 'succeeded' ? job.payload.reportedDurationSeconds : undefined;
       const billed = billedVideoRequest(caps, request, reported);
-      return { billed, credits: estimateVideoCostCredits(caps, billed), usd: estimateVideoCostUsd(caps, billed) };
+      const usd = estimateVideoCostUsd(caps, billed);
+      // Unbiased settlement against the round-up hold. A non-finite price stays NaN: the draw would read it as free.
+      return { billed, credits: Number.isFinite(usd) ? usdToCreditsStochastic(usd) : Number.NaN, usd };
     } catch (error) {
       deps.logger.error('video_job_estimate_failed', { jobId: job.id, model: request.model, error });
       return { billed: request, credits: Number.NaN, usd: null };

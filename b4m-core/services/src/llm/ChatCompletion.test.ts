@@ -4403,22 +4403,39 @@ describe('ChatCompletionProcess', () => {
     // was spent and is billed like an abort's, not refunded with the hold.
     it('bills delivered tool charges when a later tool call is refused for credits', async () => {
       const { complete } = reservationOrgSetup();
-      complete.mockImplementation(async () => {
-        (service as any).toolCreditsMap.set('image_generation', [18]);
-        (service as any).toolCreditModels.add('image-model');
-        throw insufficientCreditsError('You do not have enough organization credits to complete this request.');
-      });
+      complete.mockImplementation(
+        async (
+          _model: string,
+          _messages: unknown,
+          _options: unknown,
+          callback: (texts: string[], info: { inputTokens: number; outputTokens: number }) => Promise<void>
+        ) => {
+          await callback(['partial answer'], { inputTokens: 10, outputTokens: 1000 });
+          (service as any).toolCreditsMap.set('image_generation', [18]);
+          (service as any).toolCreditModels.add('image-model');
+          throw insufficientCreditsError('You do not have enough organization credits to complete this request.');
+        }
+      );
       fundedOrg();
       mockQuest.sessionId = 'session1';
 
       await service.process({ body: reservationBody(), logger: mockLogger });
 
+      const charged = mockDb.creditTransactions.createTransaction.mock.calls.reduce(
+        (total: number, [, row]: [string, { credits: number }]) => total - row.credits,
+        0
+      );
+      expect(charged).toBeGreaterThan(18);
       expect(mockDb.organizations.incrementCredits).toHaveBeenCalledTimes(2);
-      expect(mockDb.organizations.incrementCredits).toHaveBeenNthCalledWith(2, 'org1', expectedHold - 18);
+      expect(mockDb.organizations.incrementCredits).toHaveBeenNthCalledWith(2, 'org1', expectedHold - charged);
       expect(mockDb.creditTransactions.createTransaction).toHaveBeenCalledWith(
         'tool_usage',
         expect.objectContaining({ credits: -18, model: 'image-model' })
       );
+      expect(mockQuest.creditsUsed).toBe(charged);
+      expect(mockQuest.promptMeta.functionCalls).toEqual([
+        expect.objectContaining({ name: 'image_generation', creditsUsed: 18 }),
+      ]);
     });
 
     it('refunds the whole hold when a tool call is refused for credits before anything was spent', async () => {
@@ -8097,7 +8114,13 @@ describe('ChatCompletionProcess', () => {
     const resolve = vi.fn();
     const table = {
       'settings-surface': {
-        ownedFields: ['systemPromptText', 'enabledTools', 'temperature', 'maxToolCalls'] as const,
+        ownedFields: [
+          'systemPromptText',
+          'enabledTools',
+          'temperature',
+          'maxToolCalls',
+          'disableUserIntegrations',
+        ] as const,
         resolve,
       },
     };
@@ -8106,6 +8129,10 @@ describe('ChatCompletionProcess', () => {
       mockDb.sessions.findById.mockResolvedValue({ ...mockSession, ...session });
       (service as any).workspaceSessionSettings = workspaceSessionSettings;
       const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue([]);
+      const buildMcpToolsSpy = vi
+        .spyOn(ToolBuilder.prototype, 'buildMcpTools')
+        .mockResolvedValue({ mcpToolsByServer: {}, serverAgentConfig: {} });
+      buildMcpToolsSpy.mockClear();
       const complete = vi.fn().mockImplementation(async (_m, _msgs, _opts, cb) => cb(['Hi!']));
       mockedGetLlmByModel.mockReturnValue({
         complete,
@@ -8131,11 +8158,23 @@ describe('ChatCompletionProcess', () => {
       } as any);
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
-      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      const body = {
+        ...startQuestParams,
+        tools: [],
+        projectId: undefined,
+        organizationId: undefined,
+        mcpServers: ['notion'],
+      };
       try {
-        await service.process({ body, logger: mockLogger });
+        const processError = await service.process({ body, logger: mockLogger }).then(
+          () => undefined,
+          (error: unknown) => error
+        );
         const completeOptions = complete.mock.calls[0]?.[2];
         return {
+          processError,
+          modelCalled: complete.mock.calls.length > 0,
+          requestedMcpServers: buildMcpToolsSpy.mock.calls[0]?.[0]?.requestedMcpServers,
           // buildOptimizedFeatures is stubbed in beforeEach; its eighth argument is the session prompt.
           sessionPrompt: (service as any).buildOptimizedFeatures.mock.calls[0]?.[7] as string | undefined,
           temperature: completeOptions?.temperature,
@@ -8144,6 +8183,7 @@ describe('ChatCompletionProcess', () => {
         };
       } finally {
         buildToolsSpy.mockRestore();
+        buildMcpToolsSpy.mockRestore();
         (service as any).workspaceSessionSettings = {};
       }
     };
@@ -8158,10 +8198,12 @@ describe('ChatCompletionProcess', () => {
         enabledTools: ['current_datetime'],
         temperature: 0.15,
         maxToolCalls: 3,
+        disableUserIntegrations: true,
       });
 
       const turn = await runTurn({ surface: 'settings-surface' }, table);
 
+      expect(turn.processError).toBeUndefined();
       expect(resolve).toHaveBeenCalledWith(
         expect.objectContaining({
           user: expect.objectContaining({ id: 'user1' }),
@@ -8172,6 +8214,24 @@ describe('ChatCompletionProcess', () => {
       expect(turn.temperature).toBe(0.15);
       expect(turn.maxToolCalls).toBe(3);
       expect(turn.enabledTools).toContain('current_datetime');
+      // The request asked for an MCP server; the resolved disableUserIntegrations withholds it.
+      expect(turn.requestedMcpServers).toEqual([]);
+    });
+
+    it('fails closed when the resolver throws: no model call on stored settings', async () => {
+      resolve.mockRejectedValue(new Error('workspace lookup failed'));
+
+      const turn = await runTurn(
+        { surface: 'settings-surface', systemPromptText: 'STALE BAKED PROMPT', temperature: 0.9 },
+        table
+      );
+
+      expect(resolve).toHaveBeenCalledOnce();
+      expect(turn.processError).toEqual(
+        expect.objectContaining({ cause: expect.objectContaining({ message: 'workspace lookup failed' }) })
+      );
+      expect(turn.modelCalled).toBe(false);
+      expect(turn.sessionPrompt).toBeUndefined();
     });
 
     it('clears a baked owned field the resolver no longer yields', async () => {
@@ -8182,6 +8242,8 @@ describe('ChatCompletionProcess', () => {
         table
       );
 
+      expect(turn.processError).toBeUndefined();
+      expect(turn.modelCalled).toBe(true);
       expect(turn.sessionPrompt).toBeUndefined();
       expect(turn.maxToolCalls).toBeUndefined();
     });

@@ -36,6 +36,7 @@ const formatFor = (vendor: VoiceGenerationVendor, format: VoiceOutputFormat | un
 
 export interface SynthesizeTtsArgs {
   provider: VoiceGenerationVendor;
+  candidates?: readonly VoiceGenerationVendor[];
   text: string;
   userId: string | undefined;
   requestedVoice?: string;
@@ -69,7 +70,7 @@ export interface SynthesizedTts {
  */
 export async function synthesizeTts(args: SynthesizeTtsArgs): Promise<SynthesizedTts> {
   const { provider, text, logger } = args;
-  const candidates = ttsCandidates(provider, text.length);
+  const candidates = args.candidates ?? ttsCandidates(provider, text.length);
   let primaryError: unknown;
 
   for (const vendor of candidates) {
