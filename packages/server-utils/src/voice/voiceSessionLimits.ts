@@ -4,11 +4,42 @@
 // so the reserve and the refund can never drift apart.
 export const MAX_SESSION_SECONDS = 5 * 60;
 
+// Lifetime of an ElevenLabs call's session token, measured from its hold's start: the call cap plus
+// headroom for the provider's last turns. The llm-proxy refuses any turn past it, so reconnecting
+// onto the same hold can never stretch one reserve past this window.
+export const VOICE_SESSION_TOKEN_TTL_SECONDS = MAX_SESSION_SECONDS + 120;
+
+export function voiceSessionTokenExpiresAtMs(holdStartedAt: Date): number {
+  return holdStartedAt.getTime() + VOICE_SESSION_TOKEN_TTL_SECONDS * 1000;
+}
+
 // Realtime (OpenAI) voice: the hold covers this long a call at worst-case audio rates. Reserved in
 // POST /api/ai/voice-sessions; the same rate floors what a call settles for in
 // server/websocket/voiceSessionEnded.ts, so client-reported usage can never settle below it.
 export const REALTIME_VOICE_RESERVE_USD = 0.77;
 export const REALTIME_VOICE_HOLD_SECONDS = 60 * 60;
+
+// A realtime reconnect reuses its hold only while at least this much of the window is left; past
+// that it reserves afresh rather than open a session with almost no window to bill against.
+export const REALTIME_MIN_REUSE_SECONDS = 60;
+
+// OpenAI's own default lifetime for a realtime client secret (it accepts 10 to 7200 seconds).
+export const REALTIME_CLIENT_SECRET_TTL_SECONDS = 10 * 60;
+// Leave room for ordinary provider latency; the returned deadline still gates slower responses.
+const REALTIME_CLIENT_SECRET_EXPIRY_HEADROOM_SECONDS = 5;
+
+const realtimeHoldSecondsLeft = (holdStartedAt: Date, now: Date) =>
+  Math.floor((holdStartedAt.getTime() + REALTIME_VOICE_HOLD_SECONDS * 1000 - now.getTime()) / 1000);
+
+/**
+ * Lifetime to mint a realtime client secret with, for a call on the hold opened at `holdStartedAt`:
+ * rounded down to the whole seconds left. The caller must also check the returned expires_at:
+ * OpenAI anchors this TTL to its own creation time. Expiry only gates starting a session.
+ */
+export function realtimeClientSecretTtlSeconds(holdStartedAt: Date, now: Date = new Date()): number {
+  const secondsLeft = realtimeHoldSecondsLeft(holdStartedAt, now) - REALTIME_CLIENT_SECRET_EXPIRY_HEADROOM_SECONDS;
+  return Math.max(10, Math.min(REALTIME_CLIENT_SECRET_TTL_SECONDS, secondsLeft));
+}
 
 /**
  * The least a realtime call that has been open `elapsedSeconds` (server clock, from its bootstrap)
@@ -47,6 +78,10 @@ export function creditsForElapsed(reservedCredits: number, elapsedSeconds: numbe
  * `voiceBilledCredits` and settles on its own rate, so an ElevenLabs reconnect reusing it would
  * bill ElevenLabs minutes at the realtime floor (and the reverse). A mismatched hold is settled
  * and a fresh one reserved instead.
+ *
+ * Reuse also ends with the hold's window (MAX_SESSION_SECONDS, or REALTIME_VOICE_HOLD_SECONDS for a
+ * realtime hold): the reserve only covers that long a call, so a later reconnect pays a fresh hold.
+ * A realtime hold also stops being reused once less than REALTIME_MIN_REUSE_SECONDS of it is left.
  */
 export function shouldReuseVoiceHold(
   isReconnect: boolean | undefined,
@@ -54,12 +89,12 @@ export function shouldReuseVoiceHold(
     | { voiceReservedCredits?: number | null; voiceSessionStartedAt?: Date | null; voiceBilledCredits?: number | null }
     | null
     | undefined,
-  realtime: boolean
+  realtime: boolean,
+  now: Date = new Date()
 ): boolean {
-  return (
-    !!isReconnect &&
-    session?.voiceReservedCredits != null &&
-    session?.voiceSessionStartedAt != null &&
-    (session.voiceBilledCredits != null) === realtime
-  );
+  if (!isReconnect || session?.voiceReservedCredits == null || session?.voiceSessionStartedAt == null) return false;
+  if ((session.voiceBilledCredits != null) !== realtime) return false;
+  const startedAt = new Date(session.voiceSessionStartedAt);
+  if (realtime) return realtimeHoldSecondsLeft(startedAt, now) >= REALTIME_MIN_REUSE_SECONDS;
+  return now.getTime() - startedAt.getTime() < MAX_SESSION_SECONDS * 1000;
 }
