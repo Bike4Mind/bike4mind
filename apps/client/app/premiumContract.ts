@@ -264,9 +264,10 @@ export type PremiumWorkspaceDeniedTools = WorkspaceDeniedToolsTable;
  * Contributed via `b4mContributions.workspaceSessionSettingsExport` (`{ "<surface id>": "<module>" }`,
  * each module exporting `workspaceSessionSettings: WorkspaceSessionSettingsEntry`). A fork, clone or
  * snip drops the owned fields and a move unsets them, so a session takes on its current workspace's
- * values. One overlay per workspace id, and the id must be registered in `WORKSPACE_SURFACES`: a
- * session's `surface` is matched exactly, so an unregistered id fails codegen instead of emitting an
- * entry that could never apply.
+ * values. One overlay per workspace id, and the id must be an open surface registered in
+ * `WORKSPACE_SURFACES` - guarded surface ids deliberately live in their own module - so an
+ * unregistered id fails codegen. A typo would otherwise emit an entry no session can match; a
+ * private-surface contribution is rejected until a registration mechanism exists.
  */
 export type PremiumWorkspaceSessionSettings = WorkspaceSessionSettingsTable;
 

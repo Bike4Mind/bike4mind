@@ -506,9 +506,11 @@ const ENTITLEMENT_KEY_RE = /^[a-z0-9][a-z0-9:_.-]*$/i;
 // The workspace ids a session-settings contribution may key on: every non-null id in
 // WORKSPACE_SURFACES (b4m-core/common/src/surfaces.ts). Mirrored rather than imported because this
 // script runs at install time, before any source outside apps/client/scripts is copied, so the
-// TypeScript registry is not on disk. A session's surface is matched exactly, so an id missing here
-// would emit a table entry that can never apply. Keep in sync with surfaces.ts; the generator test
-// derives the same set from WORKSPACE_SURFACES and fails until this list catches up.
+// TypeScript registry is not on disk. Only open surfaces are registered there - a guarded surface's id
+// deliberately stays in its own module - so an id outside this set is rejected: a typo would otherwise
+// emit a table entry no session can match, and a private-surface contribution has to wait for a
+// registration mechanism. Keep in sync with surfaces.ts; the generator test derives the same set from
+// WORKSPACE_SURFACES and fails until this list catches up.
 const REGISTERED_WORKSPACE_IDS = ['opti'];
 
 // A grant entry may instead be `{ "key", "label", "sessionHref"? }`: the same grant, plus how the
@@ -1160,8 +1162,9 @@ const RESERVED_OBJECT_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 // Session fields a workspace owns, resolved at read time (b4mContributions.workspaceSessionSettingsExport,
 // `{ "<workspace id>": "<module specifier>" }`, each module exporting `workspaceSessionSettings:
 // WorkspaceSessionSettingsEntry`). Ids are declared in package.json rather than read off the module so
-// they can be validated here, and each must be a registered workspace surface id: the table is keyed
-// by the session's `surface` and matched exactly, so an unregistered id would never apply. Like the
+// they can be validated here, and each must be an open surface registered in WORKSPACE_SURFACES (a
+// guarded surface id stays in its own module, so a private-surface contribution is rejected until a
+// registration mechanism exists; a typo would otherwise emit an entry no session can match). Like the
 // partner signup hooks it must exist in BOTH forms.
 function generateWorkspaceSessionSettings(packages) {
   const outPath = join(CLIENT_ROOT, 'server/premium-generated/premiumWorkspaceSessionSettings.generated.ts');
@@ -1193,8 +1196,9 @@ function generateWorkspaceSessionSettings(packages) {
         throw new Error(
           `[codegen] invalid ${field} workspace id from package "${pkg.name}": ` +
             `${JSON.stringify(workspaceId)} is not a registered workspace surface id ` +
-            `(${REGISTERED_WORKSPACE_IDS.join(', ')}); a session's surface is matched exactly, ` +
-            `so this entry would never apply`
+            `(${REGISTERED_WORKSPACE_IDS.join(', ')}); only open surfaces are registered, so a ` +
+            `guarded surface's id is rejected until a registration mechanism exists, and a typo ` +
+            `would otherwise emit an entry no session can match`
         );
       }
       if (merged.has(workspaceId)) {
