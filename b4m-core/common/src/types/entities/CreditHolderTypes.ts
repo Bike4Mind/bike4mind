@@ -79,3 +79,10 @@ export type CreditHoldRecord = {
   /** The owner's balance right after the hold; the ledger row's balance when no refund lands. */
   balanceAfterHold: number;
 };
+
+/**
+ * A hold persisted for a later request to settle, with the id of the PendingCreditHold row the
+ * expired-hold sweep refunds. Settling claims that row, so settle and sweep can never both move
+ * balance. Absent on records written before the row existed; those settle directly.
+ */
+export type PersistedCreditHold = CreditHoldRecord & { pendingHoldId?: string };

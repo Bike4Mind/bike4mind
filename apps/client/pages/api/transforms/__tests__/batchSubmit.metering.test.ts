@@ -106,6 +106,8 @@ describe('POST /api/transforms/batch metering', () => {
 
     expect(res._getStatusCode()).toBe(202);
     expect(m.reserve.mock.calls[0][1]).toBe(4);
+    // Outlives Anthropic's 29-day results window, so the sweep cannot refund a batch a late poll can still bill.
+    expect(m.reserve.mock.calls[0][3]).toEqual({ holdTtlMs: 29 * 24 * 60 * 60_000 });
     expect(m.reserve).toHaveBeenCalledBefore(m.submitBatch);
     expect(m.create).toHaveBeenCalledWith(
       expect.objectContaining({

@@ -63,6 +63,10 @@ const BatchSubmitSchema = z.object({
     .max(10000),
 });
 
+// The hold must outlive every poll that can still bill: Anthropic serves a batch's results for 29 days
+// after creation, so a shorter expiry would let a caller who polls late get the batch free.
+const BATCH_CREDIT_HOLD_TTL_MS = 29 * 24 * 60 * 60_000;
+
 // 32mb covers a full maxPerBatch payload of large transform prompts. Both the
 // Next bodyParser (below) and baseApi's own content-length guard must be raised.
 const handler = baseApi({ maxBodySize: 32 * 1024 * 1024 }).post(async (req, res) => {
@@ -100,7 +104,9 @@ const handler = baseApi({ maxBodySize: 32 * 1024 * 1024 }).post(async (req, res)
     messages: r.messages as MessageParam[],
   }));
 
-  const reservation = await reserveCompletionCredits(req, ceilingUsd, 'batch transforms');
+  const reservation = await reserveCompletionCredits(req, ceilingUsd, 'batch transforms', {
+    holdTtlMs: BATCH_CREDIT_HOLD_TTL_MS,
+  });
 
   let submitted: Awaited<ReturnType<typeof service.submitBatch>>;
   try {
@@ -122,8 +128,8 @@ const handler = baseApi({ maxBodySize: 32 * 1024 * 1024 }).post(async (req, res)
       succeededCount: 0,
       erroredCount: 0,
       customIdMap,
-      // Settled only by a poll that sees the batch end; nothing sweeps holds, so a batch that is
-      // never polled to completion keeps its hold.
+      // Settled by the first poll that sees the batch end, through the pending-hold claim; a batch
+      // never polled within BATCH_CREDIT_HOLD_TTL_MS is refunded by the expired-hold sweep instead.
       creditHold: reservation.hold,
       apiKeyId: req.apiKeyInfo?.keyId,
       usageSource: req.apiKeyInfo ? resolveRequestUsageSource(req) : undefined,

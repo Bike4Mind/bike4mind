@@ -1,6 +1,6 @@
 import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
-import type { CreditHoldRecord } from './CreditHolderTypes';
+import type { PersistedCreditHold } from './CreditHolderTypes';
 import type { CompletionSource } from '../analytics';
 
 /**
@@ -65,7 +65,7 @@ export interface ITransformBatch extends IMongoDocument {
    */
   results?: ITransformBatchResultItem[];
   /** Credits reserved at submit, settled once on the first poll that sees the batch end. */
-  creditHold?: CreditHoldRecord | null;
+  creditHold?: PersistedCreditHold | null;
   /**
    * Stamped in the write that clears the hold after settlement. A completed row that still has a hold
    * and no creditSettledAt was claimed but never settled (settlement is not idempotent; never redo one).

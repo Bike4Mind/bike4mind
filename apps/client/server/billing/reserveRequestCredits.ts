@@ -1,4 +1,4 @@
-import { CreditHolderType, IUserDocument, type CreditHoldRecord } from '@bike4mind/common';
+import { CreditHolderType, IUserDocument, type CreditHoldRecord, type PersistedCreditHold } from '@bike4mind/common';
 import {
   creditTransactionRepository,
   organizationRepository,
@@ -28,7 +28,7 @@ export type CreditReservation = {
   /** Credits held against the owner; 0 when nothing was reserved (credits off, or a free request). */
   reservedCredits: number;
   /** The serializable hold, for settling in a later request (see settleHeldCredits); null when nothing was reserved. */
-  hold: CreditHoldRecord | null;
+  hold: PersistedCreditHold | null;
   /**
    * Return the whole reservation - the provider call failed and incurred no cost. Never throws: the route
    * is already answering with the provider failure, so a failed refund is logged and left for the sweep
@@ -70,6 +70,8 @@ type ReserveRequestCreditsParams = {
    * the key.
    */
   billingOrganizationId?: string | null;
+  /** How long the hold may stay unsettled before the sweep refunds it; defaults to CREDIT_HOLD_TTL_MS. */
+  holdTtlMs?: number;
 };
 
 /**
@@ -113,6 +115,7 @@ export async function reserveRequestCredits({
   enforceCredits,
   featureLabel,
   billingOrganizationId: explicitBillingOrgId,
+  holdTtlMs = CREDIT_HOLD_TTL_MS,
 }: ReserveRequestCreditsParams): Promise<CreditReservation> {
   if (!req.user) throw new BadRequestError('User not found');
   const userId = req.user.id;
@@ -140,24 +143,17 @@ export async function reserveRequestCredits({
       },
       holdAdapters
     );
-    const expiresAt = new Date(Date.now() + CREDIT_HOLD_TTL_MS);
+    const expiresAt = new Date(Date.now() + holdTtlMs);
     return { hold, pending: await pendingCreditHoldRepository.record(hold, featureLabel, expiresAt) };
   });
 
-  const logHoldError = (message: string, err?: unknown) =>
-    req.logger.error(`${featureLabel} ${message}`, {
-      holdId: pending.id,
-      ownerId: hold.ownerId,
-      ownerType: hold.ownerType,
-      reservedCredits: hold.reservedCredits,
-      ...(err === undefined ? {} : { error: err instanceof Error ? err.message : 'Unknown error' }),
-    });
+  const logHoldError = holdErrorLogger(req.logger, featureLabel, hold, pending.id);
 
   return {
     ownerId: hold.ownerId,
     ownerType: hold.ownerType,
     reservedCredits: hold.reservedCredits,
-    hold,
+    hold: { ...hold, pendingHoldId: pending.id },
     refund: async () => {
       try {
         // Claim and release commit together: a failed release keeps the row, and the sweep refunds it later.
@@ -173,57 +169,85 @@ export async function reserveRequestCredits({
         logHoldError('refund failed - left for the expired-hold sweep', err);
       }
     },
-    settle: async (chargedCredits, entry) => {
-      const charged = Number.isFinite(chargedCredits)
-        ? Math.min(Math.max(chargedCredits, 0), hold.reservedCredits)
-        : hold.reservedCredits;
-      for (let attempt = 1; ; attempt++) {
-        try {
-          // The receipt, partial refund, member usage and ledger commit together. A process death or
-          // failed write leaves either the original refundable hold or the completed settlement.
-          return await withTransaction(async () => {
-            if (!(await pendingCreditHoldRepository.markSettled(pending.id, charged))) {
-              const settled = await pendingCreditHoldRepository.findSettlement(pending.id);
-              if (settled !== null) return settled;
-              logHoldError('settle found its credit hold already swept - request not charged');
-              return 0;
-            }
-            return creditService.settleCreditHold(
-              hold,
-              chargedCredits,
-              entry,
-              { featureLabel, logger: req.logger, throwOnWriteFailure: true },
-              holdAdapters
-            );
-          });
-        } catch (err) {
-          // A commit can succeed while its acknowledgement is lost. Never infer a refund from a
-          // missing claim: the durable receipt tells us whether this settlement already committed.
-          try {
-            const settled = await pendingCreditHoldRepository.findSettlement(pending.id);
-            if (settled !== null) return settled;
-          } catch (reconcileError) {
-            logHoldError('settle could not read its settlement receipt', reconcileError);
-          }
-          if (attempt >= SETTLEMENT_ATTEMPTS) {
-            logHoldError('settle could not confirm outcome - any pending hold remains refundable', err);
-            return 0;
-          }
-        }
-      }
-    },
+    settle: (chargedCredits, entry) =>
+      settlePendingHold(hold, pending.id, chargedCredits, entry, { featureLabel, logger: req.logger }),
   };
 }
 
+function holdErrorLogger(logger: Logger, featureLabel: string, hold: CreditHoldRecord, pendingHoldId: string) {
+  return (message: string, err?: unknown) =>
+    logger.error(`${featureLabel} ${message}`, {
+      holdId: pendingHoldId,
+      ownerId: hold.ownerId,
+      ownerType: hold.ownerType,
+      reservedCredits: hold.reservedCredits,
+      ...(err === undefined ? {} : { error: err instanceof Error ? err.message : 'Unknown error' }),
+    });
+}
+
 /**
- * Settle a hold persisted by an earlier request (e.g. an async batch settled on poll). Same clamp
- * and ledger semantics as CreditReservation.settle; a charge of 0 refunds the whole hold.
+ * Settle `hold` through its pending row: marking the row settled commits with the partial refund,
+ * member usage and ledger row, and the sweep refunds only a row it can claim, so exactly one of
+ * them moves balance. Returns the credits charged; 0 when the sweep already refunded the hold.
+ */
+async function settlePendingHold(
+  hold: CreditHoldRecord,
+  pendingHoldId: string,
+  chargedCredits: number,
+  entry: CreditLedgerEntry,
+  { featureLabel, logger }: { featureLabel: string; logger: Logger }
+): Promise<number> {
+  const logHoldError = holdErrorLogger(logger, featureLabel, hold, pendingHoldId);
+  const charged = Number.isFinite(chargedCredits)
+    ? Math.min(Math.max(chargedCredits, 0), hold.reservedCredits)
+    : hold.reservedCredits;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      // A process death or failed write leaves either the original refundable hold or the completed settlement.
+      return await withTransaction(async () => {
+        if (!(await pendingCreditHoldRepository.markSettled(pendingHoldId, charged))) {
+          const settled = await pendingCreditHoldRepository.findSettlement(pendingHoldId);
+          if (settled !== null) return settled;
+          logHoldError('settle found its credit hold already swept - request not charged');
+          return 0;
+        }
+        return creditService.settleCreditHold(
+          hold,
+          chargedCredits,
+          entry,
+          { featureLabel, logger, throwOnWriteFailure: true },
+          holdAdapters
+        );
+      });
+    } catch (err) {
+      // A commit can succeed while its acknowledgement is lost. Never infer a refund from a
+      // missing claim: the durable receipt tells us whether this settlement already committed.
+      try {
+        const settled = await pendingCreditHoldRepository.findSettlement(pendingHoldId);
+        if (settled !== null) return settled;
+      } catch (reconcileError) {
+        logHoldError('settle could not read its settlement receipt', reconcileError);
+      }
+      if (attempt >= SETTLEMENT_ATTEMPTS) {
+        logHoldError('settle could not confirm outcome - any pending hold remains refundable', err);
+        return 0;
+      }
+    }
+  }
+}
+
+/**
+ * Settle a hold persisted by an earlier request (e.g. an async batch settled on poll). Same clamp,
+ * ledger and sweep-claim semantics as CreditReservation.settle; a charge of 0 refunds the whole hold.
  */
 export function settleHeldCredits(
-  hold: CreditHoldRecord,
+  persisted: PersistedCreditHold,
   chargedCredits: number,
   entry: CreditLedgerEntry,
   context: { featureLabel: string; logger: Logger }
 ): Promise<number> {
-  return creditService.settleCreditHold(hold, chargedCredits, entry, context, holdAdapters);
+  const { pendingHoldId, ...hold } = persisted;
+  // Held before pending rows existed: nothing for the sweep to refund, so settle directly.
+  if (!pendingHoldId) return creditService.settleCreditHold(hold, chargedCredits, entry, context, holdAdapters);
+  return settlePendingHold(hold, pendingHoldId, chargedCredits, entry, context);
 }

@@ -140,6 +140,7 @@ const handler = baseApi().get(async (req, res) => {
       },
       { featureLabel: 'batch transforms', logger: req.logger }
     );
+    // Stamped even when the sweep already refunded the hold (charged 0): either way it is resolved.
     await transformBatchRepository.markCreditSettled(batch.id);
     await usageEventRepository
       .record({

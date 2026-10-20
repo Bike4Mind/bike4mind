@@ -95,7 +95,7 @@ export async function reserveCompletionCredits(
   req: MeteredRequest,
   usd: number,
   featureLabel: string,
-  organizationId?: string | null
+  { organizationId, holdTtlMs }: { organizationId?: string | null; holdTtlMs?: number } = {}
 ): Promise<CreditReservation> {
   return reserveRequestCredits({
     req,
@@ -103,6 +103,7 @@ export async function reserveCompletionCredits(
     enforceCredits: await isCreditsEnforced(),
     featureLabel,
     billingOrganizationId: organizationId,
+    holdTtlMs,
   });
 }
 
@@ -209,7 +210,9 @@ export function createRequestCompletionMeter(
   return async (modelInfo, messages, maxTokens, models, turns = 1) => {
     await (await createModelAdmission(req.user!, models ?? [modelInfo], opts.systemModel)).assert(modelInfo.id);
     const ceilingUsd = completionCeilingUsd(modelInfo, messages, maxTokens);
-    const reservation = await reserveCompletionCredits(req, ceilingUsd * turns, featureLabel, opts.organizationId);
+    const reservation = await reserveCompletionCredits(req, ceilingUsd * turns, featureLabel, {
+      organizationId: opts.organizationId,
+    });
     return {
       refund: () => reservation.refund(),
       settle: usage =>

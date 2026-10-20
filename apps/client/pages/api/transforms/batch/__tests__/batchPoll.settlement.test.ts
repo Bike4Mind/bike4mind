@@ -240,6 +240,16 @@ describe('GET /api/transforms/batch/:id settlement', () => {
     expect(m.markSettled).not.toHaveBeenCalled();
   });
 
+  it('still marks the hold settled when the sweep already refunded it', async () => {
+    m.claim.mockResolvedValue(m.batch);
+    m.settle.mockResolvedValue(0);
+
+    await poll();
+
+    expect(m.markSettled).toHaveBeenCalledWith('row1');
+    expect(m.record).toHaveBeenCalledWith(expect.objectContaining({ creditsCharged: 0 }));
+  });
+
   it('still settles and returns the results when the results write fails', async () => {
     m.claim.mockResolvedValue(m.batch);
     m.saveResults.mockRejectedValueOnce(new Error('document too large'));
