@@ -1,6 +1,6 @@
 // PUT /api/organizations/:id/admins
 // Set the org's managers (stored as adminUserIds). Billing owner or platform admin only -
-// a manager cannot add or remove managers (org-groups #1172 authorization matrix).
+// a manager cannot add or remove managers.
 
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -63,7 +63,7 @@ const handler = baseApi().put(
       action: 'org.admins.updated',
       actorScope: 'organization',
       target: { kind: 'organization', id: organizationId, displayName: organization.name },
-      summary: `set ${adminUserIds.length} organization admins`,
+      summary: `set ${adminUserIds.length} organization managers`,
       changes: [{ field: 'adminUserIds', before: organization.adminUserIds ?? [], after: adminUserIds }],
     });
 
