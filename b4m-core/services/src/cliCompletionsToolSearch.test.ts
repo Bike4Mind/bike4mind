@@ -198,3 +198,97 @@ describe('prepareWireTools', () => {
     );
   });
 });
+
+describe('prepareWireTools tool changes', () => {
+  const change = (
+    type: 'tool_addition' | 'tool_removal',
+    name: string,
+    extra: Record<string, unknown> = {}
+  ): IMessage =>
+    ({ role: 'system', content: [{ type, tool: { type: 'tool_reference', name } }], ...extra }) as IMessage;
+  const tools = [custom('a'), custom('b', { defer_loading: true })];
+  const serverResult = {
+    type: 'tool_search_tool_result',
+    tool_use_id: 'srvtoolu_1',
+    content: { type: 'tool_search_tool_search_result', tool_references: [] },
+  };
+
+  it('accepts a change after a user turn that precedes an assistant turn', () => {
+    const messages = [
+      { role: 'user', content: 'hi' },
+      change('tool_addition', 'b'),
+      { role: 'assistant', content: 'ok' },
+    ] as IMessage[];
+    expect(prepareWireTools(tools, messages, DIRECT).tools).toHaveLength(2);
+  });
+
+  it('accepts a change as the last message after a user turn', () => {
+    expect(() => prepareWireTools(tools, [...hi, change('tool_removal', 'a')], DIRECT)).not.toThrow();
+  });
+
+  it('accepts a change after an assistant turn ending in a server tool result', () => {
+    const messages = [
+      { role: 'user', content: 'find' },
+      { role: 'assistant', content: [{ type: 'text', text: 'searching' }, serverResult] },
+      change('tool_addition', 'b'),
+    ] as IMessage[];
+    expect(() => prepareWireTools(tools, messages, DIRECT)).not.toThrow();
+  });
+
+  it('ignores plain system messages when judging neighbours', () => {
+    const messages = [
+      { role: 'user', content: 'hi' },
+      { role: 'system', content: 'be brief' },
+      change('tool_addition', 'b'),
+    ] as IMessage[];
+    expect(() => prepareWireTools(tools, messages, DIRECT)).not.toThrow();
+  });
+
+  it.each([
+    ['Bedrock', BEDROCK],
+    ['OpenAI', OPENAI],
+    ['an older Claude', OLD_CLAUDE],
+    ['an unknown model', undefined],
+  ])('refuses a change on %s with tool_changes_unsupported', (_label, model) => {
+    expect(refusal(() => prepareWireTools(tools, [...hi, change('tool_addition', 'b')], model))).toEqual({
+      errorCode: 'tool_changes_unsupported',
+      status: 400,
+    });
+  });
+
+  it.each([
+    ['a lone message', [change('tool_addition', 'b')]],
+    ['one after an assistant text turn', [...hi, { role: 'assistant', content: 'ok' }, change('tool_addition', 'b')]],
+    ['one before a user turn', [...hi, change('tool_addition', 'b'), { role: 'user', content: 'again' }]],
+    ['two back to back', [...hi, change('tool_addition', 'b'), change('tool_removal', 'a')]],
+  ])('refuses %s as invalid_tool_change', (_label, messages) => {
+    expect(refusal(() => prepareWireTools(tools, messages as IMessage[], DIRECT)).errorCode).toBe(
+      'invalid_tool_change'
+    );
+  });
+
+  it.each([
+    ['an inline definition', { type: 'tool_addition', tool: { type: 'tool_reference', name: 'b', input_schema: {} } }],
+    ['an MCP reference', { type: 'tool_addition', tool: { type: 'mcp_tool_reference', name: 'b' } }],
+    ['a mixed message', { type: 'text', text: 'also this' }],
+  ])('refuses %s as invalid_tool_change', (_label, block) => {
+    const first = { type: 'tool_removal', tool: { type: 'tool_reference', name: 'a' } };
+    const messages = [...hi, { role: 'system', content: [first, block] }] as IMessage[];
+    expect(refusal(() => prepareWireTools(tools, messages, DIRECT)).errorCode).toBe('invalid_tool_change');
+  });
+
+  it('refuses a tool change block outside a system message', () => {
+    const messages = [
+      { role: 'user', content: [{ type: 'tool_addition', tool: { type: 'tool_reference', name: 'b' } }] },
+    ] as IMessage[];
+    expect(refusal(() => prepareWireTools(tools, messages, DIRECT)).errorCode).toBe('invalid_tool_change');
+  });
+
+  it('refuses a change naming a tool that is not in tools, for an addition and a removal', () => {
+    for (const type of ['tool_addition', 'tool_removal'] as const) {
+      expect(refusal(() => prepareWireTools(tools, [...hi, change(type, 'ghost')], DIRECT)).errorCode).toBe(
+        'unknown_tool_reference'
+      );
+    }
+  });
+});
