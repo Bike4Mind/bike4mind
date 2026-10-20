@@ -22,10 +22,9 @@ import { estimateAnswerCount, typicalAnswerCredits } from '@client/app/utils/cre
  */
 export const LOW_CREDITS_THRESHOLD = LOW_CREDITS_THRESHOLD_DEFAULT;
 
-function balanceTooltip(credits: number, lowThreshold: number): string {
+function balanceTooltip(credits: number): string {
   if (credits <= 0) return 'No answers left on this model. Your chats and files are safe.';
-  if (credits < lowThreshold) return 'Answers left on the current model. Click to learn how credits work.';
-  return 'Answers left on the current model. Click to learn how credits work.';
+  return 'About how many typical answers are left on the current model. Click to learn how credits work.';
 }
 
 /**
@@ -42,17 +41,35 @@ export const CreditBalanceChipView: FC<{
   payerNote?: string | null;
 }> = ({ credits, lowCreditsThreshold, onClick, answersLeft, modelName, payerNote }) => {
   const color = credits <= 0 ? 'danger' : credits < lowCreditsThreshold ? 'warning' : 'neutral';
-  const balanceText = balanceTooltip(credits, lowCreditsThreshold);
+  const balanceText = balanceTooltip(credits);
   // Out of room on the status line: the number without "credits" (the icon says it; the name keeps it).
   const compact = useStatusLineCompact();
-  const answerLabel =
-    answersLeft === undefined || answersLeft === null
-      ? formatCreditBalance(credits)
-      : answersLeft < 1
-        ? '<1 answer'
-        : `${answersLeft.toLocaleString('en-US')} ${answersLeft === 1 ? 'answer' : 'answers'}`;
+  const hasEstimate = answersLeft !== undefined && answersLeft !== null;
+  const count = hasEstimate ? (credits <= 0 ? 0 : answersLeft) : null;
+  const noun = count === 1 ? 'answer' : 'answers';
   const shown =
-    compact && answersLeft !== undefined && answersLeft !== null ? answerLabel.replace(' answers', '') : answerLabel;
+    count === null
+      ? formatCreditBalance(credits)
+      : count < 1
+        ? credits <= 0
+          ? compact
+            ? '0'
+            : '0 answers'
+          : compact
+            ? '<1'
+            : '<1 answer'
+        : `~${count.toLocaleString('en-US')}${compact ? '' : ` ${noun}`}`;
+  const answerPhrase =
+    count === null
+      ? null
+      : count < 1
+        ? credits <= 0
+          ? '0 answers'
+          : 'less than 1 typical answer'
+        : `about ${count.toLocaleString('en-US')} typical ${noun}`;
+  const ariaLabel =
+    `${answerPhrase ?? formatCreditBalance(credits)} left${modelName ? ` on ${modelName}` : ''}.` +
+    `${answerPhrase ? ` ${formatCreditBalance(credits)}.` : ''}${payerNote ? ` ${payerNote}.` : ''} Learn about credits`;
   const title = payerNote ? (
     <Box sx={{ maxWidth: 280, display: 'flex', flexDirection: 'column', gap: '4px' }}>
       <Typography level="body-xs" textColor="inherit" sx={{ fontWeight: 600 }}>
@@ -73,7 +90,7 @@ export const CreditBalanceChipView: FC<{
         color={color}
         onClick={onClick}
         data-testid="credit-balance-chip"
-        aria-label={`${answerLabel} left${modelName ? ` on ${modelName}` : ''}. ${formatCreditBalance(credits)}.${payerNote ? ` ${payerNote}.` : ''} Learn about credits`}
+        aria-label={ariaLabel}
         startDecorator={<CreditIcon sx={{ fontSize: 14 }} />}
         endDecorator={
           payerNote ? (
