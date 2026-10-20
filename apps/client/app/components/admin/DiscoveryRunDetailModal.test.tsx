@@ -127,7 +127,7 @@ describe('DiscoveryRunDetailModal', () => {
     // `error`, and err.message is the useless axios sentence.
     mockGet.mockRejectedValue({
       message: 'Request failed with status code 404',
-      response: { data: { name: 'NotFoundError', error: 'Discovery run not found' } },
+      response: { data: { error: 'Discovery run not found' } },
     });
     renderModal('gone');
 
@@ -139,7 +139,7 @@ describe('DiscoveryRunDetailModal', () => {
   it('shows the reason a 403 gives rather than the axios status sentence', async () => {
     mockGet.mockRejectedValue({
       message: 'Request failed with status code 403',
-      response: { data: { name: 'ForbiddenError', error: 'Admin access required' } },
+      response: { data: { error: 'Admin access required' } },
     });
     renderModal('run-1');
 

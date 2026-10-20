@@ -97,8 +97,7 @@ function infoDescription(): string {
     '## Errors',
     'Error bodies use one envelope, the `ErrorResponse` schema: `{ "error": string, "request_id"?: string }`, ' +
       'plus an `errorCode` on failures a client is expected to branch on (`insufficient_credits`, ' +
-      '`spend_cap_exceeded`, `provider_not_configured`, ...). A deprecated `name` field may also appear until ' +
-      'its sunset date; do not rely on it. Branch on the HTTP status and `errorCode`, never on the `error` ' +
+      '`spend_cap_exceeded`, `provider_not_configured`, ...). Branch on the HTTP status and `errorCode`, never on the `error` ' +
       'prose. A few operations declare a bespoke error shape for a specific status (e.g. the `500` of the ' +
       'tools endpoint and the `413` of text-to-speech); each operation lists the statuses it can return and ' +
       'the body for each.',

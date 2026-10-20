@@ -67,16 +67,6 @@ describe('errorHandler - the body carries no keys the envelope does not document
     }
   });
 
-  // Pins the deprecation window rather than the field: `name` keeps shipping until the
-  // sunset in ErrorResponse's description, and this fails the day someone drops it
-  // from the runtime without also dropping it from the published envelope.
-  it('still serves the deprecated `name` field until its sunset', () => {
-    expect(bodyOf({ name: 'BadRequestError', message: 'bad input', status: 400 })).toMatchObject({
-      name: 'BadRequestError',
-    });
-    expect(documented).toContain('name');
-  });
-
   // additionalInfo carries the endpoint's own typed member, which the contract
   // declares; only the middleware's unconditional additions are pinned above.
   it('still spreads a typed additionalInfo member alongside the envelope', () => {
@@ -99,7 +89,6 @@ describe('errorHandler - the body carries no keys the envelope does not document
     expect(json).toHaveBeenCalledWith({
       errorCode: 'api_key_user_cap',
       error: 'Maximum 10 active API keys allowed per user',
-      name: 'BadRequestError',
       request_id: 'trace-err-1',
     });
   });
@@ -155,7 +144,7 @@ describe('errorHandler - CastError only means 404 when the cast was on `_id`', (
     expect(req.logger.error).not.toHaveBeenCalled();
     // The NotFoundError substitution is what keeps the junk id and the model name off a
     // 404 body; without it the raw cast message would ship on the wire.
-    expect(json.mock.calls[0][0]).toMatchObject({ name: 'NotFoundError', error: 'Resource not found' });
+    expect(json.mock.calls[0][0]).toEqual({ error: 'Resource not found', request_id: 'trace-err-1' });
     expect(JSON.stringify(json.mock.calls[0][0])).not.toContain('Feedback');
   });
 
@@ -206,7 +195,7 @@ describe('errorHandler - CastError only means 404 when the cast was on `_id`', (
     errorHandler(castError('userId'), req, res);
     // Mongoose's cast message names the model and the field it failed on. The blanket 404
     // used to mask those; the narrowing must not put them on a public wire instead.
-    expect(json.mock.calls[0][0]).toMatchObject({ name: 'CastError', error: 'Server Error' });
+    expect(json.mock.calls[0][0]).toEqual({ error: 'Server Error', request_id: 'trace-err-1' });
     expect(JSON.stringify(json.mock.calls[0][0])).not.toContain('userId');
     expect(JSON.stringify(json.mock.calls[0][0])).not.toContain('Feedback');
     for (const key of Object.keys(json.mock.calls[0][0] as Record<string, unknown>)) {
@@ -242,7 +231,6 @@ describe('errorHandler - a ZodError becomes a 422', () => {
     const { req, res, json } = makeReqRes();
     errorHandler(zodError(), req, res);
     const body = json.mock.calls[0][0] as Record<string, unknown>;
-    expect(body.name).toBe('UnprocessableEntityError');
     expect(String(body.error)).toContain('days');
     // fromZodError() flattens to a readable sentence; the raw issue objects carry keys
     // (`code`, `expected`, `_zod`) that are not in the envelope and must not reach a body.
@@ -308,8 +296,7 @@ describe('buildErrorBody', () => {
     ).toEqual({ errorCode: 'insufficient_credits', error: 'out of credits', request_id: 'r-1' });
   });
 
-  it('adds the deprecated name only when given', () => {
+  it('carries only the envelope when there is no additionalInfo', () => {
     expect(Object.keys(buildErrorBody({ error: 'x', requestId: 'r' }))).toEqual(['error', 'request_id']);
-    expect(buildErrorBody({ error: 'x', requestId: 'r', name: 'BadRequestError' }).name).toBe('BadRequestError');
   });
 });

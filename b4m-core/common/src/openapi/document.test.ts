@@ -321,28 +321,6 @@ describe('buildOpenApiDocument', () => {
     expect(chat.responses['200'].headers['X-Request-ID']).toBeDefined();
   });
 
-  // errorHandler serves every thrown error body, so a bespoke error schema that extends
-  // ApiErrorSchema inherits `name` - and it has to inherit the sunset notice with it, or
-  // the deprecation is visible on the shared component and nowhere else. See
-  // CONVENTIONS.md section 1.
-  //
-  // Each status below is one a THROW can reach - 401 from apiKeyAuth, 422 from request
-  // validation, 429 from apiKeyRateLimit - even though the TTS handler also writes a body
-  // of its own for all three. That mix is why the envelope belongs on them, and pinning
-  // them is what would fail if someone later split them onto a bespoke schema on the
-  // assumption that the handler is the only producer. 502 shares the schema today but is
-  // only ever written, so it is left out rather than pinned into place.
-  it('carries the `name` deprecation into error schemas that extend the envelope', () => {
-    for (const status of [401, 422, 429]) {
-      const inherited = doc.components.schemas[`synthesizeSpeechResponse${status}`].properties.name;
-      expect(inherited.deprecated).toBe(true);
-      expect(inherited.description).toContain('2026-12-01');
-    }
-
-    // The 413 body is written directly rather than thrown, so it never gets `name` at all.
-    expect(doc.components.schemas.synthesizeSpeechResponse413.properties.name).toBeUndefined();
-  });
-
   it('documents the oversized-audio 303 as a bodiless redirect with a Location header', () => {
     const redirect = doc.paths['/api/ai/tts'].post.responses['303'];
     expect(redirect).toBeDefined();

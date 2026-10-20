@@ -81,56 +81,34 @@ response - a greppable escape hatch with a written reason, not a way to skip the
 quietly. The only current use is `executeTool`'s 500, where a tool that ran but failed
 returns the full `ToolExecutionResponse` (`success: false`).
 
-**On the `name` field.** `apps/client/server/middlewares/errorHandler.ts` adds `name` -
-the thrower's error *class* (`NotFoundError`, `UnprocessableEntityError`) - to every error
-body it serves, which is every route, not just the contracted ones. That is an internal
-implementation detail on a public wire, and it is going away.
+**Bespoke error schemas extend the envelope.** `errorHandler` serves every *thrown* error
+body regardless of which schema the contract declared for that status, so a bespoke error
+schema (`InsufficientCreditsErrorSchema`, `ttsErrorResponseSchema`) that re-declared
+`error` from scratch would omit a field the wire carries. Those derive from
+`ApiErrorSchema` via `.extend()` instead, so a change to the envelope is a single edit.
 
-It is **deprecated, sunset 2026-12-01**, and documented in the envelope until then.
-Neither of the two obvious moves is right on its own:
-
-- Removing it outright today would be a silent removal, which section 7 forbids -
-  "undocumented legacy routes still count as published if they are reachable", and the
-  same reasoning covers a reachable field. An audit found no consumer in `apps/client`,
-  `packages/cli` (`extractServerMessage` reads `error` then `message`), the premium
-  overlays, or the generated client - which was never going to carry it, since
-  `ErrorResponse` never declared it. External callers cannot be audited from here, so the
-  window exists for them.
-- Documenting it *permanently* would be worse than either: it promotes a class name we
-  rename at will into public API we then owe compatibility on. So it carries
-  `deprecated: true` and a sunset in its description, not a plain field entry.
-
-Deprecate-then-remove is the combination that works: the envelope is honest **now**, and
-the field still leaves. Branch on the HTTP status, not on `name`. On the sunset date drop
-it from `errorHandler.ts`, `ApiErrorSchema`, and `ErrorResponse` together.
-
-Note that this reaches past contracts that name `ApiErrorSchema` directly. `errorHandler`
-serves every *thrown* error body regardless of which schema the contract declared for that
-status, so a bespoke error schema (`InsufficientCreditsErrorSchema`,
-`ttsErrorResponseSchema`) would omit a field the wire carries. Those derive from
-`ApiErrorSchema` via `.extend()` rather than re-declaring `error`/`request_id`, which is
-also what makes the sunset a single edit.
+*History:* `errorHandler` used to add `name` - the thrower's error class - to every body.
+That leaked an internal class name onto a public wire, so it was documented as deprecated
+and removed on its 2026-12-01 sunset. Do not reintroduce it; branch on the HTTP status and
+`errorCode`.
 
 **The predicate is per body, not per status.** Write a bespoke error schema from scratch
 only when *no* body for that status is thrown; a status reachable both ways keeps the
-envelope, because the fields errorHandler adds (`request_id`, and `name` until its
-sunset) are then genuinely optional rather than absent. Directly written
-bodies are ordinary, not exceptional: `/api/ai/tts` writes a body for every error status
-it declares - and, through its upstream-4xx passthrough, for several it does not - while
-only three of them (`401`, `422`, `429`) can also be reached by a throw.
-`ttsResponseTooLargeSchema` is the current example of a status no throw can reach, and
-says so; `ttsErrorResponseSchema` documents the mixed case.
+envelope, because the field errorHandler adds (`request_id`) is then genuinely optional
+rather than absent. Directly written bodies are ordinary, not exceptional: `/api/ai/tts`
+writes a body for every error status it declares - and, through its upstream-4xx
+passthrough, for several it does not - while only three of them (`401`, `422`, `429`) can
+also be reached by a throw. `ttsResponseTooLargeSchema` is the current example of a status
+no throw can reach, and says so; `ttsErrorResponseSchema` documents the mixed case.
 
 **[gated]** Now that the runtime and the spec agree, the middleware is pinned to the
 envelope: `errorHandler.test.ts` asserts every key `errorHandler` adds is one
 `ApiErrorSchema` declares - across all three of its branches, including the `HTTPError`
 one that spreads `additionalInfo` (the endpoint's own typed members are excluded by key,
-since those are its contract's concern). So a new undocumented field fails CI, and it
-fails again if `name` is dropped from only some of the three places above. `ApiErrorSchema`
+since those are its contract's concern). So a new undocumented field fails CI. `ApiErrorSchema`
 is the plain twin of `ErrorResponse` (the OpenAPI layer is generate-time only, so
 `apps/client` cannot import the component); `openapi/errorEnvelopeParity.test.ts` keeps the
-two copies from drifting, and pins `name`'s published `deprecated: true` and sunset date so
-the deprecation cannot quietly decay into a plain documented field.
+two copies from drifting.
 
 ### Status codes for shared conditions
 

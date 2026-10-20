@@ -138,8 +138,7 @@ export const TTS_ERROR_CODES = [
  * on the conditions that carry a classifier; an ordinary validation 422 has none.
  *
  * Extends `ApiErrorSchema` because what decides whether a body carries the fields
- * errorHandler adds - `request_id`, and `name` until its 2026-12-01 sunset - is
- * whether the body was THROWN, not which status it wears, and three of these four
+ * errorHandler adds - `request_id` - is whether the body was THROWN, not which status it wears, and three of these four
  * statuses are reachable both ways:
  *
  * - 401: thrown by apiKeyAuth on a rejected key; written by `auth` when no
@@ -152,8 +151,8 @@ export const TTS_ERROR_CODES = [
  * - 429: thrown by apiKeyRateLimit; written by the handler on an upstream 429.
  * - 502: only ever written.
  *
- * So those two are genuinely optional here, and splitting this per status would be
- * wrong for the first three. The 502 does advertise both without ever sending them;
+ * So it is genuinely optional here, and splitting this per status would be
+ * wrong for the first three. The 502 does advertise it without ever sending it;
  * that is not worth a fourth error schema on one route, and `request_id` missing from
  * this handler's written bodies is a gap in the handler rather than something to
  * enshrine in a schema.
@@ -175,7 +174,7 @@ export const ttsErrorResponseSchema = ApiErrorSchema.extend({
  * that predates the offload.
  *
  * Not derived from `ApiErrorSchema`: every 413 on this route is written, never
- * thrown, so `name` is genuinely absent rather than optional - a stronger claim than
+ * thrown, so `request_id` is genuinely absent rather than optional - a stronger claim than
  * `ttsErrorResponseSchema` can make for its own statuses, see the note there (a
  * provider 413 is folded onto a 422 by documentedStatusForUpstream4xx). An oversized
  * *request* body is another 413 that never reaches this schema at all - Next's own
