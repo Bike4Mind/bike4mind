@@ -260,6 +260,8 @@ export const addFileToLake = async (
   assertLakeWritable(lake);
 
   // Gated before the push so a join refused for quota writes nothing, even outside a transaction.
+  // Check-then-write, so concurrent joins can overflow a pool, as concurrent uploads can. A pending,
+  // uncharged file moves no bytes and is not gated; its later upload charge lands on the new owner.
   const file = ownerTransferPreCleared ? null : await db.fabFiles.findById(fabFileId);
   if (file) {
     await assertStorageOwnerTransferFits(file, [...storedTagNames(file), lake.datalakeTag], db);

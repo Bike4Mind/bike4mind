@@ -166,7 +166,8 @@ export const updateFabFile = async (
 
   // A join can move the file's bytes onto an org's pool (reassignStorageOwner), so it is
   // quota-gated before ANY write - against the rewrite's new size when this request also replaces
-  // the content, so a refused join cannot land after the upload and charge are committed.
+  // the content, so a refused join cannot land after the upload and charge are committed. A pending,
+  // uncharged file moves no bytes and is not gated; its later upload charge lands on the new owner.
   const ownerTransfer = lakeTags
     ? await assertStorageOwnerTransferFits(
         rewrite ? { ...fabFile, fileSize: rewrite.size, storageChargedAt: new Date() } : fabFile,
