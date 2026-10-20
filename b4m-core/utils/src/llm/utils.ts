@@ -777,21 +777,19 @@ export async function fetchAndProcessPreviousMessages(
       // the window start one quest per turn and busts the cache in exactly the long sessions the
       // alignment above exists for. Prefer the next grid point at or above the trim, so the window
       // never holds more than the budget estimated; fall back to the one below only when stepping up
-      // would drop the newest turn (the end of the window is fixed at the newest quest).
+      // would drop the newest turn (the end of the window is fixed at the newest quest). When the
+      // point below drops nothing either, keep the raw trim: the summarizer folds only quests older
+      // than oldestIncludedQuestId, so a window left whole would re-fire summarization every turn
+      // without compacting anything.
       const rawTrim = keepFromIndex;
       if (windowStartIndex !== null) {
         const step = historyWindowStep(limit);
         const absoluteStart = windowStartIndex + rawTrim;
         const snappedUp = Math.ceil(absoluteStart / step) * step - windowStartIndex;
-        keepFromIndex =
-          snappedUp <= chatHistoryItems.length - 1
-            ? snappedUp
-            : Math.max(0, Math.floor(absoluteStart / step) * step - windowStartIndex);
+        const snappedDown = Math.floor(absoluteStart / step) * step - windowStartIndex;
+        keepFromIndex = snappedUp <= chatHistoryItems.length - 1 ? snappedUp : snappedDown > 0 ? snappedDown : rawTrim;
       }
-      // Report the pre-snap trim. Snapping down can erase the trim outright - a session with fewer
-      // than `step` heavy quests leaves it at 0, and a summary boundary off the grid can push it
-      // negative - and a 0 here reads downstream as "no token pressure", so summarization would
-      // never fire for exactly the short, heavy sessions this trim exists for.
+      // Never report less than the pre-snap trim: a 0 here reads downstream as "no token pressure".
       excludedOlderQuestCount = Math.max(rawTrim, keepFromIndex);
       chatHistoryItems.splice(0, keepFromIndex);
     }

@@ -254,14 +254,17 @@ describe('prompt-cache prefix stability across turns of a long session', () => {
 
     it('starts every window on the same step grid as the count window, and busts the prefix only there', async () => {
       const turns = await runSession(BUDGET);
+      const countOnly = await runSession();
 
       // Guard: the budget really binds, so some of these starts come from the trim, not the count window.
       expect(turns.filter(turn => turn.excluded > 0).length).toBeGreaterThan(0);
+      expect(turns.some((turn, i) => turn.windowStart > countOnly[i].windowStart)).toBe(true);
       for (const turn of turns) expect((turn.windowStart - 1) % HISTORY_WINDOW_STEP).toBe(0);
 
-      // Only the window step and the turn the blog tool first appears - a budget that moved the start
-      // on its own would show up here as a bust on almost every turn.
-      expect(turnsThatBustThePrefix(turns)).toEqual([TOOL_TURN, 74]);
+      // Only the budget window's two steps (66 and 76, not the count window's 61 and 71) and the
+      // turn the blog tool first appears - a budget that moved the start on its own would show up
+      // here as a bust on almost every turn.
+      expect(turnsThatBustThePrefix(turns)).toEqual([TOOL_TURN, 66, 76]);
     });
   });
 

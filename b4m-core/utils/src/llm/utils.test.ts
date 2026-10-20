@@ -4583,17 +4583,18 @@ describe('history window alignment', () => {
       expect(new Set(starts).size).toBeLessThan(starts.length);
     });
 
-    it('still reports excluded turns when the grid has no point inside a small trim', async () => {
+    it('keeps the raw trim when the grid has no point inside a small trim', async () => {
       // Five heavy quests, fewer than one step: the trim wants to drop four, but the only grid
-      // points are 0 and 10, and 10 would drop the newest turn. The window stays unaligned, but the
-      // excluded count must survive or summarization never fires for a short, heavy session.
+      // points are 0 and 10, and 10 would drop the newest turn. Snapping to 0 would leave the
+      // summary boundary at the first quest, so the summarizer would fold nothing and re-fire every
+      // turn; the window takes the raw trim instead.
       const heavyItem = (n: number) => ({
         ...makeItem(n),
         prompt: 'x'.repeat(4000),
         reply: `reply ${n}`,
         replies: [`reply ${n}`],
       });
-      const all = [6, 5, 4, 3, 2, 1].map(heavyItem);
+      const all = [1, 2, 3, 4, 5, 6].map(heavyItem);
 
       const [, count, meta] = await fetchAndProcessPreviousMessages(makeSession(), LIMIT, {
         db: {
@@ -4607,7 +4608,8 @@ describe('history window alignment', () => {
       });
 
       expect(meta.excludedOlderQuestCount).toBe(4);
-      expect(count).toBeGreaterThan(1);
+      expect(count).toBe(1);
+      expect(meta.oldestIncludedQuestId).toBe(makeItem(5).id);
     });
 
     it('clamps the snapped trim when the summary boundary is off the step grid', async () => {
