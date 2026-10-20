@@ -4,14 +4,16 @@
  * Grant the starting free credits to Google/GitHub signups that got none before OAuth signup
  * learned to grant them (see createOAuthUser.ts + verifyCallback.ts).
  *
- * Selection lives in oauthStartingGrantPlan.ts. An account qualifies only with a 0 balance, no
- * pending-grant tag, and no credit ledger entry at all, so a re-run after --execute selects nobody.
+ * Selection lives in oauthStartingGrantPlan.ts. An account qualifies only with a 0 balance, a
+ * non-disposable email, no pending-grant tag and no credit ledger entry at all, so a re-run after
+ * --execute selects nobody. Internal accounts are excluded by NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS
+ * (plus --exclude-email-domain) and the same test-email pattern as the external-users report.
  * The grant goes through userService.grantFreeCredits: same `verify-grant:<id>` transactionId as
  * the runtime paths, so it is recorded in the ledger and can never double-credit.
  *
  * Flags:
  *   --created-before=<ISO>         required; when the fix went live on this stage (prod lags main)
- *   --exclude-email-domain=<d>     repeatable; added to the default internal domains
+ *   --exclude-email-domain=<d>     repeatable; added to NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS
  *   --execute                      write; without it the run is a dry run
  *   --expect-amount=<n>            required with --execute; must equal resolved defaultFreeCredits
  *
@@ -28,61 +30,87 @@ import {
   creditTransactionRepository,
   userRepository,
 } from '@bike4mind/database';
-import { CreditHolderType, IUserDocument } from '@bike4mind/common';
+import { CreditHolderType, IUserDocument, internalStaffEmailRegex, parseInternalStaffDomains } from '@bike4mind/common';
 import { userService } from '@bike4mind/services';
 import { Resource } from 'sst';
 import {
+  buildPlan,
   parseBackfillArgs,
-  planBackfill,
   STARTING_GRANT_STRATEGIES,
-  type BackfillArgs,
   type BackfillPlan,
-  type PlanContext,
   type StartingGrantUser,
 } from './oauthStartingGrantPlan';
+import { DEFAULT_TEST_PATTERN } from './src/externalActiveUsers';
 
 const GRANT_REASON = 'backfill: OAuth signup before the starting-grant fix';
+
+/** Only what classification reads; a full user doc carries login records, notes and counters. */
+const USER_PROJECTION = {
+  email: 1,
+  createdAt: 1,
+  currentCredits: 1,
+  isAdmin: 1,
+  isSystem: 1,
+  isBanned: 1,
+  tags: 1,
+  'authProviders.strategy': 1,
+  'oauthCredentials.strategy': 1,
+};
+
+const toDateOrNull = (value: unknown): Date | null => {
+  if (value === null || value === undefined) return null;
+  const date = new Date(value as string | number | Date);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
 
 const toStartingGrantUser = (user: IUserDocument): StartingGrantUser => ({
   id: user.id,
   email: user.email,
-  createdAt: new Date(user.createdAt),
+  createdAt: toDateOrNull(user.createdAt),
   currentCredits: user.currentCredits,
   isAdmin: user.isAdmin,
   isSystem: user.isSystem,
+  isBanned: user.isBanned,
   tags: user.tags,
   authProviders: user.authProviders,
   oauthCredentials: user.oauthCredentials,
 });
 
 const findOAuthUsers = async (): Promise<StartingGrantUser[]> => {
-  const users = await userRepository.find({
-    $or: [
-      { 'authProviders.strategy': { $in: STARTING_GRANT_STRATEGIES } },
-      { 'oauthCredentials.strategy': { $in: STARTING_GRANT_STRATEGIES } },
-    ],
-  });
+  const users = await userRepository.find(
+    {
+      // Soft-deleted accounts are out of scope; same guard the user repository's own reads use.
+      deletedAt: { $exists: false },
+      $or: [
+        { 'authProviders.strategy': { $in: STARTING_GRANT_STRATEGIES } },
+        { 'oauthCredentials.strategy': { $in: STARTING_GRANT_STRATEGIES } },
+      ],
+    },
+    USER_PROJECTION
+  );
   return users.map(toStartingGrantUser);
 };
 
-const findOwnersWithLedgerActivity = async (userIds: readonly string[]): Promise<Set<string>> => {
-  if (userIds.length === 0) return new Set();
-  const owners: string[] = await CreditTransaction.distinct('ownerId', {
-    ownerId: { $in: userIds },
-    ownerType: CreditHolderType.User,
-  });
-  return new Set(owners);
+/** Settings read failures throw and abort the run, rather than withholding grants silently. */
+const findDisposableEmailUserIds = async (users: readonly StartingGrantUser[]): Promise<Set<string>> => {
+  const blocked = new Set<string>();
+  for (const user of users) {
+    if (!user.email) continue;
+    if (await userService.shouldBlockDisposableEmail(user.email, { adminSettings: adminSettingsRepository })) {
+      blocked.add(user.id);
+    }
+  }
+  return blocked;
 };
 
-/** Ledger lookup is the expensive check, so it runs only for users that pass every other one. */
-const buildPlan = async (users: readonly StartingGrantUser[], args: BackfillArgs): Promise<BackfillPlan> => {
-  const baseContext: Omit<PlanContext, 'ownersWithLedgerActivity'> = {
-    createdBefore: args.createdBefore,
-    excludedEmailDomains: args.excludedEmailDomains,
-  };
-  const preliminary = planBackfill(users, { ...baseContext, ownersWithLedgerActivity: new Set() });
-  const ownersWithLedgerActivity = await findOwnersWithLedgerActivity(preliminary.eligible.map(user => user.id));
-  return planBackfill(users, { ...baseContext, ownersWithLedgerActivity });
+/** Old ledger rows may carry only the deprecated `userId`, so both owner fields are checked. */
+const findOwnersWithLedgerActivity = async (userIds: readonly string[]): Promise<Set<string>> => {
+  if (userIds.length === 0) return new Set();
+  const [byOwner, byLegacyUserId] = await Promise.all([
+    CreditTransaction.distinct('ownerId', { ownerId: { $in: userIds }, ownerType: CreditHolderType.User }),
+    CreditTransaction.distinct('userId', { userId: { $in: userIds } }),
+  ]);
+  return new Set([...byOwner, ...byLegacyUserId].map(String));
 };
 
 const printPlan = (scanned: number, plan: BackfillPlan): void => {
@@ -96,7 +124,7 @@ const printPlan = (scanned: number, plan: BackfillPlan): void => {
 };
 
 const describeUser = (user: StartingGrantUser): string =>
-  `${user.id}  ${user.email ?? '<no-email>'}  created=${user.createdAt.toISOString()}`;
+  `${user.id}  ${user.email ?? '<no-email>'}  created=${user.createdAt?.toISOString() ?? '<unknown>'}`;
 
 const grantAll = async (users: readonly StartingGrantUser[]): Promise<{ granted: number; errors: number }> => {
   let granted = 0;
@@ -128,13 +156,27 @@ const grantAll = async (users: readonly StartingGrantUser[]): Promise<{ granted:
 const run = async (): Promise<number> => {
   const args = parseBackfillArgs(process.argv.slice(2));
   const stage = Resource.App.stage;
+  const internalDomains = [
+    ...parseInternalStaffDomains(process.env.NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS),
+    ...args.extraInternalDomains,
+  ];
 
   console.log('BACKFILL OAUTH STARTING GRANT');
   console.log(`Stage:          ${stage}`);
   console.log(`Mode:           ${args.execute ? 'EXECUTE (will modify database)' : 'DRY RUN'}`);
   console.log(`Created before: ${args.createdBefore.toISOString()}`);
-  console.log(`Excluded email domains: ${args.excludedEmailDomains.join(', ')}`);
+  console.log(`Internal email domains: ${internalDomains.join(', ') || '<none>'}`);
   console.log('');
+
+  if (internalDomains.length === 0) {
+    console.warn('WARNING: no internal email domain configured; staff accounts are excluded only if admin.');
+    if (args.execute) {
+      console.error(
+        'Aborting: set NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS or pass --exclude-email-domain before --execute.'
+      );
+      return 1;
+    }
+  }
 
   await connectDB(Resource.MONGODB_URI.value.replace('%STAGE%', stage));
 
@@ -147,7 +189,15 @@ const run = async (): Promise<number> => {
   console.log('');
 
   const users = await findOAuthUsers();
-  const plan = await buildPlan(users, args);
+  const plan = await buildPlan(
+    users,
+    {
+      createdBefore: args.createdBefore,
+      internalEmail: internalStaffEmailRegex(internalDomains),
+      testEmail: new RegExp(DEFAULT_TEST_PATTERN, 'i'),
+    },
+    { findDisposableEmailUserIds, findOwnersWithLedgerActivity }
+  );
   printPlan(users.length, plan);
 
   if (plan.eligible.length === 0) {

@@ -1,10 +1,13 @@
-import { describe, expect, it } from 'vitest';
-import { PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
+import { describe, expect, it, vi } from 'vitest';
+import { internalStaffEmailRegex, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
+import { DEFAULT_TEST_PATTERN } from './src/externalActiveUsers';
 import {
+  buildPlan,
   classifyUser,
   parseBackfillArgs,
   planBackfill,
   type PlanContext,
+  type PlanRules,
   type StartingGrantUser,
 } from './oauthStartingGrantPlan';
 
@@ -17,15 +20,22 @@ const baseUser = (overrides: Partial<StartingGrantUser> = {}): StartingGrantUser
   currentCredits: 0,
   isAdmin: false,
   isSystem: false,
+  isBanned: false,
   tags: [],
   authProviders: [{ strategy: 'google' }],
   oauthCredentials: { strategy: 'google' },
   ...overrides,
 });
 
-const baseContext = (overrides: Partial<PlanContext> = {}): PlanContext => ({
+const baseRules = (): PlanRules => ({
   createdBefore: CUTOFF,
-  excludedEmailDomains: ['bike4mind.com'],
+  internalEmail: internalStaffEmailRegex(['internal.test']),
+  testEmail: new RegExp(DEFAULT_TEST_PATTERN, 'i'),
+});
+
+const baseContext = (overrides: Partial<PlanContext> = {}): PlanContext => ({
+  ...baseRules(),
+  disposableEmailUserIds: new Set(),
   ownersWithLedgerActivity: new Set(),
   ...overrides,
 });
@@ -35,8 +45,8 @@ describe('classifyUser', () => {
     expect(classifyUser(baseUser(), baseContext())).toEqual({ eligible: true });
   });
 
-  it('selects a GitHub signup with no email', () => {
-    const user = baseUser({ email: null, authProviders: [{ strategy: 'github' }], oauthCredentials: null });
+  it('selects a GitHub signup', () => {
+    const user = baseUser({ authProviders: [{ strategy: 'github' }], oauthCredentials: null });
     expect(classifyUser(user, baseContext())).toEqual({ eligible: true });
   });
 
@@ -49,6 +59,11 @@ describe('classifyUser', () => {
     expect(classifyUser(baseUser({ currentCredits: undefined }), baseContext())).toEqual({ eligible: true });
   });
 
+  it('applies no internal-domain rule when none is configured', () => {
+    const user = baseUser({ email: 'dev@internal.test' });
+    expect(classifyUser(user, baseContext({ internalEmail: null }))).toEqual({ eligible: true });
+  });
+
   it.each<[string, Partial<StartingGrantUser>, Partial<PlanContext>, string]>([
     [
       'enterprise SSO only',
@@ -57,20 +72,25 @@ describe('classifyUser', () => {
       'not-google-or-github',
     ],
     ['no provider at all', { authProviders: [], oauthCredentials: {} }, {}, 'not-google-or-github'],
+    ['an unknown creation time', { createdAt: null }, {}, 'missing-created-at'],
     ['created at the cutoff', { createdAt: CUTOFF }, {}, 'created-after-cutoff'],
     ['a system account', { isSystem: true }, {}, 'system-account'],
     ['an admin', { isAdmin: true }, {}, 'admin-account'],
-    ['an internal email, any case', { email: 'Dev@Bike4Mind.com' }, {}, 'excluded-email-domain'],
+    ['a banned account', { isBanned: true }, {}, 'banned-account'],
+    ['an account with no email', { email: null }, {}, 'no-email'],
+    ['an internal email, any case', { email: 'Dev@Internal.TEST' }, {}, 'internal-email'],
+    ['a test email', { email: 'qa+e2e@example.com' }, {}, 'test-email'],
     ['a positive balance', { currentCredits: 500 }, {}, 'nonzero-balance'],
     ['a negative balance', { currentCredits: -5 }, {}, 'nonzero-balance'],
     ['the pending-grant tag', { tags: [PENDING_FREE_CREDITS_TAG] }, {}, 'pending-grant-tag'],
+    ['a disposable email', {}, { disposableEmailUserIds: new Set(['user-1']) }, 'disposable-email'],
     ['any ledger entry', {}, { ownersWithLedgerActivity: new Set(['user-1']) }, 'has-ledger-activity'],
   ])('skips %s', (_label, userOverrides, contextOverrides, reason) => {
     expect(classifyUser(baseUser(userOverrides), baseContext(contextOverrides))).toEqual({ eligible: false, reason });
   });
 
   it('does not treat a lookalike domain as internal', () => {
-    expect(classifyUser(baseUser({ email: 'a@notbike4mind.com' }), baseContext())).toEqual({ eligible: true });
+    expect(classifyUser(baseUser({ email: 'a@notinternal.test' }), baseContext())).toEqual({ eligible: true });
   });
 });
 
@@ -87,21 +107,43 @@ describe('planBackfill', () => {
   });
 });
 
+describe('buildPlan', () => {
+  const users = [
+    baseUser({ id: 'fresh' }),
+    baseUser({ id: 'disposable' }),
+    baseUser({ id: 'ledgered' }),
+    baseUser({ id: 'funded', currentCredits: 10 }),
+  ];
+
+  it('looks up only users that pass the in-memory rules, then applies both lookups', async () => {
+    const findDisposableEmailUserIds = vi.fn(async () => new Set(['disposable']));
+    const findOwnersWithLedgerActivity = vi.fn(async () => new Set(['ledgered']));
+
+    const plan = await buildPlan(users, baseRules(), { findDisposableEmailUserIds, findOwnersWithLedgerActivity });
+
+    const candidateIds = ['fresh', 'disposable', 'ledgered'];
+    expect(findDisposableEmailUserIds.mock.calls[0][0].map(user => user.id)).toEqual(candidateIds);
+    expect(findOwnersWithLedgerActivity).toHaveBeenCalledWith(candidateIds);
+    expect(plan.eligible.map(user => user.id)).toEqual(['fresh']);
+    expect(plan.skipped).toMatchObject({ 'disposable-email': 1, 'has-ledger-activity': 1, 'nonzero-balance': 1 });
+  });
+});
+
 describe('parseBackfillArgs', () => {
   const cutoffFlag = '--created-before=2026-10-13T09:10:00Z';
 
-  it('defaults to a dry run with the internal domain excluded', () => {
+  it('defaults to a dry run with no extra domains', () => {
     expect(parseBackfillArgs([cutoffFlag])).toEqual({
       execute: false,
       createdBefore: new Date('2026-10-13T09:10:00Z'),
       expectAmount: null,
-      excludedEmailDomains: ['bike4mind.com'],
+      extraInternalDomains: [],
     });
   });
 
-  it('adds every --exclude-email-domain to the defaults', () => {
+  it('collects every --exclude-email-domain', () => {
     const args = parseBackfillArgs([cutoffFlag, '--exclude-email-domain=a.test', '--exclude-email-domain=b.test']);
-    expect(args.excludedEmailDomains).toEqual(['bike4mind.com', 'a.test', 'b.test']);
+    expect(args.extraInternalDomains).toEqual(['a.test', 'b.test']);
   });
 
   it('accepts --execute with an expected amount', () => {
