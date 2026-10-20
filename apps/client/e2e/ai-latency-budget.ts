@@ -53,8 +53,10 @@ export type StreamSnapshot = {
  * Done means the stop button is gone AND this turn demonstrably happened: either the stop button
  * was seen at some point (it can flash by too fast to catch on a short reply) or the newest reply
  * differs from the pre-send baseline. A stop button that never hides is never done - the caller
- * fails it as a StreamingTimeoutError instead of guessing from stable text, so a real server stall
- * is recorded as incomplete rather than as a slow success.
+ * fails it as a StreamingTimeoutError instead of guessing from stable text. One recovery is not
+ * distinguishable here: if the app gives up on a stalled turn itself it marks it complete and
+ * hides the button, which looks like a finished reply. That still fails the latency budget on
+ * time, but it is recorded as a slow success, not as incomplete.
  */
 export function isStreamComplete(snapshot: StreamSnapshot, previousResponse: string, sawStopButton: boolean): boolean {
   if (snapshot.stopVisible) return false;
