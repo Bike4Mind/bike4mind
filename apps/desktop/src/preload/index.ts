@@ -89,6 +89,7 @@ const api: DesktopApi = {
   },
   chat: {
     listModels: (force?: boolean) => ipcRenderer.invoke(IPC_CHANNELS.chatListModels, force ?? false),
+    listSuggestionModels: () => ipcRenderer.invoke(IPC_CHANNELS.chatListSuggestionModels),
     setSessionModel: (sessionId: string, model: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionModel, sessionId, model),
     setSessionReasoningEffort: (sessionId: string, effort: ReasoningEffortSetting) =>
@@ -122,7 +123,8 @@ const api: DesktopApi = {
     clearContext: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatClearContext, sessionId),
     compactContext: (sessionId: string, focus?: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatCompactContext, sessionId, focus),
-    suggestNextPrompt: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatSuggestNextPrompt, sessionId),
+    suggestNextPrompt: (sessionId: string, model?: string | null) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatSuggestNextPrompt, sessionId, model ?? null),
     getQueuedMessages: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatGetQueued, sessionId),
     cancelQueuedMessage: (sessionId: string, queuedId: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatCancelQueued, sessionId, queuedId),

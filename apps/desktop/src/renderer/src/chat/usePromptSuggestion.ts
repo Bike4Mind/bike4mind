@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { promptSuggestionsEnabled, usePromptSuggestions } from './promptSuggestions';
+import { promptSuggestionModel, promptSuggestionsEnabled, usePromptSuggestions } from './promptSuggestions';
 
 export interface PromptSuggestionController {
   /** The guess to draw as placeholder text, or null to use the ordinary placeholder. */
@@ -67,7 +67,7 @@ export function usePromptSuggestion(sessionId: string | null): PromptSuggestionC
       const id = (request.current += 1);
       const forSession = event.sessionId;
       void window.b4m.chat
-        .suggestNextPrompt(forSession)
+        .suggestNextPrompt(forSession, promptSuggestionModel())
         .then(next => {
           if (request.current !== id || activeSessionId.current !== forSession) return;
           setSuggestion(next);

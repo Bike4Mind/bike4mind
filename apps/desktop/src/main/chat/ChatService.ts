@@ -111,9 +111,11 @@ import { readableThinking } from './thinkingBlocks';
 import { COMPACT_MAX_TOKENS, compactRequestMessages, renderForSummary, sanitizeSummary } from './compaction';
 import { pickTitleModel, sanitizeGeneratedTitle, TITLE_MAX_TOKENS, titleRequestMessages } from './sessionTitle';
 import {
+  isLocalModel,
   pickSuggestionModel,
   sanitizeSuggestion,
   SUGGESTION_MAX_TOKENS,
+  suggestionModelChoices,
   suggestionRequestMessages,
 } from './nextPrompt';
 import type { SessionActivity } from './SessionActivity';
@@ -263,6 +265,13 @@ const TITLE_TIMEOUT_MS = 15_000;
  * seconds is about as long as an empty composer stays empty.
  */
 const SUGGESTION_TIMEOUT_MS = 5_000;
+
+/**
+ * The same deadline for a model served by Ollama on this machine. A laptop prefills the excerpt
+ * in seconds and may first have to load the model, and a local call costs nothing when it runs
+ * long, so the only price of waiting is a hint that lands after the user started typing.
+ */
+const LOCAL_SUGGESTION_TIMEOUT_MS = 30_000;
 
 /**
  * How long a compaction may take before it is abandoned.
@@ -685,6 +694,12 @@ export class ChatService {
 
   listModels(force = false): Promise<ChatModelCatalog> {
     return this.deps.models?.list(force) ?? Promise.resolve({ models: [] });
+  }
+
+  /** What Settings offers for the next-prompt hint; see suggestionModelChoices. */
+  async listSuggestionModels(): Promise<ChatModelCatalog> {
+    const catalog = await this.listModels();
+    return { ...catalog, models: suggestionModelChoices(catalog.models) };
   }
 
   /**
@@ -4056,9 +4071,9 @@ export class ChatService {
    * Pulled by the renderer when a turn settles rather than pushed from the reply loop, and that
    * is the load-bearing choice: the hint exists only for a window that has this conversation
    * open with an empty composer, so a push would spend credits per turn on every window that
-   * has it closed, plus the ones with a draft half typed. The caller also owns the switch, so a
-   * user who turned the feature off makes no call at all and main never needs to read a
-   * renderer preference.
+   * has it closed, plus the ones with a draft half typed. The caller also owns the switch and the
+   * model pick, so a user who turned the feature off makes no call at all and main never needs
+   * to read a renderer preference.
    *
    * Returns null for every failure, and for every reply that produced nothing worth offering.
    * None of it reaches the conversation: a hint that could not be generated is cosmetic, and an
@@ -4068,7 +4083,7 @@ export class ChatService {
    * input with it only when the user presses Tab; sending is still Enter, on whatever is
    * actually in the box. There is no path from here to a sent message.
    */
-  async suggestNextPrompt(sessionId: string): Promise<string | null> {
+  async suggestNextPrompt(sessionId: string, preferredModel: string | null = null): Promise<string | null> {
     if (!isValidSessionId(sessionId)) return null;
     // A turn is in flight, so the exchange this would be guessing from is not the last one yet.
     // The renderer calls on 'done', but a queued message starts the next reply immediately.
@@ -4099,10 +4114,13 @@ export class ChatService {
         .find(message => message.role === 'user' && !message.system && message.content.trim());
       if (!prompt) return null;
 
-      const model = pickSuggestionModel(this.deps.models?.cached() ?? []);
+      const model = pickSuggestionModel(this.deps.models?.cached() ?? [], preferredModel);
       if (!model) return null;
 
-      timer = setTimeout(() => controller.abort(), SUGGESTION_TIMEOUT_MS);
+      timer = setTimeout(
+        () => controller.abort(),
+        isLocalModel(model) ? LOCAL_SUGGESTION_TIMEOUT_MS : SUGGESTION_TIMEOUT_MS
+      );
 
       const { endpoint } = await this.resolveServerConfig(api);
       let answer = '';
@@ -4110,7 +4128,7 @@ export class ChatService {
         api.getAxiosInstance(),
         endpoint,
         {
-          model,
+          model: model.id,
           messages: suggestionRequestMessages(prompt.content, reply.content),
           tools: [],
           maxTokens: SUGGESTION_MAX_TOKENS,

@@ -3,7 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ChatStreamEvent } from '@shared/chat';
-import { setPromptSuggestionsEnabled } from './promptSuggestions';
+import { setPromptSuggestionModel, setPromptSuggestionsEnabled } from './promptSuggestions';
 import { usePromptSuggestion, type PromptSuggestionController } from './usePromptSuggestion';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -13,6 +13,7 @@ describe('usePromptSuggestion', () => {
   let controller: PromptSuggestionController | null;
   let container: HTMLElement;
   let root: Root;
+  let asked: (string | null | undefined)[];
 
   function Probe({ sessionId }: { sessionId: string | null }) {
     controller = usePromptSuggestion(sessionId);
@@ -27,9 +28,14 @@ describe('usePromptSuggestion', () => {
     listener = null;
     controller = null;
     setPromptSuggestionsEnabled(true);
+    setPromptSuggestionModel(null);
+    asked = [];
     (window as unknown as { b4m: unknown }).b4m = {
       chat: {
-        suggestNextPrompt: async () => 'Add a test',
+        suggestNextPrompt: async (_sessionId: string, model?: string | null) => {
+          asked.push(model);
+          return 'Add a test';
+        },
         onStreamEvent: (next: (event: ChatStreamEvent) => void) => {
           listener = next;
           return () => undefined;
@@ -78,5 +84,13 @@ describe('usePromptSuggestion', () => {
     await settle();
     await act(async () => setPromptSuggestionsEnabled(false));
     expect(controller?.suggestion).toBeNull();
+  });
+
+  it('asks with the model picked in Settings at the time of the call', async () => {
+    await render('s1');
+    await settle();
+    await act(async () => setPromptSuggestionModel('qwen3:8b'));
+    await settle();
+    expect(asked).toEqual([null, 'qwen3:8b']);
   });
 });
