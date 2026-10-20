@@ -111,6 +111,19 @@ describe('addFileToLake', () => {
       );
     });
 
+    it('records the join before the owner restamp, so a restamp that throws cannot lose it', async () => {
+      const adapters = makeAuditedAdapters();
+      adapters.db.fabFiles.findById
+        .mockResolvedValueOnce(null)
+        .mockRejectedValueOnce(new Error('simulated crash in the restamp'));
+
+      await expect(addFileToLake(owner, lake(), 'f1', adapters)).rejects.toThrow('simulated crash in the restamp');
+
+      expect(adapters.db.lakeMembershipChangeEvents.record).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'added' })
+      );
+    });
+
     it('records nothing for a no-op re-add of an existing member', async () => {
       // Null pre-image: the filtered push matched nothing, so the meta-tag was already there.
       const adapters = makeAuditedAdapters(null);

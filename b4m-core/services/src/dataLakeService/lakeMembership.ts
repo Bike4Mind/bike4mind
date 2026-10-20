@@ -257,10 +257,6 @@ export const addFileToLake = async (
   }
 
   const priorState = await db.fabFiles.pushTagReturningPriorState(fabFileId, lake.datalakeTag, DATALAKE_TAG_STRENGTH);
-  // Unconditional: `priorState === null` means the tag was already there, which is also the state a
-  // retry finds after a reassign threw, so only recomputing on a fresh insert would leave that
-  // file's stamp wrong for good.
-  await reassignStorageOwner(fabFileId, db);
   // Idempotent by construction (the push is filtered on the name being absent), so a no-op re-add
   // of an existing member records nothing - matching `recordLakeConfigChange`'s own "no real
   // change, no row" rule.
@@ -274,4 +270,8 @@ export const addFileToLake = async (
   if (priorState && !satisfiesMembershipScope(lakeMembershipScope(lake), priorState)) {
     await recordLakeMembershipChange({ actor, lake, fabFileId, action: 'added', origin }, { db, logger });
   }
+  // After the event, so a reassign that throws cannot lose it (a retry sees a null pre-image). And
+  // unconditional: `priorState === null` is also the state that retry finds, so only recomputing on
+  // a fresh insert would leave that file's stamp wrong for good.
+  await reassignStorageOwner(fabFileId, db);
 };
