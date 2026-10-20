@@ -3,6 +3,7 @@ import { render, screen, within, fireEvent } from '@testing-library/react';
 import type { ComponentType } from 'react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
+import { settingsMap } from '@bike4mind/common';
 
 /**
  * What gates the feature rows in the sidenav.
@@ -428,5 +429,42 @@ describe('SidenavNav overlay-contributed sidebar rows', () => {
     const rows = screen.getAllByTestId('sidenav-nav-premium-a-b');
     expect(rows).toHaveLength(1);
     expect(rows[0]).toHaveTextContent('First');
+  });
+});
+
+/**
+ * The default system prompts ship on every turn, so a sidebar row they name that does not exist sends
+ * every user to a dead end. Any quoted name in a sentence about the sidebar must be a row the
+ * baseline user (no flags, no overlay) actually sees.
+ */
+describe('default prompts', () => {
+  const defaultPrompts = Object.values(settingsMap).flatMap(setting =>
+    setting.key.endsWith('Prompt') && typeof setting.defaultValue === 'string'
+      ? [{ key: setting.key, text: setting.defaultValue }]
+      : []
+  );
+
+  const sidebarNamesIn = (text: string) =>
+    text
+      .split(/(?<=[.!?])\s+/)
+      .filter(sentence => /\b(side ?bar|sidenav)\b/i.test(sentence))
+      .flatMap(sentence => [...sentence.matchAll(/"([^"]+)"/g)].map(match => match[1]));
+
+  it('reads the help center prompt among them', () => {
+    expect(defaultPrompts.map(prompt => prompt.key)).toContain('HelpCenterPrompt');
+  });
+
+  it('name only sidebar rows that exist', () => {
+    renderNav();
+    const rowLabels = screen
+      .getAllByRole('button')
+      .filter(row => row.getAttribute('data-testid')?.startsWith('sidenav-nav-'))
+      .map(row => row.textContent);
+
+    for (const { key, text } of defaultPrompts) {
+      for (const name of sidebarNamesIn(text)) {
+        expect(rowLabels, `${key} names a "${name}" sidebar row`).toContain(name);
+      }
+    }
   });
 });
