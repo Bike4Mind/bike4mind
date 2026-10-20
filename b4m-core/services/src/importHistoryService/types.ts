@@ -1,5 +1,11 @@
 import { IChatHistoryItem, ISessionRepository, IUser } from '@bike4mind/common';
 
+/** What the import actually processed, in conversations - the same unit `onProgress` reports. */
+export type ImportHistoryResult = {
+  processedItems: number;
+  totalItems: number;
+};
+
 export type ImportHistoryAdapters = {
   db: {
     withTransaction: <T>(fn: () => Promise<T>) => Promise<T>;
