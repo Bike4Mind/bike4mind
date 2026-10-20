@@ -64,6 +64,49 @@ beforeEach(() => {
 });
 
 describe('useEventMetrics forceRefresh', () => {
+  it('recaches a new calendar window and prevents its slower stale read from replacing fresh data', async () => {
+    const oldWindow = { dateFrom: '2026-10-14', dateTo: '2026-10-20' };
+    const newWindow = { dateFrom: '2026-10-15', dateTo: '2026-10-21' };
+    let resolveRead: ((value: { data: EventMetric[] }) => void) | undefined;
+    let resolveRecache: ((value: { data: EventMetric[] }) => void) | undefined;
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (isRecacheUrl(url))
+        return new Promise(resolve => {
+          resolveRecache = resolve;
+        });
+      if (url.includes('dateTo=2026-10-21'))
+        return new Promise(resolve => {
+          resolveRead = resolve;
+        });
+      return Promise.resolve({ data: staleMetrics });
+    });
+    const { result, rerender } = renderHook(({ filters }) => useEventMetrics(filters), {
+      wrapper: makeWrapper(),
+      initialProps: { filters: oldWindow },
+    });
+    await waitFor(() => expect(result.current.data).toEqual(staleMetrics));
+
+    act(() => {
+      result.current.forceRefresh(newWindow);
+    });
+    rerender({ filters: newWindow });
+    await waitFor(() => {
+      expect(api.get).toHaveBeenCalledWith(
+        '/api/admin/event-metrics?dateFrom=2026-10-15&dateTo=2026-10-21&recache=true'
+      );
+      expect(resolveRead).toBeDefined();
+    });
+    await act(async () => {
+      resolveRecache?.({ data: freshMetrics });
+    });
+    await waitFor(() => expect(result.current.data).toEqual(freshMetrics));
+    await act(async () => {
+      resolveRead?.({ data: staleMetrics });
+    });
+    expect(result.current.data).toEqual(freshMetrics);
+    expect(result.current.isError).toBe(false);
+  });
+
   it('keeps a failed recache visible over the stale data instead of a papered-over refetch', async () => {
     vi.mocked(api.get).mockImplementation((url: string) => {
       if (isRecacheUrl(url)) {

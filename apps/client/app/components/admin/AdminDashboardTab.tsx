@@ -2,6 +2,7 @@ import { useState } from 'react';
 import dayjs from 'dayjs';
 import { Alert, Box, Button, Card, Grid, LinearProgress, Stack, Typography } from '@mui/joy';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
+import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.generated';
 import { AdminTab } from './adminSidebarConfig';
 import { UsageBySourceCard } from './EventMetrics/components/UsageBySourceCard';
 import { OverviewTab } from './EventMetrics/components/OverviewTab';
@@ -43,6 +44,9 @@ const getActivityWindow = () => ({
 });
 
 export default function AdminDashboardTab({ onNavigate }: AdminDashboardTabProps) {
+  const additionalDashboards = premiumRoutes.flatMap(route =>
+    route.adminDashboard ? [{ path: route.path, ...route.adminDashboard }] : []
+  );
   const [filters, setFilters] = useState(getActivityWindow);
   const { data: metrics = [], isLoading, isFetching, isError, forceRefresh } = useEventMetrics(filters);
 
@@ -50,9 +54,8 @@ export default function AdminDashboardTab({ onNavigate }: AdminDashboardTabProps
     const nextWindow = getActivityWindow();
     if (nextWindow.dateFrom !== filters.dateFrom || nextWindow.dateTo !== filters.dateTo) {
       setFilters(nextWindow);
-      return;
     }
-    forceRefresh();
+    forceRefresh(nextWindow);
   };
 
   return (
@@ -63,6 +66,42 @@ export default function AdminDashboardTab({ onNavigate }: AdminDashboardTabProps
           See how Bike4Mind is being used and jump into the tools behind the numbers.
         </Typography>
       </Box>
+
+      {additionalDashboards.length > 0 && (
+        <Box>
+          <Typography level="h2" sx={{ mb: 1.5 }}>
+            More dashboards
+          </Typography>
+          <Grid container spacing={2}>
+            {additionalDashboards.map(dashboard => (
+              <Grid
+                xs={12}
+                sm={additionalDashboards.length === 1 ? 12 : 6}
+                lg={additionalDashboards.length === 1 ? 12 : 4}
+                key={dashboard.path}
+              >
+                <Card variant="soft" color="primary" sx={{ height: '100%' }}>
+                  <Typography level="title-lg">{dashboard.label}</Typography>
+                  <Typography level="body-sm" sx={{ flex: 1 }}>
+                    {dashboard.description}
+                  </Typography>
+                  <Button
+                    component="a"
+                    href={dashboard.path}
+                    variant="solid"
+                    endDecorator={<ArrowForwardIcon />}
+                    sx={{ alignSelf: 'flex-start' }}
+                    data-testid="admin-dashboard-extension-link"
+                    aria-label={`Open ${dashboard.label}`}
+                  >
+                    Open dashboard
+                  </Button>
+                </Card>
+              </Grid>
+            ))}
+          </Grid>
+        </Box>
+      )}
 
       <Stack spacing={1}>
         <Typography level="h2">Client usage</Typography>

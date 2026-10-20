@@ -26,6 +26,11 @@ import type { ComponentType } from 'react';
 export interface PremiumRouteDescriptor {
   path: string;
   lazyImport: () => Promise<{ default: ComponentType }>;
+  /** Optional card on the admin landing page. Use only on a concrete, directly navigable route. */
+  adminDashboard?: {
+    label: string;
+    description: string;
+  };
   /**
    * STRUCTURAL field (like `path`/`lazyImport`, NOT a gating prop - the
    * "gating fields map 1:1 to RestrictedPage" rule above does not apply to it).

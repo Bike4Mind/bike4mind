@@ -6,13 +6,16 @@ import dayjs from 'dayjs';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { AdminTab } from './adminSidebarConfig';
 import type { EventMetric } from './EventMetrics/types';
+import type { PremiumRouteDescriptor } from '@client/app/premiumContract';
 
-const { useEventMetrics, forceRefresh, overviewSpy } = vi.hoisted(() => ({
+const { useEventMetrics, forceRefresh, overviewSpy, premiumRoutes } = vi.hoisted(() => ({
   useEventMetrics: vi.fn(),
   forceRefresh: vi.fn(),
   overviewSpy: vi.fn(),
+  premiumRoutes: [] as PremiumRouteDescriptor[],
 }));
 
+vi.mock('@client/app/premium-generated/premiumRoutes.generated', () => ({ premiumRoutes }));
 vi.mock('./EventMetrics/hooks/useEventMetrics', () => ({ useEventMetrics }));
 vi.mock('./EventMetrics/components/UsageBySourceCard', () => ({
   UsageBySourceCard: () => <div data-testid="usage-by-source-card" />,
@@ -43,6 +46,7 @@ const event: EventMetric = {
 describe('AdminDashboardTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    premiumRoutes.length = 0;
     useEventMetrics.mockReturnValue({
       data: [event],
       isLoading: false,
@@ -50,6 +54,30 @@ describe('AdminDashboardTab', () => {
       isError: false,
       forceRefresh,
     });
+  });
+
+  it('does not show an extension section when no routes contribute a dashboard', () => {
+    render(<AdminDashboardTab onNavigate={vi.fn()} />, { wrapper: Wrapper });
+    expect(screen.queryByText('More dashboards')).not.toBeInTheDocument();
+  });
+
+  it('links an installed dashboard to its registered route without loading its page', () => {
+    const lazyImport = vi.fn();
+    premiumRoutes.push(
+      { path: '/example-tool', lazyImport },
+      {
+        path: '/example-analytics',
+        lazyImport,
+        adminDashboard: { label: 'Example analytics', description: 'Explore activity and retention.' },
+      }
+    );
+    render(<AdminDashboardTab onNavigate={vi.fn()} />, { wrapper: Wrapper });
+
+    expect(screen.getByTestId('admin-dashboard-extension-link')).toHaveAttribute('href', '/example-analytics');
+    expect(screen.getByTestId('admin-dashboard-extension-link')).toHaveAccessibleName('Open Example analytics');
+    expect(screen.getByText('Explore activity and retention.')).toBeInTheDocument();
+    expect(screen.queryByText('example-tool')).not.toBeInTheDocument();
+    expect(lazyImport).not.toHaveBeenCalled();
   });
 
   afterEach(() => {
@@ -96,7 +124,10 @@ describe('AdminDashboardTab', () => {
       dateFrom: dayjs().startOf('day').subtract(6, 'day').toISOString(),
       dateTo: dayjs().endOf('day').toISOString(),
     });
-    expect(forceRefresh).not.toHaveBeenCalled();
+    expect(forceRefresh).toHaveBeenCalledExactlyOnceWith({
+      dateFrom: dayjs().startOf('day').subtract(6, 'day').toISOString(),
+      dateTo: dayjs().endOf('day').toISOString(),
+    });
   });
 
   it.each([
