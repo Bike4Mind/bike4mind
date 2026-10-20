@@ -27,7 +27,12 @@ import { BaseBedrockBackend } from './base';
 import { capCacheControlMarkers, getCachingAdapter } from '../caching/adapters';
 import { systemContentToText } from '../systemContent';
 import { DispatchModel } from '../dispatchModel';
-import { buildThinkingParams, planReasoningEffort, resolveAnthropicEffort } from '../thinkingParams';
+import {
+  buildThinkingParams,
+  effortForComplexity,
+  planReasoningEffort,
+  resolveAnthropicEffort,
+} from '../thinkingParams';
 import { toAnthropicContent } from '../anthropicContent';
 import { appendIdentityReminder, buildIdentityReminder } from '../identityReminder';
 
@@ -598,8 +603,8 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         thinkingStyle: 'adaptive',
         pricing: {
           1_000_000: {
-            input: 3 / 1000000, // $3 per 1M input tokens
-            output: 15 / 1000000, // $15 per 1M output tokens
+            input: 2 / 1000000, // $2 per 1M input tokens
+            output: 10 / 1000000, // $10 per 1M output tokens
           },
         },
         supportsVision: true,
@@ -992,6 +997,8 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       // questMaster is an Anthropic-specific extra not on the generic ICompletionOptions;
       // cast locally for that one field (thinking is already declared on the type).
       const isQuestMaster = (options as { questMaster?: boolean }).questMaster === true;
+      const reasoningEffort =
+        options.reasoningEffort ?? effortForComplexity(model, currentModelInfo, options.complexity);
       const userThinkingEnabled = options.thinking?.enabled === true;
 
       if (userThinkingEnabled || isQuestMaster) {
@@ -1020,8 +1027,8 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
           body.temperature = result.temperature;
         }
         delete body.top_p;
-      } else if (options.reasoningEffort) {
-        const plan = planReasoningEffort(model, currentModelInfo, options.reasoningEffort, maxTokens);
+      } else if (reasoningEffort) {
+        const plan = planReasoningEffort(model, currentModelInfo, reasoningEffort, maxTokens);
         if (plan.kind !== 'default') body.thinking = plan.thinking;
         if (plan.kind === 'adaptive') body.output_config = plan.output_config;
         if (plan.kind === 'budget') {

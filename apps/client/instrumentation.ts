@@ -1,13 +1,21 @@
 /**
  * Next.js Instrumentation
  *
- * This file is called once when a new Next.js server instance is initiated.
- * Node.js-specific setup (error handlers, model logging) lives in
- * instrumentation.node.ts to avoid Turbopack resolution issues with
- * workspace packages in the edge/client bundle.
+ * Called once when a new Next.js server instance starts. Next only loads this file;
+ * it does NOT pick up instrumentation.node.ts on its own. The Node-only setup lives
+ * there and is imported dynamically under the nodejs runtime guard so its workspace
+ * packages stay out of the edge bundle.
  *
  * @see https://nextjs.org/docs/app/guides/instrumentation
  */
 export async function register() {
-  // Node.js-specific instrumentation is in instrumentation.node.ts
+  if (process.env.NEXT_RUNTIME === 'nodejs') {
+    // Fail the server at boot on a malformed TRUSTED_PROXY_HOPS; otherwise getClientIp throws inside
+    // the logging middleware and every baseApi route serves a 500.
+    const { readTrustedProxyHops } = await import('./server/utils/trustedClientIpHeaders');
+    readTrustedProxyHops();
+
+    const { register: registerNode } = await import('./instrumentation.node');
+    registerNode();
+  }
 }

@@ -544,16 +544,6 @@
       "count": 1
     }
   },
-  "apps/client/pages/api/mcp-servers/[id]/index.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/mcp-servers/index.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 2
-    }
-  },
   "apps/client/pages/api/mementos/[id]/update.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1

@@ -28,7 +28,7 @@ import {
 import { logEvent } from '@server/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
 import { reserveVoiceHold, settlePriorVoiceHold } from '@server/voice/settleVoiceHold';
-import { REALTIME_VOICE_RESERVE_USD, shouldReuseVoiceHold } from '@server/voice/voiceSessionLimits';
+import { REALTIME_VOICE_RESERVE_USD, shouldReuseVoiceHold } from '@bike4mind/server-utils/voice/voiceSessionLimits';
 import { VOICE_SESSION_ERROR, VOICE_SESSION_UNAVAILABLE_MESSAGE } from '@client/shared/voiceSessionErrors';
 import axios from 'axios';
 import { z } from 'zod';

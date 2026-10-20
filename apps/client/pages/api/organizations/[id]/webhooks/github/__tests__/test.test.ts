@@ -5,7 +5,7 @@ const h = vi.hoisted(() => ({
   handler: null as null | ((req: unknown, res: unknown) => Promise<unknown>),
   findByOrganizationId: vi.fn(),
   incrementCounterConditional: vi.fn(),
-  verifyOrgAccess: vi.fn(),
+  verifyOrgOwner: vi.fn(),
   validateTargetUrl: vi.fn(),
   fetchMock: vi.fn(),
 }));
@@ -25,8 +25,8 @@ vi.mock('@bike4mind/database/infra', () => ({
 vi.mock('@bike4mind/database', () => ({
   cacheRepository: { incrementCounterConditional: h.incrementCounterConditional },
 }));
-vi.mock('@server/security/secretEncryption', () => ({ decryptSecret: () => 'plain-secret' }));
-vi.mock('@server/utils/orgAccess', () => ({ verifyOrgAccess: h.verifyOrgAccess }));
+vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({ decryptSecret: () => 'plain-secret' }));
+vi.mock('@server/utils/orgAccess', () => ({ verifyOrgOwner: h.verifyOrgOwner }));
 vi.mock('@server/utils/ssrfProtection', () => ({ validateTargetUrl: h.validateTargetUrl }));
 vi.mock('@server/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: 'test-key' } }));
 
@@ -61,7 +61,7 @@ describe('POST /api/organizations/[id]/webhooks/github/test', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.incrementCounterConditional.mockResolvedValue({ success: true });
-    h.verifyOrgAccess.mockResolvedValue({ id: 'org-1', name: 'Acme' });
+    h.verifyOrgOwner.mockResolvedValue({ id: 'org-1', name: 'Acme' });
     h.findByOrganizationId.mockResolvedValue({ id: 'cfg-1', secret: 'enc(secret)' });
     h.validateTargetUrl.mockResolvedValue({ valid: true });
     h.fetchMock.mockResolvedValue({ ok: true, status: 200, statusText: 'OK' });

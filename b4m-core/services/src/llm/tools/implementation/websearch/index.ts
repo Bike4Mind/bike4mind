@@ -1,6 +1,7 @@
 import { Logger } from '@bike4mind/observability';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import { ToolDefinition, ToolContext } from '../../base/types';
+import { INDEXED_TOOL_CITATION_RULE, citationNumbersById } from '../../citationNumbering';
 import { GetEffectiveApiKeyAdapters } from '../../../../apiKeyService';
 import {
   CitableSource,
@@ -138,16 +139,24 @@ function describePlace(place: WebSearchPlace): string {
     .join(' - ');
 }
 
-export function formatPlaceResults(places: WebSearchPlace[], anchor?: WebSearchPlace): string {
+export function formatPlaceResults(
+  places: WebSearchPlace[],
+  anchor?: WebSearchPlace,
+  citationNumbers?: ReadonlyMap<string, number>
+): string {
+  const numberOf = (place: WebSearchPlace) => citationNumbers?.get(`place:${place.id}`);
   return [
     'Places found for this search (each has a map location; refer to it by its id):',
     '',
-    ...places.map((place, index) => `${index + 1}. ${describePlace(place)}\n   id: ${stripNewlines(place.id)}`),
+    ...places.map((place, index) => {
+      const n = numberOf(place);
+      return `${n !== undefined ? `[${n}]` : `${index + 1}.`} ${describePlace(place)}\n   id: ${stripNewlines(place.id)}`;
+    }),
     ...(anchor
       ? [
           '',
           'Anchor location (the place the user named):',
-          `${describePlace(anchor)}\n   id: ${stripNewlines(anchor.id)}`,
+          `${numberOf(anchor) !== undefined ? `[${numberOf(anchor)}] ` : ''}${describePlace(anchor)}\n   id: ${stripNewlines(anchor.id)}`,
         ]
       : []),
   ].join('\n');
@@ -317,7 +326,8 @@ export async function performWebSearch(
   adapters: GetEffectiveApiKeyAdapters,
   params: WebSearchParams,
   imageUrlSigningSecret = '',
-  resolvedProviders?: Promise<[WebSearchProvider | null, WebSearchProvider | null]>
+  resolvedProviders?: Promise<[WebSearchProvider | null, WebSearchProvider | null]>,
+  numberCitables?: ToolContext['numberCitables']
 ): Promise<WebSearchResult> {
   Logger.globalInstance.log('🔍 WebSearch Tool: Starting search for query:', params.query);
 
@@ -377,7 +387,7 @@ export async function performWebSearch(
 
     const withImages = shouldIncludeImages(results, wantsImages, imageResults);
 
-    const citables: CitableSource[] = results.map((result, index) => ({
+    const unnumberedCitables: CitableSource[] = results.map((result, index) => ({
       id: result.url, // Use URL as unique identifier
       type: 'web_url' as const,
       title: result.title,
@@ -397,9 +407,14 @@ export async function performWebSearch(
     }));
     if (withPlaces) {
       for (const place of anchor ? [anchor, ...places] : places) {
-        citables.push(placeCitable(place, imageUrlSigningSecret, canSignImages));
+        unnumberedCitables.push(placeCitable(place, imageUrlSigningSecret, canSignImages));
       }
     }
+    // Organic results come first in the citables, so their stamps line up with `results` by index.
+    const numberedCitables = numberCitables?.(unnumberedCitables);
+    const citables = numberedCitables ?? unnumberedCitables;
+    const resultLabel = (index: number): string =>
+      numberedCitables ? `[${numberedCitables[index].metadata?.citationIndex}]` : `${index + 1}.`;
 
     const formattedResults = results
       .map((result, index) => {
@@ -411,7 +426,7 @@ export async function performWebSearch(
         // already closes for the image pool's fields - here it would let a snippet forge a fake
         // numbered entry or a fake "Images:" line in this line-structured output.
         return (
-          `${index + 1}. **${stripNewlines(result.title)}**\n${stripNewlines(result.snippet)}\n` +
+          `${resultLabel(index)} **${stripNewlines(result.title)}**\n${stripNewlines(result.snippet)}\n` +
           imageLine +
           `Source: [${safeHostname(result.url)}](${result.url})\n`
         );
@@ -425,9 +440,12 @@ export async function performWebSearch(
     // return zero organic hits but a real image cluster (the dedicated image search runs
     // independently of the organic search), and that image cluster - plus the cards prompt telling
     // the model how to use it - must not be thrown away just because there's no prose to go with it.
-    const placeSection = withPlaces ? `\n${formatPlaceResults(places, anchor)}\n` : '';
+    const placeSection = withPlaces
+      ? `\n${formatPlaceResults(places, anchor, numberedCitables ? citationNumbersById(numberedCitables) : undefined)}\n`
+      : '';
     const baseText = formattedResults
-      ? `Here's what I found from searching the web:\n\n${formattedResults}`
+      ? `Here's what I found from searching the web:\n\n${formattedResults}` +
+        (numberedCitables ? `\n${INDEXED_TOOL_CITATION_RULE}\n` : '')
       : imageSection || placeSection
         ? "Here's what I found from searching the web:\n"
         : 'No results found from web search.';
@@ -466,7 +484,8 @@ export const webSearchTool: ToolDefinition = {
           { db: context.db },
           params,
           config?.imageUrlSigningSecret,
-          providersPromise
+          providersPromise,
+          context.numberCitables
         );
         context.logger.log('🔍 WebSearch Tool: search timing', {
           callNumber,

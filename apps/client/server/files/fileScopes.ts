@@ -40,7 +40,7 @@ export const FILES_READ_OR_WRITE_OR_GENERATE_SCOPES: ApiKeyScope[] = [
   ApiKeyScope.AI_GENERATE,
 ];
 
-export { GENERATE_UPLOAD_MARKER } from '@server/files/generateUploadMarker';
+export { GENERATE_UPLOAD_MARKER } from '@bike4mind/server-utils/files/generateUploadMarker';
 
 /** True for an API key holding `ai:generate` but not `files:write`; a JWT caller is never bare. */
 export function isBareGenerateUpload(req: ScopedRequest): boolean {

@@ -115,6 +115,7 @@ const handler = baseApi({ auth: false })
         const { accessToken, refreshToken } = await issueSessionForRequest(req, authorizedUser.id, {
           createdVia: 'device',
           tokenVersion: authorizedUser.tokenVersion ?? 0,
+          clientId: client_id,
         });
 
         // mark consumed to prevent token reuse

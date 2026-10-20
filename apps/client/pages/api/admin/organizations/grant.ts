@@ -10,13 +10,13 @@ import { ForbiddenError } from '@server/utils/errors';
 import { organizationService, creditService } from '@bike4mind/services';
 import { ApiKeyScope, CreditHolderType, dayjs, TEAM_PLAN_SEATS_HARD_LIMIT } from '@bike4mind/common';
 import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@client/lib/subscriptions/constants';
-import { getTeamPlanSettings } from '@server/services/teamPlanSettings';
+import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
 import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sendToClient } from '@server/websocket/utils';
-import { AdminOrgAuditEvents, logAuditEvent } from '@server/utils/auditLog';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { z } from 'zod';
 import { Resource } from 'sst';
 import { randomUUID } from 'crypto';
@@ -126,29 +126,20 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         );
       }
 
+      await recordAdminActionFromRequest(req, {
+        action: 'org.credits.granted',
+        target: { kind: 'organization', id: org.id, displayName: org.name },
+        summary: `granted org with ${seats} seats and ${initialCredits} initial credits`,
+        reason,
+        details: { ownerId: owner.id, seats, initialCredits },
+      });
+
       return org;
     });
 
     if (!organization) {
       throw new BadRequestError('Failed to create organization');
     }
-
-    await logAuditEvent(
-      {
-        userId: owner.id,
-        action: AdminOrgAuditEvents.ORG_GRANTED,
-        adminUserId: req.user!.id,
-        adminUsername: req.user!.username,
-        reason,
-        metadata: {
-          organizationId: organization.id,
-          organizationName: organization.name,
-          seats,
-          initialCredits,
-        },
-      },
-      req.logger
-    );
 
     await sendToClient(owner.id, Resource.websocket.managementEndpoint, {
       action: 'invalidate_query',

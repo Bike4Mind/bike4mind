@@ -25,7 +25,9 @@ const handler = baseApi().post(
     // owner-or-platform-admin inline, excluding the appointed manager that every other roster path
     // admits - so a manager could remove a member but not add one.
     if (!organizationService.canAdministerOrganization(req.user, organization)) {
-      throw new ForbiddenError('Only the billing owner, team manager, or admin can add a user to the organization');
+      throw new ForbiddenError(
+        'Only the billing owner, an organization manager, or an admin can add a user to the organization'
+      );
     }
 
     await withTransaction(() =>

@@ -1,4 +1,4 @@
-import { isFeatureEnabled } from '@server/middlewares/featureFlag';
+import { isFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { ForbiddenError } from '@server/utils/errors';
 
 /**

@@ -13,7 +13,6 @@ import {
   fabFileChunkRepository,
   fabFileRepository,
   fallbackLakeSettingsRepository,
-  imageModerationIncidentRepository,
   lakeAccessEventRepository,
   organizationRepository,
   projectRepository,
@@ -29,7 +28,8 @@ import type { Logger } from '@bike4mind/observability';
 import { lakeWriteToolDb } from '@server/dataLakes/lakeWriteToolDb';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
 import type { ToolMaterializer } from '@bike4mind/agents';
-import { buildSystemApiKeyTable } from './resolveBackend';
+import { buildSystemApiKeyTable } from '@bike4mind/server-utils/deepAgent/resolveBackend';
+import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
 
 /**
  * Builds the owner-scoped b4m toolbelt for a deep agent's act step.
@@ -103,7 +103,7 @@ export function createDeepAgentToolMaterializer(config: DeepAgentToolMaterialize
         // Audit trail for images blocked by the image_generation/edit_image tools'
         // moderation gate. The gate itself is unconditional (constructed
         // inline in the tool) - this only wires the incident record, not the block.
-        imageModerationIncidents: imageModerationIncidentRepository,
+        imageModerationIncidents,
         // Owner lookup for edit_image's generated-image keys (resolveOwnedGeneratedImageUrl). Narrow on
         // purpose: the whole repo would also enable incrementImageCount, which this host never wired.
         quests: questRepository,

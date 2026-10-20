@@ -27,6 +27,7 @@ import {
   type BrowserPageStateEvent,
   type BrowserPaneRequest,
   type BrowserTabRequest,
+  type CreateSessionRequest,
   type DesktopApi,
 } from '@shared/ipc';
 import type { PrBarState, PrOption, PrSummaryEvent } from '@shared/pullRequest';
@@ -99,7 +100,7 @@ const api: DesktopApi = {
     setSessionArchived: (sessionId: string, archived: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionArchived, sessionId, archived),
     listSessions: () => ipcRenderer.invoke(IPC_CHANNELS.chatListSessions),
-    createSession: () => ipcRenderer.invoke(IPC_CHANNELS.chatCreateSession),
+    createSession: (request?: CreateSessionRequest) => ipcRenderer.invoke(IPC_CHANNELS.chatCreateSession, request),
     createCodeSession: (request: CreateCodeSessionRequest) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatCreateCodeSession, request),
     updateProject: (request: UpdateProjectRequest) => ipcRenderer.invoke(IPC_CHANNELS.chatUpdateProject, request),

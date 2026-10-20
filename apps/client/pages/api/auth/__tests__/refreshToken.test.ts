@@ -30,7 +30,7 @@ vi.mock('@server/middlewares/checkBlockedIP', () => ({ checkBlockedIP: vi.fn() }
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: vi.fn() }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn() }));
 vi.mock('@server/auth/sessionDevice', () => ({ buildSessionDevice: () => ({}) }));
-vi.mock('@server/auth/refreshCookie', () => ({
+vi.mock('@bike4mind/server-utils/auth/refreshCookie', () => ({
   readRefreshCookie: () => 'cookie-refresh-token',
   setRefreshCookie: (...a: unknown[]) => mockSetCookie(...a),
 }));

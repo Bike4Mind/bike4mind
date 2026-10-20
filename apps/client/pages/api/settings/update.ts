@@ -3,8 +3,12 @@ import {
   isBlankSettingValue,
   SreAgentConfig,
   SRE_SECRET_PLACEHOLDER,
+  formatUsdPerCredit,
   isMaskedSensitiveSettingValue,
+  isPricePerCreditBelowFloor,
   maskSensitiveSettingValue,
+  MIN_PRICE_PER_CREDIT_USD,
+  partitionEmailList,
   settingsMap,
 } from '@bike4mind/common';
 import { AdminSettings } from '@bike4mind/database/infra';
@@ -15,7 +19,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Config } from '@server/utils/config';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
-import { encryptSecret, isEncrypted, isValidEncryptionKey } from '@server/security/secretEncryption';
+import { encryptSecret, isEncrypted, isValidEncryptionKey } from '@bike4mind/server-utils/security/secretEncryption';
 import { materializePublicSettingsArtifactSafe } from '@server/utils/publicSettingsArtifact';
 import { refuseFloorAboveMeasured } from '@server/utils/refuseFloorAboveMeasured';
 
@@ -52,6 +56,24 @@ const handler = baseApi().put(
 
     if (key === 'forcedRetrievalMinSimilarityPct' && req.body.confirmAboveMeasuredFloor !== true) {
       await refuseFloorAboveMeasured(Number(value), req.logger);
+    }
+
+    // pricePerCredit is not scope-capable, so this is its only write path; a stored value that
+    // predates the floor is still refused at charge time (lib/credits/utils.ts).
+    if (key === 'pricePerCredit' && isPricePerCreditBelowFloor(Number(value))) {
+      throw new BadRequestError(
+        `Price Per Credit must be at least ${formatUsdPerCredit(MIN_PRICE_PER_CREDIT_USD)}, the per-credit sale price including markup.`
+      );
+    }
+
+    // The schema accepts any strings so a bad stored entry cannot blank the list on read; the write is
+    // where an admin can still fix a typo, so refuse it here.
+    if (key === 'ImageModerationReviewerEmails') {
+      const { valid, invalid } = partitionEmailList(value);
+      if (invalid.length > 0) {
+        throw new BadRequestError(`Not a valid email address: ${invalid.map(e => JSON.stringify(e)).join(', ')}`);
+      }
+      value = valid;
     }
 
     const isSensitiveSetting = settingsMap[key].isSensitive === true;

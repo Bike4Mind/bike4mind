@@ -33,7 +33,7 @@ vi.mock('@bike4mind/database', async () => {
 const mockGetTeamPlanSettings = vi.hoisted(() =>
   vi.fn(async () => ({ minSeats: 4, maxSeats: 100, creditsPerSeat: 50000 }))
 );
-vi.mock('@server/services/teamPlanSettings', () => ({ getTeamPlanSettings: mockGetTeamPlanSettings }));
+vi.mock('@bike4mind/server-utils/services/teamPlanSettings', () => ({ getTeamPlanSettings: mockGetTeamPlanSettings }));
 
 vi.mock('@server/models/Subscription', () => ({
   subscriptionRepository: {

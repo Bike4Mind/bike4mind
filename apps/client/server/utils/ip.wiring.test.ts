@@ -25,4 +25,12 @@ describe('self-host trusted-proxy wiring', () => {
   it('the Caddy override keeps the app port bound to loopback', () => {
     expect(composeServiceBlock('compose.caddy.yaml', 'app')).toMatch(/- '127\.0\.0\.1:\$\{APP_HOST_PORT:-3000\}:3000'/);
   });
+
+  // tailscale serve overwrites X-Forwarded-For with the tailnet peer, so one hop is trusted, and like
+  // Caddy that is only safe while the app port is reachable solely through the sidecar.
+  it('the Tailscale sidecar trusts one hop and keeps the app port bound to loopback', () => {
+    const app = composeServiceBlock('compose.tailscale.yaml', 'app');
+    expect(app).toContain('TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-1}');
+    expect(app).toMatch(/- '127\.0\.0\.1:\$\{APP_HOST_PORT:-3000\}:3000'/);
+  });
 });

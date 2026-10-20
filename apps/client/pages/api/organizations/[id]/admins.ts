@@ -1,13 +1,13 @@
 // PUT /api/organizations/:id/admins
-// Set the org's appointed admins (adminUserIds). Billing owner or platform admin only -
-// an org admin cannot appoint further admins (org-groups #1172 authorization matrix).
+// Set the org's managers (stored as adminUserIds). Billing owner or platform admin only -
+// a manager cannot add or remove managers.
 
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
 import { organizationRepository } from '@bike4mind/database/infra';
-import { orgAclRowConfersMembership } from '@bike4mind/common';
-import { AdminOrgAuditEvents, logAuditEvent } from '@server/utils/auditLog';
+import { isOrgOwnerOrPlatformAdmin, orgAclRowConfersMembership } from '@bike4mind/common';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { z } from 'zod';
 
 const bodySchema = z.object({ adminUserIds: z.array(z.string().min(1)).max(50) });
@@ -24,9 +24,8 @@ const handler = baseApi().put(
     const organization = await organizationRepository.findById(organizationId);
     if (!organization) throw new NotFoundError('Organization not found');
 
-    const isOwner = organization.userId === req.user?.id;
-    if (!isOwner && !req.user?.isAdmin) {
-      throw new ForbiddenError('Only the billing owner or a platform admin can set org admins');
+    if (!isOrgOwnerOrPlatformAdmin(req.user!, organization)) {
+      throw new ForbiddenError('Only the billing owner or a platform admin can set org managers');
     }
 
     // An appointed admin must be a member of the org - don't reference outsiders. Membership means
@@ -58,18 +57,15 @@ const handler = baseApi().put(
     const updated = await organizationRepository.update({ id: organizationId, adminUserIds });
 
     // "Who appointed the person who can reach confidential groups" - the same legal question the
-    // group-type grant audit answers, one link up the chain. Best-effort (logAuditEvent swallows
+    // group-type grant audit answers, one link up the chain. Best-effort (the writer swallows
     // its own errors), so it never fails the already-committed change.
-    await logAuditEvent(
-      {
-        userId: req.user!.id,
-        action: AdminOrgAuditEvents.ORG_ADMINS_UPDATED,
-        ip: req.ip,
-        userAgent: req.headers['user-agent'] || 'unknown',
-        metadata: { organizationId, adminUserIds },
-      },
-      req.logger
-    );
+    await recordAdminActionFromRequest(req, {
+      action: 'org.admins.updated',
+      actorScope: 'organization',
+      target: { kind: 'organization', id: organizationId, displayName: organization.name },
+      summary: `set ${adminUserIds.length} organization managers`,
+      changes: [{ field: 'adminUserIds', before: organization.adminUserIds ?? [], after: adminUserIds }],
+    });
 
     return res.status(200).json({ adminUserIds: updated?.adminUserIds ?? adminUserIds });
   })

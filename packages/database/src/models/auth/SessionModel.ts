@@ -123,6 +123,7 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     enabledTools: [{ type: String, required: false }],
     disabledTools: [{ type: String, required: false }],
     disableUserIntegrations: { type: Boolean, required: false },
+    userSetFields: { type: [String], required: false, default: undefined },
     forceKnowledgeRetrieval: { type: Boolean, required: false },
     retrievalTags: [{ type: String, required: false }],
     // DELIBERATELY no default: absent must stay distinguishable from false, since `retrievalTags`

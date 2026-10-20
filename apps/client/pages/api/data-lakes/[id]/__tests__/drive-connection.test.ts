@@ -40,7 +40,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@server/utils/orgAccess', () => ({
   verifyOrgAccess: h.verifyOrgAccess,
   verifyOrgAdminRead: h.verifyOrgAdminRead,
@@ -69,8 +69,8 @@ vi.mock('@bike4mind/database', async importOriginal => {
     userRepository: { ...actual.userRepository, findById: h.userFindById },
   };
 });
-vi.mock('@server/integrations/google/drive/drivePollSchedule', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/integrations/google/drive/drivePollSchedule')>()),
+vi.mock('@bike4mind/server-utils/integrations/google/drive/drivePollSchedule', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/integrations/google/drive/drivePollSchedule')>()),
   isDriveLakePollScheduled: h.isDriveLakePollScheduled,
 }));
 vi.mock('@bike4mind/services', () => ({
@@ -83,9 +83,9 @@ vi.mock('@bike4mind/services', () => ({
 }));
 
 import handler from '../drive-connection';
-import type { DriveConnectionOwner } from '@bike4mind/common';
+import type { LakeConnectionOwner } from '@bike4mind/common';
 
-const orgAOwner: DriveConnectionOwner = { kind: 'organization', organizationId: 'orgA' };
+const orgAOwner: LakeConnectionOwner = { kind: 'organization', organizationId: 'orgA' };
 
 const makeRes = () => {
   const json = vi.fn();
@@ -508,7 +508,7 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
     const { res, status, json } = makeRes();
     await run(makeReq('DELETE'), res);
 
-    const userOwner: DriveConnectionOwner = { kind: 'user', userId: 'u1' };
+    const userOwner: LakeConnectionOwner = { kind: 'user', userId: 'u1' };
     expect(h.connMarkDisconnecting).toHaveBeenCalledWith('conn1', userOwner);
     expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.example.com/drive-disconnect-purge', {
       connectionId: 'conn1',

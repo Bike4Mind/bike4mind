@@ -4,7 +4,7 @@ import { persist } from 'zustand/middleware';
 /** localStorage key used by Zustand persist - referenced by cross-tab logout listener.
  *  NOTE: no credential is written here any more. Only the non-sensitive session-state flags
  *  (hasSession / expired / expiredReason) are persisted; the access token lives in memory and
- *  the refresh token lives in an HttpOnly cookie (server/auth/refreshCookie.ts). */
+ *  the refresh token lives in an HttpOnly cookie (packages/server-utils/src/auth/refreshCookie.ts). */
 export const ACCESS_TOKEN_STORAGE_KEY = 'access-token-storage';
 
 /**

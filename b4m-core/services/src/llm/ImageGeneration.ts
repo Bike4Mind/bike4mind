@@ -1449,7 +1449,14 @@ export class ImageGenerationService {
             incidents: this.db.imageModerationIncidents,
             buffer,
             mimeType: `image/${fileType?.ext ?? 'png'}`,
-            incidentMeta: { userId, sessionId: quest.sessionId, questId, provider: modelInfo.backend, model },
+            incidentMeta: {
+              userId,
+              sessionId: quest.sessionId,
+              questId,
+              provider: modelInfo.backend,
+              model,
+              surface: 'generation',
+            },
             logger,
           });
 

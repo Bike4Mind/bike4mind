@@ -87,7 +87,13 @@ import EnableWebSearchAction from './EnableWebSearchAction';
 import AttachmentNotices from './AttachmentNotices';
 import { NotebookExecutionButtons } from './NotebookExecutionButtons';
 import type { UiSideEffect } from '@bike4mind/common';
-import { dispatchUiSideEffects } from '@client/app/utils/uiSideEffectDispatcher';
+import {
+  claimLiveDispatch,
+  claimReplayDispatch,
+  dispatchUiSideEffects,
+  noteReplyInFlight,
+  settleReplyInFlight,
+} from '@client/app/utils/uiSideEffectDispatcher';
 import { getReplyTruncationState, repairTruncatedArtifact } from '@client/app/utils/replyTruncation';
 
 import SearchResultCards from './SearchResultCards';
@@ -638,6 +644,7 @@ const PromptReplies: FC<PromptReplyProps> = ({
         attachmentNotices={messageData.attachmentNotices}
         attachmentDelivery={messageData.attachmentDelivery}
         uiSideEffects={messageData.uiSideEffects}
+        replySessionId={messageData.sessionId}
         jupyterNotebook={messageData.jupyterNotebook}
         notebookContent={notebookContent}
       />
@@ -1172,21 +1179,29 @@ const AttachmentDownloadButtons: FC<AttachmentDownloadButtonsProps> = ({ attachm
 
 // UiSideEffectDispatcher
 
-const UiSideEffectDispatcher: FC<{ effects: UiSideEffect[]; completed: boolean; dedupeKey?: string }> = ({
-  effects,
-  completed,
-  dedupeKey,
-}) => {
-  const hasDispatched = useRef(false);
-
+const UiSideEffectDispatcher: FC<{
+  effects?: UiSideEffect[];
+  completed: boolean;
+  dedupeKey: string;
+  sessionId?: string;
+}> = ({ effects, completed, dedupeKey, sessionId }) => {
   useEffect(() => {
-    if (!completed || hasDispatched.current) return;
-    hasDispatched.current = true;
-    // Live arrival from a just-completed reply - auto-apply the brief and follow
-    // the AI to its console. dedupeKey ensures the streaming path and this render
-    // path apply the same quest only once (the later one is a no-op).
-    dispatchUiSideEffects(effects, { live: true, dedupeKey });
-  }, [completed, effects, dedupeKey]);
+    if (!completed) {
+      noteReplyInFlight(dedupeKey, sessionId);
+      return;
+    }
+    if (!effects?.length) {
+      settleReplyInFlight(dedupeKey);
+      return;
+    }
+    // Live only for the first dispatch of a reply this client watched finish; anything else
+    // is a replay, once per view of the session. See claimLiveDispatch / claimReplayDispatch.
+    if (claimLiveDispatch(dedupeKey, sessionId)) {
+      dispatchUiSideEffects(effects, { live: true, dedupeKey });
+    } else if (claimReplayDispatch(dedupeKey, sessionId)) {
+      dispatchUiSideEffects(effects, { dedupeKey });
+    }
+  }, [completed, effects, dedupeKey, sessionId]);
 
   return null;
 };
@@ -1224,6 +1239,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   attachmentNotices,
   attachmentDelivery,
   uiSideEffects,
+  replySessionId,
   jupyterNotebook,
   notebookContent,
 }) => {
@@ -1643,6 +1659,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                   }}
                 >
                   <Typography
+                    data-testid="ai-response-body"
                     // plain, not soft: the reply body is unframed, and Joy's soft
                     // variant would paint its own background once the explicit one
                     // below is gone. The user's prompt keeps its bubble.
@@ -1886,7 +1903,12 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
 
           After the expand control, which belongs to the reply body it truncates, and before
           artifacts, so a tall chart cannot separate a source from the marker that cites it. */}
-      {promptMeta?.citables && promptMeta.citables.length > 0 && <CitableSources citables={promptMeta.citables} />}
+      {promptMeta?.citables && promptMeta.citables.length > 0 && (
+        // The reply only once done, so chips do not reshuffle under the reader as citations stream in.
+        // processedContent, not cleanReply: an artifact body the reader never sees must not count as
+        // citing a source. Not displayContent either, which is cut to the collapsed view.
+        <CitableSources citables={promptMeta.citables} reply={completed ? processedContent : undefined} />
+      )}
 
       {/* Artifacts sit between the reply and the footer. This Stack owns ALL of their
           spacing - 24px above, 8px below, 16px between cards - so individual artifact
@@ -1923,8 +1945,13 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
           starts, and waiting hides it for exactly as long as the model is answering without it. */}
       <AttachmentNotices attachmentNotices={attachmentNotices} attachmentDelivery={attachmentDelivery} />
 
-      {uiSideEffects && uiSideEffects.length > 0 && completed && (
-        <UiSideEffectDispatcher effects={uiSideEffects} completed={completed} dedupeKey={messageId} />
+      {messageId && (
+        <UiSideEffectDispatcher
+          effects={uiSideEffects}
+          completed={completed}
+          dedupeKey={messageId}
+          sessionId={replySessionId}
+        />
       )}
 
       {notebookContent && completed && (

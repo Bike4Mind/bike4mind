@@ -164,7 +164,7 @@ export interface paths {
     put?: never;
     /**
      * Synthesize speech from text
-     * @description Generates speech from text using OpenAI or ElevenLabs. When the requested provider has no usable key (or the provider rejects it), another configured provider stands in and the substitution is reported via `provider`/`fallbackFrom` and the `X-B4M-Tts-Provider*` headers. Input length is capped per provider (OpenAI 4096 characters, ElevenLabs 10000), and an output `format` the chosen provider cannot produce is rejected with a 422 before any provider cost is incurred. The default `encoding: "binary"` returns the raw audio bytes; `encoding: "base64"` returns JSON. Audio over the ~4MB response ceiling is returned by signed URL (a `303` for binary, the `delivery: "url"` variant for base64). Generated audio is saved to the file browser unless the call sets `preview`; the outcome is reported in the JSON save fields and the `X-B4M-Audio-*` headers - fetch the saved copy from `fileUrl` / `X-B4M-Audio-File-Url`, since `GET /api/files/{id}` fails closed until moderation completes. Authenticate with an API key (`b4m_live_`) or a JWT.
+     * @description Generates speech from text using OpenAI or ElevenLabs. When the requested provider has no usable key (or the provider rejects it), another configured provider stands in and the substitution is reported via `provider`/`fallbackFrom` and the `X-B4M-Tts-Provider*` headers. Input length is capped per provider (OpenAI 4096 characters, ElevenLabs 10000), and an output `format` the chosen provider cannot produce is rejected with a 422 before any provider cost is incurred. `organization_id` picks the payer: an organization you belong to, or null for your personal credits; omitted bills your personal credits, as this endpoint always has. The default `encoding: "binary"` returns the raw audio bytes; `encoding: "base64"` returns JSON. Audio over the ~4MB response ceiling is returned by signed URL (a `303` for binary, the `delivery: "url"` variant for base64). Generated audio is saved to the file browser unless the call sets `preview`; the outcome is reported in the JSON save fields and the `X-B4M-Audio-*` headers - fetch the saved copy from `fileUrl` / `X-B4M-Audio-File-Url`, since `GET /api/files/{id}` fails closed until moderation completes. Authenticate with an API key (`b4m_live_`) or a JWT.
      */
     post: operations['synthesizeSpeech'];
     delete?: never;
@@ -205,7 +205,7 @@ export interface paths {
     put?: never;
     /**
      * Generate a sound effect
-     * @description Generates a short sound effect from a text description. Omitting `durationSeconds` lets the provider pick the length (and bills at its default); `promptInfluence` trades prompt fidelity (1) against variation (0). Credits are reserved before generation and refunded if it fails. The default `encoding: "binary"` returns the raw audio bytes; `encoding: "base64"` returns JSON. Audio over the ~4MB response ceiling is returned by signed URL (a `303` for binary, the `delivery: "url"` variant for base64). Generated audio is saved to the file browser unless the call sets `preview`; the outcome is reported in the JSON save fields and the `X-B4M-Audio-*` headers - fetch the saved copy from `fileUrl` / `X-B4M-Audio-File-Url`, since `GET /api/files/{id}` fails closed until moderation completes. Authenticate with an API key (`b4m_live_`) or a JWT.
+     * @description Generates a short sound effect from a text description. Omitting `durationSeconds` lets the provider pick the length (and bills at its default); `promptInfluence` trades prompt fidelity (1) against variation (0). Credits are reserved before generation and refunded if it fails. `organization_id` picks the payer: an organization you belong to, or null for your personal credits; omitted bills your home organization (or personal credits if you have none). The default `encoding: "binary"` returns the raw audio bytes; `encoding: "base64"` returns JSON. Audio over the ~4MB response ceiling is returned by signed URL (a `303` for binary, the `delivery: "url"` variant for base64). Generated audio is saved to the file browser unless the call sets `preview`; the outcome is reported in the JSON save fields and the `X-B4M-Audio-*` headers - fetch the saved copy from `fileUrl` / `X-B4M-Audio-File-Url`, since `GET /api/files/{id}` fails closed until moderation completes. Authenticate with an API key (`b4m_live_`) or a JWT.
      */
     post: operations['generateSoundEffect'];
     delete?: never;
@@ -285,7 +285,7 @@ export interface paths {
     put?: never;
     /**
      * Generate an image
-     * @description Queues an image generation and returns immediately with the quest that will carry the result - no image yet, and the call never blocks on the render. Poll `GET /api/v1/quests/{id}` until `status` is `"done"` (see the `generateImage200PollResult` schema). Omit `sessionId` to create a new session. The prompt is resolved against the session history first, so a follow-up such as "make it darker" binds to the previous image; `enhancedPrompt` reports the prompt actually sent to the model. Send `prompt_resolution: "literal"` to skip that step and have the prompt sent as written (apart from truncation to the model's prompt limit). `referenceImageFabFileIds` passes up to 15 already-uploaded images as style anchors, after the input image taken from `fabFileIds`. Only gpt-image models accept them: sending any with another model is rejected with a 400 rather than ignored. Which `size` values a model accepts, and whether it honours `background`, `seed`, `quality`, `n` and reference images, is listed per model in the `image` block of `GET /api/v1/models`. Credits are checked when the render runs, so insufficient credits arrive on the polled quest rather than as a 422. `POST /api/ai/generate-image` is a legacy alias of this endpoint. Authenticate with an API key (`b4m_live_`) or a JWT.
+     * @description Queues an image generation and returns immediately with the quest that will carry the result - no image yet, and the call never blocks on the render. Poll `GET /api/v1/quests/{id}` until `status` is `"done"` (see the `generateImage200PollResult` schema). Omit `sessionId` to create a new session. The prompt is resolved against the session history first, so a follow-up such as "make it darker" binds to the previous image; `enhancedPrompt` reports the prompt actually sent to the model. Send `prompt_resolution: "literal"` to skip that step and have the prompt sent as written (apart from truncation to the model's prompt limit). `referenceImageFabFileIds` passes up to 15 already-uploaded images as style anchors, after the input image taken from `fabFileIds`. Only gpt-image models accept them: sending any with another model is rejected with a 400 rather than ignored. Which `size` values a model accepts, and whether it honours `background`, `seed`, `quality`, `n` and reference images, is listed per model in the `image` block of `GET /api/v1/models`. Credits are checked when the render runs, so insufficient credits arrive on the polled quest rather than as a 422. `organization_id` is accepted as an alias of `organizationId`, for callers used to the snake_case video and music bodies; `null` bills the personal account. `POST /api/ai/generate-image` is a legacy alias of this endpoint. Authenticate with an API key (`b4m_live_`) or a JWT.
      *
      *     Optional `callbackUrl`: an https URL that receives a signed POST when the quest settles (success, failure, or a stop; a failed render is `type: "error"` in the body, same as the poll). The body is the `GET /api/v1/quests/{id}` response. Headers: `X-Webhook-Event-ID` (the same on every attempt for one settlement; delivery is at-least-once, so dedupe on it, and a retried quest settles again under a new one), `X-Webhook-Delivery-ID` (unique per attempt), `X-Webhook-Timestamp` (unix seconds), `X-Webhook-Signature-256` (`sha256=` + hex HMAC-SHA256 of `<timestamp>.<raw body>` keyed with the API key's callback signing secret), and `X-Event-Type: quest.settled`. Delivery makes up to 5 attempts, retrying on a 5xx, 408, 429, timeout or network error - never on any other 4xx, and redirects are not followed; your endpoint must answer 2xx within 10 seconds. Requires API-key authentication and a signing secret on that key (returned once at key creation, or via `POST /api/user-api-keys/{id}/callback-secret`). A `callbackUrl` is rejected with a 400 when the request is not API-key authenticated, the key has no signing secret, the URL resolves to a private address, or the deployment does not deliver callbacks; a URL that is not https fails request validation with a 422. Polling still works whether or not `callbackUrl` is set.
      */
@@ -307,7 +307,7 @@ export interface paths {
     put?: never;
     /**
      * Edit an image
-     * @description Queues an edit of an existing image and returns the quest that will carry the result, before the render runs. Poll `GET /api/v1/quests/{id}` until `status` is `"done"` (see the `editImage200PollResult` schema). `image` is the URL of the source image; `fabFileIds` must name at least one file, and the first is the inpainting mask. `referenceImageFabFileIds` adds up to 15 style anchors after the source image, so the mask always applies to the source; only gpt-image models accept them, and sending any with another model is rejected with a 400 rather than ignored. Both id fields take ids from `POST /api/v1/files`: upload each file, poll `GET /api/v1/files/{id}` until `moderation_status` is `clean`, then pass its `id`. An id that is not yet `clean` fails the edit on the polled quest. `image` takes a URL rather than an id, so a source uploaded the same way is passed as its `download_url`, which must still be unexpired when the render runs. The edited image is not a file id: read it from `files[].url` on the polled quest, not from `GET /api/v1/files/{id}`. `seed` makes an edit reproducible on BFL (FLUX) models only; gpt-image and Gemini models ignore it. Credits are checked when the render runs, so insufficient credits arrive on the polled quest rather than as a 422. `POST /api/ai/edit-image` is a legacy alias of this endpoint. Authenticate with an API key (`b4m_live_`) or a JWT.
+     * @description Queues an edit of an existing image and returns the quest that will carry the result, before the render runs. Poll `GET /api/v1/quests/{id}` until `status` is `"done"` (see the `editImage200PollResult` schema). `image` is the URL of the source image; `fabFileIds` must name at least one file, and the first is the inpainting mask. `referenceImageFabFileIds` adds up to 15 style anchors after the source image, so the mask always applies to the source; only gpt-image models accept them, and sending any with another model is rejected with a 400 rather than ignored. Both id fields take ids from `POST /api/v1/files`: upload each file, poll `GET /api/v1/files/{id}` until `moderation_status` is `clean`, then pass its `id`. An id that is not yet `clean` fails the edit on the polled quest. `image` takes a URL rather than an id, so a source uploaded the same way is passed as its `download_url`, which must still be unexpired when the render runs. The edited image is not a file id: read it from `files[].url` on the polled quest, not from `GET /api/v1/files/{id}`. `seed` makes an edit reproducible on BFL (FLUX) models only; gpt-image and Gemini models ignore it. Credits are checked when the render runs, so insufficient credits arrive on the polled quest rather than as a 422. `organization_id` is accepted as an alias of `organizationId`, for callers used to the snake_case video and music bodies; `null` bills the personal account. `POST /api/ai/edit-image` is a legacy alias of this endpoint. Authenticate with an API key (`b4m_live_`) or a JWT.
      *
      *     Optional `callbackUrl`: an https URL that receives a signed POST when the quest settles (success, failure, or a stop; a failed render is `type: "error"` in the body, same as the poll). The body is the `GET /api/v1/quests/{id}` response. Headers: `X-Webhook-Event-ID` (the same on every attempt for one settlement; delivery is at-least-once, so dedupe on it, and a retried quest settles again under a new one), `X-Webhook-Delivery-ID` (unique per attempt), `X-Webhook-Timestamp` (unix seconds), `X-Webhook-Signature-256` (`sha256=` + hex HMAC-SHA256 of `<timestamp>.<raw body>` keyed with the API key's callback signing secret), and `X-Event-Type: quest.settled`. Delivery makes up to 5 attempts, retrying on a 5xx, 408, 429, timeout or network error - never on any other 4xx, and redirects are not followed; your endpoint must answer 2xx within 10 seconds. Requires API-key authentication and a signing secret on that key (returned once at key creation, or via `POST /api/user-api-keys/{id}/callback-secret`). A `callbackUrl` is rejected with a 400 when the request is not API-key authenticated, the key has no signing secret, the URL resolves to a private address, or the deployment does not deliver callbacks; a URL that is not https fails request validation with a 422. Polling still works whether or not `callbackUrl` is set.
      */
@@ -1803,7 +1803,7 @@ export interface components {
          * @enum {string}
          */
         reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
-        /** @description Ask a model that can think to think on this turn. On Claude, `reasoningEffort` then sets how much it thinks, and `budget_tokens` (default 16000, minimum 1024) sizes thinking on older Claude models. Ignored by models that cannot think, and on the direct Anthropic API when a json_schema `response_format` is served by a forced tool, which cannot run alongside thinking. */
+        /** @description Ask a model that can think to think on this turn. On Claude, `reasoningEffort` then sets how much it thinks, and `budget_tokens` (default 16000, minimum 1024, maximum 32000) sizes thinking on older Claude models. Ignored by models that cannot think, and on the direct Anthropic API when a json_schema `response_format` is served by a forced tool, which cannot run alongside thinking. */
         thinking?: {
           enabled: boolean;
           budget_tokens?: number;
@@ -1858,7 +1858,50 @@ export interface components {
           delivery?: 'inline';
           audio: string;
         };
+    synthesizeSpeechResponse400: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      provider?: 'openai' | 'elevenlabs';
+      /** @enum {string} */
+      errorCode?: 'insufficient_credits' | 'provider_not_configured' | 'provider_rejected';
+    };
     synthesizeSpeechResponse401: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      provider?: 'openai' | 'elevenlabs';
+      /** @enum {string} */
+      errorCode?: 'insufficient_credits' | 'provider_not_configured' | 'provider_rejected';
+    };
+    synthesizeSpeechResponse403: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
+      required_scopes?: string[];
+      /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
+      also_required_scopes?: string[];
+      /** @enum {string} */
+      errorCode?: 'billing_organization_mismatch';
+      /** @enum {string} */
+      provider?: 'openai' | 'elevenlabs';
+    };
+    synthesizeSpeechResponse404: {
       error: string;
       request_id?: string;
       /**
@@ -1938,6 +1981,8 @@ export interface components {
       stability?: number;
       similarityBoost?: number;
       languageCode?: string;
+      /** @description The organization to bill: one you belong to, or null for your personal credits. Omitted bills your personal credits, as this endpoint always has. An organization-billed API key always bills its own organization: omit this or set it to the key's organization; any other value, null included, is rejected with a 403 (`errorCode: billing_organization_mismatch`). */
+      organization_id?: string | null;
       /** @enum {string} */
       encoding?: 'binary' | 'base64';
       preview?: boolean;
@@ -2051,6 +2096,21 @@ export interface components {
           delivery?: 'inline';
           audio: string;
         };
+    generateSoundEffectResponse403: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
+      required_scopes?: string[];
+      /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
+      also_required_scopes?: string[];
+      /** @enum {string} */
+      errorCode?: 'billing_organization_mismatch';
+    };
     generateSoundEffectResponse413: {
       error: string;
     };
@@ -2082,6 +2142,8 @@ export interface components {
       durationSeconds?: number;
       promptInfluence?: number;
       format?: string;
+      /** @description The organization to bill: one you belong to, or null for your personal credits. Omitted bills your home organization, or your personal credits if you have none. An organization-billed API key always bills its own organization: omit this or set it to the key's organization; any other value, null included, is rejected with a 403 (`errorCode: billing_organization_mismatch`). */
+      organization_id?: string | null;
       /** @enum {string} */
       encoding?: 'binary' | 'base64';
       preview?: boolean;
@@ -2160,9 +2222,9 @@ export interface components {
      *           "replaced_by": null,
      *           "image": null,
      *           "credits_per_1m_tokens": {
-     *             "input": 6000,
-     *             "output": 30000,
-     *             "cached_input": 600
+     *             "input": 4000,
+     *             "output": 20000,
+     *             "cached_input": 400
      *           }
      *         },
      *         {
@@ -2511,6 +2573,8 @@ export interface components {
       /** @enum {string|null} */
       output_format?: 'png' | 'jpeg' | 'webp' | null;
       sessionName?: string;
+      /** @description Alias of `organizationId`, for callers used to the snake_case video and music bodies. Sending both with different values is a 422. */
+      organization_id?: string | null;
       /**
        * Format: uri
        * @description Optional https URL that receives one signed POST when the job settles (success or failure). Requires API-key authentication and a callback signing secret on that key. The body is the GET /api/v1/quests/{id} response. Verify it with the `X-Webhook-Signature-256` header: `sha256=` + hex HMAC-SHA256 of `<X-Webhook-Timestamp>.<raw body>` keyed with the signing secret. Polling keeps working either way.
@@ -2622,6 +2686,8 @@ export interface components {
       questId?: string;
       /** @description The organization to bill: one you belong to, or null for your personal credits. Omitted bills your home organization, or your personal credits if you have none. An organization-billed API key always bills its own organization: omit this or set it to the key's organization; any other value, null included, is rejected with a 403 (`errorCode: billing_organization_mismatch`). */
       organizationId?: string | null;
+      /** @description Alias of `organizationId`, for callers used to the snake_case video and music bodies. Sending both with different values is a 422. */
+      organization_id?: string | null;
       /** @default [] */
       fabFileIds?: string[];
       referenceImageFabFileIds?: string[];
@@ -6615,6 +6681,29 @@ export interface operations {
         };
         content?: never;
       };
+      /** @description The billing organization could not be resolved. An organization-billed API key bills an organization that no longer exists, or one its owner is no longer a member of; re-mint the key. */
+      400: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['synthesizeSpeechResponse400'];
+        };
+      };
       /** @description Missing/invalid credentials, no provider has a usable key (`provider_not_configured`), or the provider refused the key we sent and no alternate could stand in (`provider_rejected`). */
       401: {
         headers: {
@@ -6638,15 +6727,50 @@ export interface operations {
           'application/json': components['schemas']['synthesizeSpeechResponse401'];
         };
       };
-      /** @description The API key does not hold any of the required scopes. */
+      /** @description The API key lacks the `ai:generate` scope (`required_scopes` names it), or the billing organization names one you do not belong to (or is not a valid id), or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`). */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ScopeForbiddenResponse'];
+          'application/json': components['schemas']['synthesizeSpeechResponse403'];
+        };
+      };
+      /** @description A nonexistent `organization_id`, for an admin caller; for anyone else it is `403`. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['synthesizeSpeechResponse404'];
         };
       };
       /** @description The path does not serve this HTTP method. */
@@ -7108,7 +7232,7 @@ export interface operations {
         };
         content?: never;
       };
-      /** @description The billing user or organization could not be resolved. */
+      /** @description The billing user or organization could not be resolved. An organization-billed API key bills an organization that no longer exists, or one its owner is no longer a member of; re-mint the key. */
       400: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -7142,15 +7266,50 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key does not hold any of the required scopes. */
+      /** @description The API key lacks the `ai:generate` scope (`required_scopes` names it), or the billing organization names one you do not belong to (or is not a valid id), or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`). */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ScopeForbiddenResponse'];
+          'application/json': components['schemas']['generateSoundEffectResponse403'];
+        };
+      };
+      /** @description A nonexistent `organization_id`, for an admin caller; for anyone else it is `403`. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
         };
       };
       /** @description The path does not serve this HTTP method. */
@@ -7691,7 +7850,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description Request failed validation. */
+      /** @description The body is malformed, or it names the billing organization ambiguously. Both `organizationId` and `organization_id` sent with different values is a `422`; so is an empty or blank value for either (a blank is never treated as an omission, which would bill a different payer), and so is any other billing-org-shaped key such as `billing_org_id` or `payerOrgId`, which would otherwise be stripped and silently bill the caller's home organization. */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -7845,7 +8004,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description Request failed validation. */
+      /** @description The body is malformed, or it names the billing organization ambiguously. Both `organizationId` and `organization_id` sent with different values is a `422`; so is an empty or blank value for either (a blank is never treated as an omission, which would bill a different payer), and so is any other billing-org-shaped key such as `billing_org_id` or `payerOrgId`, which would otherwise be stripped and silently bill the caller's home organization. */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

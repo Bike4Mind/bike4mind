@@ -65,9 +65,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post<Request<{}
   // Acting-identity audit, on every terminal outcome. Records WHO asked for a post to
   // a shared channel and what came back - never the text, never the credential.
   //
-  // Deliberately a structured logger line rather than logAuditEvent(): that path keys
-  // on a registered analytics event union, and adding a family for this would mean
-  // touching the analytics payload registry. Worth revisiting if this endpoint gains a
+  // Deliberately a structured logger line rather than the admin audit writer: that writer
+  // takes only actions registered in the admin audit catalogue, and adding one for this
+  // would mean extending that catalogue. Worth revisiting if this endpoint gains a
   // compliance requirement.
   req.logger.info('[PrReport] send attempted', {
     audit: true,

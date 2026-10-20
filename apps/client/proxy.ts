@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { resolvePyodideMirrorOrigin } from '@client/app/utils/pyodideDistribution';
+import { getTrustedHeaderClientIp } from '@client/server/utils/trustedClientIpHeaders';
 import type { NextRequest } from 'next/server';
 
 // Blocks path traversal and null-byte injection before reaching the ISR cache layer (#7190)
@@ -13,6 +14,12 @@ const PDF_WORKER_PATH = /^\/pdf\.worker(-\d+\.\d+\.\d+)?\.min\.mjs$/;
 // sync with ORIGIN_VERIFY_HEADER in infra/router.ts. ORIGIN_VERIFY_SECRET is set only on
 // deployed stages (infra/web.ts), so self-host, local dev and tests are not gated.
 const ORIGIN_VERIFY_HEADER = 'x-b4m-origin-verify';
+
+// Never the raw x-forwarded-for: its leftmost token is client-controlled on every deploy, so a
+// [SECURITY] line would record whatever source the attacker chose.
+function logSourceIp(request: NextRequest): string {
+  return getTrustedHeaderClientIp(name => request.headers.get(name)) ?? 'unknown';
+}
 
 // Hand-rolled constant-time compare so this does not depend on node:crypto in the proxy runtime.
 function originVerified(request: NextRequest, secret: string): boolean {
@@ -63,7 +70,7 @@ export function proxy(request: NextRequest) {
     BACKSLASH_PATTERN.test(pathname)
   ) {
     console.warn(
-      `[SECURITY] Blocked path traversal attempt: ${request.method} ${pathname} from ${request.headers.get('x-forwarded-for') || 'unknown'}`
+      `[SECURITY] Blocked path traversal attempt: ${request.method} ${pathname} from ${logSourceIp(request)}`
     );
     return new NextResponse('Bad Request', { status: 400 });
   }
@@ -79,7 +86,7 @@ export function proxy(request: NextRequest) {
     decodeURIComponent(decoded);
   } catch {
     console.warn(
-      `[SECURITY] Blocked malformed URL encoding: ${request.method} ${pathname} from ${request.headers.get('x-forwarded-for') || 'unknown'}`
+      `[SECURITY] Blocked malformed URL encoding: ${request.method} ${pathname} from ${logSourceIp(request)}`
     );
     return new NextResponse('Bad Request', { status: 400 });
   }

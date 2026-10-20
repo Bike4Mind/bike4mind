@@ -17,8 +17,8 @@ import {
   formatPrimaryAnomaly,
 } from '@server/services/telemetryFingerprint';
 import { escapeMarkdown } from '@server/utils/markdownEscape';
-import { type IssueForDedup } from '@server/services/issueDedup';
-import { type Priority } from '@server/services/issueLabels';
+import { type IssueForDedup } from '@bike4mind/server-utils/services/issueDedup';
+import { type Priority } from '@bike4mind/server-utils/services/issueLabels';
 
 // ─── Schemas & Types ────────────────────────────────────────────────────────
 

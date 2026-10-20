@@ -1,11 +1,12 @@
-import { FabFile, imageModerationIncidentRepository } from '@bike4mind/database';
+import { FabFile } from '@bike4mind/database';
 import { moderateImageOrThrow } from '@bike4mind/services/llm/imageModerationGate';
 import { RekognitionImageModerationService } from '@bike4mind/utils/imageModeration';
 import type { Logger } from '@bike4mind/observability';
 import { getFilesStorage } from '@server/utils/storage';
-import { moderateUploadedFile } from '@server/s3/moderateUploadedFile';
+import { moderateUploadedFile } from '@bike4mind/server-utils/s3/moderateUploadedFile';
 import type { ModerateImportedKnowledgeFilesArgs } from '@server/s3/moderateImportedKnowledgeFiles';
 import type { Types } from 'mongoose';
+import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
 
 /**
  * The production claim/scan/persist wiring for imported-knowledge moderation, shared by the three
@@ -25,7 +26,7 @@ export function buildKnowledgeModerationDeps(
   const storage = getFilesStorage();
   return {
     service: new RekognitionImageModerationService(logger),
-    incidents: imageModerationIncidentRepository,
+    incidents: imageModerationIncidents,
     moderateImageOrThrow,
     moderate: moderateUploadedFile,
     logger,

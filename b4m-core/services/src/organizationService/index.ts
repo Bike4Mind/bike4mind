@@ -27,6 +27,8 @@ import type {
   OrganizationStorageReconciliation,
   ReconcileOrganizationStorageAdapters,
 } from './reconcileOrganizationStorage';
+import { getOrganizationStorageUsage, ORGANIZATION_STORAGE_UPLOADER_LIMIT } from './getOrganizationStorageUsage';
+import type { GetOrganizationStorageUsageAdapters } from './getOrganizationStorageUsage';
 import { resolveGroupTypesForUser } from './resolveGroupTypesForUser';
 import type { GroupTypeResolutionOverride } from './resolveGroupTypesForUser';
 import { canAdministerOrganization, isCurrentOrgMember } from './orgAuthority';
@@ -66,9 +68,12 @@ export {
   resolveCapabilitiesForUser,
   userHasCapability,
   reconcileOrganizationStorage,
+  getOrganizationStorageUsage,
+  ORGANIZATION_STORAGE_UPLOADER_LIMIT,
 };
 
 export type { SearchParameters };
 export type { OrganizationStorageReconciliation, ReconcileOrganizationStorageAdapters };
+export type { GetOrganizationStorageUsageAdapters };
 export type { GroupTypeResolutionOverride };
 export type { GroupTypeCapabilityMap };

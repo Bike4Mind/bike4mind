@@ -257,9 +257,9 @@ const handler = nextRouteForContract(chatContract, {
           prefetchedSession: invokeService.prefetchedSession,
           // Pass organization from invoke to skip redundant DB read
           prefetchedOrganization: invokeService.prefetchedOrganization,
-          // Premium overlay tool implementations: a session whose enabledTools
-          // include premium names (set server-side at create) needs the merge or
-          // those tools silently no-op on this synchronous path.
+          // Premium overlay tool implementations: a session whose effective enabledTools
+          // (its own, or its workspace's resolved at read time) include premium names needs
+          // the merge or those tools silently no-op on this synchronous path.
           externalTools: premiumLlmTools,
           abortSignal,
         }),

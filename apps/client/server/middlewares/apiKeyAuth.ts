@@ -7,7 +7,7 @@ import { logEvent } from '@server/utils/analyticsLog';
 import { UserApiKeyEvents } from '@bike4mind/common';
 import ability from '@server/auth/ability';
 import { Request, Response, NextFunction } from 'express';
-import { ApiKeyUsageManager } from '@server/managers/apiKeyUsageManager';
+import { ApiKeyUsageManager } from '@bike4mind/server-utils/managers/apiKeyUsageManager';
 import { getClientIp } from '@server/utils/ip';
 import { flattenHeaders } from '@server/utils/flattenHeaders';
 import { resolveApiKeyOwnerType } from '@server/utils/resolveApiKeyOwnerType';

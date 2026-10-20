@@ -5,7 +5,7 @@
  * Supports both GitHub App and Service Account PAT authentication.
  *
  * Security:
- * - Org owner or manager access required
+ * - Org owner or platform admin only - org managers are refused
  * - Credentials encrypted at rest using AES-256-GCM
  * - Masked credentials in responses (except one-time reveal on creation)
  * - Audit logging for all mutations
@@ -19,8 +19,8 @@
 import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
 import { orgGitHubConnectionRepository } from '@bike4mind/database';
-import { encryptSecret, isEncrypted, decryptSecret } from '@server/security/secretEncryption';
-import { verifyOrgAccess } from '@server/utils/orgAccess';
+import { encryptSecret, isEncrypted, decryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
+import { verifyOrgOwner } from '@server/utils/orgAccess';
 import { Config } from '@server/utils/config';
 import { BadRequestError, InternalServerError, NotFoundError } from '@bike4mind/utils';
 import { validatePrivateKeyFormat } from '@server/utils/validators';
@@ -159,8 +159,8 @@ const handler = baseApi()
     const orgId = req.query.id as string;
     const user = req.user!;
 
-    // owner/manager or admin only
-    await verifyOrgAccess(user, orgId);
+    // owner or platform admin only
+    await verifyOrgOwner(user, orgId);
 
     const parseResult = ConnectSchema.safeParse(req.body);
     if (!parseResult.success) {
@@ -253,9 +253,9 @@ const handler = baseApi()
     const orgId = req.query.id as string;
     const user = req.user!;
 
-    await verifyOrgAccess(user, orgId);
+    await verifyOrgOwner(user, orgId);
 
-    // findByOrganizationIdAny so managers can also see disabled connections
+    // findByOrganizationIdAny so the owner can also see disabled connections
     const connection = await orgGitHubConnectionRepository.findByOrganizationIdAny(orgId);
     if (!connection) {
       return res.json({ connected: false });
@@ -300,7 +300,7 @@ const handler = baseApi()
     const orgId = req.query.id as string;
     const user = req.user!;
 
-    await verifyOrgAccess(user, orgId);
+    await verifyOrgOwner(user, orgId);
 
     const parseResult = UpdateSchema.safeParse(req.body);
     if (!parseResult.success) {
@@ -409,7 +409,7 @@ const handler = baseApi()
     const orgId = req.query.id as string;
     const user = req.user!;
 
-    await verifyOrgAccess(user, orgId);
+    await verifyOrgOwner(user, orgId);
 
     // findByOrganizationIdAny so disabled connections can be deleted too
     const connection = await orgGitHubConnectionRepository.findByOrganizationIdAny(orgId);

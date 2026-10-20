@@ -140,7 +140,10 @@ export interface CitableSource {
      * takes its pins from here only - see WebSearchPlace.
      */
     place?: WebSearchPlace;
-    /** 1-based position of a forced-retrieval source, matching the [N] markers in the reply. */
+    /**
+     * 1-based position in promptMeta.citables, matching the [N] markers in the reply. Stamped by
+     * forced retrieval and by tools through ToolContext.numberCitables (indexed sessions only).
+     */
     citationIndex?: number;
     [key: string]: unknown;
   };

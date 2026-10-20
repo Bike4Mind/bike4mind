@@ -20,7 +20,7 @@ import {
 import { Logger } from '@bike4mind/observability';
 import { userService } from '@bike4mind/services';
 import { Config } from '@server/utils/config';
-import { closeConnection } from '@server/websocket/closeConnection';
+import { closeConnection } from '@bike4mind/server-utils/websocket/closeConnection';
 import { Resource } from 'sst';
 
 const logger = new Logger({ metadata: { service: 'realtimeConnectionSweep' } });

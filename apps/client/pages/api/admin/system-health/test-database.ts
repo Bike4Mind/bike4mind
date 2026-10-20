@@ -3,7 +3,7 @@ import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@server/utils/errors';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { logAuditEvent, AdminConfigAuditEvents } from '@server/utils/auditLog';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import mongoose from 'mongoose';
 
 export interface TestDatabaseResult {
@@ -39,15 +39,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       await mongoose.connection.db?.admin().ping();
       const latencyMs = Date.now() - startTime;
 
-      await logAuditEvent(
-        {
-          userId: req.user!.id,
-          action: AdminConfigAuditEvents.ADMIN_DATABASE_TEST,
-          ip: req.ip,
-          userAgent: req.headers['user-agent'] || 'unknown',
-        },
-        req.logger
-      );
+      await recordAdminActionFromRequest(req, {
+        action: 'system_health.test_run',
+        target: { kind: 'system', id: 'system-health', displayName: 'System health' },
+        summary: 'tested the database connection',
+        details: { testType: 'database', latencyMs },
+      });
 
       return res.json({
         success: true,

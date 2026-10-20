@@ -352,13 +352,13 @@ export async function decideVersion(
 
   const now = new Date();
   if (decision.action === 'approve') {
-    if (listing.visibility === 'public') {
-      if (version.riskTier === 'high' && !decision.ackHighRisk) {
-        throw new BadRequestError('Acknowledge the high-risk findings before approving a Public listing');
-      }
-      if (version.honestSummary?.descriptionMatches === false && !decision.ackMismatch) {
-        throw new BadRequestError('Acknowledge the description mismatch before approving a Public listing');
-      }
+    // Required at every visibility: an org admin can approve their own Organization listing, and the
+    // audit queue only catches that after it is live.
+    if (version.riskTier === 'high' && !decision.ackHighRisk) {
+      throw new BadRequestError('Acknowledge the high-risk findings before approving');
+    }
+    if (version.honestSummary?.descriptionMatches === false && !decision.ackMismatch) {
+      throw new BadRequestError('Acknowledge the description mismatch before approving');
     }
     // Stamp the version before publishing it, so a crash can never leave the listing pointing at a
     // version that is still `pending`. Approve and reject both stamp first, so they serialize here.

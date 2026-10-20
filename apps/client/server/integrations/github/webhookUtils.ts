@@ -6,7 +6,7 @@
  */
 
 import crypto from 'crypto';
-import { SignatureValidationResult } from './types';
+import { SignatureValidationResult } from '@bike4mind/server-utils/integrations/github/types';
 
 /**
  * Verify GitHub webhook signature using HMAC-SHA256

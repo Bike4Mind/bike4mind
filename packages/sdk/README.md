@@ -123,3 +123,7 @@ pnpm turbo:openapi:generate   # regenerates the spec, then the SDK types
 ```
 
 `pnpm --filter @bike4mind/sdk generate` regenerates only the SDK types from the current spec. CI fails when either is stale.
+
+## Publishing
+
+Released to npm from CI through npm trusted publishing (OIDC); no npm token is stored.

@@ -5,7 +5,7 @@ import { Logger } from '@bike4mind/observability';
 import type { Response } from 'express';
 import { authTokenGenerator } from './tokenGenerator';
 import { buildSessionDevice } from './sessionDevice';
-import { setRefreshCookie } from './refreshCookie';
+import { setRefreshCookie } from '@bike4mind/server-utils/auth/refreshCookie';
 
 interface RequestLike {
   headers: Record<string, string | string[] | undefined>;
@@ -27,6 +27,7 @@ export async function issueSessionForRequest(
     createdVia: AuthSessionCreatedVia;
     tokenVersion: number;
     impersonatedBy?: string | null;
+    clientId?: string | null;
     device?: IAuthSessionDevice;
   }
 ): Promise<{ accessToken: string; refreshToken: string; sid: string }> {
@@ -36,6 +37,7 @@ export async function issueSessionForRequest(
       createdVia: params.createdVia,
       tokenVersion: params.tokenVersion,
       impersonatedBy: params.impersonatedBy,
+      clientId: params.clientId,
       device: params.device ?? buildSessionDevice(req),
     },
     {

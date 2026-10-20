@@ -1,6 +1,8 @@
 import type { NextFunction, Request, Response } from 'express';
 import type { IUserDocument } from '@bike4mind/common';
 import { isMfaEnrollmentOwed } from '@server/auth/mfaEnforcement';
+import { logOAuthError } from '@server/auth/oauthErrorLog';
+import { resolveRouteTemplate } from '@server/utils/resolveRouteTemplate';
 
 export interface OAuthRoutePolicy {
   /**
@@ -25,10 +27,18 @@ export interface OAuthRoutePolicy {
  */
 export function oauthRouteGate(policy?: OAuthRoutePolicy) {
   return (req: Request, res: Response, next: NextFunction) => {
-    const grant = (req.user as { oauthGrant?: { scopes: string[] } } | undefined)?.oauthGrant;
+    const grant = (req.user as { oauthGrant?: { scopes: string[]; clientId?: string } } | undefined)?.oauthGrant;
     if (!grant) return next(); // not an OAuth token; unaffected
+    const logError = () =>
+      logOAuthError(req.logger, {
+        route: resolveRouteTemplate(req, { redactAmbiguousQuery: true }),
+        clientId: grant.clientId,
+        error: 'insufficient_scope',
+        status: 403,
+      });
 
     if (!policy?.oauthScopes) {
+      logError();
       return res.status(403).json({
         error: 'insufficient_scope',
         error_description: 'This route is not accessible with an OAuth access token',
@@ -37,6 +47,7 @@ export function oauthRouteGate(policy?: OAuthRoutePolicy) {
 
     const missing = policy.oauthScopes.filter(s => !grant.scopes.includes(s));
     if (missing.length) {
+      logError();
       return res
         .status(403)
         .json({ error: 'insufficient_scope', error_description: `Requires OAuth scope(s): ${missing.join(' ')}` });

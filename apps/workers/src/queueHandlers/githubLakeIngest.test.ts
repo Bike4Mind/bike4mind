@@ -84,6 +84,8 @@ const CONNECTION = {
   enabled: true,
   lastSyncedCommitSha: 'old-sha',
 };
+// A personal lake and a personal connection by the same user: the owners agree.
+const LAKE = { id: 'lake1', status: 'active', datalakeTag: 'datalake:lake1', createdByUserId: 'user1' };
 const httpError = (status: number, headers: Record<string, string> = {}) =>
   Object.assign(new Error(`HTTP ${status}`), { status, response: { headers } });
 const continuation = (over: Record<string, unknown> = {}) => ({
@@ -108,7 +110,7 @@ beforeEach(() => {
   });
   h.releaseSyncClaim.mockResolvedValue({ id: 'conn1' });
   h.recordSynced.mockResolvedValue({ id: 'conn1' });
-  h.lakeFindById.mockResolvedValue({ id: 'lake1', status: 'active', datalakeTag: 'datalake:lake1' });
+  h.lakeFindById.mockResolvedValue(LAKE);
   h.batchFindById.mockImplementation(async (id: string) => ({ id, dataLakeId: 'lake1', status: 'processing' }));
   h.userFindById.mockResolvedValue({ id: 'user1' });
   h.getSettingByName.mockResolvedValue(true);
@@ -208,12 +210,53 @@ describe('githubLakeIngest - gates', () => {
   });
 
   it('drops when the lake is no longer ingestable and settles a continuation batch', async () => {
-    h.lakeFindById.mockResolvedValue({ id: 'lake1', status: 'archived', datalakeTag: 'datalake:lake1' });
+    h.lakeFindById.mockResolvedValue({ ...LAKE, status: 'archived' });
     await run(continuation());
     expect(h.runGitHubLakeSlice).not.toHaveBeenCalled();
     expect(h.settle).toHaveBeenCalledWith('batch1', logger);
     // A soft-deleted or archived lake can come back, so its connection must survive.
     expect(h.releaseGitHubLakeConnection).not.toHaveBeenCalled();
+  });
+
+  describe('owner match between the connection and its lake', () => {
+    const MISMATCH_MESSAGE = 'This GitHub connection no longer matches its data lake owner. Reconnect the repository.';
+
+    const expectDroppedAsOwnerMismatch = () => {
+      expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'tok-claim', MISMATCH_MESSAGE, 'error');
+      expect(h.runGitHubLakeSlice).not.toHaveBeenCalled();
+      expect(h.getInstallationOctokit).not.toHaveBeenCalled();
+      expect(h.sendToQueue).not.toHaveBeenCalled();
+      expect(h.releaseGitHubLakeConnection).not.toHaveBeenCalled();
+    };
+
+    it("drops a personal connection whose lake is another user's", async () => {
+      h.lakeFindById.mockResolvedValue({ ...LAKE, createdByUserId: 'someone-else' });
+      await expect(run()).resolves.toBeUndefined();
+      expectDroppedAsOwnerMismatch();
+    });
+
+    it('drops a personal connection whose lake belongs to an org', async () => {
+      h.lakeFindById.mockResolvedValue({ ...LAKE, organizationId: 'orgA' });
+      await run();
+      expectDroppedAsOwnerMismatch();
+    });
+
+    it("drops an org connection whose lake is in another org, settling a continuation's batch", async () => {
+      h.connFindById.mockResolvedValue({ ...CONNECTION, organizationId: 'orgB' });
+      h.lakeFindById.mockResolvedValue({ ...LAKE, organizationId: 'orgA' });
+      h.adoptSyncClaim.mockResolvedValue({ token: 'tok-adopt', enabled: true });
+      await run(continuation());
+      expect(h.settle).toHaveBeenCalledWith('batch1', logger);
+      expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'tok-adopt', MISMATCH_MESSAGE, 'error');
+      expect(h.runGitHubLakeSlice).not.toHaveBeenCalled();
+    });
+
+    it('runs the slice when an org connection and its lake share the org', async () => {
+      h.connFindById.mockResolvedValue({ ...CONNECTION, organizationId: 'orgA' });
+      h.lakeFindById.mockResolvedValue({ ...LAKE, organizationId: 'orgA' });
+      await run();
+      expect(h.runGitHubLakeSlice).toHaveBeenCalled();
+    });
   });
 
   it('retires the connection and frees its repository claim when the target data lake is gone', async () => {

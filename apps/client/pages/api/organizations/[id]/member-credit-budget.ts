@@ -7,7 +7,7 @@ import { organizationService } from '@bike4mind/services';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { AdminOrgAuditEvents, logAuditEvent } from '@server/utils/auditLog';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { BadRequestError } from '@server/utils/errors';
 import { z } from 'zod';
 
@@ -30,16 +30,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).put(
       { db: { organizations: organizationRepository } }
     );
 
-    await logAuditEvent(
-      {
-        userId: req.user!.id,
-        action: AdminOrgAuditEvents.ORG_MEMBER_CREDIT_BUDGET_UPDATED,
-        ip: req.ip,
-        userAgent: req.headers['user-agent'] || 'unknown',
-        metadata: { organizationId, previous: change.previous, current: change.current },
-      },
-      req.logger
-    );
+    await recordAdminActionFromRequest(req, {
+      action: 'org.member_budget.updated',
+      actorScope: 'organization',
+      target: { kind: 'organization', id: organizationId, displayName: change.organization.name },
+      summary: 'updated the default member credit budget',
+      changes: [{ field: 'maxCreditsPerMember', before: change.previous, after: change.current }],
+    });
 
     return res.json(toSafeOrganization(change.organization, { userId: req.user!.id, isAdmin: req.user!.isAdmin }));
   })

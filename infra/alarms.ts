@@ -11,11 +11,22 @@
  * that touch alarm/dashboard code).
  */
 
-import { modelDiscoveryCronEnabled, modelDiscoveryFunction, modelDiscoveryStalenessFunction } from './cron';
+import {
+  modelDiscoveryCronEnabled,
+  modelDiscoveryFunction,
+  modelDiscoveryStalenessFunction,
+  voiceHoldSweepCron,
+} from './cron';
 import { whatsNewGenerationQueueSubscription, webhookDeliveryQueueSubscription } from './queues';
 import { subscribeQueryRoute, unsubscribeQueryRoute } from './subscriberFanout';
 import { dlqAlarmTopic } from './dlqAlarms';
-import { isMonitoredStage as _isMonitoredStage, QUESTS_NAMESPACE, QUEST_METRICS } from '@bike4mind/infra';
+import {
+  isMonitoredStage as _isMonitoredStage,
+  QUESTS_NAMESPACE,
+  QUEST_METRICS,
+  VOICE_NAMESPACE,
+  VOICE_METRICS,
+} from '@bike4mind/infra';
 
 const MONITORED_STAGES = ['dev', 'production'] as const;
 const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process.env.ENABLE_MONITORING);
@@ -1590,6 +1601,92 @@ if (isMonitoredStage) {
     alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'Quests',
+      Severity: 'High',
+    },
+  });
+
+  /**
+   * Alarm: Stale voice credit hold settled by the sweep
+   *
+   * The stale-hold sweep settled a voice hold no client ever ended. Steady state is 0: a
+   * non-zero count means the client hold leak is back. A single genuine browser crash can also
+   * trip it, hence Medium.
+   *
+   * Metric emitted by: apps/workers/src/cron/voiceHoldSweep.ts -> handler.
+   * Namespace: VOICE_NAMESPACE, dimensioned by Stage only (the handler emits { Stage }).
+   */
+  new aws.cloudwatch.MetricAlarm('voiceStaleHoldsSettled', {
+    name: `${$app.name}-${$app.stage}-voice-stale-holds-settled`,
+    alarmDescription:
+      'The stale voice hold sweep settled a credit hold no client ended: the voice hold leak may be back',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: VOICE_METRICS.HoldSweepSettled,
+    namespace: VOICE_NAMESPACE,
+    period: 300, // 5 minutes, one sweep run
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    dimensions: { Stage: $app.stage },
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'Voice',
+      Severity: 'Medium',
+    },
+  });
+
+  /**
+   * Alarm: Stale voice hold sweep cannot settle a hold
+   *
+   * A hold's settlement threw, or the whole run did (database unreachable, query error). The hold
+   * stays charged and the next run retries it, so failures in two of three runs are a stuck
+   * sweep, not a blip. Two of three rather than three in a row: a period with no run reads as
+   * not breaching and would reset the streak.
+   *
+   * Metric emitted by: apps/workers/src/cron/voiceHoldSweep.ts -> handler.
+   */
+  new aws.cloudwatch.MetricAlarm('voiceHoldSweepFailures', {
+    name: `${$app.name}-${$app.stage}-voice-hold-sweep-failures`,
+    alarmDescription: 'The stale voice hold sweep is failing to settle credit holds',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 3,
+    datapointsToAlarm: 2,
+    metricName: VOICE_METRICS.HoldSweepFailed,
+    namespace: VOICE_NAMESPACE,
+    period: 300, // 5 minutes
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    dimensions: { Stage: $app.stage },
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'Voice',
+      Severity: 'High',
+    },
+  });
+
+  /**
+   * Alarm: Stale voice hold sweep Lambda errors
+   *
+   * A timeout, OOM or init crash never reaches the handler's emit, so it shows up here and nowhere
+   * else. A run that throws also counts in voiceHoldSweepFailures. Same 2-of-3 rule as that alarm.
+   */
+  new aws.cloudwatch.MetricAlarm('voiceHoldSweepLambdaErrors', {
+    name: `${$app.name}-${$app.stage}-voice-hold-sweep-lambda-errors`,
+    alarmDescription: 'The stale voice hold sweep Lambda is erroring (timeout, OOM or crash)',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 3,
+    datapointsToAlarm: 2,
+    metricName: 'Errors',
+    namespace: 'AWS/Lambda',
+    period: 300,
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    dimensions: { FunctionName: voiceHoldSweepCron.nodes.function.name },
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'Voice',
       Severity: 'High',
     },
   });

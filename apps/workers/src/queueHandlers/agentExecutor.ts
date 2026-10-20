@@ -39,12 +39,12 @@ import {
   latticeModelRepository,
   skillRepository,
   usageEventRepository,
-  imageModerationIncidentRepository,
   lakeAccessEventRepository,
   mcpServerRepository,
   scopedSettingsRepository,
   cacheRepository,
 } from '@bike4mind/database';
+import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
 import {
   registerLambdaErrorHandlers,
   getSettingsByNames,
@@ -57,7 +57,12 @@ import {
 } from '@bike4mind/utils';
 import { ensureImageWithinDimensionLimit } from '@bike4mind/utils/imageResize';
 import { EmbeddingFactory, resolveEmbeddingWithKeylessFallback } from '@bike4mind/fab-pipeline';
-import { defaultEmbeddingModelForEnv, isSupportedEmbeddingModel, libraryFlagForScope } from '@bike4mind/common';
+import {
+  applyWorkspaceSessionSettings,
+  defaultEmbeddingModelForEnv,
+  isSupportedEmbeddingModel,
+  libraryFlagForScope,
+} from '@bike4mind/common';
 import { toRetrievalFilter } from '@bike4mind/utils/retrievalExclusion';
 import {
   getLlmByModel,
@@ -74,6 +79,7 @@ import { executionTurnAuth } from '@server/auth/turnAuth';
 import defineAbilitiesFor from '@server/auth/ability';
 import { missionChatTools, MISSION_CHAT_TOOL_NAMES } from '@workers/deepAgent/missionChatTools';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
+import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
 import {
   ReActAgent,
   type AgentCheckpoint,
@@ -954,11 +960,11 @@ async function processExecution(
     if (!user) throw new Error(`User ${execution.userId} not found`);
 
     // Validate session ownership
-    const session = await sessionRepository.findById(execution.sessionId);
-    if (!session) throw new Error(`Session ${execution.sessionId} not found`);
-    if (session.userId !== execution.userId) {
+    const loadedSession = await sessionRepository.findById(execution.sessionId);
+    if (!loadedSession) throw new Error(`Session ${execution.sessionId} not found`);
+    if (loadedSession.userId !== execution.userId) {
       logger.error('[Auth] Session ownership mismatch', {
-        sessionUserId: session.userId,
+        sessionUserId: loadedSession.userId,
         executionUserId: execution.userId,
       });
       await agentExecutionRepository.markFailed(executionId, {
@@ -967,6 +973,11 @@ async function processExecution(
       await sendWs('failed', { executionId, reason: 'unauthorized' });
       return;
     }
+    const session = await applyWorkspaceSessionSettings(
+      loadedSession,
+      { user, logger },
+      premiumWorkspaceSessionSettings
+    );
 
     // Load organization if applicable
     const organization = execution.organizationId
@@ -1683,7 +1694,7 @@ async function processExecution(
         // Audit trail for images blocked by the image_generation/edit_image tools'
         // moderation gate. The gate itself is unconditional (constructed
         // inline in the tool) - this only wires the incident record, not the block.
-        imageModerationIncidents: imageModerationIncidentRepository,
+        imageModerationIncidents,
         organizations: organizationRepository,
         lakeAccessEvents: lakeAccessEventRepository,
         scopedSettings: scopedSettingsRepository,
@@ -3346,9 +3357,9 @@ async function processSubagentDispatch(
     // Auth + ownership checks (mirror processExecution).
     const user = await User.findById(child.userId);
     if (!user) throw new Error(`User ${child.userId} not found`);
-    const session = await sessionRepository.findById(child.sessionId);
-    if (!session) throw new Error(`Session ${child.sessionId} not found`);
-    if (session.userId !== child.userId) {
+    const loadedSession = await sessionRepository.findById(child.sessionId);
+    if (!loadedSession) throw new Error(`Session ${child.sessionId} not found`);
+    if (loadedSession.userId !== child.userId) {
       await agentExecutionRepository.markFailed(childExecutionId, { message: 'Session ownership validation failed' });
       await sendWs('subagent_failed', {
         executionId: parentId,
@@ -3367,6 +3378,11 @@ async function processSubagentDispatch(
       });
       return;
     }
+    const session = await applyWorkspaceSessionSettings(
+      loadedSession,
+      { user, logger },
+      premiumWorkspaceSessionSettings
+    );
     const organization = child.organizationId ? await organizationRepository.findById(child.organizationId) : null;
 
     // Pre-flight credit check.
@@ -3562,7 +3578,7 @@ async function processSubagentDispatch(
         // Audit trail for images blocked by the image_generation/edit_image tools'
         // moderation gate. The gate itself is unconditional (constructed
         // inline in the tool) - this only wires the incident record, not the block.
-        imageModerationIncidents: imageModerationIncidentRepository,
+        imageModerationIncidents,
         organizations: organizationRepository,
         lakeAccessEvents: lakeAccessEventRepository,
         scopedSettings: scopedSettingsRepository,

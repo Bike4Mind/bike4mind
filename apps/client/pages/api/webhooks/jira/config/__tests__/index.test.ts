@@ -36,7 +36,7 @@ vi.mock('@bike4mind/database', () => ({
     deleteByWebhookConfig: h.deleteSubs,
   },
 }));
-vi.mock('@server/security/secretEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({
   encryptSecret: (value: string) => `enc(${value})`,
   decryptSecret: (value: string) => value.replace(/^enc\((.*)\)$/, '$1'),
 }));

@@ -16,7 +16,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError, ForbiddenError } from '@server/utils/errors';
 import { z } from 'zod';
 import { isValidObjectId } from '@server/utils/objectId';
-import { validateTemplate } from '@server/services/liveopsTriagePrompt';
+import { validateTemplate } from '@bike4mind/server-utils/services/liveopsTriagePrompt';
 import type { ILiveopsTriageConfigFieldChange } from '@bike4mind/database/infra';
 
 /**

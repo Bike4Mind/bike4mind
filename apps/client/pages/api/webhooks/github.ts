@@ -23,7 +23,11 @@ import { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
 import { Config } from '@server/utils/config';
 import { GitHubEvent } from '@server/integrations/github/GitHubEvent';
-import { GitHubEventType, WebhookProcessingResult, isValidGitHubEventType } from '@server/integrations/github/types';
+import {
+  GitHubEventType,
+  WebhookProcessingResult,
+  isValidGitHubEventType,
+} from '@bike4mind/server-utils/integrations/github/types';
 import {
   verifyGitHubSignature,
   getRawBody,

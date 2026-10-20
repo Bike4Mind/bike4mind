@@ -1,5 +1,6 @@
 // Tab identity and visibility rules for the organization detail route.
 
+import { isOrgOwnerOrPlatformAdmin } from '@bike4mind/common';
 import { hasOrgUpdateAccess } from '@client/app/utils/orgAccessGate';
 
 export enum OrganizationTabs {
@@ -16,15 +17,37 @@ export enum OrganizationTabs {
 }
 
 /**
- * Who may see the org's usage/spend dashboards and its feedback analysis. Mirrors the server gate
- * (apps/client/server/utils/orgAccess.ts, verifyOrgAccess): a platform admin, the org owner, or the
- * team manager - NOT every member holding manage permissions, so neither tab is offered to someone
- * the API would answer with a 404. Must stay in sync with that function.
+ * Who may see the org's feedback analysis. Mirrors the server gate the feedback-report routes run
+ * (apps/client/server/utils/orgAccess.ts, verifyOrgAccess): a platform admin, the org owner, or a
+ * manager - NOT every member holding manage permissions, so the tab is never offered to someone the
+ * API would answer with a 404. Must stay in sync with that function.
  *
  * Exported rather than left inline in $id.tsx so the spec can exercise the predicate the page
  * actually runs; a copy of the logic declared in the test passes whatever the page does.
  */
-export const canViewOrgUsage = hasOrgUpdateAccess;
+export const canViewOrgAnalysis = hasOrgUpdateAccess;
+
+/** `isOrgOwnerOrPlatformAdmin`, failing closed while the user or org is still loading. */
+const ownerTierGate = (
+  currentUser: { id: string; isAdmin?: boolean | null } | null | undefined,
+  organization: { userId: string } | null | undefined
+): boolean => !!currentUser && !!organization && isOrgOwnerOrPlatformAdmin(currentUser, organization);
+
+/**
+ * Who may see the Usage tab - the org's credit spend (`usage/index.ts`) and its ledger
+ * (`admin/transactions.ts`, `admin/session-usage.ts`), all `verifyOrgOwner`. Owner or platform
+ * admin; managers are refused.
+ */
+export const canViewOrgUsage = ownerTierGate;
+
+/**
+ * Who may see the Integrations, GitHub API and Webhooks tabs - Slack wiring
+ * (`integrations/slack/*`), the org's GitHub connection, keys and PAT (`organizations/[id]/github/*`)
+ * and webhook secrets (`organizations/[id]/webhooks/github*`), all `verifyOrgOwner`. Owner or
+ * platform admin. Connecting a GitHub source to a data lake does not go through these routes, so a
+ * manager can still do that.
+ */
+export const canManageOrgIntegrations = ownerTierGate;
 
 /**
  * Who may see the Billing & Subscription tab. Owner only - NOT `canManageOrg`, which is satisfied
@@ -54,6 +77,8 @@ export const canViewOrgBilling = (
 export interface OrgTabAccess {
   canManageOrg: boolean;
   canViewUsage: boolean;
+  canViewAnalysis: boolean;
+  canManageIntegrations: boolean;
   canManageGroups: boolean;
   canViewBilling: boolean;
 }
@@ -65,16 +90,14 @@ export interface OrgTabAccess {
  * is a redirect rather than only a conditional render.
  */
 export const resolveAccessibleTab = (selected: OrganizationTabs, access: OrgTabAccess): OrganizationTabs => {
-  const managePinned =
+  if (!access.canManageOrg && selected === OrganizationTabs.Settings) return OrganizationTabs.Overview;
+  const integrationPinned =
     selected === OrganizationTabs.Integrations ||
     selected === OrganizationTabs.GitHub ||
-    selected === OrganizationTabs.Webhooks ||
-    selected === OrganizationTabs.Settings;
-  if (!access.canManageOrg && managePinned) return OrganizationTabs.Overview;
-  // Usage and Analysis share one gate: both are owner/manager surfaces the API would 404 otherwise.
-  if (!access.canViewUsage && (selected === OrganizationTabs.Usage || selected === OrganizationTabs.Analysis)) {
-    return OrganizationTabs.Overview;
-  }
+    selected === OrganizationTabs.Webhooks;
+  if (!access.canManageIntegrations && integrationPinned) return OrganizationTabs.Overview;
+  if (!access.canViewUsage && selected === OrganizationTabs.Usage) return OrganizationTabs.Overview;
+  if (!access.canViewAnalysis && selected === OrganizationTabs.Analysis) return OrganizationTabs.Overview;
   if (!access.canManageGroups && selected === OrganizationTabs.Groups) return OrganizationTabs.Overview;
   // Billing has its own gate rather than riding canManageOrg: every action on it is owner-only.
   if (!access.canViewBilling && selected === OrganizationTabs.Billing) return OrganizationTabs.Overview;

@@ -1,5 +1,66 @@
 # @bike4mind/llm-adapters
 
+## 1.4.1
+
+### Patch Changes
+
+- Updated dependencies [[`174eeda`](https://github.com/Bike4Mind/bike4mind/commit/174eedabbbcafefe4282268d902efdc6ad12e125)]:
+  - @bike4mind/common@17.1.0
+
+## 1.4.0
+
+### Minor Changes
+
+- [#5117](https://github.com/Bike4Mind/bike4mind/pull/5117) [`ee518f5`](https://github.com/Bike4Mind/bike4mind/commit/ee518f5a07404395871bb0824b2038c842f51167) Thanks [@onoya](https://github.com/onoya)! - log per-round timing for LLM tool loops
+
+### Patch Changes
+
+- Updated dependencies [[`5598195`](https://github.com/Bike4Mind/bike4mind/commit/5598195554d31841e2a01afb4c1bb877bd315a58)]:
+  - @bike4mind/common@17.0.0
+
+## 1.3.0
+
+### Minor Changes
+
+- [#5052](https://github.com/Bike4Mind/bike4mind/pull/5052) [`868ff68`](https://github.com/Bike4Mind/bike4mind/commit/868ff68dc17ea92cf24292d6124d1757bdbe88a5) Thanks [@jjmarfa](https://github.com/jjmarfa)! - add gpt-5.4-mini dated snapshot to ChatModels
+
+### Patch Changes
+
+- [#5037](https://github.com/Bike4Mind/bike4mind/pull/5037) [`a467516`](https://github.com/Bike4Mind/bike4mind/commit/a467516775c4123320ca7079babce53aeec52869) Thanks [@julsanchez](https://github.com/julsanchez)! - hold and settle credits for research configs, thinking budgets and aborted turns
+
+- [#5040](https://github.com/Bike4Mind/bike4mind/pull/5040) [`0e98eee`](https://github.com/Bike4Mind/bike4mind/commit/0e98eee40237b240efbc0738585577a35179bacb) Thanks [@onoya](https://github.com/onoya)! - run adaptive Claude at low effort for simple queries
+
+- [#5057](https://github.com/Bike4Mind/bike4mind/pull/5057) [`8b32da9`](https://github.com/Bike4Mind/bike4mind/commit/8b32da9f4bea124592f83fc3a007df164139bc70) Thanks [@vinchi777](https://github.com/vinchi777)! - turn Ollama thinking off explicitly when the toggle is off
+
+- [#5064](https://github.com/Bike4Mind/bike4mind/pull/5064) [`c4792db`](https://github.com/Bike4Mind/bike4mind/commit/c4792db25539db71ca079fa91e6e2054626b7846) Thanks [@onoya](https://github.com/onoya)! - log Bedrock request failures by payload shape, never prompt text
+
+- [#5085](https://github.com/Bike4Mind/bike4mind/pull/5085) [`d299e48`](https://github.com/Bike4Mind/bike4mind/commit/d299e483d13449ccf91cd3471dde95f0e83cc487) Thanks [@erikbethke](https://github.com/erikbethke)! - align model prices with provider rate cards
+
+- [#5119](https://github.com/Bike4Mind/bike4mind/pull/5119) [`9da32d2`](https://github.com/Bike4Mind/bike4mind/commit/9da32d26f2a53fd0371c6a27c265ff000358619b) Thanks [@vinchi777](https://github.com/vinchi777)! - send replayed tool-call arguments to Ollama as an object
+
+- Updated dependencies [[`ffa4000`](https://github.com/Bike4Mind/bike4mind/commit/ffa4000fdd229f99fd8173ebc8c8bf257219773d), [`bddc668`](https://github.com/Bike4Mind/bike4mind/commit/bddc668291070d4cc3b53a91cb207be006092ee9), [`af39820`](https://github.com/Bike4Mind/bike4mind/commit/af3982067de72652fcbd7cb4c2e2cee74f4d1fc4), [`5fb3885`](https://github.com/Bike4Mind/bike4mind/commit/5fb38852c2d555a0189f02191a5cdc1d8774a57a), [`a467516`](https://github.com/Bike4Mind/bike4mind/commit/a467516775c4123320ca7079babce53aeec52869), [`92186a1`](https://github.com/Bike4Mind/bike4mind/commit/92186a1c8172c0520779beb2c00b4be3ee1fa327), [`a466c7f`](https://github.com/Bike4Mind/bike4mind/commit/a466c7fd0143132cade0db08a2b1039238a1d3f7), [`868ff68`](https://github.com/Bike4Mind/bike4mind/commit/868ff68dc17ea92cf24292d6124d1757bdbe88a5), [`73c675c`](https://github.com/Bike4Mind/bike4mind/commit/73c675c64e0be1189c0aa8e4c1c59a86ab388104), [`6f32290`](https://github.com/Bike4Mind/bike4mind/commit/6f322902280cea3fb7ed745e10ea49d47a186f8d), [`4b046c1`](https://github.com/Bike4Mind/bike4mind/commit/4b046c1a77916a76fadd7cacceb9b86f17d791c7), [`d299e48`](https://github.com/Bike4Mind/bike4mind/commit/d299e483d13449ccf91cd3471dde95f0e83cc487), [`71376ea`](https://github.com/Bike4Mind/bike4mind/commit/71376ea83c4435f465b88094c47611a69ec2b5b2), [`e898c7c`](https://github.com/Bike4Mind/bike4mind/commit/e898c7cc920e1d5c3262114651e7bf24f626eab2)]:
+  - @bike4mind/common@16.2.0
+
+## 1.2.1
+
+### Patch Changes
+
+- Updated dependencies [[`b85ca8b`](https://github.com/Bike4Mind/bike4mind/commit/b85ca8bc9edddc0c85be7403d6c99a44b537a3d3), [`e421f9a`](https://github.com/Bike4Mind/bike4mind/commit/e421f9aab9419637a5baefcddf2ffc7d9725bb0b), [`f144377`](https://github.com/Bike4Mind/bike4mind/commit/f144377e6e845c5e7c0e6d9787c4d5172f6ea3a1), [`57b5c68`](https://github.com/Bike4Mind/bike4mind/commit/57b5c689bfcab1d87f40aed39b17cd0566694c8d), [`2549cb9`](https://github.com/Bike4Mind/bike4mind/commit/2549cb91c4e7fb9064ed8db28bbaafc9b439bc61)]:
+  - @bike4mind/common@16.1.0
+
+## 1.2.0
+
+### Minor Changes
+
+- [#4654](https://github.com/Bike4Mind/bike4mind/pull/4654) [`57d3468`](https://github.com/Bike4Mind/bike4mind/commit/57d3468c31107cd5b5e7fa819d2ad8b224f02498) Thanks [@jebie](https://github.com/jebie)! - native tool search on direct Anthropic
+
+### Patch Changes
+
+- [#4983](https://github.com/Bike4Mind/bike4mind/pull/4983) [`d83ce3a`](https://github.com/Bike4Mind/bike4mind/commit/d83ce3a92238e271112af4a0546886ccdcfa27a6) Thanks [@jarlacut](https://github.com/jarlacut)! - pass abortSignal to the Gemini stream and emit usage on abort
+
+- Updated dependencies [[`57d3468`](https://github.com/Bike4Mind/bike4mind/commit/57d3468c31107cd5b5e7fa819d2ad8b224f02498), [`026c8d9`](https://github.com/Bike4Mind/bike4mind/commit/026c8d963affc7b032ebe8a2e2adc2a38f5d823c), [`167e186`](https://github.com/Bike4Mind/bike4mind/commit/167e186fb7ee88df6a07b6e3539a0a72c92e2f0f), [`077295b`](https://github.com/Bike4Mind/bike4mind/commit/077295b626863b0ecec8866d5c2abf8301fdb2f5), [`c380161`](https://github.com/Bike4Mind/bike4mind/commit/c380161df1b4bda5ba5af6bf0ee692689deed661), [`a64ce8a`](https://github.com/Bike4Mind/bike4mind/commit/a64ce8afc9d05d0b988d8eb336d588614893a90d), [`e774b4a`](https://github.com/Bike4Mind/bike4mind/commit/e774b4ab69877762a15cb7ac59edd082fdc93320), [`d42b0c6`](https://github.com/Bike4Mind/bike4mind/commit/d42b0c62ef7e22ea0c63cffb66ed05402a7d9178), [`ecad515`](https://github.com/Bike4Mind/bike4mind/commit/ecad5151d524c027fe8da233fecd30b833ac3c41), [`f33b246`](https://github.com/Bike4Mind/bike4mind/commit/f33b246c31f172ec274d965e4950856490f5c45b)]:
+  - @bike4mind/common@16.0.0
+
 ## 1.1.2
 
 ### Patch Changes

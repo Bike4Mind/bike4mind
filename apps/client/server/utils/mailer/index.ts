@@ -4,7 +4,14 @@ import { isPlaceholderValue } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
 import { postEmailMirrorToSlack } from '@server/integrations/slack/slack';
-import { extractBodyPreview, inferEmailType } from '@server/integrations/slack/emailMirror';
+import { extractBodyPreview, inferEmailType } from '@bike4mind/server-utils/integrations/slack/emailMirror';
+
+export interface SendEmailOptions {
+  /** Post the redacted copy to the email-audit Slack channel. Default true. */
+  mirror?: boolean;
+  /** Name the recipient in the delivery log lines. Default true. */
+  logRecipient?: boolean;
+}
 
 export interface EmailConfigStatus {
   configured: boolean;
@@ -162,8 +169,18 @@ export class MailService {
     }
   }
 
-  async sendEmail(to: string | string[], data: unknown) {
+  /**
+   * `mirror: false` skips the email-audit Slack copy and `logRecipient: false` keeps the address out
+   * of the delivery logs, for mail whose recipients or existence should stay in the mailbox.
+   */
+  async sendEmail(
+    to: string | string[],
+    data: unknown,
+    options: SendEmailOptions = {}
+  ): Promise<SMTPTransport.SentMessageInfo | false> {
+    const { mirror = true, logRecipient = true } = options;
     const recipient = to instanceof Array ? to.join(', ') : to;
+    const loggedRecipient = logRecipient ? recipient : '[redacted]';
     const subject = (data as { subject?: string })?.subject || 'unknown';
 
     // try/catch here (not delegating the error) so the API call still succeeds even when mail fails
@@ -174,25 +191,27 @@ export class MailService {
         ...(typeof data === 'object' && data),
       });
 
-      Logger.info(`Email sent successfully to ${recipient} (messageId: ${result.messageId})`);
+      Logger.info(`Email sent successfully to ${loggedRecipient} (messageId: ${result.messageId})`);
 
       // Mirror a redacted copy to the email-audit Slack channel. Awaited (not
       // fire-and-forget) so the POST completes before a Lambda freezes the
       // process; postEmailMirrorToSlack swallows its own errors, so this can
       // neither throw nor change the email result. bodyPreview is redacted in
       // extractBodyPreview - raw tokens never reach Slack.
-      await postEmailMirrorToSlack({
-        to: recipient,
-        subject,
-        emailType: inferEmailType(subject),
-        bodyPreview: extractBodyPreview(data),
-      });
+      if (mirror) {
+        await postEmailMirrorToSlack({
+          to: recipient,
+          subject,
+          emailType: inferEmailType(subject),
+          bodyPreview: extractBodyPreview(data),
+        });
+      }
 
       return result;
       // eslint-disable-next-line
     } catch (e: any) {
       Logger.error(
-        `Email delivery failed to ${recipient} (subject: ${subject}). ` +
+        `Email delivery failed to ${loggedRecipient} (subject: ${subject}). ` +
           `SMTP config: host=${Config.MAIL_HOST}, port=${Config.MAIL_PORT}. ` +
           `Error: ${e.message}`,
         e.code ? `SMTP code: ${e.code}` : '',

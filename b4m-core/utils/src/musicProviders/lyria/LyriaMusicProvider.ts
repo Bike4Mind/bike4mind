@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { MAX_MUSIC_OUTPUT_BYTES, MUSIC_MODEL_CATALOG, type ValidatedMusicRequest } from '@bike4mind/common';
+import {
+  LYRIC_LINE_TIMING_SOURCE,
+  MAX_MUSIC_OUTPUT_BYTES,
+  MUSIC_MODEL_CATALOG,
+  type ValidatedMusicRequest,
+} from '@bike4mind/common';
 import { readJson } from '../../generationProviders/http';
 import {
   classifyGeminiSubmitFailure,
@@ -67,11 +72,10 @@ export const buildLyriaInput = (request: ValidatedMusicRequest): string => {
 const modelOutputs = (interaction: Interaction): Content[] =>
   interaction.steps?.filter(step => step.type === 'model_output').flatMap(step => step.content ?? []) ?? [];
 
-// Lyria marks sections as `[[A0]]` lines and sung lines with a `[:]` prefix, sometimes with the `[start:end]` timing
-// in seconds filled in (`[3.4:6.9]`); an instrumental reads `<instrumental>`. The client strips the same timings from
-// songs stored before this (stripLyricTimestamps in apps/client/app/components/Media/generationFormat.ts).
+// Lyria marks sections as `[[A0]]` lines and sung lines with a timing prefix (LYRIC_LINE_TIMING_SOURCE); an
+// instrumental reads `<instrumental>`.
 const SECTION_MARKER = /^\[\[[A-Z]+\d+\]\]$/;
-const LINE_MARKER = /^\[(?:\d+(?:\.\d+)?:\d+(?:\.\d+)?|:)\]\s?/;
+const LINE_MARKER = new RegExp(String.raw`^${LYRIC_LINE_TIMING_SOURCE}\s?`);
 
 export const normalizeLyriaLyrics = (raw: string): string | undefined => {
   const sections: string[][] = [[]];

@@ -23,7 +23,8 @@ vi.mock('./plainFetch', () => ({
 const dnsLookup = vi.fn(async () => [{ address: '93.184.216.34', family: 4 }]);
 vi.mock('node:dns/promises', () => ({ lookup: (...args: unknown[]) => dnsLookup(...args) }));
 
-import { firecrawlFetch, truncationMarker, webFetchBody, webFetchTool } from './index';
+import { FirecrawlError } from '@mendable/firecrawl-js';
+import { firecrawlFetch, truncationMarker, UnsupportedScrapeTargetError, webFetchBody, webFetchTool } from './index';
 import { UnsafeScrapeTargetError } from './errors';
 import { createFirecrawlApp } from './firecrawlApp';
 import { plainFetchScrape } from './plainFetch';
@@ -242,6 +243,43 @@ describe('webFetchTool result + citable', () => {
     expect(citable.metadata.truncated).toBe(false);
     expect(citable.metadata.originalContentLength).toBe(10_000);
     expect(citable.metadata.contentLength).toBe(10_000);
+  });
+});
+
+describe('firecrawlFetch provider refusals', () => {
+  const unsupportedSite = () =>
+    new FirecrawlError(
+      'Failed to scrape URL. Status code: 403. Error: We apologize for the inconvenience but we do not support this site.',
+      403
+    );
+
+  it('rethrows a Firecrawl 403 as a 422 UnsupportedScrapeTargetError carrying the original', async () => {
+    const refusal = unsupportedSite();
+    scrapeUrl.mockRejectedValueOnce(refusal);
+
+    const error = await firecrawlFetch(adapters, 'https://www.example.com/post/1').catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(UnsupportedScrapeTargetError);
+    expect(error).toMatchObject({ statusCode: 422, cause: refusal });
+    expect((error as Error).message).toBe(
+      "This site can't be fetched: the web scraper does not support www.example.com."
+    );
+  });
+
+  it.each([401, 402, 429])('leaves a Firecrawl %i as is so it still reports as a server fault', async statusCode => {
+    const failure = new FirecrawlError(`Status code: ${statusCode}`, statusCode);
+    scrapeUrl.mockRejectedValueOnce(failure);
+
+    await expect(firecrawlFetch(adapters, 'https://example.com/doc')).rejects.toBe(failure);
+  });
+
+  it('still gives the web_fetch tool its web_search hint for an unsupported site', async () => {
+    scrapeUrl.mockRejectedValueOnce(unsupportedSite());
+
+    const { result } = await runTool('https://www.example.com/post/1');
+
+    expect(result).toContain('This site cannot be accessed by the web scraper');
+    expect(result).toContain('web_search');
   });
 });
 
@@ -541,5 +579,45 @@ describe('firecrawlFetch keyless plain-fetch fallback', () => {
     mockPlainFetch.mockRejectedValueOnce(new Error('totally unexpected parse failure'));
 
     await expect(runTool('https://example.com/doc')).rejects.toThrow('totally unexpected parse failure');
+  });
+});
+
+describe('web_fetch turn-wide citation numbering', () => {
+  async function runNumbered(numberCitables?: ToolContext['numberCitables']) {
+    scrapeMarkdown = 'page body';
+    const citables: CitableSource[] = [];
+    const statusUpdate = vi.fn(async (q: Parameters<ToolContext['statusUpdate']>[0]) => {
+      const emitted = q?.promptMeta?.citables as CitableSource[] | undefined;
+      if (emitted) citables.push(...emitted);
+    });
+    const context = { ...makeContext(statusUpdate), numberCitables } as ToolContext;
+    const result = await webFetchTool.implementation(context, {}).toolFn({ url: 'https://example.com/doc' });
+    return { result: result as string, citables };
+  }
+
+  it('leads the page with its turn number and ships the numbered citable', async () => {
+    const stamp: NonNullable<ToolContext['numberCitables']> = citables =>
+      citables.map((citable, position) => ({
+        ...citable,
+        metadata: { ...citable.metadata, citationIndex: position + 3 },
+      }));
+
+    const { result, citables } = await runNumbered(stamp);
+
+    expect(result.startsWith('This page is source [3].')).toBe(true);
+    expect(result).toContain('page body');
+    expect(citables).toHaveLength(1);
+    expect(citables[0].metadata?.citationIndex).toBe(3);
+  });
+
+  it.each([
+    ['numberCitables returns undefined', vi.fn(() => undefined)],
+    ['numberCitables is absent', undefined],
+  ])('leaves the output unnumbered when %s', async (_label, numberCitables) => {
+    const { result, citables } = await runNumbered(numberCitables);
+
+    expect(result).not.toContain('[3]');
+    expect(result).not.toContain('This page is source');
+    expect(citables[0].metadata?.citationIndex).toBeUndefined();
   });
 });

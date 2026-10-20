@@ -31,8 +31,9 @@ const PICKED_THING: Record<LakeSourceKind, string> = { github: 'repository', goo
 
 /**
  * The way back into an abandoned connect (cancelled at the provider, picker closed, grant expired):
- * an empty connector-fed org lake with no source attached. Targets the connector the lake was created
- * for (`pendingConnector`); an absent or unrecognized value falls back to GitHub.
+ * an empty connector-fed lake (org, or personal for its creator) with no source attached. Targets the
+ * connector the lake was created for (`pendingConnector`); an absent or unrecognized value falls back
+ * to GitHub.
  *
  * Shown only once both connection reads have resolved to "none" and the caller may connect (an
  * appointed org admin can read the status, but both connect routes are owner/manager only): a failed
@@ -59,7 +60,6 @@ export default function FinishSourceConnectBanner({
   const setGitHubConnectFailure = useDataLakeWizardStore(s => s.setGitHubConnectFailure);
   const source = getLakeSource(lake.pendingConnector === 'googleDrive' ? 'googleDrive' : 'github');
   const eligible =
-    !!lake.organizationId &&
     lake.origin === 'connector-fed' &&
     resolveLakeSourceAvailability(source, lake, isAdminFeatureEnabled).status === 'available';
 

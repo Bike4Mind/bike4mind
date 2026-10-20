@@ -130,7 +130,12 @@ function mockRes(): Res {
 
 const call = (body: Record<string, unknown>) => {
   const res = mockRes();
-  return (handler as unknown as (req: unknown, res: Res) => Promise<unknown>)({ body }, res).then(() => res);
+  const logger = { warn: vi.fn(), info: vi.fn() };
+  return (handler as unknown as (req: unknown, res: Res) => Promise<unknown>)({ body, logger }, res).then(() =>
+    Object.assign(res, {
+      oauthLines: logger.warn.mock.calls.map(c => String(c[0])).filter(l => l.startsWith('[OAUTH_ERROR]')),
+    })
+  );
 };
 
 const baseBody = {
@@ -656,5 +661,95 @@ describe('POST /api/oauth/token refresh_token grant', () => {
     expect(limit({ body: { grant_type: 'refresh_token' } })).toBe(1200);
     expect(limit({ body: { grant_type: 'authorization_code' } })).toBe(20);
     expect(limit({ body: {} })).toBe(20);
+  });
+});
+
+/**
+ * Every error response emits exactly one secret-free [OAUTH_ERROR] line naming the route, client,
+ * error code and status, so client failures are countable per client_id.
+ */
+describe('POST /api/oauth/token error logging', () => {
+  const SECRETS = { code: 'the-code', client_secret: 'top-secret-value', code_verifier: VALID_VERIFIER };
+  const body = { ...baseBody, ...SECRETS };
+  const confidential = { tokenEndpointAuthMethod: 'client_secret_post' };
+  const pub = { tokenEndpointAuthMethod: 'none' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (h.findById as Mock).mockResolvedValue({ id: 'u1', email: 'u@x.com', username: 'u', tokenVersion: 0 });
+    (h.validateClient as Mock).mockResolvedValue(pub);
+    (h.validateClientSecret as Mock).mockResolvedValue(confidential);
+    (h.verifyPkce as Mock).mockReturnValue(true);
+    (h.grantCovers as Mock).mockReturnValue(true);
+    seedValidCode(authCode('challenge'));
+  });
+
+  const cases: Array<[string, () => void, Record<string, unknown>, string, number, string?]> = [
+    ['schema failure', () => {}, { ...body, redirect_uri: 'not-a-url' }, 'invalid_request', 400],
+    ['unknown client', () => (h.validateClient as Mock).mockResolvedValue(null), body, 'unauthorized_client', 401],
+    [
+      'confidential secret failure',
+      () => {
+        (h.validateClient as Mock).mockResolvedValue(confidential);
+        (h.validateClientSecret as Mock).mockResolvedValue(null);
+      },
+      body,
+      'invalid_client',
+      401,
+    ],
+    ['code not found', () => (h.findValidCode as Mock).mockResolvedValue(null), body, 'invalid_grant', 400],
+    ['client mismatch', () => {}, { ...body, client_id: 'client-2' }, 'invalid_grant', 400, 'client-2'],
+    ['PKCE missing', () => (h.findValidCode as Mock).mockResolvedValue(authCode('')), body, 'invalid_grant', 400],
+    ['verifier mismatch', () => (h.verifyPkce as Mock).mockReturnValue(false), body, 'invalid_grant', 400],
+    ['lost consume race', () => (h.consumeValidCode as Mock).mockResolvedValue(null), body, 'invalid_grant', 400],
+    ['user not found', () => (h.findById as Mock).mockResolvedValue(null), body, 'invalid_grant', 400],
+    [
+      'relying-party consent missing',
+      () => {
+        (h.validateClient as Mock).mockResolvedValue({ ...pub, clientType: 'relying-party' });
+        (h.findGrant as Mock).mockResolvedValue(null);
+      },
+      body,
+      'access_denied',
+      400,
+    ],
+    ['unsupported grant_type', () => {}, { ...body, grant_type: 'password' }, 'unsupported_grant_type', 400],
+  ];
+
+  it.each(cases)('%s logs one [OAUTH_ERROR] line', async (_name, setup, reqBody, error, status, client) => {
+    setup();
+    const res = await call(reqBody);
+
+    expect(res.statusCode).toBe(status);
+    expect(res.body?.error).toBe(error);
+    expect(res.oauthLines).toEqual([
+      `[OAUTH_ERROR] route=oauth/token client=${client ?? 'client-1'} error=${error} status=${status}`,
+    ]);
+    for (const secret of [...Object.values(SECRETS), 'id.jwt', 'a.jwt', 'r.jwt', 'oauth.jwt']) {
+      expect(res.oauthLines[0]).not.toContain(secret);
+    }
+  });
+
+  it('records the minting client on a first-party session and logs nothing', async () => {
+    const res = await call(body);
+
+    expect(res.body?.access_token).toBe('a.jwt');
+    expect(h.issueSessionForRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      'u1',
+      expect.objectContaining({ createdVia: 'oauth-token', clientId: 'client-1' })
+    );
+    expect(res.oauthLines).toEqual([]);
+  });
+
+  it('issues no session for a relying party', async () => {
+    (h.validateClient as Mock).mockResolvedValue({ ...pub, clientType: 'relying-party' });
+    (h.findGrant as Mock).mockResolvedValue({ scopes: ['openid'] });
+
+    const res = await call(body);
+
+    expect(res.body?.access_token).toBe('oauth.jwt');
+    expect(h.issueSessionForRequest).not.toHaveBeenCalled();
+    expect(res.oauthLines).toEqual([]);
   });
 });

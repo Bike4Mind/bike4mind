@@ -10,12 +10,17 @@ import { createMocks } from 'node-mocks-http';
 const mockRefs = vi.hoisted(() => ({
   getHandler: null as null | ((req: any, res: any) => unknown),
   putHandler: null as null | ((req: unknown, res: unknown) => unknown),
+  postHandler: null as null | ((req: unknown, res: unknown) => unknown),
+  deleteHandler: null as null | ((req: unknown, res: unknown) => unknown),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
   const chain: any = {
     use: () => chain,
-    post: () => chain,
+    post: (fn: (req: unknown, res: unknown) => unknown) => {
+      mockRefs.postHandler = fn;
+      return chain;
+    },
     get: (fn: any) => {
       mockRefs.getHandler = fn;
       return chain;
@@ -24,7 +29,10 @@ vi.mock('@server/middlewares/baseApi', () => {
       mockRefs.putHandler = fn;
       return chain;
     },
-    delete: () => chain,
+    delete: (fn: (req: unknown, res: unknown) => unknown) => {
+      mockRefs.deleteHandler = fn;
+      return chain;
+    },
   };
   return { baseApi: () => chain };
 });
@@ -41,7 +49,7 @@ vi.mock('@server/integrations/github/webhookUtils', () => ({
   generateWebhookToken: () => 'token',
   generateWebhookSecret: () => 'secret',
 }));
-vi.mock('@server/security/secretEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({
   encryptSecret: (s: string) => s,
   decryptSecret: (s: string) => s,
 }));
@@ -133,6 +141,29 @@ describe('PUT /api/organizations/[id]/webhooks/github', () => {
     expect(orgWebhookConfigRepository.update.mock.calls[0][0]).toStrictEqual({
       id: 'cfg1',
       subscribedEvents: ['push'],
+    });
+  });
+});
+
+// The webhook secret and routing token are owner-only: a manager is refused (404, as for a
+// stranger) on every method, before any config is read or written.
+describe('webhook config is owner-only', () => {
+  const orgs = {
+    'a roster manager': { userId: 'owner1', adminUserIds: ['mgr'], users: [{ userId: 'mgr' }] },
+    'the legacy managerId': { userId: 'owner1', managerId: 'mgr' },
+  };
+  const methods = ['getHandler', 'postHandler', 'putHandler', 'deleteHandler'] as const;
+
+  describe.each(Object.entries(orgs))('%s', (_label, org) => {
+    it.each(methods)('refuses %s with no config read or write', async handlerKey => {
+      organizationRepository.findById.mockResolvedValue({ id: ORG_ID, ...org });
+      const { req, res } = createMocks({ method: 'GET', query: { id: ORG_ID }, body: { repos: [] } });
+      Object.assign(req, { user: { id: 'mgr', isAdmin: false } });
+
+      await expect(Promise.resolve(mockRefs[handlerKey]!(req, res))).rejects.toThrow(/not found/i);
+
+      expect(orgWebhookConfigRepository.findByOrganizationId).not.toHaveBeenCalled();
+      expect(orgWebhookConfigRepository.update).not.toHaveBeenCalled();
     });
   });
 });

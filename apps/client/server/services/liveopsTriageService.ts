@@ -31,7 +31,11 @@ import {
 import type { IssueTrackerService, ExistingIssue as TrackerExistingIssue, CreateIssueParams } from './issueTrackers';
 import { SlackClient, SlackMessage } from '@bike4mind/slack';
 import { GitHubService } from './githubService';
-import { getDefaultTemplateString, interpolateTemplate, PRIORITY_GUIDELINES } from './liveopsTriagePrompt';
+import {
+  getDefaultTemplateString,
+  interpolateTemplate,
+  PRIORITY_GUIDELINES,
+} from '@bike4mind/server-utils/services/liveopsTriagePrompt';
 import { getNextScheduledRun } from '@client/shared/liveopsScheduleUtils';
 import {
   generateFingerprint,
@@ -44,7 +48,7 @@ import {
   formatSemanticFingerprintComment,
   extractSemanticFingerprintFromIssueBody,
 } from './liveopsFingerprint';
-import { REQUIRED_LIVEOPS_LABELS, type GitHubLabelDef } from './issueLabels';
+import { REQUIRED_LIVEOPS_LABELS, type GitHubLabelDef } from '@bike4mind/server-utils/services/issueLabels';
 
 /**
  * Slack Block Kit types for proper type safety

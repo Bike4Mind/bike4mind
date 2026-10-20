@@ -95,7 +95,7 @@ test.describe('Notebook CRUD', () => {
 
       await chatPage.sendMessageAndWaitForResponse('What is the capital of France?');
 
-      await verifyAnswers('Paris', { selector: '[data-testid="ai-response"]' });
+      await verifyAnswers('Paris', { selector: '[data-testid="ai-response-body"]' });
     });
 
     await test.step('rename a notebook', async () => {

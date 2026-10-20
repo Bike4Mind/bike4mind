@@ -1,6 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { ForbiddenError } from '@bike4mind/common';
+import { BadRequestError, NotFoundError, UnprocessableEntityError } from '@bike4mind/utils';
+import {
+  EditImageRequestBodySchema,
+  ForbiddenError,
+  GenerateImageIvokeParamsSchema,
+  editImageContract,
+  generateImageContract,
+} from '@bike4mind/common';
 import type { IUserDocument } from '@bike4mind/common';
 
 const mockFindById = vi.fn();
@@ -21,6 +27,8 @@ vi.mock('../resolveActiveOrg', () => ({
 }));
 
 import {
+  assertNoStrayBillingOrgKeys,
+  resolveBillingOrgInput,
   verifyOrgAccess,
   verifyOrgAdminRead,
   verifyOrgOwner,
@@ -77,6 +85,15 @@ describe('verifyOrgOwner', () => {
   it('404s the team manager, who passes verifyOrgAccess but does not own the billing', async () => {
     await expect(verifyOrgOwner({ id: MANAGER, isAdmin: false }, ORG)).rejects.toBeInstanceOf(NotFoundError);
     await expect(verifyOrgAccess({ id: MANAGER, isAdmin: false }, ORG)).resolves.toBe(org);
+  });
+
+  // Same boundary for an adminUserIds manager on the roster: the owner-only routes (spend,
+  // integration secrets) refuse them although every verifyOrgAccess route admits them.
+  it('404s an org manager on the roster, who passes verifyOrgAccess', async () => {
+    const rostered = { ...org, adminUserIds: [APPOINTED_ADMIN], users: [{ userId: APPOINTED_ADMIN }] };
+    mockFindById.mockResolvedValue(rostered);
+    await expect(verifyOrgOwner({ id: APPOINTED_ADMIN, isAdmin: false }, ORG)).rejects.toBeInstanceOf(NotFoundError);
+    await expect(verifyOrgAccess({ id: APPOINTED_ADMIN, isAdmin: false }, ORG)).resolves.toBe(rostered);
   });
 
   it('404s a non-owner (same error as missing, to prevent enumeration)', async () => {
@@ -174,8 +191,19 @@ describe('verifyOrgAdminRead', () => {
     await expect(verifyOrgAdminRead(user, ORG)).resolves.toEqual({ org: orgWithAdmins, canManage: true });
   });
 
-  // The whole point of the tier: the appointed admin passes the read gate but not verifyOrgAccess.
-  it('admits an appointed admin for reading but reports canManage false', async () => {
+  // A manager with a current users[] row operates too: canManage and the write gate both admit them.
+  it('reports canManage for a manager on the roster, whom verifyOrgAccess also admits', async () => {
+    const rostered = { ...orgWithAdmins, users: [{ userId: APPOINTED_ADMIN }] };
+    mockFindById.mockResolvedValue(rostered);
+    await expect(verifyOrgAdminRead({ id: APPOINTED_ADMIN, isAdmin: false }, ORG)).resolves.toEqual({
+      org: rostered,
+      canManage: true,
+    });
+    await expect(verifyOrgAccess({ id: APPOINTED_ADMIN, isAdmin: false }, ORG)).resolves.toBe(rostered);
+  });
+
+  // The whole point of the tier: a manager whose users[] row has lapsed may read but not operate.
+  it('admits a manager with no users[] row for reading but reports canManage false', async () => {
     await expect(verifyOrgAdminRead({ id: APPOINTED_ADMIN, isAdmin: false }, ORG)).resolves.toEqual({
       org: orgWithAdmins,
       canManage: false,
@@ -389,5 +417,83 @@ describe('resolveBillingOrgId', () => {
   it('rethrows a non-authorization error from the fallback path (transient DB failure -> 5xx)', async () => {
     mockResolveActiveOrg.mockRejectedValue(new Error('db down'));
     await expect(resolveBillingOrgId(asReq({ id: OWNER, organizationId: ORG }), undefined)).rejects.toThrow('db down');
+  });
+});
+
+describe('resolveBillingOrgInput', () => {
+  it.each([
+    [{ organizationId: 'orgA' }, 'orgA'],
+    [{ organization_id: 'orgA' }, 'orgA'],
+    [{ organizationId: null }, null],
+    [{ organization_id: null }, null],
+    [{}, undefined],
+    [{ organizationId: 'orgA', organization_id: 'orgA' }, 'orgA'],
+    [{ organizationId: null, organization_id: null }, null],
+  ])('maps %j to %j', (body, expected) => {
+    expect(resolveBillingOrgInput(body)).toBe(expected);
+  });
+
+  it.each([
+    { organizationId: 'orgA', organization_id: 'orgB' },
+    { organizationId: 'orgA', organization_id: null },
+    { organizationId: null, organization_id: 'orgA' },
+  ])('rejects a disagreement (422) for %j', body => {
+    expect(() => resolveBillingOrgInput(body)).toThrow(UnprocessableEntityError);
+    expect(() => resolveBillingOrgInput(body)).toThrow(/disagree/);
+  });
+});
+
+describe('assertNoStrayBillingOrgKeys', () => {
+  it.each([
+    'organizationID',
+    'billing_org_id',
+    'orgId',
+    'billingOrganizationId',
+    'billingAccountId',
+    'billing_account_id',
+    'billedOrganizationId',
+    'billed_organization_id',
+    'billedTo',
+    'payerOrgId',
+    'payer_org_id',
+    'payerAccountId',
+    'payer_id',
+    'targetOrganizationId',
+    'ownerOrganizationId',
+    'organizationIds',
+    'org_id_v2',
+  ])('rejects %s (422)', key => {
+    expect(() => assertNoStrayBillingOrgKeys({ prompt: 'x', [key]: 'orgA' })).toThrow(UnprocessableEntityError);
+  });
+
+  it.each(['organizationId', 'organization_id'])('accepts %s', key => {
+    expect(() => assertNoStrayBillingOrgKeys({ [key]: 'orgA' })).not.toThrow();
+  });
+
+  it.each([null, undefined, 'str', 5])('ignores non-object body %s', body => {
+    expect(() => assertNoStrayBillingOrgKeys(body)).not.toThrow();
+  });
+
+  it('flags no ordinary field of either image request body (substring match must not over-reject)', () => {
+    const shapeOf = (s: unknown) => {
+      const z = s as { shape?: object; _def?: { schema?: { shape?: object } } };
+      return Object.keys(z.shape ?? z._def?.schema?.shape ?? {});
+    };
+    const sources = {
+      GenerateImageIvokeParamsSchema: shapeOf(GenerateImageIvokeParamsSchema),
+      EditImageRequestBodySchema: shapeOf(EditImageRequestBodySchema),
+      generateImageContract: shapeOf(generateImageContract.request),
+      editImageContract: shapeOf(editImageContract.request),
+    };
+    // An unreadable wrapper yields [] and would otherwise drop out of the scan silently.
+    for (const [name, keys] of Object.entries(sources)) {
+      expect(keys.length, `${name} shape unreadable`).toBeGreaterThan(0);
+    }
+    const body = Object.fromEntries(
+      Object.values(sources)
+        .flat()
+        .map(k => [k, 1])
+    );
+    expect(() => assertNoStrayBillingOrgKeys(body)).not.toThrow();
   });
 });

@@ -1,12 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { findStaleVoiceHolds, claimVoiceHold, incrementCredits, createTransaction, connectDB } = vi.hoisted(() => ({
-  findStaleVoiceHolds: vi.fn(),
-  claimVoiceHold: vi.fn(),
-  incrementCredits: vi.fn(),
-  createTransaction: vi.fn(),
-  connectDB: vi.fn(async () => undefined),
-}));
+const { findStaleVoiceHolds, claimVoiceHold, incrementCredits, createTransaction, connectDB, emitMetrics } = vi.hoisted(
+  () => ({
+    findStaleVoiceHolds: vi.fn(),
+    claimVoiceHold: vi.fn(),
+    incrementCredits: vi.fn(),
+    createTransaction: vi.fn(),
+    connectDB: vi.fn(async () => undefined),
+    emitMetrics: vi.fn(async () => undefined),
+  })
+);
 
 vi.mock('@bike4mind/database', () => ({
   connectDB,
@@ -22,6 +25,7 @@ vi.mock('@bike4mind/observability', () => ({
     error() {}
   },
 }));
+vi.mock('@server/utils/cloudwatch', () => ({ emitMetrics }));
 vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://host/%STAGE%' } }));
 vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
 
@@ -37,7 +41,7 @@ import {
   MAX_SESSION_SECONDS,
   REALTIME_VOICE_HOLD_SECONDS,
   realtimeCreditsFloor,
-} from '@server/voice/voiceSessionLimits';
+} from '@bike4mind/server-utils/voice/voiceSessionLimits';
 
 const NOW = new Date('2026-10-11T12:00:00Z');
 const STARTED = new Date(NOW.getTime() - 60 * 60 * 1000);
@@ -180,5 +184,50 @@ describe('voiceHoldSweep', () => {
     await handler();
     expect(connectDB).toHaveBeenCalledWith('mongodb://host/test');
     expect(findStaleVoiceHolds).toHaveBeenCalledTimes(1);
+  });
+
+  // The alarms in infra/alarms.ts match on this namespace, these names and exactly { Stage }.
+  it('publishes the settled and failed counts for the stage alarms', async () => {
+    findStaleVoiceHolds.mockResolvedValue([hold('a'), hold('b')]);
+    incrementCredits.mockRejectedValueOnce(new Error('db blip'));
+
+    await handler();
+
+    expect(emitMetrics).toHaveBeenCalledTimes(1);
+    expect(emitMetrics).toHaveBeenCalledWith('Lumina5/Voice', [
+      { name: 'HoldSweepSettled', value: 1, dimensions: { Stage: 'test' }, unit: 'Count' },
+      { name: 'HoldSweepFailed', value: 1, dimensions: { Stage: 'test' }, unit: 'Count' },
+    ]);
+  });
+
+  it('reports a run that fails before reaching the holds as a failure, and still throws', async () => {
+    findStaleVoiceHolds.mockRejectedValueOnce(new Error('query failed'));
+
+    await expect(handler()).rejects.toThrow('query failed');
+
+    expect(emitMetrics).toHaveBeenCalledWith('Lumina5/Voice', [
+      { name: 'HoldSweepSettled', value: 0, dimensions: { Stage: 'test' }, unit: 'Count' },
+      { name: 'HoldSweepFailed', value: 1, dimensions: { Stage: 'test' }, unit: 'Count' },
+    ]);
+  });
+
+  it('reports a run that cannot reach the database as a failure, and still throws', async () => {
+    connectDB.mockRejectedValueOnce(new Error('database unreachable'));
+
+    await expect(handler()).rejects.toThrow('database unreachable');
+
+    expect(findStaleVoiceHolds).not.toHaveBeenCalled();
+    expect(emitMetrics).toHaveBeenCalledWith('Lumina5/Voice', [
+      { name: 'HoldSweepSettled', value: 0, dimensions: { Stage: 'test' }, unit: 'Count' },
+      { name: 'HoldSweepFailed', value: 1, dimensions: { Stage: 'test' }, unit: 'Count' },
+    ]);
+  });
+
+  it('leaves metrics to the hosted handler, so the self-host twin never calls CloudWatch', async () => {
+    findStaleVoiceHolds.mockResolvedValue([hold('a')]);
+
+    await runVoiceHoldSweep(NOW);
+
+    expect(emitMetrics).not.toHaveBeenCalled();
   });
 });

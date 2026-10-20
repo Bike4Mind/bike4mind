@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { CREDITS_PER_USD_COST } from '../pricing';
+import { CREDITS_PER_USD_COST, formatUsdPerCredit, MIN_PRICE_PER_CREDIT_USD } from '../pricing';
 import { CustomMcpPrivateCidrSchema, McpHostPatternListSchema } from './customMcpHosts';
 import {
   DEFAULT_PASSAGE_TOKEN_TARGET,
@@ -341,6 +341,7 @@ export const SettingKeySchema = z.enum([
   'BedrockGuardrailId',
   'BedrockGuardrailVersion',
   'ImageModerationEnabled',
+  'ImageModerationReviewerEmails',
   'tagLineMain',
   'tagLineSub',
   'defaultTags',
@@ -2865,6 +2866,18 @@ export const settingsMap = {
       'Whether to run generated images through content moderation (Rekognition) and block explicit content. Legal-safety control (#9776) — default ON.',
     category: 'AI Moderation',
   }),
+  ImageModerationReviewerEmails: makeObjectSetting<string[]>({
+    key: 'ImageModerationReviewerEmails',
+    name: 'Image Moderation Reviewer Emails',
+    defaultValue: [],
+    description:
+      'Email addresses alerted when an image moderation incident needs review, one per line. The alert carries incident metadata and an admin link only, never the image or user content. Empty sends no alert.',
+    category: 'AI Moderation',
+    // Plain strings, not z.email(): one malformed stored entry must not fail the whole list and
+    // silence every reviewer. The update route refuses invalid entries; readers filter with
+    // partitionEmailList.
+    schema: z.array(z.string()),
+  }),
   SkillMarketHighRiskTools: makeStringSetting({
     key: 'SkillMarketHighRiskTools',
     name: 'Skill Market High-Risk Tools',
@@ -3020,7 +3033,7 @@ export const settingsMap = {
     userReadable: true,
     name: 'Price Per Credit',
     defaultValue: 50,
-    description: 'The price per credit for purchasing credits.',
+    description: `The price in USD of one credit bought pay-as-you-go. Cannot be set below ${formatUsdPerCredit(MIN_PRICE_PER_CREDIT_USD)}, the per-credit sale price including markup.`,
     category: 'Users',
     group: API_SERVICE_GROUPS.CREDITS.id,
     order: 1,

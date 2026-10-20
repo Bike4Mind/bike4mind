@@ -31,11 +31,8 @@ const setMemberCreditOverride = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/services', () => ({ organizationService: { setMemberCreditOverride } }));
 vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: { marker: 'orgRepo' } }));
 vi.mock('@bike4mind/database/auth', () => ({ userRepository: { marker: 'userRepo' } }));
-const logAuditEvent = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-vi.mock('@server/utils/auditLog', () => ({
-  AdminOrgAuditEvents: { ORG_MEMBER_CREDIT_BUDGET_UPDATED: 'ORG_MEMBER_CREDIT_BUDGET_UPDATED' },
-  logAuditEvent,
-}));
+const recordAdminActionFromRequest = vi.hoisted(() => vi.fn().mockResolvedValue(null));
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest }));
 
 import '@pages/api/organizations/[id]/members/[userId]/credit-budget';
 
@@ -68,12 +65,15 @@ describe('PUT /api/organizations/[id]/members/[userId]/credit-budget', () => {
       { organizationId: 'org1', userId: 'member1', maxCredits: 0 },
       { db: { organizations: { marker: 'orgRepo' }, users: { marker: 'userRepo' } } }
     );
-    expect(logAuditEvent).toHaveBeenCalledWith(
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
       expect.objectContaining({
-        action: 'ORG_MEMBER_CREDIT_BUDGET_UPDATED',
-        metadata: { organizationId: 'org1', memberUserId: 'member1', previous: 25, current: 0 },
-      }),
-      undefined
+        action: 'org.member_budget.updated',
+        actorScope: 'organization',
+        target: expect.objectContaining({ kind: 'organization', id: 'org1' }),
+        changes: [{ field: 'maxCredits', before: 25, after: 0 }],
+        details: { memberUserId: 'member1' },
+      })
     );
     expect(res._getStatusCode()).toBe(200);
   });
@@ -88,6 +88,6 @@ describe('PUT /api/organizations/[id]/members/[userId]/credit-budget', () => {
     setMemberCreditOverride.mockRejectedValue(new Error('Member not found'));
     const { run } = put({ maxCredits: 5 });
     await expect(run()).rejects.toThrow('Member not found');
-    expect(logAuditEvent).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
   });
 });

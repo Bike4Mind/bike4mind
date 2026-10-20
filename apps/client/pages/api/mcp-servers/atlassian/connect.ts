@@ -1,6 +1,9 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError } from '@server/utils/errors';
-import { getAtlassianOAuthConfig, ATLASSIAN_OAUTH_SCOPES } from '@server/integrations/jira/atlassianConfig';
+import {
+  getAtlassianOAuthConfig,
+  ATLASSIAN_OAUTH_SCOPES,
+} from '@bike4mind/server-utils/integrations/jira/atlassianConfig';
 import { userRepository } from '@bike4mind/database';
 import crypto from 'crypto';
 import { Config } from '@server/utils/config';

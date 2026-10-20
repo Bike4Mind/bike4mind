@@ -7,7 +7,7 @@ const h = vi.hoisted(() => ({
   update: vi.fn(),
   countByOrganization: vi.fn(),
   incrementCounterConditional: vi.fn(),
-  verifyOrgAccess: vi.fn(),
+  verifyOrgOwner: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -29,10 +29,10 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@server/integrations/github/webhookUtils', () => ({
   generateWebhookSecret: () => 'new-plain-secret',
 }));
-vi.mock('@server/security/secretEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({
   encryptSecret: (value: string) => `enc(${value})`,
 }));
-vi.mock('@server/utils/orgAccess', () => ({ verifyOrgAccess: h.verifyOrgAccess }));
+vi.mock('@server/utils/orgAccess', () => ({ verifyOrgOwner: h.verifyOrgOwner }));
 vi.mock('@server/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: 'test-key' } }));
 
 await import('../rotate-secret');
@@ -71,7 +71,7 @@ describe('POST /api/organizations/[id]/webhooks/github/rotate-secret', () => {
 
     await h.handler!({ query: { id: 'org-1' }, user: { id: 'user-1' } }, res);
 
-    expect(h.verifyOrgAccess).toHaveBeenCalledWith({ id: 'user-1' }, 'org-1');
+    expect(h.verifyOrgOwner).toHaveBeenCalledWith({ id: 'user-1' }, 'org-1');
     expect(h.update).toHaveBeenCalledTimes(1);
     expect(h.update).toHaveBeenCalledWith({ id: 'cfg-1', secret: 'enc(new-plain-secret)' });
     expect(res.status).toHaveBeenCalledWith(200);

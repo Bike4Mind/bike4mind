@@ -18,10 +18,10 @@ import {
   KnowledgeType,
   FabFileSourceType,
   type IUserDocument,
-  driveConnectionOwnerForLake,
-  driveConnectionOwnerOf,
+  lakeConnectionOwnerForLake,
+  lakeConnectionOwnerOf,
   isLakeIngestable,
-  isSameDriveConnectionOwner,
+  isSameLakeConnectionOwner,
   isStorageLimitError,
   storageOwnerOf,
   type LakeSkippedFileReason,
@@ -69,7 +69,7 @@ import {
   MAX_INGEST_CANDIDATES,
   MAX_INGEST_FILE_BYTES,
   driveIngestSkipReason,
-} from '@server/integrations/google/drive/driveIngestLimits';
+} from '@bike4mind/server-utils/integrations/google/drive/driveIngestLimits';
 import { finalizeBatchIfComplete } from '@server/dataLakes/dataLakeBatchProgress';
 import { sendToQueue } from '@server/utils/sqs';
 import { Resource } from 'sst';
@@ -580,7 +580,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // is gone for good. Tear the connection down the way the lake purge does
       // (releaseDriveConnectionForLake): releasing the claim back to 'connected' would re-poll it
       // forever and keep its globally unique driveFolderId claimed by a lake nobody can reach.
-      const retired = await releaseDriveConnection(connectionId, driveConnectionOwnerOf(connection)).catch(
+      const retired = await releaseDriveConnection(connectionId, lakeConnectionOwnerOf(connection)).catch(
         (e: unknown) => {
           logger.warn('[driveLakeIngest] could not release the connection of a missing lake', {
             connectionId,
@@ -618,11 +618,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       await releaseClaim(null);
       return;
     }
-    // The connect door (authorizeLakeDriveAccess) only binds a connection to a lake of the same owner -
+    // The connect door (authorizeLakeConnectorAccess) only binds a connection to a lake of the same owner -
     // the lake's org, or for a personal lake its creator. Re-checked here because the admin-actor
     // membership writes below are justified by exactly that, and a mismatched row must not ride it.
-    const connectionOwner = driveConnectionOwnerOf(connection);
-    if (!isSameDriveConnectionOwner(connectionOwner, driveConnectionOwnerForLake(lake))) {
+    const connectionOwner = lakeConnectionOwnerOf(connection);
+    if (!isSameLakeConnectionOwner(connectionOwner, lakeConnectionOwnerForLake(lake))) {
       logger.warn('[driveLakeIngest] connection owner does not match the target lake; dropping', { connectionId });
       if (resumeBatchId) await settleChainedBatch(resumeBatchId);
       await releaseClaim('This Drive connection no longer matches its data lake owner. Reconnect the folder.');
@@ -1010,7 +1010,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
     // A trusted system reconcile acts as admin for membership writes (canManageLake): the connection
     // was authorized at connect time by an org owner/manager, or for a personal lake by its creator
-    // (authorizeLakeDriveAccess; the owner match above re-asserts it). Pass the resolved lake
+    // (authorizeLakeConnectorAccess; the owner match above re-asserts it). Pass the resolved lake
     // itself (not a hand-projection) so `organizationId` reaches the org-manageable manage rung.
     const membershipActor = { userId: connection.connectedBy, isAdmin: true };
     // Every membership write in this handler is the Drive connector sync itself, not a person at

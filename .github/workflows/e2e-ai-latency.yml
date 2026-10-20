@@ -684,7 +684,12 @@ jobs:
 
               # Quality column
               if [ -n "$PW_JSON" ]; then
-                UNEXPECTED="$(jq -r '.stats.unexpected // 0' "$PW_JSON" 2>/dev/null || echo 0)"
+                # Skip the latency gate test: its breach belongs to the Latency column below, and
+                # counting it here would read a slow-but-correct cell as a quality failure. The
+                # title must stay in sync with LATENCY_GATE_TITLE in ai-latency-suite-factory.ts.
+                UNEXPECTED="$(jq -r --arg gate 'average AI latency is within the threshold' \
+                  '[.. | objects | select(has("specs")) | .specs[] | select(.title != $gate and .ok == false)] | length' \
+                  "$PW_JSON" 2>/dev/null || echo 0)"
                 [ "$UNEXPECTED" -gt 0 ] && QUALITY="Fail" || QUALITY="Pass"
               else
                 QUALITY="---"
@@ -714,6 +719,7 @@ jobs:
                     REASON="$(printf '%.2fs' "$AVG") / <=${THRESHOLD}s FAIL"
                     [ "${ABANDONED:-0}" -gt 0 ] && REASON="${REASON} (${ABANDONED} prompt(s) never finished)"
                     LATENCY_STR="$REASON"
+                    echo "::error title=AI latency breach::${SPEC} on ${AI_MODEL}: ${REASON}"
                     LATENCY_EXCEEDED_COUNT=$((LATENCY_EXCEEDED_COUNT + 1))
                     EXCEEDED=true
                   else

@@ -507,6 +507,38 @@ describe('ServerSubagentOrchestrator', () => {
       expect(result.completionInfo.totalCredits!).toBeLessThan(usdToCredits(getTextModelCost(tiered, 301_000, 1_200)));
     });
 
+    it('prices a cached long prompt in the totals fallback on the tier its whole prompt falls in', async () => {
+      stubAgentRun({
+        totalTokens: 210_100,
+        totalInputTokens: 20_000,
+        totalOutputTokens: 100,
+        totalCacheReadTokens: 190_000,
+        iterations: 1,
+        toolCalls: 0,
+        reachedMaxIterations: false,
+      });
+
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: makeLlm(MODEL_ID),
+        logger: makeLogger(),
+        parentTools: [],
+        availableModels: [tiered],
+      });
+
+      const result = await orchestrator.delegateToAgent({
+        task: 't',
+        agentDef: makeAgentDef({ model: MODEL_ID }),
+        thoroughness: 'medium',
+      });
+
+      // 210K prompt: the >200K rates, though the uncached 20K alone sits under the threshold.
+      expect(result.completionInfo.totalCredits).toBeCloseTo(
+        usdToCredits(20_000 * 0.000006 + 190_000 * 0.000006 * 0.1 + 100 * 0.0000225),
+        10
+      );
+    });
+
     it('computes fallback totalCredits on the same cache-aware basis as the recorded cost', async () => {
       const inputTokens = 12_000;
       const outputTokens = 3_000;

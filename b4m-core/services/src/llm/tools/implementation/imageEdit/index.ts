@@ -199,6 +199,7 @@ async function moderateToolImage(
       sessionId: context.sessionId,
       provider,
       model,
+      surface: 'edit',
     },
     logger: context.logger,
   });

@@ -1,5 +1,19 @@
 # @bike4mind/cli
 
+## 3.2.0
+
+### Minor Changes
+
+- [#4966](https://github.com/Bike4Mind/bike4mind/pull/4966) [`167e186`](https://github.com/Bike4Mind/bike4mind/commit/167e186fb7ee88df6a07b6e3539a0a72c92e2f0f) Thanks [@onoya](https://github.com/onoya)! - typed response schemas for quest plans, quest timeout and groups
+
+### Patch Changes
+
+- [#4969](https://github.com/Bike4Mind/bike4mind/pull/4969) [`697c9a6`](https://github.com/Bike4Mind/bike4mind/commit/697c9a6326b28232ecb44befe662b0dcbc8de617) Thanks [@erikbethke](https://github.com/erikbethke)! - match the MCP Registry name casing to the Bike4Mind org login
+
+- [#4989](https://github.com/Bike4Mind/bike4mind/pull/4989) [`6a2291f`](https://github.com/Bike4Mind/bike4mind/commit/6a2291f29592aff2a57f1d48b88d105b90d10a7b) Thanks [@onoya](https://github.com/onoya)! - derive tool policy from per-tool descriptors in a tool gateway
+
+- [#4991](https://github.com/Bike4Mind/bike4mind/pull/4991) [`06f2578`](https://github.com/Bike4Mind/bike4mind/commit/06f2578e3753ee70ad8df59b3b3ed16fd6c754a1) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - extract the CLI tool search into b4m-core/agents
+
 ## 3.1.0
 
 ### Minor Changes

@@ -21,7 +21,7 @@ import {
 } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { moderateImportedKnowledgeFiles } from '@server/s3/moderateImportedKnowledgeFiles';
-import { chargeStampedKnowledgeStorage, stampImportedKnowledgeRows } from '@server/s3/storageCharge';
+import { chargeStampedKnowledgeStorage, stampImportedKnowledgeRows } from '@bike4mind/server-utils/s3/storageCharge';
 import { buildKnowledgeModerationDeps } from '@server/s3/knowledgeModerationDeps';
 import { withContext } from '@server/s3/utils';
 import { createOwnedArtifactSourceRefsGuard } from '@server/utils/artifactSourceRefsGuards';

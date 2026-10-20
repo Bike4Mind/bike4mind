@@ -104,10 +104,17 @@ LiveopsTriageConfigAuditLogSchema.index({ configId: 1, timestamp: -1 });
 LiveopsTriageConfigAuditLogSchema.index({ userId: 1, timestamp: -1 });
 LiveopsTriageConfigAuditLogSchema.index({ action: 1, timestamp: -1 });
 
-// TTL index to auto-delete old audit logs after 90 days (consistent with other audit logs)
+/**
+ * TTL on timestamp: these audit logs are kept for 12 months.
+ *
+ * Mongo does not apply a changed expireAfterSeconds to an index that already exists, so changing
+ * this value needs a collMod migration (see 20260921235953_set-liveops-triage-config-audit-log-retention).
+ */
+export const LIVEOPS_TRIAGE_CONFIG_AUDIT_LOG_RETENTION_SECONDS = 365 * 24 * 60 * 60;
+
 LiveopsTriageConfigAuditLogSchema.index(
   { timestamp: 1 },
-  { expireAfterSeconds: 90 * 24 * 60 * 60 } // 90 days
+  { expireAfterSeconds: LIVEOPS_TRIAGE_CONFIG_AUDIT_LOG_RETENTION_SECONDS }
 );
 
 class LiveopsTriageConfigAuditLogRepository

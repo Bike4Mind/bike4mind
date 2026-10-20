@@ -5,8 +5,8 @@ import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import { RemoteSkillSource } from '@bike4mind/cli/skills';
 import type { ChatStreamEvent, ChatToolCall } from '@shared/chat';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ChatService } from './ChatService';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ChatService, type ChatServiceDeps } from './ChatService';
 import { SessionStore } from './SessionStore';
 import { ProjectTrustStore } from './skills/ProjectTrustStore';
 import { remoteSkillsKey } from './skills/accountSkills';
@@ -38,6 +38,8 @@ describe('ChatService and skills', () => {
   let streams: PassThrough[];
   let project: string;
   let catalog: SkillCatalog;
+  /** Mutated per test: the service holds this object, so a test can shrink a budget before it runs. */
+  const turnLimits: NonNullable<ChatServiceDeps['turnLimits']> = {};
 
   beforeEach(async () => {
     const base = await realpath(await mkdtemp(join(tmpdir(), 'b4m-chatskills-')));
@@ -74,13 +76,20 @@ describe('ChatService and skills', () => {
       return { key, source: new RemoteSkillSource(api, { cacheFilePath: join(base, `${key}.json`) }) };
     };
     catalog = new SkillCatalog(new ProjectTrustStore(join(base, 'trust.json')), accountSkills);
-    events = [];
-    streams = [];
-    post = vi.fn().mockImplementation(() => {
+    for (const key of Object.keys(turnLimits) as (keyof typeof turnLimits)[]) delete turnLimits[key];
+    // Bound to this test's own objects, not read through the describe-level lets at call time: the
+    // previous test's disposed service can still emit the 'done' of its aborted reply after this
+    // hook has run, and counted here it would end a turn() wait before this test's reply has settled.
+    const emitted: ChatStreamEvent[] = [];
+    events = emitted;
+    const opened: PassThrough[] = [];
+    streams = opened;
+    const calls = vi.fn().mockImplementation(() => {
       const stream = new PassThrough();
-      streams.push(stream);
+      opened.push(stream);
       return Promise.resolve({ data: stream, status: 200 });
     });
+    post = calls;
     service = new ChatService({
       store: new SessionStore(join(base, 'sessions'), 'test-model'),
       access: { list: async () => [] } as unknown as AccessStore,
@@ -88,24 +97,32 @@ describe('ChatService and skills', () => {
       getApiClient: () =>
         ({
           get: vi.fn().mockResolvedValue({}),
-          getAxiosInstance: () => ({ post }),
+          getAxiosInstance: () => ({ post: calls }),
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
       userInstructionsRoot: join(base, 'user'),
       skills: catalog,
       approvals: new ApprovalGate(),
-      emit: event => events.push(event),
+      turnLimits,
+      emit: event => emitted.push(event),
     });
+  });
+
+  // A reply a test leaves open - a stream never ended, a command still running - would otherwise
+  // keep the previous service busy while the next test waits on its first request.
+  afterEach(() => {
+    service.dispose();
+    for (const stream of streams) stream.end();
   });
 
   async function turn(sessionId: string, text: string, expectedPosts: number): Promise<Record<string, unknown>> {
     await service.send(sessionId, text);
-    await vi.waitUntil(() => post.mock.calls.length === expectedPosts, { timeout: 3000, interval: 5 });
+    await vi.waitUntil(() => post.mock.calls.length === expectedPosts, { timeout: 5000, interval: 5 });
     const stream = streams[expectedPosts - 1];
     stream.write(frame({ type: 'content', text: 'ok', stopReason: 'end_turn' }));
     stream.write(frame('[DONE]'));
     await vi.waitUntil(() => events.filter(event => event.type === 'done').length === expectedPosts, {
-      timeout: 3000,
+      timeout: 5000,
       interval: 5,
     });
     return post.mock.calls[expectedPosts - 1][1];
@@ -144,30 +161,115 @@ describe('ChatService and skills', () => {
     expect(systemText(await turn(id, 'hello', 1))).not.toContain('ship-it');
   });
 
-  it('asks in "Approve for me" before an outbound call that follows a skill', async () => {
+  /** Runs `skill`, then `next`, in one reply, and returns the call that stopped to ask, if any. */
+  async function afterSkill(skillName: string, next: { name: string; input: Record<string, unknown> }) {
     const id = await session();
-    await catalog.setTrusted(project, true);
-    await service.send(id, 'release it');
-    await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
+    await service.send(id, 'go');
+    await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
     streams[0].write(
-      frame({ type: 'tool_use', tools: [{ id: 'c1', name: 'skill', arguments: '{"skill":"ship-it"}' }] })
+      frame({ type: 'tool_use', tools: [{ id: 'c1', name: 'skill', arguments: JSON.stringify({ skill: skillName }) }] })
     );
     streams[0].write(frame('[DONE]'));
-    await vi.waitUntil(() => streams.length === 2, { timeout: 3000, interval: 5 });
+    await vi.waitUntil(() => streams.length === 2, { timeout: 5000, interval: 5 });
     streams[1].write(
-      frame({ type: 'tool_use', tools: [{ id: 'c2', name: 'web_fetch', arguments: '{"url":"https://example.com/"}' }] })
+      frame({ type: 'tool_use', tools: [{ id: 'c2', name: next.name, arguments: JSON.stringify(next.input) }] })
     );
     streams[1].write(frame('[DONE]'));
-
-    const asked = await vi.waitUntil(
+    await vi.waitUntil(
       () =>
-        events
-          .map(event => (event.type === 'tool-start' ? event.call : null))
-          .find((call): call is ChatToolCall => call?.status === 'awaiting-approval'),
-      { timeout: 3000, interval: 5 }
+        events.some(
+          event =>
+            (event.type === 'tool-start' && event.call.status === 'awaiting-approval') ||
+            (event.type === 'tool-end' && event.call.id === 'c2')
+        ),
+      { timeout: 5000, interval: 5 }
     );
-    expect(asked.name).toBe('web_fetch');
-    expect(asked.approvalDetail).toContain('read content from a skill (skill)');
+    const asked = events
+      .map(event => (event.type === 'tool-start' ? event.call : null))
+      .find((call): call is ChatToolCall => call?.status === 'awaiting-approval');
+    return { asked, id };
+  }
+
+  /** Runs one skill in a reply that then runs out of budget, continues it, and returns any call that asks. */
+  async function resumedAfterSkill(skillName: string) {
+    turnLimits.rounds = 1;
+    const id = await session();
+    await service.send(id, 'go');
+    await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
+    streams[0].write(
+      frame({ type: 'tool_use', tools: [{ id: 'c1', name: 'skill', arguments: JSON.stringify({ skill: skillName }) }] })
+    );
+    streams[0].write(frame('[DONE]'));
+    await vi.waitUntil(() => events.some(event => event.type === 'done' && event.stopReason === 'tool_turn_limit'), {
+      timeout: 5000,
+      interval: 5,
+    });
+
+    events.length = 0;
+    await expect(service.continueReply(id)).resolves.toMatchObject({ ok: true });
+    await vi.waitUntil(() => streams.length === 2, { timeout: 5000, interval: 5 });
+    streams[1].write(
+      frame({
+        type: 'tool_use',
+        tools: [
+          { id: 'c2', name: 'bash_execute', arguments: JSON.stringify({ command: 'node --version', cwd: project }) },
+        ],
+      })
+    );
+    streams[1].write(frame('[DONE]'));
+    await vi.waitUntil(
+      () =>
+        events.some(event => event.type === 'tool-end' && event.call.id === 'c2') ||
+        events.some(
+          event => event.type === 'tool-start' && event.call.id === 'c2' && event.call.status === 'awaiting-approval'
+        ),
+      { timeout: 5000, interval: 5 }
+    );
+    return events
+      .map(event => (event.type === 'tool-start' ? event.call : null))
+      .find((call): call is ChatToolCall => call?.status === 'awaiting-approval');
+  }
+
+  it('asks in "Approve for me" before an outbound call that follows an account skill', async () => {
+    const { asked } = await afterSkill('web-summary', {
+      name: 'web_fetch',
+      input: { url: 'https://example.com/' },
+    });
+
+    expect(asked?.name).toBe('web_fetch');
+    expect(asked?.approvalDetail).toContain('read content from a skill (skill)');
+  });
+
+  it('does not count a skill from a project the user trusted as untrusted content', async () => {
+    await catalog.setTrusted(project, true);
+    const { asked, id } = await afterSkill('ship-it', {
+      name: 'bash_execute',
+      input: { command: 'node --version', cwd: project },
+    });
+
+    expect(asked).toBeUndefined();
+    // The card was skipped because the call said its content is the user's own, and that flag
+    // has to survive into the stored turn: a resumed reply replays it. See the tests below.
+    const emitted = events
+      .map(event => (event.type === 'tool-end' ? event.call : null))
+      .find((call): call is ChatToolCall => call?.id === 'c1');
+    expect(emitted?.ownContent).toBe(true);
+    const stored = (await service.getSession(id))?.messages
+      .flatMap(message => message.toolCalls ?? [])
+      .find(call => call.id === 'c1');
+    expect(stored?.ownContent).toBe(true);
+  });
+
+  it('does not start a resumed reply tainted when it replays a trusted project skill', async () => {
+    await catalog.setTrusted(project, true);
+    expect(await resumedAfterSkill('ship-it')).toBeUndefined();
+  });
+
+  it('keeps a resumed reply tainted when it replays an account skill', async () => {
+    const asked = await resumedAfterSkill('web-summary');
+
+    expect(asked?.name).toBe('bash_execute');
+    expect(asked?.approvalDetail).toContain('read content from a skill (skill)');
   });
 
   it('keeps the system prompt byte-identical across turns, so the cached prefix holds', async () => {

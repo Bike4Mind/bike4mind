@@ -1,5 +1,17 @@
 # @bike4mind/infra
 
+## 4.1.0
+
+### Minor Changes
+
+- [#5063](https://github.com/Bike4Mind/bike4mind/pull/5063) [`4b046c1`](https://github.com/Bike4Mind/bike4mind/commit/4b046c1a77916a76fadd7cacceb9b86f17d791c7) Thanks [@onoya](https://github.com/onoya)! - add the admin Audit Log page
+
+## 4.0.0
+
+### Major Changes
+
+- [#4937](https://github.com/Bike4Mind/bike4mind/pull/4937) [`026c8d9`](https://github.com/Bike4Mind/bike4mind/commit/026c8d963affc7b032ebe8a2e2adc2a38f5d823c) Thanks [@onoya](https://github.com/onoya)! - bill org-owned file storage to the organization
+
 ## 3.0.0
 
 ### Major Changes
