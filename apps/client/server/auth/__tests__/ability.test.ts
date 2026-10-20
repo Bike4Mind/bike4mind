@@ -286,6 +286,6 @@ describe('defineAbilitiesFor - org manager rule', () => {
     const ability = defineAbilitiesFor(makeUser());
     const query = JSON.stringify(accessibleBy(ability, 'update').ofType(Organization));
     expect(query).toContain('"adminUserIds":"u1"');
-    expect(query).toContain('"users.userId":"u1"');
+    expect(query).toContain('"users":{"$elemMatch":{"userId":"u1"}}');
   });
 });
