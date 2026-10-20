@@ -3,10 +3,10 @@ import {
   type AdminAuditAction,
   type AuditActor,
   type AuditChange,
-  type AuditContext,
   type AuditEntry,
   type AuditTarget,
   type IAdminAuditLogRepository,
+  type StoredAuditContext,
 } from '@bike4mind/common';
 import { redactAuditPayload, redactChange } from './redactAuditPayload';
 
@@ -15,7 +15,7 @@ export type RecordAdminActionInput = {
   actor: AuditActor;
   target: AuditTarget;
   summary: string;
-  context: AuditContext;
+  context: StoredAuditContext;
   organizationId?: string;
   reason?: string;
   changes?: AuditChange[];

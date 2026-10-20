@@ -28,13 +28,21 @@ export const AuditChangeSchema = z.object({
 });
 export type AuditChange = z.infer<typeof AuditChangeSchema>;
 
-export const AuditContextSchema = z.object({
+/** Sources a stored AdminAuditLog row can carry; the write input and the filters stay inside this set. */
+export const StoredAuditContextSourceSchema = z.enum(['admin_ui', 'api_key', 'script', 'worker']);
+
+export const StoredAuditContextSchema = z.object({
   ip: z.string().optional(),
   userAgent: z.string().optional(),
   requestId: z.string().optional(),
-  // 'user' is the account holder's own session; only the security-store adapters emit it, never AdminAuditLog.
-  source: z.enum(['admin_ui', 'api_key', 'script', 'worker', 'user']),
+  source: StoredAuditContextSourceSchema,
   route: z.string().optional(),
+});
+export type StoredAuditContext = z.infer<typeof StoredAuditContextSchema>;
+
+/** Read-side context: 'user' is the account holder's own session, which only the security-store adapters emit. */
+export const AuditContextSchema = StoredAuditContextSchema.extend({
+  source: z.union([StoredAuditContextSourceSchema, z.literal('user')]),
 });
 export type AuditContext = z.infer<typeof AuditContextSchema>;
 
@@ -75,7 +83,7 @@ export const AuditEntrySchema = z.object({
 });
 export type AuditEntry = z.infer<typeof AuditEntrySchema>;
 
-export type NewAdminAuditEntry = Omit<AuditEntry, 'id' | 'source'>;
+export type NewAdminAuditEntry = Omit<AuditEntry, 'id' | 'source' | 'context'> & { context: StoredAuditContext };
 
 /** Deliberately not an IBaseRepository: an immutable log exposes no update or delete. */
 export interface IAdminAuditLogRepository {
