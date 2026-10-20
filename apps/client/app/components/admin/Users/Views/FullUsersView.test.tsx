@@ -19,7 +19,7 @@ vi.mock('../SystemMessageModal', () => ({ default: () => null }));
 vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () => null }));
 vi.mock('../ComplianceModal', () => ({ useComplianceModal: () => vi.fn() }));
 vi.mock('@client/app/components/admin/Users/Views/FullUserViewModal', () => ({
-  useFullUserViewModal: () => vi.fn(),
+  useFullUserViewModal: () => ({ setUserId: vi.fn() }),
 }));
 vi.mock('@client/app/hooks/data/user', () => ({
   useDeleteUser: () => ({ mutate: vi.fn() }),

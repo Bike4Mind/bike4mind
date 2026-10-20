@@ -3,8 +3,7 @@ import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import SwapVertIcon from '@mui/icons-material/SwapVert';
 import { IconButton, Option, Select, Stack, Tooltip } from '@mui/joy';
 import React from 'react';
-import { useShallow } from 'zustand/react/shallow';
-import { useUsersTab } from '../useUsersTabParams';
+import { useUsersParams } from '../useUsersTabParams';
 
 interface SortControlsProps {
   disabled?: boolean;
@@ -16,7 +15,7 @@ interface SortControlsProps {
  * its `disabled` binding: the suite uses its enabled state as the "fetch finished" probe.
  */
 const SortControls: React.FC<SortControlsProps> = ({ disabled, fullWidth }) => {
-  const [params, setParams] = useUsersTab(useShallow(state => [state.params, state.setParams]));
+  const [params, setParams] = useUsersParams();
 
   const isAscending = params.sortOrder === 'asc';
 

@@ -1,18 +1,15 @@
+import { ADMIN_TAB_PARAM, ADMIN_USERS_TAB_SLUG } from '@bike4mind/common';
 import { IGetUsersParams } from '@client/app/utils/userAPICalls';
+import { useNavigate, useSearch } from '@tanstack/react-router';
+import { useCallback, useEffect, useMemo } from 'react';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { useShallow } from 'zustand/react/shallow';
+import { DEFAULT_USERS_PARAMS, isSameUsersView, usersViewFromSearch, usersViewToSearch } from './usersTabSearch';
 
-export const PAGE_LIMIT_OPTIONS = [5, 10, 20];
+export { DEFAULT_USERS_PARAMS, PAGE_LIMIT_OPTIONS } from './usersTabSearch';
 
-export const DEFAULT_USERS_PARAMS: IGetUsersParams = {
-  page: 1,
-  limit: 10,
-  search: '',
-  sortField: 'createdAt',
-  sortOrder: 'desc',
-  orgSearch: ['all'],
-  tags: [],
-};
+const ADMIN_PATH = '/admin';
 
 // Persist key must stay 'admin-user-tab-01': changing it silently discards
 // every admin's saved filters.
@@ -28,6 +25,72 @@ export const useUsersTab = create<{
     { name: 'admin-user-tab-01' }
   )
 );
+
+type SearchRecord = Record<string, unknown>;
+
+const VIEW_KEYS = ['page', 'limit', 'sortField', 'sortOrder', 'orgSearch', 'tags'] as const;
+
+const touchesView = (patch: Partial<IGetUsersParams>) => VIEW_KEYS.some(key => key in patch);
+
+/**
+ * The Users tab's list params. The URL owns the view (page, limit, sort, org and tag filters) when it
+ * carries one; the persisted store holds the free-text search, which never enters the URL, and a copy
+ * of the view so a bare `?tab=users` restores the last one. Every write goes to both, with `replace`.
+ */
+export const useUsersParams = (): readonly [IGetUsersParams, (patch: Partial<IGetUsersParams>) => void] => {
+  const [storedParams, setStoredParams] = useUsersTab(useShallow(state => [state.params, state.setParams]));
+  const search = useSearch({ strict: false }) as SearchRecord;
+  const navigate = useNavigate();
+  const urlView = useMemo(() => usersViewFromSearch(search), [search]);
+
+  const params = useMemo(() => (urlView ? { ...storedParams, ...urlView } : storedParams), [storedParams, urlView]);
+
+  const setParams = useCallback(
+    (patch: Partial<IGetUsersParams>) => {
+      setStoredParams(patch);
+      if (!touchesView(patch)) return;
+      // Written from the store, which useUsersTabUrlSync keeps level with the URL and which already
+      // holds this patch, rather than from a `previous` that a same-tick write may not have committed.
+      navigate({
+        to: ADMIN_PATH,
+        search: (previous: SearchRecord) => ({ ...previous, ...usersViewToSearch(useUsersTab.getState().params) }),
+        replace: true,
+      });
+    },
+    [navigate, setStoredParams]
+  );
+
+  return [params, setParams] as const;
+};
+
+/**
+ * Reconciles the URL and the persisted store while the Users tab is mounted. A URL that describes a
+ * view wins and is copied into the store (so the next bare visit restores it); a URL with no view
+ * gets the stored one written in. Leaving the tab needs no cleanup: the tab-sync rebuild in
+ * useAdminTabUrlSync drops these keys through the param registry.
+ */
+export const useUsersTabUrlSync = (): void => {
+  const search = useSearch({ strict: false }) as SearchRecord;
+  const navigate = useNavigate();
+  const urlView = useMemo(() => usersViewFromSearch(search), [search]);
+  // On back/forward to another tab the URL changes a render before this tab unmounts; never write
+  // the Users view onto another tab's URL. A bare `/admin` is picked up once the tab sync names us.
+  const isUsersTabUrl = search[ADMIN_TAB_PARAM] === ADMIN_USERS_TAB_SLUG;
+
+  useEffect(() => {
+    if (!isUsersTabUrl) return;
+    const { params: storedParams, setParams: setStoredParams } = useUsersTab.getState();
+    if (urlView) {
+      if (!isSameUsersView(urlView, storedParams)) setStoredParams(urlView);
+      return;
+    }
+    navigate({
+      to: ADMIN_PATH,
+      search: (previous: SearchRecord) => ({ ...previous, ...usersViewToSearch(useUsersTab.getState().params) }),
+      replace: true,
+    });
+  }, [isUsersTabUrl, urlView, navigate]);
+};
 
 /** Filters that the mobile drawer's "Clear all" and the desktop filter chip reset. */
 export const CLEARED_FILTER_PARAMS: Partial<IGetUsersParams> = {

@@ -3,25 +3,46 @@ import { unsavedFieldLabels } from '@client/app/components/admin/Users/unsavedFi
 import { useGetUser } from '@client/app/hooks/data/user';
 import { useConfirmation } from '@client/app/hooks/useConfirmation';
 import { LinearProgress, Modal, ModalClose, ModalDialog } from '@mui/joy';
-import { useState } from 'react';
-import { create } from 'zustand';
+import { useNavigate, useSearch } from '@tanstack/react-router';
+import { useCallback, useEffect, useState } from 'react';
+import { toast } from 'sonner';
+import { USERS_USER_ID_PARAM } from '../usersTabSearch';
 
-export const useFullUserViewModal = create<{
-  userId: string | null;
-  setUserId: (userId: string | null) => void;
-}>()(set => ({
-  userId: null,
-  setUserId: userId => set({ userId }),
-}));
+/** The user open in the full view, kept in `?userId=` so a refresh or a shared link reopens it. */
+export const useFullUserViewModal = () => {
+  const userId = useSearch({
+    strict: false,
+    select: search => (search as Record<string, unknown>)[USERS_USER_ID_PARAM],
+  });
+  const navigate = useNavigate();
+
+  const setUserId = useCallback(
+    (id: string | null) =>
+      navigate({
+        to: '/admin',
+        search: (previous: Record<string, unknown>) => ({ ...previous, [USERS_USER_ID_PARAM]: id ?? undefined }),
+        replace: true,
+      }),
+    [navigate]
+  );
+
+  return { userId: typeof userId === 'string' ? userId : null, setUserId };
+};
 
 const FullUserViewModal = () => {
-  const userId = useFullUserViewModal(state => state.userId);
-  const setUserId = useFullUserViewModal(state => state.setUserId);
+  const { userId, setUserId } = useFullUserViewModal();
   const confirm = useConfirmation();
   // Field keys, not labels: the card owns what changed, this owns how to say it.
   const [unsavedFields, setUnsavedFields] = useState<string[]>([]);
 
   const user = useGetUser(userId);
+
+  // A stale or mistyped `?userId=` closes the modal rather than leaving a dead "not found" pane.
+  useEffect(() => {
+    if (!userId || !user.isError) return;
+    toast.error('That user could not be found.');
+    setUserId(null);
+  }, [userId, user.isError, setUserId]);
 
   /**
    * The card stages every edit locally and sends them only on Update, so closing
