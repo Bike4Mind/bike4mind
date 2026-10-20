@@ -5,7 +5,9 @@ import {
   paginatedResponseSchema,
   PublicReleaseNoteSchema,
   type PublicReleaseNote,
+  type PublicReleaseNoteVideo,
 } from '@bike4mind/common';
+import { isUpstreamMediaUrl } from '@server/releaseNotes/publicMedia';
 import { deploymentMediaOrigins } from '@server/utils/deploymentMediaOrigins';
 import { safeFetch } from '@bike4mind/server-utils/utils/ssrfProtection';
 import { decodeCursor, encodeCursor } from '@server/utils/cursorPagination';
@@ -174,7 +176,7 @@ async function fetchPage(
       body = undefined;
     }
     const parsed = pageSchema.safeParse(body);
-    if (parsed.success) return { page: vetVideos(parsed.data), upstreamDown: false };
+    if (parsed.success) return { page: vetVideos(parsed.data, base), upstreamDown: false };
     const feed = jsonFeedSchema.safeParse(body);
     if (feed.success) return { page: jsonFeedToPage(feed.data, limit, cursor), upstreamDown: false };
     logger.warn('[whats-new] upstream feed body matched neither the public schema nor JSON Feed');
@@ -190,15 +192,20 @@ async function fetchPage(
 }
 
 // Drops a video with any URL outside the deployment's media allowlist, which the CSP would block anyway.
-function vetVideos(page: UpstreamFeedPage): UpstreamFeedPage {
-  const policy = { extraOrigins: deploymentMediaOrigins() };
+// The upstream's own media route is allowed too (proxy.ts adds its origin to the CSP).
+function vetVideos(page: UpstreamFeedPage, feedUrl: string): UpstreamFeedPage {
+  const extraOrigins = deploymentMediaOrigins();
+  const upstreamMediaUrls = (video: PublicReleaseNoteVideo) =>
+    new Set(Object.values(video).filter((url): url is string => !!url && isUpstreamMediaUrl(url, feedUrl)));
   return {
     ...page,
-    data: page.data.map(note =>
-      note.video && Object.keys(getModalVideoErrors(fromPublicReleaseNoteVideo(note.video), policy)).length > 0
+    data: page.data.map(note => {
+      if (!note.video) return note;
+      const policy = { extraOrigins, allowedUrls: upstreamMediaUrls(note.video) };
+      return Object.keys(getModalVideoErrors(fromPublicReleaseNoteVideo(note.video), policy)).length > 0
         ? { ...note, video: null }
-        : note
-    ),
+        : note;
+    }),
   };
 }
 

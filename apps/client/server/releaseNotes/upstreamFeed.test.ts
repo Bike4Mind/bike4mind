@@ -60,6 +60,20 @@ describe('fetchUpstreamFeed video vetting', () => {
     );
     expect((await fetchOnce())?.data[0].video).toBeNull();
   });
+
+  it("keeps a video served from the upstream's own media route", async () => {
+    const video = {
+      landscape_url: 'https://upstream.example.com/api/v1/whats-new/media/rn1/landscape',
+      landscape_poster_url: 'https://upstream.example.com/api/v1/whats-new/media/rn1/landscape-poster',
+    };
+    mockSafeFetch.mockResolvedValue(pageWith(video));
+    expect((await fetchOnce())?.data[0].video).toEqual(video);
+  });
+
+  it('drops a video that uses any other path on the upstream origin', async () => {
+    mockSafeFetch.mockResolvedValue(pageWith({ landscape_url: 'https://upstream.example.com/files/wide.mp4' }));
+    expect((await fetchOnce())?.data[0].video).toBeNull();
+  });
 });
 
 describe('fetchUpstreamFeed', () => {

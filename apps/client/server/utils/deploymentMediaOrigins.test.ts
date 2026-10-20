@@ -1,5 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
-import { deploymentMediaOrigins, resolveObjectStoreOrigin } from './deploymentMediaOrigins';
+import {
+  deploymentMediaOrigins,
+  resolveObjectStoreOrigin,
+  resolveWhatsNewUpstreamOrigin,
+} from './deploymentMediaOrigins';
 
 describe('deploymentMediaOrigins', () => {
   it('lists the object store and files origins that are configured', () => {
@@ -13,6 +17,14 @@ describe('deploymentMediaOrigins', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     expect(resolveObjectStoreOrigin('http://store.test; script-src *')).toBe('');
     expect(resolveObjectStoreOrigin('ftp://store.test')).toBe('');
+    warn.mockRestore();
+  });
+
+  it('takes the upstream feed origin over https only', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(resolveWhatsNewUpstreamOrigin(' https://up.test/api/v1/whats-new ')).toBe('https://up.test');
+    expect(resolveWhatsNewUpstreamOrigin('http://up.test/api/v1/whats-new')).toBe('');
+    expect(resolveWhatsNewUpstreamOrigin(undefined)).toBe('');
     warn.mockRestore();
   });
 });
