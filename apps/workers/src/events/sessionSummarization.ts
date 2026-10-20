@@ -199,7 +199,7 @@ export const handler = withEventContext(async (event, logger) => {
   // used for RAG prompting
   const fabFileData = {
     userId: session.userId,
-    fileName: `${session.name || 'Notebook'} Summary.txt`,
+    fileName: `[Automatic summary] ${session.name || 'Notebook'}.txt`,
     fileContent: summaryContent,
     fileSize: Buffer.byteLength(summaryContent),
     mimeType: SupportedFabFileMimeTypes.TXT_PLAIN,
