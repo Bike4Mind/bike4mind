@@ -616,7 +616,7 @@ export async function handlePermissionResponse(
     });
     logger.info('[Permission] Denied — execution stopped', {
       executionId: cmd.executionId,
-      toolName: cmd.toolName,
+      toolName: deniedName,
     });
     return;
   }
