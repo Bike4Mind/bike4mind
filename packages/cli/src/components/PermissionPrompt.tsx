@@ -1,5 +1,6 @@
 import React, { useState, useCallback } from 'react';
 import { Box, Text, useInput } from 'ink';
+import type { PermissionPromptKind } from '../tools/gateway/gatewayTypes.js';
 
 export type PermissionResponse = 'allow-once' | 'allow-session' | 'allow-always' | 'deny';
 
@@ -92,6 +93,8 @@ export interface PermissionPromptProps {
   args: unknown;
   preview?: string;
   canBeTrusted: boolean; // Whether this tool can be trusted (not prompt_always)
+  /** 'sandbox-escalation' offers a retry outside the sandbox with no trust options. */
+  kind?: PermissionPromptKind;
   onResponse: (response: PermissionResponse) => void;
 }
 
@@ -112,22 +115,30 @@ export function PermissionPrompt({
   args,
   preview,
   canBeTrusted,
+  kind,
   onResponse,
 }: PermissionPromptProps) {
+  const isSandboxEscalation = kind === 'sandbox-escalation';
   const hideArgs = TOOLS_WITH_HIDDEN_ARGS.has(toolName);
   // Build menu items based on whether tool can be trusted
-  const items: Array<{ label: string; value: PermissionResponse }> = canBeTrusted
+  const items: Array<{ label: string; value: PermissionResponse }> = isSandboxEscalation
     ? [
-        { label: '✓ Allow once', value: 'allow-once' },
-        { label: '✓ Allow for this session', value: 'allow-session' },
-        { label: '✓ Always allow (trust this tool)', value: 'allow-always' },
+        { label: '\u2713 Retry once without sandbox', value: 'allow-once' },
+        { label: '\u2713 Allow this command unsandboxed for the session', value: 'allow-session' },
         { label: '✗ Deny', value: 'deny' },
       ]
-    : [
-        { label: '✓ Allow once', value: 'allow-once' },
-        { label: '✓ Allow for this session', value: 'allow-session' },
-        { label: '✗ Deny', value: 'deny' },
-      ];
+    : canBeTrusted
+      ? [
+          { label: '✓ Allow once', value: 'allow-once' },
+          { label: '✓ Allow for this session', value: 'allow-session' },
+          { label: '✓ Always allow (trust this tool)', value: 'allow-always' },
+          { label: '✗ Deny', value: 'deny' },
+        ]
+      : [
+          { label: '✓ Allow once', value: 'allow-once' },
+          { label: '✓ Allow for this session', value: 'allow-session' },
+          { label: '✗ Deny', value: 'deny' },
+        ];
 
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [responded, setResponded] = useState(false);
@@ -237,7 +248,7 @@ export function PermissionPrompt({
         </Box>
       )}
 
-      {!canBeTrusted && (
+      {!canBeTrusted && !isSandboxEscalation && (
         <Box marginTop={1}>
           <Text color="red" dimColor>
             Note: This tool cannot be trusted due to its dangerous nature.

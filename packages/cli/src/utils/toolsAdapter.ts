@@ -13,7 +13,7 @@ import {
   type UserQuestionResponse,
 } from '@bike4mind/services/llm/tools/cliTools';
 import type { PermissionManager } from './PermissionManager';
-import type { PermissionResponse } from '../components/PermissionPrompt';
+import type { ShowPermissionPrompt } from '../tools/gateway/gatewayTypes.js';
 import type { SandboxOrchestrator } from '../sandbox/SandboxOrchestrator.js';
 import type { ApiClient } from '../auth/ApiClient';
 import { executeHooks, buildHookContext } from '../agents/hookExecutor.js';
@@ -312,7 +312,7 @@ export async function generateCliTools(
   llm: ICompletionBackend,
   model: string,
   permissionManager: PermissionManager,
-  showPermissionPrompt: (toolName: string, args: unknown, preview?: string) => Promise<{ action: PermissionResponse }>,
+  showPermissionPrompt: ShowPermissionPrompt,
   agentContext: AgentContext,
   configStore: any, // ConfigStore instance
   apiClient: ApiClient,
