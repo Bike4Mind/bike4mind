@@ -28,14 +28,17 @@ const mcpServerFields = {
 /**
  * PUT: `name` is optional because the route resolves the server by id, not by name.
  *
- * `envVariables` is a full replacement, not a patch - the handler `$set`s whatever arrives, so a
- * body carrying a subset drops the rest. That is why it stays required here: an omitted array
- * would have to mean either "clear them" or "leave them alone", and a 400 asking for the whole
- * set is clearer than picking one silently.
+ * `envVariables` is a full replacement of the key set: a key sent back blank keeps the stored value
+ * for that key, and a blank value on a new key is refused by the handler. It stays required here: an
+ * omitted array would have to mean either "clear them" or "leave them alone", and a 400 asking for
+ * the whole set is clearer than picking one silently.
  */
 export const mcpServerUpdateBodySchema = z.object({
   ...mcpServerFields,
   name: mcpServerFields.name.optional(),
+  // The client only ever sees keys (mcpServerResponseSchema withholds values), so an edit sends a
+  // stored key back blank; the handler keeps the stored value for it.
+  envVariables: z.array(z.object({ key: z.string(), value: z.string().optional() })),
 });
 
 /**

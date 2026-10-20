@@ -25,24 +25,34 @@ vi.mock('./AdminSettingInputField', () => ({
     <div data-testid={`generic-setting-${setting.key}`} data-default-value={JSON.stringify(defaultValue)} />
   ),
 }));
+vi.mock('./AdminStringListSettingField', () => ({
+  default: ({ setting, storedValue }: { setting: { key: SettingKey }; storedValue: unknown }) => (
+    <div data-testid={`string-list-setting-${setting.key}`} data-stored-value={JSON.stringify(storedValue)} />
+  ),
+}));
 
 import AdminSettingsTab from './AdminSettingsTab';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
-const aiTab = Object.values(SETTING_TABS).find(tab =>
-  (tab.categories as readonly string[]).includes(settingsMap.videoGeneration.category)
-);
+const findTab = (category: string) =>
+  Object.values(SETTING_TABS).find(tab => (tab.categories as readonly string[]).includes(category));
 
-const renderAiTab = () => {
+const aiTab = findTab(settingsMap.videoGeneration.category);
+const securityTab = findTab(settingsMap.ImageModerationReviewerEmails.category);
+
+const renderTab = (tab: typeof aiTab) => {
   render(
     <CssVarsProvider theme={appTheme}>
       <AdminSettingsTab />
     </CssVarsProvider>
   );
-  expect(aiTab).toBeDefined();
-  fireEvent.click(screen.getAllByRole('tab', { name: new RegExp(aiTab!.name, 'i') })[0]);
+  expect(tab).toBeDefined();
+  fireEvent.click(screen.getAllByRole('tab', { name: new RegExp(tab!.name, 'i') })[0]);
 };
+
+const renderAiTab = () => renderTab(aiTab);
+const renderSecurityTab = () => renderTab(securityTab);
 
 beforeEach(() => {
   serverSettings = [];
@@ -64,6 +74,33 @@ describe('AdminSettingsTab recommended models setting', () => {
 
     expect(screen.getByTestId('admin-recommended-models-card')).toBeTruthy();
     expect(screen.queryByTestId('generic-setting-recommendedModelIds')).toBeNull();
+  });
+});
+
+describe('AdminSettingsTab reviewer emails setting', () => {
+  it('renders the string-list editor with the stored reviewers and no generic card', () => {
+    serverSettings = [{ settingName: 'ImageModerationReviewerEmails', settingValue: '["reviewer@example.com"]' }];
+    renderSecurityTab();
+
+    const field = screen.getByTestId('string-list-setting-ImageModerationReviewerEmails');
+    expect(field.getAttribute('data-stored-value')).toContain('reviewer@example.com');
+    expect(screen.queryByTestId('generic-setting-ImageModerationReviewerEmails')).toBeNull();
+  });
+
+  it('gives the generic field to an object setting that defaults to an array', () => {
+    // The editor belongs to the listed keys, not to every object setting that happens to hold a
+    // list. No other rendered setting ships an array default, so lend one the shape here.
+    const setting = settingsMap.customMcpBlockedHosts;
+    const original = setting.defaultValue;
+    (setting as { defaultValue: unknown }).defaultValue = [];
+    try {
+      renderTab(findTab(setting.category));
+
+      expect(screen.getByTestId('generic-setting-customMcpBlockedHosts')).toBeTruthy();
+      expect(screen.queryByTestId('string-list-setting-customMcpBlockedHosts')).toBeNull();
+    } finally {
+      (setting as { defaultValue: unknown }).defaultValue = original;
+    }
   });
 });
 

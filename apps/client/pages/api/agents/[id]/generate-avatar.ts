@@ -2,7 +2,7 @@ import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
 import { AGENTS_WRITE_SCOPES } from '@server/agents/agentScopes';
 import { assertAgentAccess } from '@server/agents/assertAgentAccess';
-import { agentRepository, imageModerationIncidentRepository } from '@bike4mind/database';
+import { agentRepository } from '@bike4mind/database';
 import { ImageModels, IAgent, ModelInfo } from '@bike4mind/common';
 import {
   BadRequestError,
@@ -22,6 +22,7 @@ import { KnowledgeType } from '@bike4mind/common';
 import { fabFileRepository } from '@bike4mind/database';
 import axios from 'axios';
 import imageLogger from '@server/utils/imageLogger';
+import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
 
 // System prompt for creating visual prompts from agent descriptions
 const AGENT_AVATAR_PROMPT_SYSTEM = `You are an expert at translating rich personality descriptions and agent metadata into detailed visual prompts for AI image generation.
@@ -350,10 +351,10 @@ const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
     await moderateImageOrThrow({
       service: new RekognitionImageModerationService(req.logger),
       enabled: getSettingsValue('ImageModerationEnabled', moderationSettings) ?? true,
-      incidents: imageModerationIncidentRepository,
+      incidents: imageModerationIncidents,
       buffer: imageBuffer,
       mimeType: 'image/png',
-      incidentMeta: { userId, provider: 'avatar', model: 'avatar' },
+      incidentMeta: { userId, provider: 'avatar', model: 'avatar', surface: 'generation' },
       logger: req.logger,
     });
 

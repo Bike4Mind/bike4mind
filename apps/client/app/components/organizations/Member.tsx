@@ -1,5 +1,6 @@
 import {
   canAdministerOrganization,
+  canRevokeOrgMember,
   canManageMemberCreditBudgets,
   InviteType,
   IOrganizationDocument,
@@ -113,13 +114,14 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
     return result.sort((a, b) => (sortOrder === 'asc' ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name)));
   }, [users, search, sortOrder, pendingUsers, organization]);
 
-  // Each roster control mirrors the server predicate behind its own endpoint. The two sets differ:
-  // a manager may revoke but not invite, an appointed admin may invite but not revoke.
+  // Each roster control mirrors the server predicate behind its own endpoint. The sets differ: the
+  // legacy managerId may revoke but not invite, and only the owner may revoke a manager.
   // Invites (create + cancel) gate on isOrgMember, then isOrgOwnerOrCurrentAdmin, in sharingService;
   // an appointed admin whose users[] row lacks read/write fails the first check.
   const canInviteMembers =
     !!currentUser && isOrgMember(currentUser, organization) && isOrgOwnerOrCurrentAdmin(currentUser, organization);
-  // DELETE /members/:userId gates on canAdministerOrganization in organizationService.revokeAccess.
+  // DELETE /members/:userId gates on canRevokeOrgMember in organizationService.revokeAccess, which
+  // also depends on the target; this coarse flag only decides whether the seats card shows.
   const canRevokeMembers = !!currentUser && canAdministerOrganization(currentUser, organization);
 
   // Mirrors the server gate on the credit-budget routes.
@@ -398,7 +400,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
               organization={organization}
               user={user}
               canInviteMembers={canInviteMembers}
-              canRevokeMembers={canRevokeMembers}
+              canRevokeMembers={!!currentUser && canRevokeOrgMember(currentUser, organization, user.id)}
               canManageCreditBudgets={canManageCreditBudgets}
             />
           </Fragment>

@@ -32,6 +32,7 @@ import {
 } from '@mui/joy';
 import React, { useCallback, useMemo, useState } from 'react';
 import AdminSettingInputField from './AdminSettingInputField';
+import AdminStringListSettingField from './AdminStringListSettingField';
 import { AdminOperationsModelSetting } from './AdminOperationsModelSetting';
 import { AdminGenerationModelsSetting } from './AdminGenerationModelsSetting';
 import { AdminRecommendedModelsSetting } from './AdminRecommendedModelsSetting';
@@ -142,6 +143,9 @@ export const resolveSettingsIcon = (icon: string | undefined): React.FC<{ sx?: S
   (icon && IconMap[icon]) || IconMap.Settings;
 
 const settingConfigs = Object.values(settingsMap);
+
+// Settings whose value is a list of plain strings get the one-entry-per-line editor.
+const STRING_LIST_SETTING_KEYS = new Set<string>(['ImageModerationReviewerEmails']);
 
 interface EnvVariable {
   key: string;
@@ -539,6 +543,21 @@ const AdminSettingsTab: React.FC = () => {
                 setting: child,
                 defaultValue: settingValueByName.get(child.key) ?? child.defaultValue,
               }));
+              // A string-list setting gets a one-entry-per-line editor; the React key is the stored
+              // value so a save or refetch resets the draft. Keyed explicitly rather than by value
+              // shape: any future object setting with an array default would otherwise get this
+              // editor, and toStringList drops non-string entries.
+              if (setting.type === 'object' && STRING_LIST_SETTING_KEYS.has(setting.key)) {
+                const storedValue = settingValueByName.get(setting.key) ?? setting.defaultValue;
+                return (
+                  <AdminStringListSettingField
+                    key={`${setting.key}-${JSON.stringify(storedValue)}`}
+                    index={index}
+                    setting={setting}
+                    storedValue={storedValue}
+                  />
+                );
+              }
               return (
                 <AdminSettingInputField
                   key={`${setting.key}-${groupId || 'ungrouped'}-${setting.name}-${index}`}

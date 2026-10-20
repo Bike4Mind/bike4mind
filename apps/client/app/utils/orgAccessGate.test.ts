@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { hasOrgUpdateAccess } from './orgAccessGate';
 
-/** Mirrors server/utils/orgAccess.ts verifyOrgAccess - owner or manager, plus platform admins. */
+/** Mirrors server/utils/orgAccess.ts verifyOrgAccess - owner or any manager, plus platform admins. */
 describe('hasOrgUpdateAccess', () => {
   const org = { userId: 'owner-1', managerId: 'manager-1' };
 
@@ -11,6 +11,17 @@ describe('hasOrgUpdateAccess', () => {
 
   it('admits the team manager', () => {
     expect(hasOrgUpdateAccess({ id: 'manager-1' }, org)).toBe(true);
+  });
+
+  it('admits an org manager who is still on the roster', () => {
+    const roster = { ...org, adminUserIds: ['org-manager-1'], users: [{ userId: 'org-manager-1' }] };
+    expect(hasOrgUpdateAccess({ id: 'org-manager-1' }, roster)).toBe(true);
+  });
+
+  it('refuses a stale manager entry with no users[] row', () => {
+    expect(hasOrgUpdateAccess({ id: 'org-manager-1' }, { ...org, adminUserIds: ['org-manager-1'], users: [] })).toBe(
+      false
+    );
   });
 
   it('admits a platform admin who is neither', () => {

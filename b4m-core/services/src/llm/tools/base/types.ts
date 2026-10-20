@@ -28,6 +28,7 @@ import {
   ILakeMembershipChangeEventRepository,
   ModelInfo,
   type AuthOrigin,
+  type CitableSource,
 } from '@bike4mind/common';
 
 /**
@@ -360,6 +361,15 @@ export interface ToolContext {
   storage: Pick<BaseStorage, 'upload' | 'getSignedUrl' | 'getPublicUrl'>;
   imageGenerateStorage: Pick<BaseStorage, 'upload' | 'getSignedUrl' | 'getPublicUrl'>;
   statusUpdate: (q: Partial<IChatHistoryItemDocument>, status?: string) => Promise<void>;
+  /**
+   * Give `citables` their numbers in the turn's shared [N] sequence before the tool writes its
+   * output, and merge them into the turn. Returns one stamped copy per input, in input order
+   * (`metadata.citationIndex` is the number to label that result with), or undefined when the turn
+   * is not numbered; the tool then labels its results locally. Send the returned copies through
+   * statusUpdate as usual. Absent outside indexed-citation chat sessions. See
+   * citationNumbering.ts.
+   */
+  numberCitables?: (citables: CitableSource[]) => CitableSource[] | undefined;
   onStart?: (toolName: string, data: any) => Promise<void>;
   onFinish?: (toolName: string, data: any) => Promise<void>;
   llm: Pick<ICompletionBackend, 'complete'>;

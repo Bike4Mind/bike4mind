@@ -1,6 +1,6 @@
 import mongoose, { Schema, model, Document, Model } from 'mongoose';
 import type { ImageModerationIncident as ImageModerationIncidentData, IncidentReviewStatus } from '@bike4mind/common';
-import { INCIDENT_REPORT_CHANNELS, INCIDENT_REVIEW_STATUSES } from '@bike4mind/common';
+import { INCIDENT_REPORT_CHANNELS, INCIDENT_REVIEW_STATUSES, INCIDENT_SURFACES } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 
 /**
@@ -31,6 +31,7 @@ const ImageModerationIncidentSchema = new Schema(
     fabFileId: { type: String, required: false },
     provider: { type: String, required: true },
     model: { type: String, required: true },
+    surface: { type: String, enum: INCIDENT_SURFACES, required: false },
     labels: [
       {
         _id: false,
@@ -49,6 +50,7 @@ const ImageModerationIncidentSchema = new Schema(
     previousReviewStatus: { type: String, enum: ['false_positive'], required: false },
     falsePositiveBy: { type: String, required: false },
     falsePositiveAt: { type: Date, required: false },
+    alertedAt: { type: Date, required: false },
   },
   {
     timestamps: true,
@@ -99,6 +101,11 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
    */
   async record(input: ImageModerationIncidentData): Promise<IImageModerationIncidentDocument> {
     return this.model.create(input);
+  }
+
+  /** Stamps the time the reviewer alert for this incident was delivered. */
+  async markAlerted(id: string, alertedAt = new Date()): Promise<void> {
+    await this.model.updateOne({ _id: id }, { $set: { alertedAt } });
   }
 
   /** Returns unreviewed incidents (reviewStatus absent or 'pending_review'), oldest first. */

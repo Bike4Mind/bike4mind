@@ -27,10 +27,10 @@ const findModel = async (id: ChatModels): Promise<ModelInfo> => {
 // https://cloud.google.com/vertex-ai/generative-ai/pricing.
 const PUBLISHED_CACHE_READ: Partial<Record<ChatModels, Record<number, number>>> = {
   [ChatModels.GEMINI_3_5_FLASH]: { 1048576: 0.15 },
-  [ChatModels.GEMINI_3_1_PRO_PREVIEW]: { 2097152: 0.2 },
+  [ChatModels.GEMINI_3_1_PRO_PREVIEW]: { 200000: 0.2, 2097152: 0.4 },
   [ChatModels.GEMINI_3_1_FLASH_LITE]: { 1048576: 0.025 },
   [ChatModels.GEMINI_3_FLASH_PREVIEW]: { 2097152: 0.05 },
-  [ChatModels.GEMINI_2_5_PRO]: { 2097152: 0.125 },
+  [ChatModels.GEMINI_2_5_PRO]: { 200000: 0.125, 2097152: 0.25 },
   [ChatModels.GEMINI_2_5_FLASH]: { 1048576: 0.03 },
   [ChatModels.GEMINI_2_5_FLASH_LITE]: { 1048576: 0.01 },
   [ChatModels.GROK_4_5]: { 200000: 0.3, 500000: 0.6 },
@@ -46,18 +46,6 @@ describe('Gemini and xAI cache-read rates', () => {
       for (const [tier, perMillion] of Object.entries(rates)) {
         expect(model.pricing[Number(tier)].cache_read).toBeCloseTo(perMillion / 1_000_000, 12);
       }
-    }
-  );
-
-  // A >200K tier here would bill an entire agent run at the upper rate: the agent executor prices a
-  // run's summed input (apps/workers/src/queueHandlers/agentExecutor.billing.ts), not one request.
-  // #4679 makes that per-request and removes this guard.
-  it.each([ChatModels.GEMINI_2_5_PRO, ChatModels.GEMINI_3_1_PRO_PREVIEW])(
-    '%s stays flat until agentExecutor.billing.ts prices per iteration (#4679)',
-    async id => {
-      const model = await findModel(id);
-
-      expect(Object.keys(model.pricing).map(Number)).toEqual([2_097_152]);
     }
   );
 
@@ -92,7 +80,7 @@ describe('Gemini and xAI cache-read rates', () => {
 
   it.each([
     [ChatModels.GEMINI_2_5_PRO, 1.25, 0.125, 10],
-    [ChatModels.GEMINI_3_1_PRO_PREVIEW, 2, 0.2, 18],
+    [ChatModels.GEMINI_3_1_PRO_PREVIEW, 2, 0.2, 12],
   ])('bills a cached %s request at or under 200K at the <=200K rates', async (id, input, cacheRead, output) => {
     const model = await findModel(id);
 

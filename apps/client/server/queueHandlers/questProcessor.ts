@@ -28,7 +28,6 @@ import {
   dataLakeRepository,
   fallbackLakeSettingsRepository,
   latticeModelRepository,
-  imageModerationIncidentRepository,
   lakeAccessEventRepository,
   Quest,
   scopedSettingsRepository,
@@ -44,6 +43,7 @@ import type { ToolDefinition } from '@bike4mind/services/llm/tools';
 import { withLatticeTools } from '@bike4mind/server-utils/queueHandlers/latticeChatTools';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
 import { premiumWorkspaceDeniedTools } from '@server/premium-generated/premiumWorkspaceDeniedTools.generated';
+import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
 import { Resource } from 'sst';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
 import { logEvent } from '@server/utils/analyticsLog';
@@ -68,6 +68,7 @@ import {
   getVideoJobDeps,
 } from '@server/generationJobs/wiring';
 import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
+import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
 
 // Cache static ChatCompletion options (DB repos, storage clients, config) across invocations;
 // dynamic per-request properties (user, sessionId, logger) are added below. Tokenizer is a
@@ -145,7 +146,7 @@ export const getStaticOptions = () => {
       // Audit trail for images blocked by the image_generation/edit_image tools'
       // moderation gate. The gate itself is unconditional (constructed inline
       // in the tool) - this only wires the incident record, not the block.
-      imageModerationIncidents: imageModerationIncidentRepository,
+      imageModerationIncidents,
       lakeAccessEvents: lakeAccessEventRepository,
       scopedSettings: scopedSettingsRepository,
       ...lakeWriteToolDb,
@@ -157,6 +158,7 @@ export const getStaticOptions = () => {
     slackWebhookUrl: Config.SLACK_WEBHOOK_URL,
     abilityGetter: defineAbilitiesFor,
     workspaceDeniedTools: premiumWorkspaceDeniedTools,
+    workspaceSessionSettings: premiumWorkspaceSessionSettings,
     getScopeFilter: (user: IUserDocument, permission: Permission, modelName: string) =>
       accessibleBy(defineAbilitiesFor(user), permission).ofType(mongoose.models[modelName]),
     // Resolve the caller's entitlement keys so retrieval can reach entitlement-gated lakes

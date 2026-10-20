@@ -316,7 +316,7 @@ describe('request_directory in a spawned session', () => {
 
   it('is withheld from the seed run, which is pointed at /add-dir rather than a chip', async () => {
     const id = await spawned();
-    await h.service.send(id, 'go', [], undefined, 0);
+    await h.service.send(id, 'go', [], { seedHops: 0 });
     await h.awaitRound(1);
 
     expect(h.toolNames(0)).not.toContain('request_directory');
@@ -355,7 +355,7 @@ describe('request_directory in a spawned session', () => {
     streams[0].write(frame('[DONE]'));
     await vi.waitUntil(() => events.some(event => event.type === 'done'), { timeout: 5000, interval: 10 });
 
-    expect(await h.service.send(id, 'from elsewhere', [], queued(id, extra))).toMatchObject({ ok: true });
+    expect(await h.service.send(id, 'from elsewhere', [], { released: queued(id, extra) })).toMatchObject({ ok: true });
     await vi.waitUntil(() => streams.length >= 2, { timeout: 5000, interval: 5 });
 
     expect(h.toolNames(1)).not.toContain('request_directory');

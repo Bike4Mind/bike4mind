@@ -3,11 +3,14 @@ import {
   ADMIN_FEEDBACK_TAB_SLUG,
   ADMIN_AUDIT_LOG_TAB_SLUG,
   ADMIN_TAB_PARAM,
+  ADMIN_USERS_TAB_SLUG,
   AUDIT_ENTRY_ID_PARAM,
   FEEDBACK_ID_PARAM,
+  MODERATION_INCIDENT_ID_PARAM,
   QUEST_ID_PARAM,
   adminAuditLogPath,
   adminFeedbackRecordPath,
+  adminModerationIncidentPath,
   sessionPath,
   sessionTurnPath,
   toAbsoluteUrl,
@@ -19,6 +22,13 @@ describe('deepLinks', () => {
     expect(url.pathname).toBe('/admin');
     expect(url.searchParams.get(ADMIN_TAB_PARAM)).toBe(ADMIN_FEEDBACK_TAB_SLUG);
     expect(url.searchParams.get(FEEDBACK_ID_PARAM)).toBe('fb-1');
+  });
+
+  it('addresses a moderation incident by tab slug and id', () => {
+    const url = new URL(adminModerationIncidentPath('inc-1'), 'https://app.example');
+    expect(url.pathname).toBe('/admin');
+    expect(url.searchParams.get(ADMIN_TAB_PARAM)).toBe(ADMIN_USERS_TAB_SLUG);
+    expect(url.searchParams.get(MODERATION_INCIDENT_ID_PARAM)).toBe('inc-1');
   });
 
   it('uses a stable slug rather than the positional AdminTab enum value', () => {

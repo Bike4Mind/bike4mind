@@ -9,7 +9,6 @@ import {
   defineAbilitiesFor,
   fabFileChunkRepository,
   fabFileRepository,
-  imageModerationIncidentRepository,
   lakeAccessEventRepository,
   latticeModelRepository,
   mcpServerRepository,
@@ -61,8 +60,10 @@ import { Config } from '@server/utils/config';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
 import { Resource } from 'sst';
 import { premiumWorkspaceDeniedTools } from '@server/premium-generated/premiumWorkspaceDeniedTools.generated';
+import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
 import { buildMcpEnvVariables } from '@server/utils/mcpEnv';
 import { LLMEvents, TelemetryEvents } from '@server/utils/eventBus';
+import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
 
 /**
  * Publish telemetry alert events to EventBridge for async processing.
@@ -183,7 +184,7 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
       // Audit trail for images blocked by the image_generation/edit_image tools'
       // moderation gate. The gate itself is unconditional (constructed inline
       // in the tool) - this only wires the incident record, not the block.
-      imageModerationIncidents: imageModerationIncidentRepository,
+      imageModerationIncidents,
       lakeAccessEvents: lakeAccessEventRepository,
       scopedSettings: scopedSettingsRepository,
       ...lakeWriteToolDb,
@@ -197,6 +198,7 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
     // @deprecated: Use scope instead
     abilityGetter: defineAbilitiesFor,
     workspaceDeniedTools: premiumWorkspaceDeniedTools,
+    workspaceSessionSettings: premiumWorkspaceSessionSettings,
     getScopeFilter: (user: IUserDocument, permission: Permission, modelName: string) =>
       accessibleBy(defineAbilitiesFor(user), permission).ofType(mongoose.models[modelName]),
     // Resolve entitlement keys so ALL chat surfaces (chat/opti/voice/ai-llm/rapid-reply/slack)

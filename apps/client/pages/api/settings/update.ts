@@ -8,6 +8,7 @@ import {
   isPricePerCreditBelowFloor,
   maskSensitiveSettingValue,
   MIN_PRICE_PER_CREDIT_USD,
+  partitionEmailList,
   settingsMap,
 } from '@bike4mind/common';
 import { AdminSettings } from '@bike4mind/database/infra';
@@ -63,6 +64,16 @@ const handler = baseApi().put(
       throw new BadRequestError(
         `Price Per Credit must be at least ${formatUsdPerCredit(MIN_PRICE_PER_CREDIT_USD)}, the per-credit sale price including markup.`
       );
+    }
+
+    // The schema accepts any strings so a bad stored entry cannot blank the list on read; the write is
+    // where an admin can still fix a typo, so refuse it here.
+    if (key === 'ImageModerationReviewerEmails') {
+      const { valid, invalid } = partitionEmailList(value);
+      if (invalid.length > 0) {
+        throw new BadRequestError(`Not a valid email address: ${invalid.map(e => JSON.stringify(e)).join(', ')}`);
+      }
+      value = valid;
     }
 
     const isSensitiveSetting = settingsMap[key].isSensitive === true;

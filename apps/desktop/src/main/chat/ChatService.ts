@@ -67,6 +67,7 @@ import {
   currentBranch,
   defaultBaseBranch,
   isGitDirectory,
+  isGitRepository,
   listWorktrees,
   projectDisplayName,
   resolveBaseRef,
@@ -213,6 +214,16 @@ const TURN_LIMITS: TurnLimits = {
 
 /** How a turn ended. Only 'completed' lets a queued message go out; see settleQueue. */
 type TurnOutcome = 'completed' | 'aborted' | 'failed';
+
+type SendOptions = {
+  /** A taken queue entry must never fall back into the queue. */
+  released?: ChatQueuedMessage;
+  /** A spawned session inherits its parent's relay depth. */
+  seedHops?: number;
+  /** Main submitted this message, so the renderer needs its persisted copy. */
+  announce?: boolean;
+  notes?: readonly string[];
+};
 
 /**
  * How many agent-spawned sessions may have a reply in flight at once, across the whole app.
@@ -649,7 +660,7 @@ export class ChatService {
     const entry = queue.enqueueAutomatic(sessionId, text, automatic);
     const taken = queue.take(sessionId, entry.id);
     if (!taken) return { ok: false, busy: true, error: 'This conversation is busy.' };
-    const result = await this.send(sessionId, taken.text, [], taken);
+    const result = await this.send(sessionId, taken.text, [], { released: taken });
     if (result.ok) return { ok: true };
     // Announces the entry gone; an automatic one is never handed to the composer.
     queue.giveBack(sessionId, [taken], 'refused', result.error);
@@ -1288,13 +1299,12 @@ export class ChatService {
     sessionId: string,
     text: string,
     attachments: readonly ChatAttachment[] = [],
-    released?: ChatQueuedMessage,
-    seedHops?: number
+    options: SendOptions = {}
   ): Promise<SendMessageResult> {
     this.sending.set(sessionId, (this.sending.get(sessionId) ?? 0) + 1);
     let result: SendMessageResult | undefined;
     try {
-      result = await this.acceptTurn(sessionId, text, attachments, released, seedHops);
+      result = await this.acceptTurn(sessionId, text, attachments, options);
       return result;
     } finally {
       const left = (this.sending.get(sessionId) ?? 1) - 1;
@@ -1303,7 +1313,7 @@ export class ChatService {
       // flushQueue holds off while a send is in flight, so the flush is owed now; a no-op if this
       // send started a reply. A refused queued message is the exception: sendTaken hands it back
       // and the chain stops there.
-      if (!(released && !result?.ok)) this.flushQueue(sessionId);
+      if (!(options.released && !result?.ok)) this.flushQueue(sessionId);
     }
   }
 
@@ -1311,19 +1321,9 @@ export class ChatService {
     sessionId: string,
     text: string,
     attachments: readonly ChatAttachment[],
-    /**
-     * Set on the flush path only: the queue entry this turn IS. It stops a message coming out
-     * of the queue from falling back into it - that would move it to the tail and reorder the
-     * user's own turns - and names the entry to confirm once the turn is accepted.
-     */
-    released?: ChatQueuedMessage,
-    /**
-     * Hop depth to start the turn at when nothing was relayed. Set only by `spawnSession`, so a
-     * child inherits its spawner's depth: without it, a turn that has run out of hops could
-     * spawn a session and message from there, laundering itself a fresh chain.
-     */
-    seedHops?: number
+    options: SendOptions
   ): Promise<SendMessageResult> {
+    const { released } = options;
     const prompt = text.trim();
     // An attachment is a message on its own: "look at this" with a screenshot needs no prose.
     if (!prompt && attachments.length === 0) return { ok: false, error: 'Type a message first.' };
@@ -1400,7 +1400,11 @@ export class ChatService {
       if (pending + attachments.length > MAX_ATTACHMENTS_PER_TURN) {
         return { ok: false, error: `Only ${MAX_ATTACHMENTS_PER_TURN} attachments fit in one message.` };
       }
-      return { ok: true, queued: true, message: this.deps.queue.enqueue(sessionId, prompt, attachments) };
+      return {
+        ok: true,
+        queued: true,
+        message: this.deps.queue.enqueue(sessionId, prompt, attachments, options.notes),
+      };
     }
 
     // Claimed with no await since the isBusy check above, so a second turn arriving during the
@@ -1408,16 +1412,7 @@ export class ChatService {
     // one instead of starting a reply of its own.
     this.accepting.add(sessionId);
     try {
-      return await this.startAcceptedTurn(
-        sessionId,
-        prompt,
-        attachments,
-        existing,
-        invocation,
-        skillCommand,
-        released,
-        seedHops
-      );
+      return await this.startAcceptedTurn(sessionId, prompt, attachments, existing, invocation, skillCommand, options);
     } finally {
       this.accepting.delete(sessionId);
     }
@@ -1431,9 +1426,10 @@ export class ChatService {
     existing: ChatSession,
     invocation: ReturnType<typeof parseSkillInvocation>,
     skillCommand: Awaited<ReturnType<SkillCatalog['get']>>,
-    released: ChatQueuedMessage | undefined,
-    seedHops: number | undefined
+    options: SendOptions
   ): Promise<SendMessageResult> {
+    const { released, seedHops } = options;
+    const notes = released?.notes ?? options.notes;
     const api = this.deps.getApiClient();
     if (!api) return { ok: false, error: 'Sign in to send a message.' };
 
@@ -1490,6 +1486,7 @@ export class ChatService {
         : {}),
       ...(attached.length > 0 ? { attachments: attached } : {}),
       ...(skill ? { skill } : {}),
+      ...(notes?.length ? { notes: [...notes] } : {}),
     };
 
     // Read off the session as it was BEFORE this message, which is the same question
@@ -1509,7 +1506,7 @@ export class ChatService {
 
     // Before the reply starts, so the prompt reaches the thread above the reply that answers
     // it: runReply emits 'start' the moment it is called.
-    if (released) this.deps.queue?.sent(sessionId, released.id, userMessage);
+    if (released || options.announce) this.deps.queue?.sent(sessionId, released?.id ?? userMessage.id, userMessage);
 
     if (released?.automatic) this.autoFixTurns.add(sessionId);
     else this.autoFixTurns.delete(sessionId);
@@ -2577,7 +2574,7 @@ export class ChatService {
   private sendTaken(sessionId: string, next: ChatQueuedMessage): void {
     const queue = this.deps.queue;
     if (!queue) return;
-    void this.send(sessionId, next.text, next.attachments ?? [], next).then(result => {
+    void this.send(sessionId, next.text, next.attachments ?? [], { released: next }).then(result => {
       if (result.ok) return;
       // Its turn came and main refused it - signed out since, or a model reconciled to one that
       // cannot read the image it carries. It is out of the queue by now, so it is handed back
@@ -2916,8 +2913,10 @@ export class ChatService {
             ok: false,
             message:
               target.status === 'started'
-                ? `The user already started suggestion ${id} as session ${target.started?.sessionId ?? ''}, so it ` +
-                  'can no longer change. Use session_send to tell that session instead.'
+                ? target.started?.placement === 'here'
+                  ? `The user chose to run suggestion ${id} here, in this conversation, so it can no longer change.`
+                  : `The user already started suggestion ${id} as session ${target.started?.sessionId ?? ''}, so it ` +
+                    'can no longer change. Use session_send to tell that session instead.'
                 : `Suggestion ${id} was dismissed. Suggest it again only if the user still wants it.`,
           };
           return null;
@@ -2932,6 +2931,10 @@ export class ChatService {
 
     return {
       suggest: async task => {
+        const [base, repository] = await Promise.all([
+          spawnBaseFor(project),
+          isGitRepository(project.workingDirectory),
+        ]);
         const suggestion: ChatSpawnSuggestion = {
           // Short because the model has to type it back to revise the card.
           id: randomUUID().slice(0, 8),
@@ -2939,8 +2942,9 @@ export class ChatService {
           ...(task.title ? {} : { derivedTitle: true }),
           prompt: task.prompt,
           ...(task.summary ? { summary: task.summary } : {}),
-          base: await spawnBaseFor(project),
+          base,
           branch: suggestBranchName(task.title, task.prompt),
+          repository,
           status: 'pending',
           revision: 0,
           createdAt: new Date().toISOString(),
@@ -2976,6 +2980,9 @@ export class ChatService {
    * Allowed while this conversation is replying: the child is its own conversation, and holding
    * the start for the reply would make the card the blocking thing it replaced. The model hears
    * what happened through the note `reportSuggestionOutcomes` puts on the next turn.
+   *
+   * 'here' starts no session: the task goes out through `send` as the user's own message, so it
+   * queues behind a live reply exactly as typing it would. See runSuggestionHere.
    */
   async startSpawnSuggestion(request: StartSpawnSuggestionRequest): Promise<SpawnSuggestionResult> {
     const { sessionId, suggestionId } = request;
@@ -2993,6 +3000,7 @@ export class ChatService {
       const prompt = typeof request.prompt === 'string' ? request.prompt.trim() : '';
       if (!prompt) return { ok: false, error: 'The task needs a prompt.' };
       const title = (typeof request.title === 'string' ? request.title.trim() : '') || suggestion.title;
+      if (request.placement === 'here') return await this.runSuggestionHere(sessionId, suggestion, prompt, title);
       const branch = typeof request.branch === 'string' ? request.branch.trim() : '';
       if (request.placement === 'worktree' && !branch) return { ok: false, error: 'Name a branch for the worktree.' };
       const placement: SpawnPlacement =
@@ -3029,6 +3037,48 @@ export class ChatService {
     } finally {
       this.startingSuggestions.delete(key);
     }
+  }
+
+  /** Reserve the suggestion before sending; its reminder travels with the task, even when queued. */
+  private async runSuggestionHere(
+    sessionId: string,
+    suggestion: ChatSpawnSuggestion,
+    prompt: string,
+    title: string
+  ): Promise<SpawnSuggestionResult> {
+    const started: ChatSpawnSuggestion = {
+      ...suggestion,
+      title,
+      prompt,
+      status: 'started',
+      started: { placement: 'here', title, edited: prompt !== suggestion.prompt || title !== suggestion.title },
+    };
+    const replace = (still: (entry: ChatSpawnSuggestion) => boolean, next: ChatSpawnSuggestion) =>
+      this.deps.store.changeSpawnSuggestions(sessionId, current =>
+        current.some(entry => entry.id === suggestion.id && still(entry))
+          ? current.map(entry => (entry.id === suggestion.id ? next : entry))
+          : null
+      );
+    if (!(await replace(entry => entry.status === 'pending', started))) {
+      return { ok: false, error: 'That suggestion is no longer waiting to start.' };
+    }
+
+    const text = `${RUN_HERE_PREAMBLE}\n\n${prompt}`;
+    // Queueing is decided inside send, after its awaits; announcement does not imply a queue release.
+    const sent = await this.send(sessionId, text, [], {
+      announce: true,
+      notes: [describeSuggestionOutcome(started)],
+    });
+    if (!sent.ok) {
+      const restored = await replace(
+        entry => entry.status === 'started' && entry.started?.placement === 'here',
+        suggestion
+      );
+      if (restored) this.emitSuggestions(sessionId, restored);
+      return { ok: false, error: sent.error };
+    }
+    await this.announceSuggestions(sessionId);
+    return { ok: true, suggestion: started };
   }
 
   async dismissSpawnSuggestion(sessionId: string, suggestionId: string): Promise<SpawnSuggestionResult> {
@@ -3306,8 +3356,7 @@ export class ChatService {
         child.id,
         workspace ? `${worktreePreamble(project.directory, workspace)}\n\n${seed}` : seed,
         [],
-        undefined,
-        this.turnRelay.get(parent.id)?.hops ?? 0
+        { seedHops: this.turnRelay.get(parent.id)?.hops ?? 0 }
       );
       if (!sent.ok) {
         this.spawnWatch.delete(child.id);
@@ -4971,12 +5020,25 @@ function withNotes(message: ChatMessage, text: string): string {
 /** Longest edited prompt quoted back to the model; the child has the whole of it. */
 const EDITED_PROMPT_QUOTE_CHARS = 4000;
 
+/**
+ * Opens a suggestion the user ran here. Suggestion prompts are written as briefs for a new
+ * session, often "you are a worker delegated from...", and read alone they invite delegating again.
+ */
+export const RUN_HERE_PREAMBLE =
+  '[I chose to run this suggested task here, in this conversation. Do the work yourself; do not hand it to another session.]';
+
 /** The note the model gets about one suggestion the user acted on. See reportSuggestionOutcomes. */
 export function describeSuggestionOutcome(suggestion: ChatSpawnSuggestion): string {
   const name = `suggestion ${suggestion.id} ("${suggestion.title}")`;
   const started = suggestion.started;
   if (suggestion.status !== 'started' || !started) {
     return `The user dismissed ${name}. Nothing was started; do not suggest it again unless they ask.`;
+  }
+  if (started.placement === 'here') {
+    return (
+      `The user chose to run ${name} here, in this conversation, instead of starting a session. ` +
+      'Their message carries the task; do the work in this conversation.'
+    );
   }
   const where =
     started.placement === 'worktree'

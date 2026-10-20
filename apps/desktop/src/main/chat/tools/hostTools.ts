@@ -1,3 +1,4 @@
+import { SPAWN_CHOICE_TEXT } from '@shared/chat';
 import { suggestBranchName } from '../project/branchName';
 import {
   requireString,
@@ -120,6 +121,10 @@ const LOCAL_NOTE =
   'The new session shares this conversation working directory. Nothing new is checked out, and ' +
   'both sessions edit the same files at the same time.';
 
+const RUN_HERE_NOTE =
+  'The user chose to run this task here, in this conversation, instead of starting a session. ' +
+  'Nothing was started. Do the work yourself now, in this turn, and do not call session_spawn for it again.';
+
 export const sessionSpawn: ToolDefinition = {
   schema: {
     name: 'session_spawn',
@@ -135,8 +140,9 @@ export const sessionSpawn: ToolDefinition = {
       'by another one, the user is asked to approve the start instead, and the call waits. ' +
       'A started session runs on its own, does not report into your turn, and tells this ' +
       'conversation when it finishes. It cannot see anything said here, so the prompt has to ' +
-      'carry the whole task. The USER chooses where it runs: in this working directory, or in a ' +
-      'git worktree of its own on a new branch cut from the branch this conversation is on - so ' +
+      'carry the whole task. The USER chooses where it runs: in this working directory, in a ' +
+      'git worktree of its own on a new branch cut from the branch this conversation is on, or ' +
+      'here in this conversation, handing the task back to you - so ' +
       'name files by their path within the repository rather than telling it to carry on with ' +
       'something uncommitted here. Each one costs credits: never suggest several variations of ' +
       'one task.',
@@ -176,7 +182,7 @@ export const sessionSpawn: ToolDefinition = {
         options: [
           {
             id: 'worktree',
-            label: 'Start with worktree',
+            label: SPAWN_CHOICE_TEXT.worktree.label,
             description: worktreeNote(base),
             input: { placement: 'worktree', base },
             // Prefilled and editable rather than derived behind the user's back. A worktree is
@@ -191,9 +197,16 @@ export const sessionSpawn: ToolDefinition = {
           },
           {
             id: 'local',
-            label: 'Start locally',
+            label: SPAWN_CHOICE_TEXT.local.label,
             description: LOCAL_NOTE,
             input: { placement: 'local' },
+          },
+          {
+            id: 'here',
+            label: SPAWN_CHOICE_TEXT.here.label,
+            description: SPAWN_CHOICE_TEXT.here.hint,
+            redirect: true,
+            note: RUN_HERE_NOTE,
           },
         ],
       },
@@ -215,7 +228,8 @@ export const sessionSpawn: ToolDefinition = {
       return [
         `Suggested task ${suggestion.id} ("${suggestion.title}"). Nothing has started.`,
         'It is on a card beside the user composer. They can edit it, start it - in a worktree on',
-        `${suggestion.branch} cut from ${suggestion.base}, or in this working directory - or dismiss it.`,
+        `${suggestion.branch} cut from ${suggestion.base}, or in this working directory - run it here as`,
+        'their own next message, or dismiss it.',
         'Do not wait for them: carry on or end your turn, and tell them you suggested it, not that it',
         `is running. If they ask for changes, call session_suggestion_update with id ${suggestion.id};`,
         'if they decline it or want it done here, call session_suggestion_dismiss and do it yourself.',
