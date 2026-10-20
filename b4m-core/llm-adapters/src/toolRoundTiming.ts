@@ -36,6 +36,8 @@ export const summarizeToolOutcomes = (outcomes: readonly ToolRoundOutcome[]): To
     resultChars: outcome.ok ? toolResultChars(outcome.result) : 0,
   }));
 
+/** With `executeTools: false` the caller drives the loop: tool rounds log nothing and terminal rounds log `round: 0`.
+ * A model fallback starts a fresh `complete()`, so `round` and `sinceRequestMs` restart at 0. */
 export const logToolRound = (logger: Pick<Logger, 'info' | 'warn'>, entry: ToolRoundEntry): void => {
   // The one deliberate swallow: observability must never break a chat turn.
   try {
