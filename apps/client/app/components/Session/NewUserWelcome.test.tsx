@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import type { AnswerCostReference } from '@client/app/utils/creditEstimate';
+import type { ModelAnswerCost } from '@client/app/utils/creditEstimate';
 
 const { state, sendPrompt, setChatInputValue } = vi.hoisted(() => ({
   state: {
@@ -13,10 +13,7 @@ const { state, sendPrompt, setChatInputValue } = vi.hoisted(() => ({
     balance: 9982,
     enforceCredits: true,
     hasComposer: true,
-    answerCostReference: {
-      premium: { modelName: 'Claude Sonnet 5.5', creditsPerAnswer: 54 },
-      budget: { modelName: 'GPT-5.4 Mini', creditsPerAnswer: 15 },
-    } as AnswerCostReference | null,
+    answerCost: { modelName: 'Claude Sonnet 5.5', creditsPerAnswer: 54 } as ModelAnswerCost | null,
   },
   sendPrompt: vi.fn(() => Promise.resolve(true)),
   setChatInputValue: vi.fn(),
@@ -36,8 +33,8 @@ vi.mock('@client/app/hooks/data/settings', () => ({
   useGetSettingsValue: (key: string) => (key === 'enforceCredits' ? state.enforceCredits : undefined),
 }));
 vi.mock('@client/app/hooks/useEffectiveCredits', () => ({ useEffectiveCredits: () => state.balance }));
-vi.mock('@client/app/hooks/useAnswerCostReference', () => ({
-  useAnswerCostReference: () => state.answerCostReference,
+vi.mock('@client/app/hooks/useSelectedModelAnswerCost', () => ({
+  useSelectedModelAnswerCost: () => state.answerCost,
 }));
 vi.mock('@client/app/hooks/useChatActions', () => ({
   default: (selector: (s: { sendPrompt: unknown }) => unknown) =>
@@ -67,10 +64,7 @@ describe('NewUserWelcome', () => {
     state.balance = 9982;
     state.enforceCredits = true;
     state.hasComposer = true;
-    state.answerCostReference = {
-      premium: { modelName: 'Claude Sonnet 5.5', creditsPerAnswer: 54 },
-      budget: { modelName: 'GPT-5.4 Mini', creditsPerAnswer: 15 },
-    };
+    state.answerCost = { modelName: 'Claude Sonnet 5.5', creditsPerAnswer: 54 };
     sendPrompt.mockClear();
     setChatInputValue.mockClear();
     localStorage.clear();
@@ -83,15 +77,15 @@ describe('NewUserWelcome', () => {
     expect(screen.getAllByTestId(/^new-user-welcome-prompt-/)).toHaveLength(3);
   });
 
-  it('estimates how many answers the starting credits cover across models, labelled as an estimate', () => {
+  it('estimates how many answers the starting credits cover on the selected model, labelled as an estimate', () => {
     renderWelcome();
     expect(screen.getByTestId('new-user-welcome-answers-estimate')).toHaveTextContent(
-      /^Estimate: about 180 to 660 answers, depending on the model \(Claude Sonnet 5\.5 to GPT-5\.4 Mini\)/
+      /^Estimate: about 180 answers on Claude Sonnet 5\.5\./
     );
   });
 
-  it('shows no estimate when no reference model is priced', () => {
-    state.answerCostReference = null;
+  it('shows no estimate when the selected model is not priced', () => {
+    state.answerCost = null;
     renderWelcome();
     expect(screen.getByTestId('new-user-welcome-credits')).toBeInTheDocument();
     expect(screen.queryByTestId('new-user-welcome-answers-estimate')).not.toBeInTheDocument();
