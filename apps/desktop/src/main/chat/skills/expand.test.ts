@@ -100,6 +100,11 @@ describe('expandSkill', () => {
     expect(result.errors).toEqual([]);
   });
 
+  it('keeps an empty import empty rather than sending a bare wrapper', async () => {
+    const empty: CustomCommand = { ...command('  '), source: 'remote', filePath: 'b4m:/api/skills/x', untrusted: true };
+    expect((await expandSkill(empty, '', [granted], granted)).body).toBe('');
+  });
+
   it("leaves the user's own account skill byte-identical to before", async () => {
     const own: CustomCommand = { ...command('Summarise $ARGUMENTS'), source: 'remote', filePath: 'b4m:/api/skills/x' };
     expect((await expandSkill(own, 'it', [granted], granted)).body).toBe('Summarise it');

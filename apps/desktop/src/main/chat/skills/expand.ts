@@ -61,7 +61,8 @@ export async function expandSkill(
   workingDirectory?: string
 ): Promise<ExpandedSkill> {
   const substituted = substituteArguments(command.body, parseArguments(args));
-  if (command.untrusted) return { body: renderUntrusted(command, substituted), errors: [] };
+  // An empty body stays empty, so the callers' empty-body refusal still sees it through the wrapper.
+  if (command.untrusted) return { body: substituted.trim() ? renderUntrusted(command, substituted) : '', errors: [] };
 
   const errors: string[] = [];
   const blocks: string[] = [];

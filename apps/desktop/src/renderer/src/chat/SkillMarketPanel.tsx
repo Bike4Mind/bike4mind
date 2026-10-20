@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -98,9 +98,13 @@ export function SkillMarketPanel({
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<SkillMarketListingRef | null>(initial ?? null);
 
+  // Only the latest request lands, so a slow page for old filters cannot overwrite the new ones.
+  const latest = useRef(0);
   const load = useCallback(async (next: SkillMarketFilters, nextPage: number) => {
+    const request = ++latest.current;
     setLoading(true);
     const result = await window.b4m.skillMarket.browse(next, nextPage);
+    if (request !== latest.current) return;
     setLoading(false);
     setError(result.error ?? null);
     setHasMore(result.hasMore);

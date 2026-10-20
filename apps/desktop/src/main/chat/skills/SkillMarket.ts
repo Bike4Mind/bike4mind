@@ -146,8 +146,10 @@ export class SkillMarket {
             ? '/skills/market/mine'
             : null;
     if (!path || !isExternallyOpenable(`${base}${path}`)) return false;
-    await this.deps.openExternal(`${base}${path}`);
-    return true;
+    return this.deps.openExternal(`${base}${path}`).then(
+      () => true,
+      () => false
+    );
   }
 
   /**

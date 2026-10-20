@@ -210,5 +210,8 @@ describe('SkillMarket', () => {
 
     expect(await market.openOnWeb({ kind: 'url', id: 'javascript:alert(1)' } as never)).toBe(false);
     expect(openExternal).toHaveBeenCalledTimes(3);
+
+    openExternal.mockRejectedValueOnce(new Error('no handler'));
+    expect(await market.openOnWeb({ kind: 'mine' })).toBe(false);
   });
 });
