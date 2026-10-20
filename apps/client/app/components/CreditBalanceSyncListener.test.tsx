@@ -123,7 +123,7 @@ describe('CreditBalanceSyncListener', () => {
       expect(cancel).not.toHaveBeenCalled();
 
       runTurn();
-      expect(cancel).toHaveBeenCalledWith({ queryKey: ['organizations'] });
+      expect(cancel).toHaveBeenCalledWith(expect.objectContaining({ queryKey: ['organizations'] }));
 
       await act(async () => {
         release();
@@ -159,6 +159,31 @@ describe('CreditBalanceSyncListener', () => {
       });
 
       expect(queryClient.getQueryData(orgKey)).toEqual({ credits: 100 });
+      unsubscribe();
+    });
+
+    it('does not cancel an org query that is on its first load', async () => {
+      useLLM.setState({ organizationId: 'org-1' });
+      const orgKey = ['organizations', 'user', 'u1'];
+      const observer = new QueryObserver(queryClient, {
+        queryKey: orgKey,
+        queryFn: () => new Promise<{ credits: number }>(() => undefined),
+      });
+      const unsubscribe = observer.subscribe(() => undefined);
+      const { release } = holdNextOrgRefresh();
+      renderListener();
+      runTurn();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(BALANCE_SYNC_DELAYS_MS[0]);
+      });
+
+      runTurn();
+      await act(async () => {
+        release();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(queryClient.getQueryState(orgKey)?.fetchStatus).toBe('fetching');
       unsubscribe();
     });
 

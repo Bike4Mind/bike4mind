@@ -72,7 +72,11 @@ const CreditBalanceSyncListener = () => {
         // An org refetch already running would still update the cached org balance, which is what
         // the chip reads for a team account, and end the new turn's hold early.
         if (pullsInFlight > 0 && useLLM.getState().organizationId) {
-          void queryClient.cancelQueries({ queryKey: ['organizations'] });
+          // Only queries that hold data: cancelling a first load elsewhere would revert it to pending.
+          void queryClient.cancelQueries({
+            queryKey: ['organizations'],
+            predicate: query => query.state.data !== undefined,
+          });
         }
         const turn = ++turnEnds;
         const isStale = () => turn !== turnEnds;
