@@ -89,20 +89,22 @@ export async function resolveStorageOwnerTransfer(
 /**
  * The join gate: throws a StorageLimitError when giving `file` the meta-tags in `tagNames` would move
  * its charged bytes onto an owner with no room for them. Call it BEFORE the tag write, so a refused
- * join writes nothing even on a door that runs outside a transaction.
+ * join writes nothing even on a door that runs outside a transaction. Returns the transfer it graded,
+ * or null when the owner would not change.
  */
 export async function assertStorageOwnerTransferFits(
   file: OwnerSourceFile,
   tagNames: readonly string[],
   db: Pick<StorageOwnerTransferDb, 'dataLakes' | 'users' | 'organizations'>
-): Promise<void> {
+): Promise<StorageOwnerTransfer | null> {
   const transfer = await resolveStorageOwnerTransfer(file, tagNames, db);
-  if (!transfer || transfer.bytes <= 0) return;
+  if (!transfer || transfer.bytes <= 0) return transfer;
   const uploader = await db.users.findById(file.userId);
   if (!uploader) throw new NotFoundError('File owner not found');
   await checkStorageLimitForOwner({ user: uploader, organizationId: transfer.nextOrganizationId }, transfer.bytes, id =>
     db.organizations.findById(id)
   );
+  return transfer;
 }
 
 // A lost compare-and-set means a concurrent charge, rewrite or reassign moved the row; re-reading

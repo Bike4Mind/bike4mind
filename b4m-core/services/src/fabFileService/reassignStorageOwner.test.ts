@@ -231,7 +231,9 @@ describe('assertStorageOwnerTransferFits', () => {
   it('lets a join through when the org has room', async () => {
     const { db } = makeDb(null);
 
-    await expect(assertStorageOwnerTransferFits(file([]), ['datalake:acme'], db)).resolves.toBeUndefined();
+    await expect(assertStorageOwnerTransferFits(file([]), ['datalake:acme'], db)).resolves.toMatchObject({
+      to: { type: 'org', id: 'org-acme' },
+    });
   });
 
   it('does not check quota when the owner would not change', async () => {

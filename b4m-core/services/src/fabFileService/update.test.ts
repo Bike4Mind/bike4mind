@@ -402,6 +402,36 @@ describe('updateFabFile (lake-tag reconciliation wiring)', () => {
       expect(mockAdapters.db.organizations.incrementCurrentStorage).not.toHaveBeenCalled();
     });
 
+    it("does not grade a rewrite's growth against the old owner when the edit moves the file to an org", async () => {
+      const textRow = baseFile({ mimeType: 'text/plain', fileSize: 10, tags: [], ...charged });
+      findUpdateAccessById.mockResolvedValue(textRow);
+      findByDatalakeTag.mockResolvedValue(orgLake);
+      mockAdapters.db.dataLakes.findByDatalakeTags.mockResolvedValue([orgLake]);
+      // The uploader's personal pool is full; the destination org has room.
+      mockAdapters.db.users.findById.mockResolvedValue({
+        id: 'user-123',
+        currentStorageSize: 1024 * 1024,
+        storageLimit: 1,
+      });
+      mockAdapters.db.organizations.findById.mockResolvedValue({
+        id: 'org-acme',
+        currentStorageSize: 0,
+        storageLimit: 1,
+      });
+      const fabFiles = mockAdapters.db.fabFiles as typeof mockAdapters.db.fabFiles & Record<string, Mock>;
+      fabFiles.findChargeState = vi.fn().mockResolvedValue(textRow);
+      fabFiles.commitContentRewrite = vi.fn().mockResolvedValue(textRow);
+
+      await updateFabFile(
+        mockUser,
+        { id: 'file-1', fileContent: 'x'.repeat(100), tags: [{ name: 'datalake:acme', strength: 1 }] },
+        mockAdapters as any
+      );
+
+      expect(mockAdapters.storage.upload).toHaveBeenCalled();
+      expect(fabFiles.findChargeState).not.toHaveBeenCalled();
+    });
+
     it('grades a join against the rewritten size before the upload commits', async () => {
       // A text file, so the content block runs; unstamped, so its current charged bytes are 0.
       findUpdateAccessById.mockResolvedValue(

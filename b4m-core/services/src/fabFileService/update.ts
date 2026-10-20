@@ -167,13 +167,13 @@ export const updateFabFile = async (
   // A join can move the file's bytes onto an org's pool (reassignStorageOwner), so it is
   // quota-gated before ANY write - against the rewrite's new size when this request also replaces
   // the content, so a refused join cannot land after the upload and charge are committed.
-  if (lakeTags) {
-    await assertStorageOwnerTransferFits(
-      rewrite ? { ...fabFile, fileSize: rewrite.size, storageChargedAt: new Date() } : fabFile,
-      lakeTags.tagsToPersist.map(t => t.name),
-      db
-    );
-  }
+  const ownerTransfer = lakeTags
+    ? await assertStorageOwnerTransferFits(
+        rewrite ? { ...fabFile, fileSize: rewrite.size, storageChargedAt: new Date() } : fabFile,
+        lakeTags.tagsToPersist.map(t => t.name),
+        db
+      )
+    : null;
 
   if (rewrite) {
     const { content, size } = rewrite;
@@ -182,7 +182,8 @@ export const updateFabFile = async (
     const filePath = fabFile.filePath ?? `${uuidv4()}${ext ? `.${ext}` : '.txt'}`;
 
     let fileSize = size;
-    await assertRewriteFits(fabFile, fileSize, db, user);
+    // A transfer moves every byte off the current owner, and the gate above graded the new owner on this size.
+    if (!ownerTransfer) await assertRewriteFits(fabFile, fileSize, db, user);
 
     await storage.upload(filePath, content, {
       ContentType: mimeType,
