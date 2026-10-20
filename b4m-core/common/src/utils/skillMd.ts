@@ -71,6 +71,10 @@ export function toSkillMd(skill: SkillMdSkill, opts: ToSkillMdOptions = {}): str
   return ['---', ...comments, yaml, '---', '', `${skill.body}\n`].join('\n');
 }
 
+// Claude Code writes hints unquoted (`argument-hint: [pr-number] [priority]`), which YAML reads as a
+// flow sequence or rejects outright; quote the raw line so the hint survives verbatim.
+const UNQUOTED_ARGUMENT_HINT = /^(argument-hint:[ \t]*)(\[.*?)[ \t]*$/m;
+
 const toText = (value: unknown): string | undefined =>
   typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' ? String(value) : undefined;
 
@@ -89,7 +93,11 @@ export function parseSkillMd(text: string): ParseSkillMdResult {
 
   let data: unknown;
   try {
-    data = YAML.parse(split.frontmatter) ?? {};
+    const frontmatter = split.frontmatter.replace(
+      UNQUOTED_ARGUMENT_HINT,
+      (_, key: string, hint: string) => `${key}${JSON.stringify(hint)}`
+    );
+    data = YAML.parse(frontmatter) ?? {};
   } catch (error) {
     return { ok: false, error: `Invalid YAML frontmatter: ${error instanceof Error ? error.message : String(error)}` };
   }
