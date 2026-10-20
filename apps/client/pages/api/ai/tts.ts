@@ -83,7 +83,16 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
   const candidateAvailability = await Promise.all(
     ttsCandidates(vendor, text.length).map(async candidate => ({
       vendor: candidate,
-      available: candidate === vendor || (userId !== undefined && (await hasTtsProviderKey(candidate, userId))),
+      available:
+        candidate === vendor ||
+        (userId !== undefined &&
+          (await hasTtsProviderKey(candidate, userId).catch(error => {
+            req.logger.warn('TTS fallback key lookup failed', {
+              vendor: candidate,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            return false;
+          }))),
     }))
   );
   const candidates = candidateAvailability.filter(candidate => candidate.available).map(candidate => candidate.vendor);

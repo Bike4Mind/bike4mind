@@ -576,11 +576,12 @@ describe('configured fallback holds', () => {
     expect(mocks.synthesizeTts).toHaveBeenCalledWith(expect.objectContaining({ candidates: ['openai', 'elevenlabs'] }));
   });
 
-  it('fails before taking a hold when the key lookup fails', async () => {
-    const fault = new Error('key lookup unavailable');
-    mocks.hasTtsProviderKey.mockRejectedValue(fault);
-    await expect(run({ text: 'hello' }).promise).rejects.toBe(fault);
-    expect(mocks.holdPreflightCredits).not.toHaveBeenCalled();
-    expect(mocks.synthesizeTts).not.toHaveBeenCalled();
+  it('drops an alternate whose key lookup fails and still holds and synthesizes', async () => {
+    mocks.hasTtsProviderKey.mockRejectedValue(new Error('key lookup unavailable'));
+    const { res, promise } = run({ text: 'hello' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.holdPreflightCredits).toHaveBeenCalled();
+    expect(mocks.synthesizeTts).toHaveBeenCalledWith(expect.objectContaining({ candidates: ['openai'] }));
   });
 });
