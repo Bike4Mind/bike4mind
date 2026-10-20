@@ -43,7 +43,7 @@ export function isLatencyObservation(err: unknown): err is StreamingTimeoutError
 /** One poll of the chat UI while waiting for a reply to finish. */
 export type StreamSnapshot = {
   stopVisible: boolean;
-  /** innerText of the newest reply's root container; '' when none is mounted. */
+  /** innerText of the newest reply's body (root container when no body is mounted); '' when none. */
   text: string;
 };
 

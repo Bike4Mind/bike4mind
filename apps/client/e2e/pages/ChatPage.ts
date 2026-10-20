@@ -22,10 +22,11 @@ export class ChatPage extends BasePage {
    *
    * Reads the reply body (`ai-response-body`), falling back to the whole root container when no
    * body is mounted (syntax-highlight and image-only views). The body test id is what keeps
-   * reasoning text, banners and accessories out of the returned text: the root wraps those too,
-   * and callers assert keywords against this string. Reading only `ai-response`, the id on the
-   * markdown <p> renderer, missed list-only replies entirely and stalled the completion wait
-   * until its budget ran out.
+   * reasoning text and the banner/accessory rows around it out of the returned text: the root
+   * wraps those too, and callers assert keywords against this string. The prompt-enhancement
+   * banner is the exception - it renders inside the body, so an enhanced prompt's banner text is
+   * included. Reading only `ai-response`, the id on the markdown <p> renderer, missed list-only
+   * replies entirely and stalled the completion wait until its budget ran out.
    *
    * The count() guards are load-bearing: the config sets no `actionTimeout`, so a bare
    * `.innerText()` on an absent element auto-waits with NO timeout and blocks until the test
