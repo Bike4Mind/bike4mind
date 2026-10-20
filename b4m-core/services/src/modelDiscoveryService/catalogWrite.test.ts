@@ -563,7 +563,7 @@ describe('planCatalogWrites', () => {
         resolved: { status: 'deprecated', deprecationDate: '2026-05-01' },
       },
       {
-        name: "takes a provider's earlier legacy dates over an aggregator's later deprecation",
+        name: 'clamps a held later deprecation with a typed earlier legacy date',
         held: { status: 'deprecated', deprecationDate: '2027-03-30' },
         contributions: typed({ status: 'legacy', deprecationDate: '2026-09-30', retirementDate: '2027-03-30' }),
         source: 'openai',
