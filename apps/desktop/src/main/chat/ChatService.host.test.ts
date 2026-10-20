@@ -34,14 +34,18 @@ describe('ChatService app-control tools', () => {
     projectA = await realpath(await mkdtemp(join(tmpdir(), 'b4m-host-a-')));
     projectB = await realpath(await mkdtemp(join(tmpdir(), 'b4m-host-b-')));
     store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-host-sessions-')), 'test-model');
-    events = [];
-    streams = [];
+    // Bound per test: a previous service replying late must not push into this test's events.
+    const emitted: ChatStreamEvent[] = [];
+    events = emitted;
+    const opened: PassThrough[] = [];
+    streams = opened;
     asked = [];
-    post = vi.fn().mockImplementation(() => {
+    const boundPost = vi.fn().mockImplementation(() => {
       const stream = new PassThrough();
-      streams.push(stream);
+      opened.push(stream);
       return Promise.resolve({ data: stream, status: 200 });
     });
+    post = boundPost;
     approvals = new ApprovalGate({ requested: vi.fn(), settled: vi.fn() });
 
     service = new ChatService({
@@ -52,11 +56,11 @@ describe('ChatService app-control tools', () => {
       getApiClient: () =>
         ({
           get: vi.fn().mockResolvedValue({}),
-          getAxiosInstance: () => ({ post }),
+          getAxiosInstance: () => ({ post: boundPost }),
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
       emit: event => {
-        events.push(event);
+        emitted.push(event);
         // Stand in for the user, answering every ask the moment it is raised. 'always' is
         // chosen so that anything which CAN become a standing approval does, and a card that
         // offers a choice is answered with the option that runs where the caller already is:
