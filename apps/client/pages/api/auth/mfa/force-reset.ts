@@ -45,6 +45,7 @@ const handler = baseApi().post(
         action: 'user.mfa.denied',
         attempted: 'user.mfa.reset',
         target: { kind: 'user', id: userId, displayName: adminUser.name || adminUser.username },
+        message: 'Use Profile > Settings > Security to turn off your own MFA.',
       });
     }
     const reason = parseAdminActionReason(rawReason);

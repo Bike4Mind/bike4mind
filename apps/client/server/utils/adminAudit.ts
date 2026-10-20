@@ -117,7 +117,12 @@ type DeniedAction = Extract<AdminAuditAction, `${string}.denied`>;
  */
 export const denySelfAdminAction = async (
   req: AuditRequest,
-  { action, attempted, target }: { action: DeniedAction; attempted: AdminAuditAction; target: AuditTarget }
+  {
+    action,
+    attempted,
+    target,
+    message = 'Admins cannot perform this action on their own account.',
+  }: { action: DeniedAction; attempted: AdminAuditAction; target: AuditTarget; message?: string }
 ): Promise<never> => {
   await recordAdminActionFromRequest(req, {
     action,
@@ -125,7 +130,7 @@ export const denySelfAdminAction = async (
     summary: `blocked ${attempted} on their own account`,
     details: { attemptedAction: attempted },
   });
-  throw new ForbiddenError('Admins cannot perform this action on their own account.');
+  throw new ForbiddenError(message);
 };
 
 export const systemAuditActor = (name: string): AuditActor => ({

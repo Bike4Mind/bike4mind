@@ -82,7 +82,11 @@ describe('POST /api/auth/mfa/force-reset', () => {
     await expect(run()).rejects.toBeInstanceOf(ForbiddenError);
     expect(mockDeny).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ action: 'user.mfa.denied', attempted: 'user.mfa.reset' })
+      expect.objectContaining({
+        action: 'user.mfa.denied',
+        attempted: 'user.mfa.reset',
+        message: 'Use Profile > Settings > Security to turn off your own MFA.',
+      })
     );
     expect(mockForceResetMFA).not.toHaveBeenCalled();
     expect(mockRemovePasskeys).not.toHaveBeenCalled();
