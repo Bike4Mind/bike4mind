@@ -188,7 +188,7 @@ import EnsureConnectionIndexes from './20260921235988_ensure-connection-indexes'
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import MoveQuestAnsweredByToRedirectedFrom from './20260921235987_move-quest-answeredby-to-redirectedfrom';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
-import DropGoogleCalendarSettings from './20260921235981_drop-google-calendar-settings';
+import DropGoogleCalendarSettings from './20260921235982_drop-google-calendar-settings';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import EnsureMcpConnectionIndexes from './20260921235985_ensure-mcp-connection-indexes';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
