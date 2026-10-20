@@ -82,7 +82,8 @@ vi.mock('@bike4mind/database', () => ({
     validateAndRotateNonce: (...a: unknown[]) => mockValidateAndRotateNonce(...a),
     consumeOtherCodes: (...a: unknown[]) => mockConsumeOtherCodes(...a),
   },
-  adminSettingsRepository: {},
+  adminSettingsRepository: { findBySettingName: vi.fn(async () => null) },
+  partnerSignupRuleRepository: { findActiveRules: vi.fn(async () => []) },
   registrationInviteRepository: {},
   subscriberRepository: {},
   creditTransactionRepository: {},
@@ -444,6 +445,7 @@ describe('/api/otc/verify — enumeration resistance', () => {
     expect(mockRes.status).toHaveBeenCalledWith(200);
     const body = mockRes.json.mock.calls[0][0];
     expect(body.registrationRequired).toBe(true);
+    expect(body.registrationAllowed).toBe(false);
     expect(body.email).toBe('user@example.com');
     expect(typeof body.pendingToken).toBe('string');
     // Enumeration-safe: no refresh token / session is issued at this stage.
