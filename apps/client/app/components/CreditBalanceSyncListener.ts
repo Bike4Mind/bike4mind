@@ -25,6 +25,7 @@ export async function syncCreditBalance(queryClient: QueryClient, isStale?: () =
   // The organization the sends carried (see CreditPayerNote for why not the account menu's pick).
   if (useLLM.getState().organizationId) {
     await queryClient.invalidateQueries({ queryKey: ['organizations'] });
+    if (isStale?.()) return;
   }
   try {
     const balance = await queryClient.fetchQuery({
@@ -62,19 +63,28 @@ const CreditBalanceSyncListener = () => {
     // Clearing the timers only cancels pulls that have not fired; one already in flight
     // from an earlier turn is told apart by this counter.
     let turnEnds = 0;
+    let pullsInFlight = 0;
 
     const unsubscribe = useStreamingState.subscribe(state => {
       const streaming = state.isAnyStreaming();
       if (wasStreaming && !streaming) {
         timers.forEach(clearTimeout);
+        // An org refetch already running would still update the cached org balance, which is what
+        // the chip reads for a team account, and end the new turn's hold early.
+        if (pullsInFlight > 0 && useLLM.getState().organizationId) {
+          void queryClient.cancelQueries({ queryKey: ['organizations'] });
+        }
         const turn = ++turnEnds;
         const isStale = () => turn !== turnEnds;
         timers = BALANCE_SYNC_DELAYS_MS.map((delay, index) =>
           setTimeout(() => {
-            const sync = syncCreditBalance(queryClient, isStale);
+            pullsInFlight += 1;
             // Only the last pull confirms the balance: an unchanged first pull may just be a slow settle.
             const isLast = index === BALANCE_SYNC_DELAYS_MS.length - 1;
-            void (isLast ? sync.finally(() => !isStale() && markSynced()) : sync);
+            void syncCreditBalance(queryClient, isStale).finally(() => {
+              pullsInFlight -= 1;
+              if (isLast && !isStale()) markSynced();
+            });
           }, delay)
         );
       }
