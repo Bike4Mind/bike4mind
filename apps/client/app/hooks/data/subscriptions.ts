@@ -286,7 +286,6 @@ export const useGrantSubscription = () => {
       organizationId,
       durationMonths = 1,
       billingOwnerId,
-      managerId,
       reason,
     }: {
       userId: string;
@@ -297,7 +296,6 @@ export const useGrantSubscription = () => {
       organizationId?: string;
       durationMonths?: number;
       billingOwnerId?: string;
-      managerId?: string;
       reason: string;
     }) => {
       const { data } = await api.post<{
@@ -314,7 +312,6 @@ export const useGrantSubscription = () => {
         organizationId,
         durationMonths,
         billingOwnerId,
-        managerId,
         reason,
       });
       return data;

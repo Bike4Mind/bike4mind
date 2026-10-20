@@ -16,7 +16,8 @@ export interface SoundCost {
 
 /**
  * Computes the raw provider cost of a single sound-effects generation.
- * Conversion to internal credits happens downstream via `usdToCredits`.
+ * Conversion to internal credits happens downstream: `usdToCredits` for gates
+ * and reservations (round-up), `usdToCreditsStochastic` for the final debit.
  */
 export interface SoundCostCalculator<T extends SoundCostInput> {
   getCost(input: T): SoundCost;

@@ -109,6 +109,17 @@ describe('POST /api/users/:id/loginAs - respond() boundary', () => {
     expect(mockIssueSession).not.toHaveBeenCalled();
   });
 
+  it('denies a self-impersonation with no reason as a 403, not a 400, and records the denial', async () => {
+    const { req, res } = post({ mfaToken: '123456' }, 'admin1');
+
+    await expect((handler as any)(req, res)).rejects.toBeInstanceOf(ForbiddenError);
+    expect(mockDeny).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ action: 'user.impersonation.denied', attempted: 'user.impersonation.started' })
+    );
+    expect(mockLoginAs).not.toHaveBeenCalled();
+  });
+
   it('issues the session inside the transaction and records user.impersonation.started with the sid and reason', async () => {
     mockIssueSession.mockImplementation(async () => {
       txEvents.push('issue');

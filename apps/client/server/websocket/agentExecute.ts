@@ -571,14 +571,15 @@ export async function handlePermissionResponse(
   // continue - the tool was only recorded when `rememberForSession` was set,
   // which the Deny button never sends.)
   if (!cmd.approved) {
-    const denialMessage = `Execution stopped: you denied "${cmd.toolName}".`;
+    const deniedName = execution.pendingPermission?.toolName ?? cmd.toolName;
+    const denialMessage = `Execution stopped: you denied "${deniedName}".`;
     // CAS-guarded the same way `approvePendingPermission` is (status
     // `awaiting_permission`, pause not already approved, identity-pinned on
     // `toolCallId`) - an approval for this exact pause that has already won its own
     // CAS cannot be undone by a denial racing it from another tab.
     const denied = await agentExecutionRepository.denyPendingPermission(cmd.executionId, {
       toolCallId: pendingCallId,
-      deniedTool: cmd.rememberForSession ? cmd.toolName : undefined,
+      deniedTool: cmd.rememberForSession ? deniedName : undefined,
       errorMessage: denialMessage,
     });
     if (!denied) {
@@ -598,18 +599,24 @@ export async function handlePermissionResponse(
       return;
     }
     if (cmd.rememberForSession) {
-      await rememberToolDecision(execution.sessionId, userId, cmd.toolName, 'denied', logger);
+      await rememberToolDecision(execution.sessionId, userId, deniedName, 'denied', logger);
     }
+    // Settle the dispatch-time Quest so chat history keeps the denial across a refresh
+    // instead of a permanently `pending` empty bubble - parity with the executor's
+    // policy-denied path (`agentExecutorUtils/toolPermissions.ts`). Persist before the
+    // send: a closed socket makes the send throw, and a retried Deny cannot repair it
+    // because the CAS above has already left `awaiting_permission`.
+    await persistRunAsQuest(cmd.executionId, denialMessage, logger);
     await sendAgentEvent(connectionId, endpoint, {
       action: 'failed',
       executionId: cmd.executionId,
       reason: 'tool_denied',
-      toolName: cmd.toolName,
+      toolName: deniedName,
       message: denialMessage,
     });
     logger.info('[Permission] Denied — execution stopped', {
       executionId: cmd.executionId,
-      toolName: cmd.toolName,
+      toolName: deniedName,
     });
     return;
   }

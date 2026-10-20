@@ -43,7 +43,6 @@ const GrantSubscriptionModal: React.FC<GrantSubscriptionModalProps> = ({ user, o
   const [organizationName, setOrganizationName] = useState('');
   const [durationMonths, setDurationMonths] = useState(1);
   const [billingOwnerId, setBillingOwnerId] = useState<string | null>(null);
-  const [managerId, setManagerId] = useState<string | null>(null);
   const [reason, setReason] = useState('');
 
   const grantSubscription = useGrantSubscription();
@@ -75,7 +74,6 @@ const GrantSubscriptionModal: React.FC<GrantSubscriptionModalProps> = ({ user, o
         organizationName: organizationName.trim(),
         durationMonths,
         billingOwnerId: billingOwnerId || undefined,
-        managerId: managerId || undefined,
         reason: reason.trim(),
       });
     }
@@ -91,7 +89,6 @@ const GrantSubscriptionModal: React.FC<GrantSubscriptionModalProps> = ({ user, o
     setOrganizationName('');
     setDurationMonths(1);
     setBillingOwnerId(null);
-    setManagerId(null);
     setReason('');
   };
 
@@ -194,14 +191,6 @@ const GrantSubscriptionModal: React.FC<GrantSubscriptionModalProps> = ({ user, o
                 onChange={setBillingOwnerId}
                 placeholder="Select billing owner (optional)"
                 helperText="The user responsible for billing. Defaults to the target user if not specified."
-              />
-
-              <UserSelector
-                label="Team Manager"
-                value={managerId}
-                onChange={setManagerId}
-                placeholder="Select team manager (optional)"
-                helperText="The user who will manage the team. Can be different from the billing owner."
               />
 
               <FormControl>

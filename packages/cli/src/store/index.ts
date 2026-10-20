@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { Session, Message } from '../storage';
 import type { PermissionResponse } from '../components';
+import type { PermissionPromptKind } from '../tools/gateway/gatewayTypes.js';
 import type { BackgroundAgentJob, BackgroundAgentStatus } from '../agents/types.js';
 import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services/llm';
 import type { ShellSession, ShellSessionStatus } from '@bike4mind/services/llm/tools/cliTools';
@@ -42,6 +43,7 @@ interface PermissionPromptState {
   args: unknown;
   preview?: string;
   canBeTrusted: boolean;
+  kind?: PermissionPromptKind;
   resolve: (response: { action: PermissionResponse }) => void;
 }
 

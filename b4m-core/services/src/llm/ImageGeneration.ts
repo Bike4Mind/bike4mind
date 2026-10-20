@@ -60,6 +60,7 @@ import {
   OpenaiModerationsService,
   TiktokenTokenizer,
   usdToCredits,
+  usdToCreditsStochastic,
   UnprocessableEntityError,
   OpenAIImageService,
   BFLImageService,
@@ -559,7 +560,7 @@ export class ImageGenerationService {
       );
     }
 
-    // usdCost returned only for usage-event analytics; billing still uses requiredCredits.
+    // requiredCredits only gates the request (rounded up); the final debit settles usdCost stochastically.
     return { requiredCredits, usdCost: usdCost * n + inputUsd };
   }
 
@@ -1525,6 +1526,18 @@ export class ImageGenerationService {
         totalResponseTime,
       });
 
+      // Per-image prices are exact, so the final debit is the unbiased draw on usageCostUsd
+      // (may be 0), replacing the rounded-up pre-flight figure.
+      const creditTransactions = this.db.creditTransactions;
+      const settlement =
+        adminSettingsEnforceCredits &&
+        typeof quest.creditsUsed === 'number' &&
+        Number.isFinite(quest.creditsUsed) &&
+        creditTransactions
+          ? { creditTransactions, credits: usdToCreditsStochastic(usageCostUsd) }
+          : undefined;
+      if (settlement) quest.creditsUsed = settlement.credits;
+
       await this.db.quests.update({
         id: quest.id,
         reply: quest.reply,
@@ -1564,31 +1577,28 @@ export class ImageGenerationService {
         statusMessage: null,
       });
 
-      // Deduct credits after successful generation
-      if (
-        adminSettingsEnforceCredits &&
-        typeof quest.creditsUsed === 'number' &&
-        Number.isFinite(quest.creditsUsed) &&
-        !!this.db.creditTransactions
-      ) {
-        await deductCreditsWithOrgSupport(
-          {
-            type: 'image_generation_usage',
-            user,
-            organization,
-            credits: quest.creditsUsed,
-            sessionId,
-            questId,
-            model,
-          },
-          {
-            db: {
-              creditTransactions: this.db.creditTransactions,
-              users: this.db.users,
-              organizations: this.db.organizations,
+      // Deduct credits after successful generation. A zero draw writes no ledger row; the usage event still lands.
+      if (settlement) {
+        if (settlement.credits > 0) {
+          await deductCreditsWithOrgSupport(
+            {
+              type: 'image_generation_usage',
+              user,
+              organization,
+              credits: settlement.credits,
+              sessionId,
+              questId,
+              model,
             },
-          }
-        );
+            {
+              db: {
+                creditTransactions: settlement.creditTransactions,
+                users: this.db.users,
+                organizations: this.db.organizations,
+              },
+            }
+          );
+        }
 
         // Dual-write usage event: analytics only, never billing. Awaited because a write still in
         // flight when the Lambda handler returns can be frozen and never land; the catch keeps it
@@ -1612,7 +1622,7 @@ export class ImageGenerationService {
             cacheWriteTokens: 0,
             units: billedN,
             costUsd: usageCostUsd,
-            creditsCharged: quest.creditsUsed,
+            creditsCharged: settlement.credits,
             status: 'ok',
             latencyMs: Date.now() - startTime,
           })

@@ -130,6 +130,20 @@ describe('PUT /api/organizations/[id] -- admin credit edit', () => {
     vi.clearAllMocks();
     credit.events.length = 0;
     credit.findById.mockResolvedValue({ id: 'org-123', userId: 'owner-1', name: 'Acme', currentCredits: 1000 });
+    credit.addCredits.mockImplementation(async () => {
+      credit.events.push('addCredits');
+    });
+    credit.subtractCredits.mockImplementation(async () => {
+      credit.events.push('subtractCredits');
+    });
+    credit.recordAdminActionFromRequest.mockImplementation(async () => {
+      credit.events.push('record');
+      return null;
+    });
+    update.mockImplementation(async () => {
+      credit.events.push('update');
+      return { id: 'org1', userId: 'u1', name: 'Acme' };
+    });
   });
 
   it('books a raised balance to the ledger and records a signed audit entry', async () => {
@@ -170,13 +184,14 @@ describe('PUT /api/organizations/[id] -- admin credit edit', () => {
       req,
       expect.objectContaining({ details: expect.objectContaining({ credits: -200 }) })
     );
+    expect(credit.events).toEqual(['tx:start', 'findById', 'subtractCredits', 'record', 'update', 'tx:end']);
   });
 
   it('reads the balance inside the transaction so a retry recomputes the delta', async () => {
     const { req, res } = makeReq({ currentCredits: 1500, creditReason: 'Goodwill for the outage' }, 'org-123', true);
     await mockRefs.putHandler!(req, res);
 
-    expect(credit.events).toEqual(['tx:start', 'findById', 'tx:end']);
+    expect(credit.events).toEqual(['tx:start', 'findById', 'addCredits', 'record', 'update', 'tx:end']);
   });
 
   it('refuses a balance change without a reason and moves nothing', async () => {

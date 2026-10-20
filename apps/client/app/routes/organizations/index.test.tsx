@@ -7,7 +7,6 @@ import OrganizationListPage from './index';
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   memberOrganizations: [] as Array<Record<string, unknown>>,
-  managedOrganizations: [] as Array<Record<string, unknown>>,
   teamPlanAvailable: true,
   openCreateTeamModal: vi.fn(),
 }));
@@ -21,13 +20,6 @@ vi.mock('@client/app/contexts/UserContext', () => ({
 }));
 vi.mock('@client/app/hooks/data/organizations', () => ({
   useGetUserOrganizations: () => ({ data: mocks.memberOrganizations, isLoading: false, isFetching: false }),
-  useGetManagedOrganizations: () => ({
-    data: mocks.managedOrganizations,
-    isLoading: false,
-    isFetching: false,
-    isError: false,
-    refetch: vi.fn(),
-  }),
   useOrganizationSeats: () => ({ currentSeats: 2 }),
 }));
 vi.mock('@client/app/hooks/data/subscriptions', () => ({ useGetSubscriptionsByOwner: () => ({ data: [] }) }));
@@ -47,12 +39,11 @@ describe('Teams list for an appointed manager', () => {
     mocks.navigate.mockReset();
     mocks.openCreateTeamModal.mockReset();
     mocks.teamPlanAvailable = true;
-    mocks.memberOrganizations = [];
-    mocks.managedOrganizations = [
+    mocks.memberOrganizations = [
       {
         id: 'org1',
         userId: 'owner1',
-        managerId: 'manager1',
+        adminUserIds: ['manager1'],
         name: 'Managed Team',
         personal: false,
         seats: 4,
@@ -88,7 +79,7 @@ describe('Teams list for an appointed manager', () => {
     expect(mocks.openCreateTeamModal).not.toHaveBeenCalled();
   });
 
-  it('offers a manager-only team as a navigable Team card', () => {
+  it('offers a team the user manages as a navigable Team card', () => {
     render(
       <CssVarsProvider theme={theme}>
         <OrganizationListPage />
@@ -101,13 +92,13 @@ describe('Teams list for an appointed manager', () => {
     expect(mocks.navigate).toHaveBeenCalledWith({ to: '/organizations/org1' });
   });
 
-  it('lists managed and member teams once each, sorted by name', () => {
+  it('lists teams once each, sorted by name', () => {
     mocks.memberOrganizations = [
       { id: 'org2', userId: 'owner2', name: 'Alpha Team', personal: false, seats: 2, currentCredits: 10 },
       {
         id: 'org1',
         userId: 'owner1',
-        managerId: 'manager1',
+        adminUserIds: ['manager1'],
         name: 'Managed Team',
         personal: false,
         seats: 4,

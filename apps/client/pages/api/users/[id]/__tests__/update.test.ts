@@ -979,6 +979,8 @@ describe('PUT /api/users/:id/update - admin audit trail', () => {
       expect(same.res._getStatusCode()).toBe(200);
       expect(zero.res._getStatusCode()).toBe(200);
       expect(mockAdminUpdateUser).toHaveBeenCalledTimes(2);
+      expect(mockAdminUpdateUser.mock.calls[0][1].currentCredits).toBeUndefined();
+      expect(mockAdminUpdateUser.mock.calls[1][1].currentCredits).toBeUndefined();
     });
 
     it('denies a self credit change with a 403 and user.credits.denied', async () => {

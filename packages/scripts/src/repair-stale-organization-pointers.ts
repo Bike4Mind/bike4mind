@@ -2,7 +2,7 @@
 
 /**
  * One-off repair for users whose `organizationId` points at an org that is missing, soft-deleted,
- * or no longer counts them as a member (a managerId-only manager included). Selector and
+ * or no longer counts them as a member. Selector and
  * idempotency notes: ./clearStaleOrganizationPointers.ts.
  *
  * Dry run by default; pass --apply to write. Every run first records the stale pointers (org, reason,

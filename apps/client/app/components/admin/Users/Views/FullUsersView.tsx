@@ -78,7 +78,7 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal, 
   const updateUser = useUpdateUser();
   const loginAsUser = useLoginAsUser();
   const queryClient = useQueryClient();
-  const setFullUserViewUserId = useFullUserViewModal(state => state.setUserId);
+  const { setUserId: setFullUserViewUserId } = useFullUserViewModal();
   const setComplianceUserId = useComplianceModal(state => state.setUserId);
   const { currentUser, setCurrentUser } = useUser(
     useShallow(s => ({ currentUser: s.currentUser, setCurrentUser: s.setCurrentUser }))

@@ -89,15 +89,13 @@ export const revokeAccess = async (
   organization.userDetails = organization.userDetails.filter(user => user.id.toString() !== userId);
 
   // Mirror leave.ts: an involuntarily-removed member must not keep the org's group ids (data
-  // access), their data-lake access on this org's lakes, a seat in adminUserIds, or the manager
-  // appointment (both of those are org-admin authority - assertCanManageOrgGroups reads the first,
-  // findIdsWithAdminRights reads both). Involuntary removal is exactly where retained access
+  // access), their data-lake access on this org's lakes, or a seat in adminUserIds (org-admin
+  // authority - assertCanManageOrgGroups and findIdsWithAdminRights both read it). Involuntary removal is exactly where retained access
   // matters most. Idempotent under retry. The whole org doc goes in because the lake step needs the
   // billing owner to pass a departed creator's lakes on to; the lapse is attributed to the REMOVING
   // admin, the principal whose action ended the access.
   const purged = await purgeOrgMembershipArtifacts(userId, organization, { userId: user.id }, adapters);
   organization.adminUserIds = purged.adminUserIds;
-  organization.managerId = purged.managerId;
 
   await adapters.db.organizations.removeMember(organization.id, userId);
 

@@ -207,6 +207,7 @@ import EnsureAdminAuditLogReadIndexes from './20260921235942_ensure-adminauditlo
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import BackfillAdminAuditCredits from './20260921235943_backfill-admin-audit-credits';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
+import FoldOrganizationManagerIntoAdminUserIds from './20260921235983_fold-organization-manager-into-admin-user-ids';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
 
@@ -356,6 +357,7 @@ const coreMigrations: MigrationFile[] = [
   SetIntegrationAuditLogRetention,
   SetSlackAuditLogRetention,
   SetLiveopsTriageConfigAuditLogRetention,
+  FoldOrganizationManagerIntoAdminUserIds,
   EnsureAdminAuditLogIndexes,
   BackfillAdminAuditLog,
   EnsureAdminAuditLogReadIndexes,

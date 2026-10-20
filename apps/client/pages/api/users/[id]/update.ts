@@ -274,7 +274,7 @@ const handler = baseApi().put(
             .lean()) as AccountStateSnapshot | null;
           const { user: updated, creditAdjustment } = await userService.adminUpdateUser(
             currentUser.id,
-            { ...body, creditReason },
+            changesCredits ? { ...body, creditReason } : { ...body, currentCredits: undefined, creditReason },
             {
               db: {
                 users: userRepository,

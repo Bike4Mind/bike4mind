@@ -26,7 +26,6 @@ const handler = baseApi().post(
     if (!mfaToken || typeof mfaToken !== 'string') {
       throw new BadRequestError('MFA token is required to use loginAs');
     }
-    const reason = parseAdminActionReason(rawReason);
 
     if (adminUser.isAdmin && isSameUserId(adminUser.id, targetUserId)) {
       await denySelfAdminAction(req, {
@@ -35,6 +34,8 @@ const handler = baseApi().post(
         target: { kind: 'user', id: targetUserId, displayName: adminUser.name || adminUser.username },
       });
     }
+
+    const reason = parseAdminActionReason(rawReason);
 
     // Capture the admin's own refresh token BEFORE the impersonated one overwrites the cookie
     // slot; it is parked in the return cookie so /api/auth/returnToAdmin can restore the admin

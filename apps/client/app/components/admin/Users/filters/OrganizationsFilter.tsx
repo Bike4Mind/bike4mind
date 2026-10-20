@@ -3,8 +3,7 @@ import CorporateFareIcon from '@mui/icons-material/CorporateFare';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import { useGetAllOrganizations } from '@client/app/utils/organizationAPICalls';
 import React from 'react';
-import { useShallow } from 'zustand/react/shallow';
-import { useUsersTab } from '../useUsersTabParams';
+import { useUsersParams } from '../useUsersTabParams';
 
 interface OrganizationsFilterProps {
   disabled?: boolean;
@@ -13,7 +12,7 @@ interface OrganizationsFilterProps {
 }
 
 const OrganizationsFilter: React.FC<OrganizationsFilterProps> = ({ disabled, fullWidth }) => {
-  const [params, setParams] = useUsersTab(useShallow(state => [state.params, state.setParams]));
+  const [params, setParams] = useUsersParams();
   const organizations = useGetAllOrganizations({ filters: { personal: false } });
 
   const selected = params.orgSearch || [];
