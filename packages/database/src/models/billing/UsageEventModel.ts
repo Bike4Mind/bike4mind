@@ -88,7 +88,7 @@ const UsageEventSchema = new Schema<IUsageEventDocument>(
     // Price stamp (see UsageEventTypes). All optional: older rows and non-text features leave
     // them unset. turnUsage defaults to undefined, not [], so a single-turn row stays without it.
     priceSource: { type: String, required: false, enum: [...USAGE_PRICE_SOURCES] },
-    priceRowId: { type: Schema.Types.ObjectId, required: false, ref: 'ModelPrice' },
+    priceRowId: { type: String, required: false },
     rates: {
       type: new Schema(
         {

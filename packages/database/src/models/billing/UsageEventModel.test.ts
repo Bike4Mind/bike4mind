@@ -71,8 +71,10 @@ describe('UsageEventRepository', () => {
       expect(doc!.apiKeyId).toBeUndefined();
     });
 
-    it('round-trips the price stamp: source, ObjectId row id, rates and per-turn usage', async () => {
-      const priceRowId = new mongoose.Types.ObjectId().toString();
+    it('round-trips the price stamp: source, string row id, rates and per-turn usage', async () => {
+      // A string like every other id on this document, so a lean read matches what the type
+      // promises and a fixture id that is not hex still records.
+      const priceRowId = 'price-row-4';
       const doc = await record({
         priceSource: 'catalog',
         priceRowId,
@@ -86,8 +88,7 @@ describe('UsageEventRepository', () => {
 
       const stored = await UsageEvent.findById(doc!.id).lean();
       expect(stored!.priceSource).toBe('catalog');
-      expect(stored!.priceRowId).toBeInstanceOf(mongoose.Types.ObjectId);
-      expect(String(stored!.priceRowId)).toBe(priceRowId);
+      expect(stored!.priceRowId).toBe(priceRowId);
       expect(stored!.rates).toEqual({
         tierKey: 200_000,
         input: 2e-6,
