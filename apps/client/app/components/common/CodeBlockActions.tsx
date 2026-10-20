@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Box } from '@mui/joy';
 import { useCodeBlockActions } from '@client/app/utils/codeBlockActions';
 
@@ -30,3 +31,9 @@ export const CodeBlockActionControls: React.FC<{
     </>
   );
 };
+
+/** Renders an action's output into the outlet under the code (nothing until it has mounted). */
+export const CodeBlockActionOutput: React.FC<{ outputSlot: HTMLElement | null; children: React.ReactNode }> = ({
+  outputSlot,
+  children,
+}) => (outputSlot ? createPortal(children, outputSlot) : null);

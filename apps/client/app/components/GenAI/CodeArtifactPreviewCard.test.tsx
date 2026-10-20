@@ -1,9 +1,9 @@
 import React from 'react';
-import { createPortal } from 'react-dom';
 import { act, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
+import { CodeBlockActionOutput } from '@client/app/components/common/CodeBlockActions';
 import { registerCodeBlockAction, type CodeBlockActionProps } from '@client/app/utils/codeBlockActions';
 import CodeArtifactPreviewCard from './CodeArtifactPreviewCard';
 
@@ -28,7 +28,9 @@ const RunControl: React.FC<CodeBlockActionProps> = ({ code, language, outputSlot
     <button data-testid="code-block-run-btn" data-language={language}>
       {code}
     </button>
-    {outputSlot && createPortal(<span data-testid="code-block-run-output">ran</span>, outputSlot)}
+    <CodeBlockActionOutput outputSlot={outputSlot}>
+      <span data-testid="code-block-run-output">ran</span>
+    </CodeBlockActionOutput>
   </>
 );
 

@@ -19,8 +19,8 @@ export type CodeBlockActionProps = {
   /** The language as written (e.g. 'py' or 'python'); 'text' for a fence that had none. */
   language: string;
   /**
-   * Element under the code where the action may portal its output (createPortal). Null on
-   * the first render, before the outlet has mounted.
+   * Element under the code for the action's output; render into it with
+   * CodeBlockActionOutput (components/common/CodeBlockActions.tsx). Null until it mounts.
    */
   outputSlot: HTMLElement | null;
 };
