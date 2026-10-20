@@ -240,4 +240,21 @@ describe('WhatsNewSliderModal video slides', () => {
     await waitFor(() => expect(video.getAttribute('src')).toBe(sign('modals/wide.mp4', 2)));
     expect(mocks.mutateAsync).toHaveBeenLastCalledWith({ filePaths: ['modals/wide.mp4'], expiresIn: 3600 });
   });
+
+  it('reloads a media route video once past its cached redirect, then falls back to the image', async () => {
+    const route = '/api/v1/whats-new/media/a/landscape';
+    renderSlider([
+      slide('a', '2026-03-05T00:00:00Z', { video: { landscapeUrl: route }, imageUrl: `${S3}/modals/shot.png` }),
+    ]);
+    const video = await videoEl();
+    expect(video.getAttribute('src')).toBe(route);
+
+    fireEvent.error(video);
+    await waitFor(() => expect(video.getAttribute('src')).toBe(`${route}?retry=1`));
+    expect(screen.queryByRole('img', { name: 'Slide a' })).toBeNull();
+
+    fireEvent.error(video);
+    expect(await screen.findByRole('img', { name: 'Slide a' })).toBeTruthy();
+    expect(screen.queryByTestId('whats-new-slide-video')).toBeNull();
+  });
 });

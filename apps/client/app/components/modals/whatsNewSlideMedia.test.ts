@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { pickSlideVideo, storageKeyOf, videoUrlsOf } from './whatsNewSlideMedia';
+import {
+  isMediaRouteUrl,
+  localizeMediaRouteUrls,
+  pickSlideVideo,
+  storageKeyOf,
+  videoUrlsOf,
+  withRetryParam,
+} from './whatsNewSlideMedia';
 
 const both = {
   landscapeUrl: 'https://b.s3.us-east-2.amazonaws.com/modals/wide.mp4',
@@ -44,5 +51,48 @@ describe('storageKeyOf', () => {
   it('is null for other urls', () => {
     expect(storageKeyOf('https://d111.cloudfront.net/modals/a.mp4')).toBeNull();
     expect(storageKeyOf('not a url')).toBeNull();
+  });
+});
+
+describe('localizeMediaRouteUrls', () => {
+  const HERE = 'https://chat.example.com';
+  const UPSTREAM = 'https://upstream.example.com';
+
+  it("serves this deployment's media route from the browsed origin, whatever origin the feed named", () => {
+    expect(
+      localizeMediaRouteUrls(
+        {
+          landscapeUrl: 'https://app.example.com/api/v1/whats-new/media/n1/landscape',
+          landscapePosterUrl: 'https://chat.example.com/api/v1/whats-new/media/n1/landscape-poster',
+          portraitUrl: 'https://d111.cloudfront.net/tall.mp4',
+          portraitPosterUrl: null,
+        },
+        UPSTREAM,
+        HERE
+      )
+    ).toEqual({
+      landscapeUrl: '/api/v1/whats-new/media/n1/landscape',
+      landscapePosterUrl: '/api/v1/whats-new/media/n1/landscape-poster',
+      portraitUrl: 'https://d111.cloudfront.net/tall.mp4',
+      portraitPosterUrl: null,
+    });
+  });
+
+  it("leaves the upstream feed's media route on the upstream", () => {
+    const url = `${UPSTREAM}/api/v1/whats-new/media/n1/landscape`;
+    expect(localizeMediaRouteUrls({ landscapeUrl: url }, UPSTREAM, HERE).landscapeUrl).toBe(url);
+  });
+});
+
+describe('isMediaRouteUrl and withRetryParam', () => {
+  it('recognizes relative and absolute media route URLs only', () => {
+    expect(isMediaRouteUrl('/api/v1/whats-new/media/n1/landscape', 'https://a.test')).toBe(true);
+    expect(isMediaRouteUrl('https://up.test/api/v1/whats-new/media/n1/portrait', 'https://a.test')).toBe(true);
+    expect(isMediaRouteUrl('https://b.s3.us-east-2.amazonaws.com/modals/wide.mp4', 'https://a.test')).toBe(false);
+  });
+
+  it('adds the retry param to either form', () => {
+    expect(withRetryParam('/api/v1/whats-new/media/n1/landscape')).toBe('/api/v1/whats-new/media/n1/landscape?retry=1');
+    expect(withRetryParam('/m?x=1')).toBe('/m?x=1&retry=1');
   });
 });

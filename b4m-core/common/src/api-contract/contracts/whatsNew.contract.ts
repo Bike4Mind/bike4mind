@@ -38,8 +38,8 @@ export const listWhatsNewContract = defineEndpoint({
 
 /**
  * Contract for GET /api/v1/whats-new/media/{id}/{asset}, served by
- * apps/client/pages/api/v1/whats-new/media/[id]/[asset].ts. The 10 and 50 minutes below must stay in sync
- * with that route's CACHE_CONTROL and SIGNED_URL_TTL_SECONDS.
+ * apps/client/pages/api/v1/whats-new/media/[id]/[asset].ts. The 10 minutes and 1 hour below must stay in
+ * sync with that route's CACHE_CONTROL and SIGNED_URL_TTL_SECONDS.
  */
 export const getWhatsNewMediaContract = defineEndpoint({
   method: 'get',
@@ -51,8 +51,8 @@ export const getWhatsNewMediaContract = defineEndpoint({
     '9:16 MP4s, the `-poster` assets their still images. The `video` URLs that listWhatsNew returns for ' +
     'uploaded files point here, so a browser can use them as `src` and `poster` as they are. Public: no ' +
     'credentials are needed, and the note must be one listWhatsNew would show. The redirect is cacheable ' +
-    'for up to 10 minutes and its target stays valid for at least 50 minutes after that, so follow it ' +
-    'rather than storing the target. Rate limited per client IP.',
+    'for up to 10 minutes and its target is signed for 1 hour, longer than that, so follow it rather ' +
+    'than storing the target. Rate limited per client IP.',
   tags: ['Release notes'],
   auth: 'public',
   pathParams: ReleaseNoteMediaParamsSchema,

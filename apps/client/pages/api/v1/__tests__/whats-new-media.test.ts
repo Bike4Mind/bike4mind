@@ -157,6 +157,19 @@ describe('GET /api/v1/whats-new/media/{id}/{asset}', () => {
     expect(mockSign).not.toHaveBeenCalled();
   });
 
+  it('404s an upload that was deleted', async () => {
+    mockFindFile.mockResolvedValueOnce({ _id: 'f1', moderationStatus: 'clean', deletedAt: new Date() });
+    expect((await errorOf()).statusCode).toBe(404);
+    expect(mockSign).not.toHaveBeenCalled();
+  });
+
+  it('signs an untracked upload under modals/, as /api/files/presigned-url does', async () => {
+    mockFindFile.mockResolvedValueOnce(null);
+    const res = await run();
+    expect(res._getStatusCode()).toBe(303);
+    expect(mockSign).toHaveBeenCalledWith('modals/wide.mp4', 'get', { expiresIn: 3600, audience: 'browser' });
+  });
+
   it('404s an upload that moderation holds or blocks', async () => {
     mockFindFile.mockResolvedValueOnce({ _id: 'f1', moderationStatus: 'pending' });
     expect((await errorOf()).statusCode).toBe(404);

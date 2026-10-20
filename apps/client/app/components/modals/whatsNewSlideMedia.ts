@@ -42,3 +42,47 @@ export function storageKeyOf(url: string): string | null {
   const key = parsed.pathname.replace(/^\//, '');
   return key || null;
 }
+
+// The release note media route (pages/api/v1/whats-new/media), which redirects to a freshly signed URL.
+const MEDIA_ROUTE_PATH = '/api/v1/whats-new/media/';
+
+export function isMediaRouteUrl(url: string, base = window.location.origin): boolean {
+  try {
+    return new URL(url, base).pathname.startsWith(MEDIA_ROUTE_PATH);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The feed names this deployment's media route by APP_URL, which may be another of its domains than the
+ * one being browsed, and the CSP only allows this origin. So a media route URL is made relative here,
+ * except on the upstream feed's origin, which is genuinely another deployment.
+ */
+export function localizeMediaRouteUrls(
+  video: ModalVideo,
+  upstreamOrigin: string,
+  base = window.location.origin
+): ModalVideo {
+  const localize = (url: string | null | undefined) => {
+    if (!url) return url;
+    try {
+      const parsed = new URL(url);
+      if (parsed.origin === upstreamOrigin || !isMediaRouteUrl(url, base)) return url;
+      return `${parsed.pathname}${parsed.search}`;
+    } catch {
+      return url;
+    }
+  };
+  return {
+    landscapeUrl: localize(video.landscapeUrl),
+    landscapePosterUrl: localize(video.landscapePosterUrl),
+    portraitUrl: localize(video.portraitUrl),
+    portraitPosterUrl: localize(video.portraitPosterUrl),
+  };
+}
+
+/** A media route URL that bypasses any cached redirect, so the retry gets a newly signed target. */
+export function withRetryParam(url: string): string {
+  return `${url}${url.includes('?') ? '&' : '?'}retry=1`;
+}

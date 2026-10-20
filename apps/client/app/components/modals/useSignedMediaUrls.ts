@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useGetPresignedUrl } from '@client/app/hooks/data/fabFiles';
-import { storageKeyOf } from './whatsNewSlideMedia';
+import { isMediaRouteUrl, storageKeyOf, withRetryParam } from './whatsNewSlideMedia';
 
 const SIGNED_URL_TTL_SECONDS = 3600;
 const MIN_REFRESH_INTERVAL_MS = 30_000;
@@ -10,14 +10,17 @@ export type ResolvedMediaUrls = Record<string, string | null>;
 
 /**
  * Resolves modal media URLs for playback. A stored upload is presigned like slide images; `refresh`
- * re-signs one URL so a looping video recovers when its signature expires mid-session. It returns false
- * when there is nothing to retry (an unsigned URL, or one already re-signed in the last 30s).
+ * re-signs one URL so a looping video recovers when its signature expires mid-session, and reloads a
+ * media route URL once past any cached redirect. It returns false when there is nothing to retry (another
+ * unsigned URL, a media route URL already retried, or one already re-signed in the last 30s).
  */
 export function useSignedMediaUrls(urls: string[]) {
   const { mutateAsync: sign } = useGetPresignedUrl();
 
   const [resolved, setResolved] = useState<ResolvedMediaUrls>({});
   const lastRefresh = useRef(new Map<string, number>());
+  const retriedRoutes = useRef(new Set<string>());
+  const [retried, setRetried] = useState<ReadonlySet<string>>(new Set());
 
   const urlsKey = Array.from(new Set(urls)).join('\n');
 
@@ -62,6 +65,12 @@ export function useSignedMediaUrls(urls: string[]) {
 
   const refresh = useCallback(
     (url: string): boolean => {
+      if (isMediaRouteUrl(url)) {
+        if (retriedRoutes.current.has(url)) return false;
+        retriedRoutes.current.add(url);
+        setRetried(new Set(retriedRoutes.current));
+        return true;
+      }
       if (!storageKeyOf(url)) return false;
       const now = Date.now();
       if (now - (lastRefresh.current.get(url) ?? 0) < MIN_REFRESH_INTERVAL_MS) return false;
@@ -75,5 +84,15 @@ export function useSignedMediaUrls(urls: string[]) {
     [resolve]
   );
 
-  return { resolved, refresh };
+  const playable = useMemo(() => {
+    if (retried.size === 0) return resolved;
+    const out: ResolvedMediaUrls = { ...resolved };
+    for (const url of retried) {
+      const src = out[url];
+      if (src) out[url] = withRetryParam(src);
+    }
+    return out;
+  }, [resolved, retried]);
+
+  return { resolved: playable, refresh };
 }

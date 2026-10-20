@@ -12,8 +12,8 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 import { findDeniedInNote, loadReleaseNotesConfig } from '@server/releaseNotes/adminReleaseNotes';
 import { ownModalMediaKey } from '@server/releaseNotes/publicMedia';
 
-// Seconds. A redirect cached for its full max-age still names a URL with 50 minutes left; both figures
-// are published in whatsNew.contract.ts.
+// Seconds. The URL is signed for longer than the redirect may be cached (both figures are published in
+// whatsNew.contract.ts), though the signing credentials can expire sooner.
 const SIGNED_URL_TTL_SECONDS = 3600;
 const CACHE_CONTROL = 'public, max-age=600, s-maxage=600';
 
@@ -31,9 +31,10 @@ const handler = nextRouteForContract(getWhatsNewMediaContract, {
   const url = note.video?.[RELEASE_NOTE_MEDIA_FIELDS[asset]];
   const key = url ? ownModalMediaKey(url, Resource.fabFileBucket.name) : null;
   if (!key) throw new NotFoundError('Release note media not found');
-  // The moderation gate of /api/files/presigned-url: a held or blocked upload is never signed.
+  // The moderation gate of /api/files/presigned-url: a held, blocked or deleted upload is never signed.
+  // An untracked key still signs, as its `modals/` allowlist does.
   const file = await FabFile.findOne({ filePath: key }).lean();
-  if (file && !isImageServeable(file)) throw new NotFoundError('Release note media not found');
+  if (file && (file.deletedAt || !isImageServeable(file))) throw new NotFoundError('Release note media not found');
 
   const signed = await getFilesStorage().getSignedUrl(key, 'get', {
     expiresIn: SIGNED_URL_TTL_SECONDS,
