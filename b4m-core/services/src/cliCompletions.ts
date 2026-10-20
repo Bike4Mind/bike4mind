@@ -30,7 +30,9 @@ import {
   DEGENERATE_FINISH_REASON,
   estimateStreamedOutputTokens,
   completionsSupportsToolSearch,
+  isClaudeModelId,
   type CreditHoldRecord,
+  type ICacheStrategy,
 } from '@bike4mind/common';
 import {
   usdToCredits,
@@ -51,6 +53,7 @@ import {
   type ICompletionOptionTools,
   isModelProviderConfigured,
 } from '@bike4mind/llm-adapters';
+import { WORKFLOW_REMINDER_MARKER } from '@bike4mind/agents';
 import { Logger } from '@bike4mind/observability';
 import { getEffectiveLLMApiKeys } from './apiKeyService';
 import { subtractCredits, isMemberCreditCapExceeded, MEMBER_CREDIT_CAP_MESSAGE } from './creditService';
@@ -214,8 +217,9 @@ function estimateToolTokens(tools: ICompletionOptionTools[], deferralHonoured: b
  * Anthropic's). Must stay in sync with the adapters that report cache reads into settlement
  * (those calling `splitCacheInclusiveInput`); the Gemini and xAI adapters forward them only for a
  * model that publishes cache_read, the same condition this path checks. Ollama publishes no
- * cache_read; Bedrock's cache_control is gated on options.cacheStrategy.enableCaching, which this
- * path never sets.
+ * cache_read. Claude is not listed: buildClaudeCacheStrategy sets its cache_control, and the hold
+ * below discounts it only on Anthropic and only for client-sent `cache` flags, so server-set
+ * caching never lowers a hold.
  */
 const AUTO_CACHING_BACKENDS: ReadonlySet<ModelBackend> = new Set([
   ModelBackend.OpenAI,
@@ -224,6 +228,45 @@ const AUTO_CACHING_BACKENDS: ReadonlySet<ModelBackend> = new Set([
   ModelBackend.Gemini,
   ModelBackend.XAI,
 ]);
+
+/**
+ * Claude prompt caching, set here so no CLI or Desktop release is needed. Mirrors the strategy web
+ * chat builds in ChatCompletionProcess (system prompt, tools, history, 5m TTL); the Anthropic
+ * caching adapter places the breakpoints and budgets them around any client-sent `cache: true`
+ * flags. Other backends cache server-side without a flag or ignore the strategy.
+ *
+ * CLI and Desktop send a growing conversation, so even their first round writes a prefix the next
+ * round reads. Any other source with no assistant message yet is a one-shot call: caching it pays
+ * the 1.25x write and never reads it back, so it stays off until a prior turn exists.
+ */
+function buildClaudeCacheStrategy(
+  modelInfo: ModelInfo | undefined,
+  messages: IMessage[],
+  hasTools: boolean,
+  source: CompletionSource
+): ICacheStrategy | undefined {
+  const isClaude =
+    modelInfo?.backend === ModelBackend.Anthropic ||
+    (modelInfo?.backend === ModelBackend.Bedrock && isClaudeModelId(modelInfo.id));
+  if (!isClaude) return undefined;
+  const reusablePrefix =
+    messages.length >= 2 && (source === 'cli' || source === 'desktop' || messages.some(m => m.role === 'assistant'));
+  // The CLI re-appends a workflow reminder after the history on every request. Anchoring on it would
+  // never hit, so the history breakpoint goes on the message before it (as ReActAgent does locally).
+  const lastMessage = messages[messages.length - 1];
+  const endsWithReminder =
+    lastMessage?.role === 'user' &&
+    typeof lastMessage.content === 'string' &&
+    lastMessage.content.startsWith(WORKFLOW_REMINDER_MARKER);
+  return {
+    enableCaching: reusablePrefix,
+    cacheSystemPrompt: true,
+    cacheTools: hasTools,
+    cacheConversationHistory: reusablePrefix,
+    ...(endsWithReminder ? { historyCacheExcludeTrailingCount: 1 } : {}),
+    cacheTTL: '5m',
+  };
+}
 
 // Bounds a cold or fabricated cache at about 2.5x the floor (a write costs 1.25x against the 0.5x floor).
 const CACHED_INPUT_RESERVATION_FLOOR = 0.5;
@@ -508,11 +551,15 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     modelInfo
   );
 
+  const requestTools = useServerTools ? params.serverTools! : (promotedTools ?? []);
+  const cacheStrategy = buildClaudeCacheStrategy(modelInfo, messages, requestTools.length > 0, source);
+
   const completionOptions: Partial<ICompletionOptions> = {
     temperature: options?.temperature,
     maxTokens,
     stream: options?.stream ?? true,
-    tools: useServerTools ? params.serverTools! : (promotedTools ?? []),
+    tools: requestTools,
+    ...(cacheStrategy ? { cacheStrategy } : {}),
     ...(wireTools.providerTools.length > 0 ? { providerTools: wireTools.providerTools } : {}),
     executeTools: useServerTools,
     ...(useServerTools && params.maxToolCalls !== undefined
