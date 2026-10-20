@@ -196,6 +196,7 @@ describe('useEffectiveCredits', () => {
     });
 
     it('keeps holding the first turn pre-turn balance when a new turn starts before the settled balance lands', () => {
+      vi.useFakeTimers();
       const { result, rerender } = endTurnWithHoldDippedBalance();
 
       act(() => useStreamingState.getState().startStreaming('session-2'));
@@ -203,6 +204,12 @@ describe('useEffectiveCredits', () => {
 
       mockUseUser.mockReturnValue({ currentUser: { id: 'user-1', currentCredits: 100 } });
       rerender();
+      expect(result.current).toBe(1500);
+
+      // The first turn's backstop must not fire into the second turn's stream.
+      act(() => {
+        vi.advanceTimersByTime(POST_STREAM_HOLD_MAX_MS);
+      });
       expect(result.current).toBe(1500);
     });
   });
