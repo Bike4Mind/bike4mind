@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { ChatModels, getTextModelCost, getTurnsCost, type ModelInfo } from '@bike4mind/common';
+import { ChatModels, getTextModelCost, getTurnsCost, usdToCredits, type ModelInfo } from '@bike4mind/common';
 import { staticPriceBackends } from './adapterPriceLiterals';
 
 /** USD per 1M tokens for prompts above `above` input tokens, up to the next tier's `above`. */
@@ -23,7 +23,9 @@ export const RATE_CARDS_CHECKED_ON = '2026-10-19';
 const RATE_CARDS_MAX_AGE_DAYS = 60;
 
 // Sources: https://platform.claude.com/docs/en/about-claude/pricing,
-// https://developers.openai.com/api/docs/pricing and https://ai.google.dev/gemini-api/docs/pricing.
+// https://developers.openai.com/api/docs/pricing, https://ai.google.dev/gemini-api/docs/pricing and, for
+// the us. Bedrock rows (regional endpoints, 10% over global), the AWS price list
+// https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/region_index.json.
 // gpt-5.6-sol is left out on purpose: its literal carries the regular rate, not the promotion the
 // provider page lists (see openaiBackend.ts).
 const PROVIDER_RATE_CARDS: Partial<Record<ChatModels, RateCardTier[]>> = {
@@ -31,6 +33,8 @@ const PROVIDER_RATE_CARDS: Partial<Record<ChatModels, RateCardTier[]>> = {
   [ChatModels.CLAUDE_5_SONNET_BEDROCK]: [{ above: 0, input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 }],
   [ChatModels.CLAUDE_4_5_SONNET]: [{ above: 0, input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }],
   [ChatModels.CLAUDE_4_5_HAIKU]: [{ above: 0, input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 }],
+  [ChatModels.CLAUDE_4_5_SONNET_BEDROCK]: [{ above: 0, input: 3.3, output: 16.5, cacheRead: 0.33, cacheWrite: 4.125 }],
+  [ChatModels.CLAUDE_4_5_HAIKU_BEDROCK]: [{ above: 0, input: 1.1, output: 5.5, cacheRead: 0.11, cacheWrite: 1.375 }],
   [ChatModels.GPT5_6_TERRA]: [
     { above: 0, input: 2, output: 12, cacheRead: 0.2 },
     { above: 272_000, input: 4, output: 18, cacheRead: 0.4 },
@@ -134,5 +138,52 @@ describe('long-context tier selection', () => {
 
     expect(getTextModelCost(model, 272_000, 0) * PER_MILLION).toBeCloseTo(272_000 * 5, 6);
     expect(getTextModelCost(model, 272_001, 0) * PER_MILLION).toBeCloseTo(272_001 * 10, 6);
+  });
+});
+
+/** Credits at the documented 1.2 markup / $0.0006 per credit, pinned so an ambient env override cannot move them. */
+const CREDITS_PER_USD = 2000;
+const credits = (usd: number) => usdToCredits(usd, CREDITS_PER_USD);
+
+describe('billed USD and credits per request', () => {
+  it.each([ChatModels.CLAUDE_5_SONNET, ChatModels.CLAUDE_5_SONNET_BEDROCK])(
+    'bills %s at $2 / $10 per 1M tokens',
+    async id => {
+      const model = (await staticTextModels()).get(id)!;
+
+      // 100K in at $2 + 20K out at $10 = $0.20 + $0.20.
+      const cost = getTextModelCost(model, 100_000, 20_000);
+      expect(cost).toBeCloseTo(0.4, 10);
+      expect(credits(cost)).toBe(800);
+
+      // One million tokens of each class: $2, $10, $0.20 cache read, $2.50 cache write.
+      expect(credits(getTextModelCost(model, PER_MILLION, 0))).toBe(4_000);
+      expect(credits(getTextModelCost(model, 0, PER_MILLION))).toBe(20_000);
+      expect(credits(getTextModelCost(model, 0, 0, PER_MILLION, 0))).toBe(400);
+      expect(credits(getTextModelCost(model, 0, 0, 0, PER_MILLION))).toBe(5_000);
+    }
+  );
+
+  it('moves a Gemini 3.1 Pro request to the >200K tier on its whole prompt, cache read included', async () => {
+    const model = (await staticTextModels()).get(ChatModels.GEMINI_3_1_PRO_PREVIEW)!;
+    const bill = (cacheRead: number) =>
+      getTurnsCost(model, [{ inputTokens: 150_000, cacheReadInputTokens: cacheRead, outputTokens: 10_000 }]);
+
+    // 200K prompt: 150K x $2 + 50K x $0.20 + 10K x $12.
+    expect(bill(50_000)).toBeCloseTo(0.3 + 0.01 + 0.12, 10);
+    expect(credits(bill(50_000))).toBe(860);
+
+    // 200,001 prompt: every class moves up, 150K x $4 + 50,001 x $0.40 + 10K x $18.
+    expect(bill(50_001)).toBeCloseTo(0.6 + 0.0200004 + 0.18, 10);
+    expect(credits(bill(50_001))).toBe(1_601);
+  });
+
+  it('bills the us. Bedrock Haiku 4.5 at the 10% regional premium', async () => {
+    const model = (await staticTextModels()).get(ChatModels.CLAUDE_4_5_HAIKU_BEDROCK)!;
+
+    // 100K in at $1.10 + 10K out at $5.50.
+    const cost = getTextModelCost(model, 100_000, 10_000);
+    expect(cost).toBeCloseTo(0.11 + 0.055, 10);
+    expect(credits(cost)).toBe(330);
   });
 });

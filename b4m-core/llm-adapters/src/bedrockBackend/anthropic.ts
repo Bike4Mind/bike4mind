@@ -506,10 +506,11 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         max_tokens: 64000,
         can_stream: true,
         can_think: true,
+        // us. is a regional endpoint: AWS bills a 10% premium over the global rate ($3 / $15).
         pricing: {
           200000: {
-            input: 3 / 1000000, // $3 per 1M input tokens same with  sonnet4
-            output: 15 / 1000000, // $15 per 1M output tokens
+            input: 3.3 / 1000000, // $3.30 per 1M input tokens
+            output: 16.5 / 1000000, // $16.50 per 1M output tokens
           },
         },
         supportsVision: true,
@@ -531,8 +532,9 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         max_tokens: 64000,
         can_stream: true,
         can_think: true,
+        // us. is a regional endpoint: AWS bills a 10% premium over the global rate ($1 / $5).
         pricing: {
-          200000: { input: 1 / 1_000_000, output: 5 / 1_000_000 },
+          200000: { input: 1.1 / 1_000_000, output: 5.5 / 1_000_000 },
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
