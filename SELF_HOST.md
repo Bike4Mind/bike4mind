@@ -1049,7 +1049,7 @@ Behind a reverse proxy that peer is the proxy, so every visitor would share one 
 | Setup | `TRUSTED_PROXY_HOPS` |
 | --- | --- |
 | No proxy (direct `:3000`) | unset (or `0`) - on Docker Desktop (macOS/Windows) published ports arrive from the Docker gateway, so every client still shares one bucket |
-| Tailscale sidecar (Path A, including the Headscale variant) | `1` - set for you by `compose.tailscale.yaml`, which also binds the app port to loopback; `tailscale serve` replaces any client-sent `X-Forwarded-For` with the tailnet peer's address |
+| Tailscale sidecar (Path A, including the Headscale variant) | `1` - set for you by `compose.tailscale.yaml`, which also binds the app port to loopback; hops=1 trusts only the rightmost `X-Forwarded-For` entry, which `tailscale serve` (Go `httputil.ReverseProxy` in Rewrite mode) sets to the tailnet peer's address. This follows from serve's proxy design and has not been tested end to end here. |
 | Bundled Caddy (`compose.caddy.yaml`) | `1` - set for you |
 | Your own single proxy (nginx, Traefik, a cloud load balancer) | `1` |
 | Kubernetes chart via `kubectl port-forward` | unset - every connection arrives from the pod's loopback, so users share one bucket; add `TRUSTED_PROXY_HOPS` under the chart's `config:` once you put an ingress in front |

@@ -76,8 +76,9 @@ services:
       - '127.0.0.1:${APP_HOST_PORT:-3000}:3000'
     environment:
       # tailscale serve proxies through Go's httputil.ReverseProxy with a Rewrite hook, which drops
-      # any client-sent X-Forwarded-For, then sets it to the tailnet peer's address (Funnel: the
-      # public client's). So exactly one hop is trusted. See apps/client/server/utils/ip.ts.
+      # any client-sent X-Forwarded-For and sets it to the tailnet peer's address (Funnel: the public
+      # client's). Not tested end to end; one trusted hop stays correct if serve appends instead.
+      # See apps/client/server/utils/trustedClientIpHeaders.ts.
       TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-1}
 
 volumes:
