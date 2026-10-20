@@ -68,14 +68,16 @@ const findTab = (category: string) =>
 const aiTab = findTab(settingsMap.videoGeneration.category);
 const securityTab = findTab(settingsMap.ImageModerationReviewerEmails.category);
 
+// The section comes from the URL, so seed it rather than click a tab: the mocked navigate does not
+// write the search back.
 const renderTab = (tab: typeof aiTab) => {
+  expect(tab).toBeDefined();
+  router.search = { tab: 'admin-settings', section: tab!.id };
   render(
     <CssVarsProvider theme={appTheme}>
       <AdminSettingsTab />
     </CssVarsProvider>
   );
-  expect(tab).toBeDefined();
-  fireEvent.click(screen.getAllByRole('tab', { name: new RegExp(tab!.name, 'i') })[0]);
 };
 
 const renderAiTab = () => renderTab(aiTab);
