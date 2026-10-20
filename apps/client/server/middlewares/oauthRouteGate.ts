@@ -31,7 +31,7 @@ export function oauthRouteGate(policy?: OAuthRoutePolicy) {
     if (!grant) return next(); // not an OAuth token; unaffected
     const logError = () =>
       logOAuthError(req.logger, {
-        route: resolveRouteTemplate(req),
+        route: resolveRouteTemplate(req, { redactAmbiguousQuery: true }),
         clientId: grant.clientId,
         error: 'insufficient_scope',
         status: 403,

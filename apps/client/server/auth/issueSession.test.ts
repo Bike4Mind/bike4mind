@@ -8,7 +8,7 @@ vi.mock('@bike4mind/services', () => ({
 vi.mock('@bike4mind/database', () => ({ authSessionRepository: {} }));
 vi.mock('./tokenGenerator', () => ({ authTokenGenerator: { signAccessToken: vi.fn() } }));
 vi.mock('./sessionDevice', () => ({ buildSessionDevice: () => ({ label: 'test' }) }));
-vi.mock('./refreshCookie', () => ({ setRefreshCookie: vi.fn() }));
+vi.mock('@bike4mind/server-utils/auth/refreshCookie', () => ({ setRefreshCookie: vi.fn() }));
 
 import { issueSessionForRequest } from './issueSession';
 

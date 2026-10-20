@@ -14,7 +14,7 @@ export interface IssueSessionParams {
   /** User's current tokenVersion, embedded in the minted access token. */
   tokenVersion: number;
   impersonatedBy?: string | null;
-  /** OAuth client that minted this session (oauth-token only). */
+  /** OAuth client that minted this session (authorization-code or device flow). */
   clientId?: string | null;
   device?: IAuthSessionDevice;
   /** Override the session/refresh lifetime; defaults to DEFAULT_REFRESH_TTL_MS. */

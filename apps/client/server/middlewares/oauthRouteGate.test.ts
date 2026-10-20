@@ -74,6 +74,26 @@ describe('oauthRouteGate error logging', () => {
       run({ oauthGrant: { scopes: ['openid'], clientId: 'c1' } }, { oauthScopes: ['openid'] }).logger.warn
     ).not.toHaveBeenCalled();
   });
+
+  it('hides the route when an identical query value makes a path ID ambiguous', () => {
+    const res = mockRes();
+    const logger = { warn: vi.fn() };
+    oauthRouteGate()(
+      {
+        user: { oauthGrant: { scopes: ['openid'], clientId: 'c1' } },
+        logger,
+        originalUrl: '/api/agents/a1?id=a1',
+        query: { id: 'a1' },
+      } as never,
+      res as never,
+      vi.fn()
+    );
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(logger.warn.mock.calls).toEqual([
+      ['[OAUTH_ERROR] route=unknown client=c1 error=insufficient_scope status=403'],
+    ]);
+  });
 });
 
 describe('admitsOptionalAuthUser', () => {

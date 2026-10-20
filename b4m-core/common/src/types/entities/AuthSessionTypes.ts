@@ -65,7 +65,7 @@ export interface IAuthSession {
   createdVia: AuthSessionCreatedVia;
   /** Set when this session belongs to an admin impersonating the user (loginAs). */
   impersonatedBy?: string | null;
-  /** OAuth client that minted this session (oauth-token only); absent on older rows. */
+  /** OAuth client that minted this session (authorization-code or device flow); absent on older rows. */
   clientId?: string | null;
   lastUsedAt: Date;
   /** TTL: the session (and its row) expire here; mirrors the refresh-token TTL. */

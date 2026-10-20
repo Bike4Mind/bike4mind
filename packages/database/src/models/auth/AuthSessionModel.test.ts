@@ -36,6 +36,31 @@ describe('AuthSessionModel repository', () => {
     expect((await authSessionRepository.findBySid('no-client'))?.clientId).toBeNull();
   });
 
+  it('preserves the minting client through rotation, replay and recovery', async () => {
+    const sid = 'client-lifecycle';
+    const clientId = 'b4m-desktop';
+    await authSessionRepository.create(base({ sid, clientId, createdVia: 'device', refreshTokenHash: 'h0' }));
+
+    const rotated = await authSessionRepository.rotateHash(sid, {
+      expectedCurrentHash: 'h0',
+      nextHash: 'h1',
+      replayExpiresAt: new Date(Date.now() + 5000),
+      newExpiresAt: FAR_FUTURE(),
+    });
+    expect(rotated?.clientId).toBe(clientId);
+    expect((await authSessionRepository.registerReplayUse(sid, 3))?.clientId).toBe(clientId);
+
+    await AuthSessionModel.updateOne({ sid }, { $set: { graceExpiresAt: new Date(Date.now() - 1000) } }).exec();
+    const recovered = await authSessionRepository.recoverRotateHash(sid, {
+      expectedPreviousHash: 'h0',
+      nextHash: 'h2',
+      replayExpiresAt: new Date(Date.now() + 5000),
+      maxRecoveries: 3,
+    });
+    expect(recovered?.clientId).toBe(clientId);
+    expect((await authSessionRepository.findBySid(sid))?.clientId).toBe(clientId);
+  });
+
   it('findActiveByUserId excludes revoked and expired, newest-used first', async () => {
     await authSessionRepository.create(base({ sid: 'old', userId: 'u2', lastUsedAt: new Date(Date.now() - 1000) }));
     await authSessionRepository.create(base({ sid: 'new', userId: 'u2', lastUsedAt: new Date() }));
