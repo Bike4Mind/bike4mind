@@ -1491,6 +1491,16 @@ const optihashiRunCompletionQueueSubscription = optihashiRunCompletionQueue.subs
     ...DEFAULT_LAMBDA_ENVIRONMENT,
   },
   permissions: [
+    {
+      actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
+      resources: [
+        'arn:aws:bedrock:*:*:foundation-model/anthropic.claude-*',
+        'arn:aws:bedrock:*:*:foundation-model/amazon.*',
+        'arn:aws:bedrock:*:*:inference-profile/anthropic.claude-*',
+        'arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-*',
+        'arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-*',
+      ],
+    },
     { actions: ['cloudwatch:PutMetricData'], resources: ['*'] },
     { actions: ['execute-api:ManageConnections'], resources: ['*'] },
   ],
