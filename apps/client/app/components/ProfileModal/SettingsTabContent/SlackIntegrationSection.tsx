@@ -205,6 +205,9 @@ const SlackIntegrationSection = () => {
       // Check if it's a duplicate Slack ID error (409 Conflict)
       if (error?.response?.status === 409) {
         toast.error(error.response.data.error || 'This Slack Member ID is already in use by another account.');
+      } else if (error?.response?.status === 400 && error.response.data?.error) {
+        // The server explains refusals such as an unverified Slack identity or channel.
+        toast.error(error.response.data.error);
       } else {
         toast.error('Failed to update Slack settings');
       }
@@ -304,6 +307,8 @@ const SlackIntegrationSection = () => {
 
   // Use savedSlackUserId for UI state - updated on save/unlink, not while typing
   const isLinked = Boolean(savedSlackUserId && currentUser?.slackSettings?.slackTeamId);
+  // A link made before workspace verification has no team, so Slack delivery refuses it.
+  const needsReconnect = Boolean(savedSlackUserId && !currentUser?.slackSettings?.slackTeamId);
 
   return (
     <SectionContainer
@@ -356,6 +361,13 @@ const SlackIntegrationSection = () => {
       }
     >
       <Stack spacing={3}>
+        {needsReconnect && (
+          <Alert color="warning" variant="soft" data-testid="slack-reconnect-alert">
+            Your Slack account was linked before workspace verification was required. Reconnect with Slack to keep using
+            Slack agents and notifications.
+          </Alert>
+        )}
+
         {/* Loading state while checking OAuth availability */}
         {!isLinked && isLoadingWorkspaces && (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
