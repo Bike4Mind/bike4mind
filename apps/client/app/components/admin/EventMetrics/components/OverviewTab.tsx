@@ -75,7 +75,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({ metrics, chartData, sh
                 Events by Category
                 <AnalyticsTermHelp
                   term="Events by Category"
-                  description="Groups the loaded events into related types of activity. For example, message actions may share a category. Each slice counts recorded events, not distinct users. Events with no category appear as Other."
+                  description="Groups the loaded events by keywords in their names, such as Session, File or Auth. Each slice counts recorded events, not distinct users. Events whose names match none of these groups appear as Other."
                 />
               </Typography>
               <ResponsiveContainer width="100%" height={300}>
