@@ -7862,8 +7862,9 @@ describe('ChatCompletionProcess', () => {
     // sharedPromptPrefix.test.ts hands buildTaggedContextMessages its sources, so it cannot see what
     // this process puts into them; a per-caller value slipped into a shared source only shows here.
     it('sends two very different callers the same system stack up to the shareable boundary', async () => {
-      const sharedHead = async (isAdmin: boolean, timezone: string, path: string) => {
-        (service as any).user.isAdmin = isAdmin;
+      const original = { ...(service as any).user };
+      const sharedHead = async (id: string, isAdmin: boolean, timezone: string, path: string) => {
+        Object.assign((service as any).user, { id, name: id, email: `${id}@example.com`, isAdmin });
         const extraContextMessages = [{ role: 'user', content: `[Current View Context]\nPath: ${path}` }];
         const stack: any[] = (await runWithTools([navigateTool], undefined, { timezone, extraContextMessages }))![1];
         const boundary = stack.findIndex((m: any) => m.cache === true);
@@ -7871,12 +7872,13 @@ describe('ChatCompletionProcess', () => {
         return { head: JSON.stringify(stack.slice(0, boundary + 1)), tail: JSON.stringify(stack.slice(boundary + 1)) };
       };
       try {
-        const admin = await sharedHead(true, 'Asia/Tokyo', '/admin');
-        const member = await sharedHead(false, 'America/Denver', '/notebook');
+        const admin = await sharedHead('user-a', true, 'Asia/Tokyo', '/admin');
+        const member = await sharedHead('user-b', false, 'America/Denver', '/notebook');
 
         expect(admin.head).toEqual(member.head);
         expect(admin.tail).not.toEqual(member.tail);
       } finally {
+        Object.assign((service as any).user, original);
         delete (service as any).user.isAdmin;
       }
     });
