@@ -51,6 +51,7 @@ import {
   tokenEstimateMultiplier,
   pairDataLakeTools,
   isClaudeModelId,
+  REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS,
   questGenerationJobs,
   resolveWorkspaceDeniedTools,
   filterRunnableModels,
@@ -211,6 +212,7 @@ import {
   resolveForcedRetrieval,
   SYSTEM_PROMPT_PRIORITY,
   relocatePerTurnContext,
+  resolveIdentityReminder,
   resolveSkipAutoOffers,
   lakeContentTokens,
   toPromptDetails,
@@ -532,6 +534,22 @@ export function resolveQuestErrorCode(error: unknown): QuestErrorCode | undefine
  */
 export const FORCE_FALLBACK_TEST_MARKER = '[[force-provider-fallback]]';
 
+/**
+ * Whether `current_model_details` must not be offered to `model`. A model that cannot call tools
+ * keeps its identity line (unset counts as unsupported, matching canServeChat in the fallback
+ * selector). Alone, the tool would make a plain turn carry tools: the 5.4 family then loses
+ * reasoning_effort on chat completions, and the rest of the set moves onto the Responses
+ * transport. Shared by the primary-turn trim and the per-hop fallback override so they cannot drift.
+ */
+function withholdIdentityTool(model: { id: string; supportsTools?: boolean }, toolNames: string[]): boolean {
+  return (
+    !model.supportsTools ||
+    (REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS.has(model.id) &&
+      toolNames.length === 1 &&
+      toolNames[0] === 'current_model_details')
+  );
+}
+
 function isToolPairingError(error: Error): boolean {
   const msg = error.message.toLowerCase();
   // Match known Anthropic tool-pairing failure patterns:
@@ -801,10 +819,10 @@ export function attachmentHasIndexedContent(
 
 /**
  * Tools this process auto-adds server-side regardless of user selection. Three auto-add sites
- * feed this: the request-parse method (navigate_view), the conditional blog/skill/data-lake gate in
- * `process()` (blog_publish/blog_edit/blog_draft, skill, and the DATA_LAKE_TOOL_NAMES trio - each on
- * its own intent/catalog signal, see `shouldOfferBlogTools`/`shouldOfferSkillTool`/
- * `shouldOfferDataLakeTools`), and `resolveEnabledTools` (the
+ * feed this: the request-parse method (navigate_view and current_model_details), the conditional
+ * blog/skill/data-lake gate in `process()` (blog_publish/blog_edit/blog_draft, skill, and the
+ * DATA_LAKE_TOOL_NAMES trio - each on its own intent/catalog signal, see `shouldOfferBlogTools`/
+ * `shouldOfferSkillTool`/`shouldOfferDataLakeTools`), and `resolveEnabledTools` (the
  * attached-knowledge offer). Small local (Ollama) models get confused by tools they didn't ask
  * for, so the names in this list are trimmed for that backend unless the user explicitly enabled
  * them. Keep this list in sync with those auto-add sites.
@@ -820,6 +838,7 @@ export const AUTO_ADDED_TOOL_NAMES = [
   'blog_publish',
   'blog_edit',
   'navigate_view',
+  'current_model_details',
   'skill',
   ...DATA_LAKE_TOOL_NAMES,
 ];
@@ -1735,6 +1754,7 @@ export class ChatCompletionProcess {
       if (!enabledTools.includes('navigate_view') && shouldAutoEnableNavigateView(parsedBody.extraContextMessages)) {
         finalEnabledTools.push('navigate_view');
       }
+      if (!finalEnabledTools.includes('current_model_details')) finalEnabledTools.push('current_model_details');
     }
 
     // Auto-add Lattice tools when Lattice feature is enabled
@@ -2435,6 +2455,7 @@ export class ChatCompletionProcess {
       if (!modelInfo || !llm) {
         throw new Error('Invalid LLM backend specified');
       }
+      const servingModel = { current: modelInfo };
       // Queue and agent runs skip ChatCompletionInvoke, so the redirect is first seen here. Record it
       // with the same convention Invoke uses: model.name is what answers, redirectedFrom what was asked.
       if (quest.promptMeta && resolvedModelId !== model) {
@@ -3313,6 +3334,7 @@ export class ChatCompletionProcess {
 
       let allTools = toolBuilder.buildTools({
         enabledTools,
+        servingModel,
         // Auto-offers are OUR additions, not the caller's, and MCP tools are merged past the
         // `enabledTools` filter without ever being named - so a caller that suppressed our
         // additions gets them suppressed here too. This is what makes an empty tool profile
@@ -3396,6 +3418,16 @@ export class ChatCompletionProcess {
             `🔧 [Tools] Trimmed ${before - allTools.length} auto-added tool(s) for local model ${modelInfo.id}`
           );
         }
+      }
+
+      if (
+        allTools &&
+        withholdIdentityTool(
+          modelInfo,
+          allTools.map(t => t.toolSchema.name)
+        )
+      ) {
+        allTools = allTools.filter(t => t.toolSchema.name !== 'current_model_details');
       }
 
       const offeredToolNames = allTools?.map(t => t.toolSchema.name) ?? [];
@@ -4624,9 +4656,8 @@ export class ChatCompletionProcess {
               }
             : undefined,
         tools: allTools,
-        // raw promises an empty system parameter; the adapters append a model-identity
-        // line on their own, so the promise has to be threaded down to them.
-        ...(promptMode === 'raw' ? { omitIdentityReminder: true } : {}),
+        // The adapters append a model-identity line on their own; see resolveIdentityReminder.
+        ...resolveIdentityReminder({ promptMode, offeredToolNames }),
       };
 
       // Create an AbortController to allow cancelling the request. Set up before the Research
@@ -4726,7 +4757,13 @@ export class ChatCompletionProcess {
         const researchResults = await researchModeService.processResearchMode(
           researchMode,
           outboundMessages,
-          options as ICompletionOptions,
+          // Each configuration runs on its own model: the tool is bound to the primary's serving
+          // model, so withhold it and let every adapter keep naming its own model.
+          {
+            ...options,
+            tools: allTools?.filter(t => t.toolSchema.name !== 'current_model_details'),
+            identityViaTool: false,
+          } as ICompletionOptions,
           async (configId: string, streamedTexts: (string | null | undefined)[], completionInfo?: unknown) => {
             // Handle streaming for each configuration
             this.sendResearchModeStreamUpdate(quest, configId, streamedTexts, completionInfo);
@@ -4998,6 +5035,17 @@ export class ChatCompletionProcess {
               outboundMessages,
               {
                 ...options,
+                // A fallback hop gets its identity line back wherever the primary turn would have.
+                ...(options.identityViaTool &&
+                withholdIdentityTool(
+                  currentModel,
+                  (options.tools ?? []).map(t => t.toolSchema.name)
+                )
+                  ? {
+                      tools: options.tools?.filter(t => t.toolSchema.name !== 'current_model_details'),
+                      identityViaTool: false,
+                    }
+                  : {}),
                 // The preference is set from a selector shown only for OpenAI-style reasoning models, so
                 // it must not retune Claude, whose adapters honour reasoningEffort for the completions API.
                 // Checked per attempt: a fallback can swap a GPT model for a Claude one (and back).
@@ -5369,7 +5417,8 @@ export class ChatCompletionProcess {
                   excludeModelIds: triedModelIds,
                   preferUntriedBackend: isFinalHop,
                   endUserId: this.user.id,
-                  requireTools: !!options.tools?.length,
+                  // the identity tool alone does not need a tool-capable fallback
+                  requireTools: !!options.tools?.some(t => t.toolSchema.name !== 'current_model_details'),
                 }
               );
 
@@ -5382,6 +5431,7 @@ export class ChatCompletionProcess {
               // Update to the fallback model
               currentModel = fallbackResult.model;
               currentLlm = fallbackResult.backend;
+              servingModel.current = currentModel;
               if (this.reservationBasis) this.reservationBasis.modelInfo = currentModel;
               primaryFailureReason ??= sanitizeTelemetryError(lastError);
               fallbackAttempt++;

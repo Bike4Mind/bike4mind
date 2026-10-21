@@ -93,6 +93,28 @@ describe('OpenAIBackend lead system message on the wire', () => {
     });
   });
 
+  it('tool-backed identity: tools present drops the reminder, tools absent keeps it', async () => {
+    const withTools = buildBackend();
+    await withTools.backend.complete(
+      ChatModels.GPT4_1,
+      [{ role: 'user', content: 'hi' }],
+      { identityViaTool: true, tools: [tool] },
+      async () => {}
+    );
+    const sent = withTools.chatCreate.mock.calls[0][0] as { messages: AnyRecord[] };
+    expect(sent.messages.some(m => m.role === 'system')).toBe(false);
+
+    const withoutTools = buildBackend();
+    await withoutTools.backend.complete(
+      ChatModels.GPT4_1,
+      [{ role: 'user', content: 'hi' }],
+      { identityViaTool: true, tools: undefined },
+      async () => {}
+    );
+    const kept = withoutTools.chatCreate.mock.calls[0][0] as { messages: AnyRecord[] };
+    expect(kept.messages[0]).toEqual({ role: 'system', content: buildIdentityReminder(ChatModels.GPT4_1) });
+  });
+
   it('raw lane sends no system message when the caller supplied none', async () => {
     const { backend, chatCreate } = buildBackend();
 

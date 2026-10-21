@@ -9,7 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import { ChatModels } from '@bike4mind/common';
 import { AnthropicBackend } from './anthropicBackend';
-import { buildIdentityReminder } from './identityReminder';
+import { buildIdentityReminder, shouldOmitIdentityReminder } from './identityReminder';
 
 function buildCapturingBackend() {
   const backend = new AnthropicBackend('test-key');
@@ -108,6 +108,47 @@ describe('AnthropicBackend identity reminder', () => {
       'retrieved file content',
       buildIdentityReminder(ChatModels.CLAUDE_4_8_OPUS),
     ]);
+  });
+});
+
+describe('identityViaTool', () => {
+  it('keeps the reminder on a call that carries no tools, such as a capped recursion', async () => {
+    const { backend, captured } = buildCapturingBackend();
+
+    await backend.complete(
+      ChatModels.CLAUDE_4_8_OPUS,
+      [{ role: 'user', content: 'hi' }],
+      { stream: false, tools: [], identityViaTool: true },
+      async () => {}
+    );
+
+    expect(captured[0].system).toBe(buildIdentityReminder(ChatModels.CLAUDE_4_8_OPUS));
+  });
+
+  it('drops the reminder when tools are on the request', async () => {
+    const { backend, captured } = buildCapturingBackend();
+
+    await backend.complete(
+      ChatModels.CLAUDE_4_8_OPUS,
+      [{ role: 'user', content: 'hi' }],
+      {
+        stream: false,
+        tools: [{ toolSchema: { name: 'lookup', description: 'x', parameters: { type: 'object', properties: {} } } }],
+        identityViaTool: true,
+      },
+      async () => {}
+    );
+
+    expect(captured[0].system).toBeUndefined();
+  });
+
+  it.each([
+    ['tool-backed with tools', { identityViaTool: true, tools: [{}] }, true],
+    ['tool-backed, tools dropped', { identityViaTool: true, tools: undefined }, false],
+    ['raw, tools dropped', { omitIdentityReminder: true, tools: undefined }, true],
+    ['default', {}, false],
+  ])('shouldOmitIdentityReminder: %s', (_label, options, expected) => {
+    expect(shouldOmitIdentityReminder(options)).toBe(expected);
   });
 });
 

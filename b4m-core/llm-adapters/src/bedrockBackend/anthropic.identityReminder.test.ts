@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { ChatModels, type ICacheStrategy, type IMessage } from '@bike4mind/common';
+import { ChatModels, type ICacheStrategy, type ICompletionOptionTools, type IMessage } from '@bike4mind/common';
 import AnthropicBedrockBackend from './anthropic';
 import { buildIdentityReminder } from '../identityReminder';
 
@@ -19,7 +19,12 @@ const backend = new AnthropicBedrockBackend();
 
 function systemOf(
   messages: IMessage[],
-  options: { cacheStrategy?: ICacheStrategy; omitIdentityReminder?: boolean } = {}
+  options: {
+    cacheStrategy?: ICacheStrategy;
+    omitIdentityReminder?: boolean;
+    identityViaTool?: boolean;
+    tools?: ICompletionOptionTools[];
+  } = {}
 ) {
   const payload = backend.getPayload(MODEL, messages, { ...options, maxTokens: 1024 });
   return (JSON.parse(payload.body) as { system?: string | SystemBlock[] }).system;
@@ -69,5 +74,20 @@ describe('AnthropicBedrockBackend identity reminder', () => {
     );
 
     expect(system).toBe(RETRIEVED);
+  });
+});
+
+describe('AnthropicBedrockBackend identityViaTool', () => {
+  const tool: ICompletionOptionTools = {
+    toolSchema: { name: 'lookup', description: 'Look something up.', parameters: { type: 'object', properties: {} } },
+  };
+  const messages: IMessage[] = [{ role: 'user', content: 'hi' }];
+
+  it('drops the reminder when the tool-backed identity has tools on the request', () => {
+    expect(systemOf(messages, { identityViaTool: true, tools: [tool] })).toBeUndefined();
+  });
+
+  it('keeps the reminder when the call carries no tools', () => {
+    expect(systemOf(messages, { identityViaTool: true, tools: undefined })).toBe(buildIdentityReminder(MODEL));
   });
 });
