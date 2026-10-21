@@ -366,6 +366,81 @@ describe('ConverseBedrockBackend', () => {
   });
 });
 
+describe('inline thinking tags', () => {
+  const streamText = async (deltas: string[], messages: IMessage[] = [{ role: 'user', content: 'q' }]) => {
+    const backend = new TestConverseBackend();
+    withMockClient(backend, () => ({
+      stream: asStream([
+        { messageStart: { role: 'assistant' } },
+        ...deltas.map(text => ({ contentBlockDelta: { contentBlockIndex: 0, delta: { text } } })),
+        { contentBlockStop: { contentBlockIndex: 0 } },
+        { messageStop: { stopReason: 'end_turn' } },
+      ]),
+    }));
+    const out = collect();
+    await backend.complete(NOVA, messages, { stream: true }, out.callback);
+    return out.joined();
+  };
+  const titleMessages: IMessage[] = [
+    { role: 'system', content: 'Give a title to this session.' },
+    { role: 'user', content: 'q' },
+  ];
+
+  it('moves non-streamed inline thinking into a think span', async () => {
+    const backend = new TestConverseBackend();
+    withMockClient(backend, () => ({
+      output: {
+        message: {
+          role: 'assistant',
+          content: [{ text: '<thinking> use math_evaluate </thinking>\n\nThe product is 391.' }],
+        },
+      },
+      stopReason: 'end_turn',
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+    }));
+    const out = collect();
+    await backend.complete(NOVA, [{ role: 'user', content: 'q' }], { stream: false }, out.callback);
+    expect(out.joined()).toBe('<think> use math_evaluate </think>The product is 391.');
+  });
+
+  it('handles tags split across streamed deltas', async () => {
+    const text = await streamText(['<thi', 'nking> plan it </thin', 'king>', '\n', 'Answer ', '<th', 'is stays']);
+    expect(text).toBe('<think> plan it </think>Answer <this stays');
+  });
+
+  it('drops inline thinking for special tasks', async () => {
+    expect(await streamText(['<thinking>hmm</thinking>\n', 'Title'], titleMessages)).toBe('Title');
+  });
+
+  it('closes an unclosed span at stream end', async () => {
+    expect(await streamText(['Hi <thinking>trailing', ' thought'])).toBe('Hi <think>trailing thought</think>');
+  });
+
+  it('leaves text without the tag untouched', async () => {
+    expect(await streamText(['I was thinking about it'])).toBe('I was thinking about it');
+  });
+
+  it('passes the tag through for a model without the field', async () => {
+    const record: ModelInfo = {
+      ...CONVERSE_BEDROCK_MODELS[0],
+      id: 'us.example.converse-model-v1:0' as ModelInfo['id'],
+    };
+    const backend = new TestConverseBackend();
+    backend.setDispatchModel(record);
+    withMockClient(backend, () => ({
+      stream: asStream([
+        { messageStart: { role: 'assistant' } },
+        { contentBlockDelta: { contentBlockIndex: 0, delta: { text: '<thinking>x</thinking> y' } } },
+        { contentBlockStop: { contentBlockIndex: 0 } },
+        { messageStop: { stopReason: 'end_turn' } },
+      ]),
+    }));
+    const out = collect();
+    await backend.complete(String(record.id), [{ role: 'user', content: 'q' }], { stream: true }, out.callback);
+    expect(out.joined()).toBe('<thinking>x</thinking> y');
+  });
+});
+
 describe('adding a Converse model is an enum entry plus a ModelInfo record', () => {
   const logger = new Logger();
 

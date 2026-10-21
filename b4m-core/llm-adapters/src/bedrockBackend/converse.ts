@@ -23,13 +23,17 @@ import {
 } from '../backend';
 import { DispatchModel } from '../dispatchModel';
 import { BaseBedrockBackend } from './base';
+import { createInlineReasoningScanner, type InlineReasoningScanner } from './inlineReasoning';
+
+/** A Converse table row; inlineReasoningTag names a tag the model wraps its chain-of-thought in inside plain text. */
+export type ConverseModelInfo = ModelInfo & { inlineReasoningTag?: 'thinking' };
 
 /**
  * Models served by ConverseBedrockBackend. Adding a Converse-compatible Bedrock model is a
  * `ChatModels` entry plus a record here: routing (getLlmByModel's Bedrock branch), the
  * Bedrock listing (UndifferentiatedBedrockBackend) and request shaping all read this table.
  */
-export const CONVERSE_BEDROCK_MODELS: readonly ModelInfo[] = [
+export const CONVERSE_BEDROCK_MODELS: readonly ConverseModelInfo[] = [
   {
     id: ChatModels.NOVA_PRO_BEDROCK,
     type: 'text',
@@ -42,6 +46,7 @@ export const CONVERSE_BEDROCK_MODELS: readonly ModelInfo[] = [
       // $0.80 / 1M in, $3.20 / 1M out (US on-demand). @see https://aws.amazon.com/bedrock/pricing/
       300_000: { input: 0.0000008, output: 0.0000032 },
     },
+    inlineReasoningTag: 'thinking',
     supportsVision: true,
     supportsTools: true,
     supportsImageVariation: false,
@@ -174,6 +179,12 @@ export class ConverseBedrockBackend extends BaseBedrockBackend {
   /** Whether the stream is inside a reasoning span, so each span gets one <think>/</think> pair. */
   private isInReasoningBlock = false;
   private reasoningEscaper = createThinkMarkerEscaper();
+  private inlineScanner: InlineReasoningScanner | null = null;
+
+  private newInlineScanner(model: string): InlineReasoningScanner | null {
+    const tag = CONVERSE_BEDROCK_MODELS.find(m => String(m.id) === model)?.inlineReasoningTag;
+    return tag ? createInlineReasoningScanner(tag, this.isSpecialTask) : null;
+  }
 
   /** The static table this backend serves; subclasses for a single vendor narrow it. */
   protected modelTable(): readonly ModelInfo[] {
@@ -260,6 +271,7 @@ export class ConverseBedrockBackend extends BaseBedrockBackend {
 
     this.isInReasoningBlock = false;
     this.reasoningEscaper = createThinkMarkerEscaper();
+    this.inlineScanner = this.newInlineScanner(model);
 
     return {
       modelId: model,
@@ -454,7 +466,8 @@ export class ConverseBedrockBackend extends BaseBedrockBackend {
         const reasoning = block.reasoningContent.reasoningText?.text;
         if (reasoning && !this.isSpecialTask) text += `<think>${escapeThinkMarkers(reasoning)}</think>`;
       } else if (typeof block.text === 'string') {
-        text += block.text;
+        const scanner = this.newInlineScanner(model);
+        text += scanner ? scanner.push(block.text) + scanner.flush() : block.text;
       }
     });
 
@@ -487,6 +500,7 @@ export class ConverseBedrockBackend extends BaseBedrockBackend {
     if (event.messageStart) {
       this.isInReasoningBlock = false;
       this.reasoningEscaper = createThinkMarkerEscaper();
+      this.inlineScanner = this.newInlineScanner(model);
       return plain(0, '');
     }
 
@@ -509,7 +523,8 @@ export class ConverseBedrockBackend extends BaseBedrockBackend {
     if (event.contentBlockStop) {
       const index = event.contentBlockStop.contentBlockIndex ?? 0;
       const chunkText =
-        this.isInReasoningBlock && !this.isSpecialTask ? this.reasoningEscaper.flush() + '</think>' : '';
+        (this.isInReasoningBlock && !this.isSpecialTask ? this.reasoningEscaper.flush() + '</think>' : '') +
+        (this.inlineScanner?.flush() ?? '');
       this.isInReasoningBlock = false;
       return plain(index, chunkText, { toolArguments: false });
     }
@@ -543,7 +558,7 @@ export class ConverseBedrockBackend extends BaseBedrockBackend {
     if (delta?.text !== undefined) {
       const closing = this.isInReasoningBlock ? this.reasoningEscaper.flush() + '</think>' : '';
       this.isInReasoningBlock = false;
-      return closing + delta.text;
+      return closing + (this.inlineScanner ? this.inlineScanner.push(delta.text) : delta.text);
     }
     return '';
   }
