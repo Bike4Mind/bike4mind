@@ -147,7 +147,7 @@ export const BlankChat = memo(function BlankChat({
                 </Box>
                 <Typography
                   level="body-xs"
-                  textColor="text.secondary"
+                  textColor="text.tertiary"
                   sx={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
                   data-testid="chat-empty-suggestion-prompt"
                 >
