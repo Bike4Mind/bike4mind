@@ -6,9 +6,7 @@ import type {
   ICompletionOptions,
   ICompletionOptionTools,
 } from '@bike4mind/llm-adapters';
-import { parseToolReferences } from '../tools/cliToolSearchTool.js';
-
-const TOOL_SEARCH_TOOL_NAME = 'tool_search';
+import { parseToolReferences, TOOL_SEARCH_TOOL_NAME } from '../tools/cliToolSearchTool.js';
 
 /**
  * Same gate the completions endpoint applies (cliCompletionsToolSearch.ts), so the CLI never sends
@@ -114,9 +112,12 @@ export function prepareToolSearchRequest(
   const wireNames = new Set([...wireTools, ...registryTools].map(t => t.toolSchema.name));
   const referenced = new Set<string>();
   const wireMessages = rewriteToolSearchResults(messages, references => {
-    if (!references.every(r => wireNames.has(r.tool_name))) return undefined;
-    for (const reference of references) referenced.add(reference.tool_name);
-    return references;
+    // A reference to a tool no longer offered (e.g. an MCP server disconnected) is dropped, and the
+    // result is rewritten to the resolved subset, so one stale name does not un-defer the rest.
+    const resolved = references.filter(r => wireNames.has(r.tool_name));
+    if (resolved.length === 0) return undefined;
+    for (const reference of resolved) referenced.add(reference.tool_name);
+    return resolved.length === references.length ? references : resolved;
   });
 
   const liveNames = new Set(tools.map(t => t.toolSchema.name));
@@ -125,6 +126,8 @@ export function prepareToolSearchRequest(
     wireTools.push(liveNames.has(name) && !referenced.has(name) ? tool : asDeferred(tool));
   }
 
+  // Defensive only: tool_search itself is never a deferred registry tool, so every tool cannot be
+  // deferred in the current wiring.
   if (wireTools.every(t => t.toolSchema.defer_loading === true)) return request;
   return { messages: wireMessages, tools: wireTools };
 }

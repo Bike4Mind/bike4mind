@@ -140,6 +140,19 @@ describe('prepareToolSearchRequest', () => {
     expect(resultContent(prepared.messages, 1)).toBe(serialized);
   });
 
+  it('keeps the references that still resolve when one of them is gone', () => {
+    const { registry, tools } = setup();
+    const prepared = prepareToolSearchRequest(
+      { messages: toolSearchTurn('toolu_1', JSON.stringify(references('mcp__a', 'mcp__gone'))), tools },
+      registry,
+      true
+    );
+    expect(resultContent(prepared.messages, 1)).toEqual(references('mcp__a'));
+    const loaded = prepared.tools.find(t => t.toolSchema.name === 'mcp__a');
+    expect(loaded?.toolSchema.defer_loading).toBe(true);
+    expect(wire(prepared.tools)).toBe(wire(prepareToolSearchRequest({ messages, tools }, registry, true).tools));
+  });
+
   it('sends a deferred tool loaded without a reference non-deferred, so it stays callable', () => {
     const { registry, tools } = setup();
     const live = [...tools, registry.get('mcp__c')!];
@@ -231,7 +244,8 @@ describe('ToolSearchLlmBackend', () => {
       calls.push({ model, messages: msgs, options });
       throw new Error('rate limited');
     });
-    const fallback = new FallbackLlmBackend(new ToolSearchLlmBackend(inner, registry, models), [OPENAI], () => {});
+    const toolSearchLlm = new ToolSearchLlmBackend(inner, registry, models);
+    const fallback = new FallbackLlmBackend(toolSearchLlm, [OPENAI], () => {});
     const history = toolSearchTurn('toolu_1', JSON.stringify(references('mcp__a')));
 
     await fallback.complete(NATIVE, history, { tools: [...tools, registry.get('mcp__a')!] }, noop);
@@ -240,6 +254,20 @@ describe('ToolSearchLlmBackend', () => {
     expect(resultContent(calls[0].messages, 1)).toEqual(references('mcp__a'));
     expect(calls[1].options.tools?.some(t => t.toolSchema.defer_loading)).toBe(false);
     expect(resultContent(calls[1].messages, 1)).toMatch(/^Loaded 1 tool schema\(s\): mcp__a/);
+    expect(toolSearchLlm.servesToolReference()).toBe(false);
+  });
+
+  it('treats a Bedrock-served Claude as non-native: unchanged tools, references as text', async () => {
+    const { registry, tools } = setup();
+    const { inner, calls } = innerBackend();
+    const backend = new ToolSearchLlmBackend(inner, registry, models);
+    const history = toolSearchTurn('toolu_1', JSON.stringify(references('mcp__a')));
+
+    await backend.complete(BEDROCK, history, { tools }, noop);
+
+    expect(backend.servesToolReference()).toBe(false);
+    expect(calls[0].options).toEqual({ tools });
+    expect(resultContent(calls[0].messages, 1)).toMatch(/^Loaded 1 tool schema\(s\): mcp__a/);
   });
 
   it('delegates currentModel, pushToolMessages and getModelInfo', async () => {
