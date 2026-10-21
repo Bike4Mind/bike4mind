@@ -46,6 +46,24 @@ const db = {
 
 // The Tag model is registered by importing @bike4mind/database but is not exported from it.
 const TagModel = () => mongoose.model('Tag');
+const LedgerEventModel = () => mongoose.model('MemoryLedgerEvent');
+
+/** A lake belief extracted from a file, as the extractor writes it. */
+const seedLakeBelief = async (fabFileId: string) =>
+  LedgerEventModel().create({
+    principalKind: 'lake',
+    principalId: 'datalake:lake',
+    ownerUserId: USER,
+    seq: 0,
+    kind: 'assert',
+    subject: fabFileId,
+    fact: 'lake-belief-canary',
+    at: new Date().toISOString(),
+    sources: [fabFileId],
+    hash: 'hash-1',
+    prevHash: null,
+    shredded: false,
+  });
 
 beforeAll(async () => {
   mongoServer = await createMongoServer();
@@ -56,7 +74,12 @@ afterAll(async () => {
   await mongoServer?.stop();
 });
 afterEach(async () => {
-  await Promise.all([FabFile.deleteMany({}), TagModel().deleteMany({}), DataLakeModel.deleteMany({})]);
+  await Promise.all([
+    FabFile.deleteMany({}),
+    TagModel().deleteMany({}),
+    DataLakeModel.deleteMany({}),
+    LedgerEventModel().deleteMany({}),
+  ]);
 });
 
 const seedFile = async (tags: string[], overrides: Record<string, unknown> = {}) => {
@@ -161,11 +184,18 @@ describe('tagService.remove recomputes a lake whose prefix-arm signal it just st
       totalSizeBytes: 10,
     });
     const invoices = await fileTagRepository.findOrCreateByNameAndUserId('lk:invoices', USER, {});
-    await seedFile(['lk:invoices']);
+    const fileId = await seedFile(['lk:invoices']);
+    const belief = await seedLakeBelief(fileId);
 
     await tagService.remove(USER, { id: invoices.id }, { db });
 
     const persisted = await DataLakeModel.findById(lake.id);
     expect(persisted?.fileCount).toBe(0);
+
+    // Losing the prefix tag is a lake leave, so the belief distilled from the file stops being
+    // readable through this lake.
+    const shredded = await LedgerEventModel().findById(belief._id);
+    expect(shredded?.shredded).toBe(true);
+    expect(shredded?.fact).toBeUndefined();
   });
 });
