@@ -6,13 +6,29 @@ import { estimateImageCredits, UnsupportedImageModelError } from '../../../image
 import { AudioCostInput, estimateAudioCredits } from '../../../audioCost';
 
 export async function validateUserCredits(
-  user: any,
+  user: { currentCredits?: number; id: string },
   modelInfo: ModelInfo,
   n: number,
   input: CostInput,
   logger: Logger,
-  organization?: IOrganizationDocument | null
+  organization?: IOrganizationDocument | null,
+  // Credits this turn already committed to earlier tool calls; the balance snapshot predates them.
+  committedCredits = 0
 ): Promise<{ requiredCredits: number; usdCost: number }> {
+  return validateImageCredits(user, modelInfo, n, input, logger, organization, committedCredits);
+}
+
+/** Synchronous so a tool can check and commit its estimate without yielding to another call. */
+export function validateImageCredits(
+  user: { currentCredits?: number; id: string },
+  modelInfo: ModelInfo,
+  n: number,
+  input: CostInput,
+  logger: Logger,
+  organization?: IOrganizationDocument | null,
+  // Credits this turn already committed to earlier tool calls; the balance snapshot predates them.
+  committedCredits = 0
+): { requiredCredits: number; usdCost: number } {
   let userCredits = user.currentCredits ?? 0;
 
   if (organization) {
@@ -37,6 +53,7 @@ export async function validateUserCredits(
     throw err;
   }
 
+  userCredits -= committedCredits;
   if (userCredits < requiredCredits) {
     const creditsType = organization ? 'organization' : 'personal';
     throw insufficientCreditsError(
@@ -58,9 +75,11 @@ export function validateAudioCredits(
   user: { currentCredits?: number; id: string },
   input: AudioCostInput,
   logger: Logger,
-  organization?: IOrganizationDocument | null
+  organization?: IOrganizationDocument | null,
+  // Credits this turn already committed to earlier tool calls; the balance snapshot predates them.
+  committedCredits = 0
 ): { requiredCredits: number; usdCost: number; units: number } {
-  const availableCredits = organization ? organization.currentCredits : (user.currentCredits ?? 0);
+  const availableCredits = (organization ? organization.currentCredits : (user.currentCredits ?? 0)) - committedCredits;
   logger.updateMetadata(
     organization
       ? { creditsSource: 'organization', creditsSourceId: organization.id }

@@ -255,6 +255,7 @@ describe('ChatService queued messages', () => {
     const { id } = await service.createSession();
     await service.send(id, 'first');
     await waitForEvent('start');
+    await waitForPost(1);
     await service.send(id, 'second');
     await service.send(id, 'third');
 

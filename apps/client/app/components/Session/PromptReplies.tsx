@@ -1,3 +1,4 @@
+import { ReplyMarkdownImage } from './ReplyMarkdownImage';
 import ImageContainer from '@client/app/components/Session/ImageContainer';
 import VideoContainer from '@client/app/components/Session/VideoContainer';
 import { GeneratedAudioPlayer } from '@client/app/components/Session/GeneratedAudioPlayer';
@@ -1336,6 +1337,12 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   const markdownComponents = useMemo(() => createMarkdownComponents({ highlightText }), [highlightText]);
 
   const codeComponent = useMemo(() => createCodeComponent(), []);
+  const markdownImage = useCallback(
+    ({ alt, src }: ComponentProps<'img'>) => (
+      <ReplyMarkdownImage src={typeof src === 'string' ? src : ''} alt={alt} onSendMessage={onSendMessage} />
+    ),
+    [onSendMessage]
+  );
   const placesById = useMemo(() => placesFromCitables(promptMeta?.citables), [promptMeta?.citables]);
   // Off until the reply is done and the markers can link, so any other reply keeps its `[N]` as ordinary text (search
   // highlighting matches across it) rather than one element per marker.
@@ -1842,32 +1849,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                                     components={{
                                       ...markdownComponents,
                                       code: codeComponent,
-                                      img: ({ alt, src, title }) => {
-                                        if (!src) {
-                                          return null;
-                                        }
-
-                                        const srcStr = typeof src === 'string' ? src : '';
-                                        if (
-                                          srcStr.startsWith('/mnt/') ||
-                                          srcStr.startsWith('/tmp/') ||
-                                          srcStr.startsWith('file://') ||
-                                          srcStr.startsWith('sandbox:') ||
-                                          srcStr.includes('/mnt/data/')
-                                        ) {
-                                          return null;
-                                        }
-
-                                        return (
-                                          <ImageContainer
-                                            src={srcStr}
-                                            index={0}
-                                            totalImages={1}
-                                            images={[srcStr]}
-                                            onSendMessage={onSendMessage}
-                                          />
-                                        );
-                                      },
+                                      img: markdownImage,
                                       a: link,
                                       [CITATION_MARKER_TAG]: CitationMarker,
                                     }}
