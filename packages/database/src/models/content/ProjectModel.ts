@@ -53,6 +53,34 @@ export class ProjectRepository extends BaseRepository<IProjectDocument> implemen
     await this.projectModel.updateMany({ sessionIds: sessionId }, { $pull: { sessionIds: sessionId } });
   }
 
+  async pullFileReferences(fileIds: string[], scope: { projectId: string } | { userIds: string[] }) {
+    if (fileIds.length === 0) return;
+    const holdsAny = { $or: [{ fileIds: { $in: fileIds } }, { 'systemPrompts.fileId': { $in: fileIds } }] };
+    const pull = { $pull: { fileIds: { $in: fileIds }, systemPrompts: { fileId: { $in: fileIds } } } };
+    if ('projectId' in scope) {
+      if (!mongoose.isObjectIdOrHexString(scope.projectId)) return;
+      await this.projectModel.updateOne({ _id: scope.projectId, ...holdsAny }, pull);
+      return;
+    }
+    if (scope.userIds.length === 0) return;
+    // `deletedAt: null` on the owner arm is what lets the partial {userId, name} unique index serve
+    // it; both $or arms must be indexed or the planner falls back to a collection scan.
+    await this.projectModel.updateMany(
+      {
+        $and: [
+          {
+            $or: [
+              { userId: { $in: scope.userIds }, deletedAt: null },
+              { 'users.userId': { $in: scope.userIds }, deletedAt: null },
+            ],
+          },
+          holdsAny,
+        ],
+      },
+      pull
+    );
+  }
+
   async searchAccessible(
     userId: string,
     search: string,

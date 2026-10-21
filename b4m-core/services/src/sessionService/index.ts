@@ -15,5 +15,7 @@ export * from './addFavorite';
 export * from './deleteFavorite';
 export * from './autoName';
 export * from './scrubMissingKnowledgeIds';
+export * from './scrubStaleFileReferences';
+export * from './classifyUnresolvedFileIds';
 export * from './move';
 export * from './surfaceTransition';

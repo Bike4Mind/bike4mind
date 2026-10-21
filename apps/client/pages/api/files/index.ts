@@ -4,6 +4,7 @@ import {
   FabFile,
   fabFileRepository,
   projectRepository,
+  sessionRepository,
   User,
   userRepository,
   withTransaction,
@@ -86,13 +87,15 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
       const fabFileIds = (await FabFile.find(ownedFilter).select('_id').lean()).map(f => String(f._id));
       await unpublishUserArtifactsBySource(userId, { kind: 'fabfile', fabFileIds }, { logger: req.logger });
 
-      await withTransaction(async session => {
+      // The files this transaction actually deleted, returned out of it so a rolled-back attempt
+      // never drives the reference cleanup below.
+      const deleted = await withTransaction(async session => {
         try {
           // sessionId feeds deleteStoredObjects' fork guard: without it the file's own notebook reads as another's.
           const files = await FabFile.find(ownedFilter)
             .select(
               'filePath versions moderationStatus blockReason sourceMetadata.generatedCopyKey sourceMetadata.sessionId ' +
-                'organizationId fileSize storageChargedAt status createdAt'
+                'organizationId fileSize storageChargedAt status createdAt userId users.userId'
             )
             .session(session);
           const user = await User.findById(userId).session(session);
@@ -149,6 +152,7 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
             },
             { session, ability: req.ability }
           );
+          return files.map(file => ({ id: String(file._id), userId: file.userId, users: file.users }));
         } catch (error) {
           req.logger.error('Transaction error in DELETE /api/files:', {
             error,
@@ -157,6 +161,27 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
           throw error;
         }
       });
+
+      // Every one of these files is gone for everyone now, so drop the references that would
+      // otherwise keep re-attaching them - the same unlink a single delete leaves to its caller
+      // (deleteFabFile). After the commit, outside its session, and best-effort: the files are
+      // deleted either way. Only the owner's and direct-share recipients' own sessions, system files
+      // and projects are cleaned; group- or lake-held references are left to the turn-time scrub.
+      if (deleted.length > 0) {
+        try {
+          for (const references of fabFilesService.groupDeletedFileReferences(
+            deleted.map(fabFilesService.deletedFileReferences)
+          )) {
+            await fabFilesService.cleanUpDeletedFileReferences(
+              references,
+              { sessions: sessionRepository, users: userRepository, projects: projectRepository },
+              req.logger
+            );
+          }
+        } catch (error) {
+          req.logger.warn('DELETE /api/files: failed to unlink references to deleted files', { error, userId });
+        }
+      }
 
       return res.status(204).send();
     } catch (error) {

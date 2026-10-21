@@ -19,6 +19,21 @@ describe('sanitizeReportHtml', () => {
     expect(result).toContain('<p>safe</p>');
   });
 
+  it('handles deeply nested discarded iframe fallback without overflowing the stack', () => {
+    const result = sanitizeReportHtml('<iframe>'.repeat(20_000) + 'safe');
+
+    expect(result).toContain('safe');
+    expect(result).not.toMatch(/<\/?iframe\b/i);
+  });
+
+  it('sanitizes markup inside discarded iframe fallback', () => {
+    const result = sanitizeReportHtml(
+      '<iframe><p onclick="alert(1)">safe</p><script>alert(1)</script><a href="javascript:alert(1)">link</a>'
+    );
+
+    expect(result).toBe('<p>safe</p><a>link</a>');
+  });
+
   it('strips onclick attributes', () => {
     const result = sanitizeReportHtml('<p onclick="alert(1)">text</p>');
     expect(result).not.toContain('onclick');

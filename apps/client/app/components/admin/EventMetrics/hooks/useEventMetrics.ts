@@ -49,7 +49,11 @@ export const useEventMetrics = (filters?: MetricsFilters) => {
     // Keyed off the mutation's own variables, not the enclosing queryKey: react-query rebinds a
     // pending mutation's options on every render, so the closure would otherwise write this
     // response into whichever filter set is selected by the time it resolves.
-    onSuccess: (metrics, variables) => queryClient.setQueryData(metricsQueryKey(variables), metrics),
+    onSuccess: async (metrics, variables) => {
+      // A newly selected window may still have a cached server read in flight.
+      await queryClient.cancelQueries({ queryKey: metricsQueryKey(variables), exact: true });
+      queryClient.setQueryData(metricsQueryKey(variables), metrics);
+    },
   });
 
   // A failed recache stays visible until the next attempt, but it belongs to the filter set it was
@@ -57,7 +61,7 @@ export const useEventMetrics = (filters?: MetricsFilters) => {
   const recacheFailed =
     recacheMutation.isError && hashKey(metricsQueryKey(recacheMutation.variables)) === hashKey(queryKey);
 
-  const forceRefresh = () => recacheMutation.mutate(filters);
+  const forceRefresh = (refreshFilters = filters) => recacheMutation.mutate(refreshFilters);
 
   return {
     ...query,

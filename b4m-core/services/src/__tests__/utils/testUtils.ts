@@ -60,6 +60,7 @@ export const createMockProjectRepository = (): IProjectRepository => ({
   searchAccessible: vi.fn(),
   listAccessibleAfterId: vi.fn(),
   removeSession: vi.fn(),
+  pullFileReferences: vi.fn(),
   findAllBySessionId: vi.fn(),
 });
 
@@ -213,6 +214,8 @@ export const createMockSessionRepository = (): MockedObject<ISessionRepository> 
     incrementImageCount: vi.fn(),
     findAllWithKnowledgeId: vi.fn(),
     pullKnowledgeIds: vi.fn(),
+    pullKnowledgeIdsFromSession: vi.fn(),
+    pullKnowledgeIdsForUsers: vi.fn(),
     searchByUserId: vi.fn(),
     listByUserId: vi.fn(),
     findRecentlyUpdatedByUserId: vi.fn(),
@@ -299,6 +302,7 @@ export const createMockUserRepository = (): MockedObject<IUserRepository> =>
     atomicEnableMfa: vi.fn(),
     findOrCreateByEmail: vi.fn(),
     recordModerationHit: vi.fn(),
+    pullSystemFilesForUsers: vi.fn(),
     setModerationStatus: vi.fn(),
     recordModerationAppeal: vi.fn(),
   });

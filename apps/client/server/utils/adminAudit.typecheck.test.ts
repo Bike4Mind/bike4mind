@@ -52,11 +52,17 @@ declare module '@bike4mind/common' {
       value: unknown
     ): { success: true; data: string } | { success: false; error: { issues: { message: string }[] } };
   };
+  export const ADMIN_AUDIT_CREDIT_GRANT_ACTIONS: AdminAuditAction[];
+  export const ADMIN_AUDIT_DEFAULT_CRITICAL_GRANT_CREDITS: number;
+  export const ADMIN_AUDIT_DEFAULT_DAILY_GRANT_CREDITS: number;
   export class BadRequestError extends Error {}
   export class ForbiddenError extends Error {}
 }
 declare module '@bike4mind/database' {
-  export const adminAuditLogRepository: unknown;
+  export const adminAuditLogRepository: {
+    sumCreditsGranted(actorUserId: string, since: Date): Promise<number>;
+  };
+  export const adminSettingsRepository: unknown;
 }
 declare module '@bike4mind/database/auth' {
   export const userRepository: {
@@ -73,11 +79,25 @@ declare module '@bike4mind/services' {
       summary: string;
       details?: Record<string, unknown>;
     };
+    export type CreditGrantPolicy = {
+      singleGrantCredits: number;
+      dailyTotalCredits: number;
+      sumCreditsGranted(actorUserId: string, since: Date): Promise<number>;
+    };
+    export type RecordAdminActionAdapters = {
+      db: { adminAuditLog: unknown };
+      creditGrantPolicy?: CreditGrantPolicy;
+      logger?: unknown;
+    };
     export function recordAdminAction(
       input: RecordAdminActionInput,
       adapters: unknown
     ): Promise<import('@bike4mind/common').AuditEntry | null>;
   }
+}
+declare module '@bike4mind/utils' {
+  export function getSettingsMap(db: unknown, options?: unknown): Promise<Record<string, string>>;
+  export function getSettingsValue(key: string, settings: Record<string, string>, defaultValue: number): number;
 }
 declare module '@bike4mind/server-utils/utils/ip' {
   export function getClientIp(req: import('express').Request): string;

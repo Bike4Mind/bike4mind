@@ -9,6 +9,7 @@ describe('sendPromptViaComposer', () => {
     const handleSendClick = vi.fn();
     const toastInfo = vi.fn();
     const shouldToastBlockedSend = vi.fn().mockReturnValue(true);
+    const onBlocked = vi.fn();
 
     const sent = await sendPromptViaComposer({
       prompt: '2) Extend',
@@ -17,17 +18,20 @@ describe('sendPromptViaComposer', () => {
       toastInfo,
       t,
       handleSendClick,
+      onBlocked,
     });
 
     expect(sent).toBe(false);
     expect(handleSendClick).not.toHaveBeenCalled();
     expect(toastInfo).toHaveBeenCalledWith('Uploading files...');
+    expect(onBlocked).toHaveBeenCalledWith('uploading');
   });
 
-  it('does not toast a second time within the gate window', async () => {
+  it('still reports the block when the toast gate stays silent, so analytics sees every reason', async () => {
     const handleSendClick = vi.fn();
     const toastInfo = vi.fn();
     const shouldToastBlockedSend = vi.fn().mockReturnValue(false);
+    const onBlocked = vi.fn();
 
     await sendPromptViaComposer({
       sendBlockedReason: 'reconnecting',
@@ -35,9 +39,11 @@ describe('sendPromptViaComposer', () => {
       toastInfo,
       t,
       handleSendClick,
+      onBlocked,
     });
 
     expect(toastInfo).not.toHaveBeenCalled();
+    expect(onBlocked).toHaveBeenCalledWith('reconnecting');
     expect(handleSendClick).not.toHaveBeenCalled();
   });
 

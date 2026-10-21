@@ -103,6 +103,7 @@ test.describe('MFA', () => {
     await basePage.dismissModals();
 
     await adminPage.navigateToAdmin();
+    await adminPage.navigateToUsersTab();
     await adminPage.searchUser(targetName);
     await adminPage.waitForUserVisible(targetName);
 

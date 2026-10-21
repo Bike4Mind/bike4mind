@@ -4,6 +4,7 @@ import {
   fabFileChunkRepository,
   fabFileRepository,
   fileTagRepository,
+  projectRepository,
   sessionRepository,
   userRepository,
   withTransaction,
@@ -49,7 +50,7 @@ export async function deleteFileForUser(req: Request, fabFileId: string) {
 
   let refund: { owner: StorageOwner; bytes: number } | undefined;
 
-  const deleteAction = await withTransaction(async session => {
+  const { action: deleteAction, references } = await withTransaction(async session => {
     const result = await fabFilesService.deleteFabFile(
       userId,
       { id: fabFileId },
@@ -91,8 +92,17 @@ export async function deleteFileForUser(req: Request, fabFileId: string) {
       );
     }
 
-    return result.action;
+    return result;
   });
+
+  // After the commit, outside the transaction's session (see cleanUpDeletedFileReferences).
+  if (references) {
+    await fabFilesService.cleanUpDeletedFileReferences(
+      references,
+      { users: userRepository, projects: projectRepository },
+      req.logger
+    );
+  }
 
   // Refund the file's owner (its org, or its uploader), not the caller, after a successful deletion.
   if (refund && refund.bytes > 0) {

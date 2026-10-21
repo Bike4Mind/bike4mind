@@ -7,11 +7,13 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { ICreditTransaction } from '@bike4mind/common';
 
-const { navigate, account } = vi.hoisted(() => ({
+const { navigate, account, purchaseToast } = vi.hoisted(() => ({
   navigate: vi.fn(),
+  purchaseToast: vi.fn(),
   account: { selectedAccount: null as null | { personal: boolean } },
 }));
 
+vi.mock('sonner', () => ({ toast: { success: purchaseToast } }));
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigate }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -27,10 +29,24 @@ vi.mock('react-i18next', () => ({
 }));
 vi.mock('@client/app/components/Credits/AccountSelector', () => ({ useSelectedAccount: () => account }));
 vi.mock('../Credits/PaymentButton', () => ({
-  default: ({ label, packageId }: { label: ReactNode; packageId: string }) => (
-    <button type="button" data-testid="credits-purchase-btn" data-package={packageId}>
-      {label}
-    </button>
+  default: ({
+    label,
+    packageId,
+    onPayment,
+    onPaymentPending,
+  }: {
+    label: ReactNode;
+    packageId: string;
+    onPayment: (credits: number) => void;
+    onPaymentPending?: () => void;
+  }) => (
+    <>
+      <button type="button" data-testid="credits-purchase-btn" data-package={packageId}>
+        {label}
+      </button>
+      <button type="button" data-testid="payment-success" onClick={() => onPayment(33333)} />
+      <button type="button" data-testid="payment-pending" onClick={onPaymentPending} />
+    </>
   ),
 }));
 
@@ -51,7 +67,21 @@ const renderSection = (props: Partial<Parameters<typeof CreditsSection>[0]> = {}
 describe('CreditsSection', () => {
   beforeEach(() => {
     navigate.mockClear();
+    purchaseToast.mockClear();
     account.selectedAccount = null;
+  });
+
+  it('keeps pending separate from successful purchases and success notifications', () => {
+    const onPurchase = vi.fn();
+    const onPaymentPending = vi.fn();
+    renderSection({ onPurchase, onPaymentPending });
+    fireEvent.click(screen.getByTestId('payment-pending'));
+    expect(onPaymentPending).toHaveBeenCalledTimes(1);
+    expect(onPurchase).not.toHaveBeenCalled();
+    expect(purchaseToast).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('payment-success'));
+    expect(onPurchase).toHaveBeenCalledTimes(1);
+    expect(purchaseToast).toHaveBeenCalledTimes(1);
   });
 
   it('closes the modal and opens the profile usage tab from the usage link', () => {

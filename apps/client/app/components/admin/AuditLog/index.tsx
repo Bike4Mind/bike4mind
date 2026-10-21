@@ -1,10 +1,11 @@
-import { useEffect, useMemo } from 'react';
-import { Stack, Typography } from '@mui/joy';
-import type { AuditEntry, AuditLogFilters } from '@bike4mind/common';
+import { useEffect, useMemo, useState } from 'react';
+import { Alert, Stack, Typography } from '@mui/joy';
+import type { AuditEntry, AuditLogFilters, AuditSummaryWindow } from '@bike4mind/common';
 import { useSnackbar } from '@client/app/contexts/SnackbarContext';
-import { useAuditEntry, useAuditLog } from '@client/app/hooks/data/adminAuditLog';
+import { useAuditAlertStatus, useAuditEntry, useAuditLog } from '@client/app/hooks/data/adminAuditLog';
 import { AuditEntryDrawer, AuditEventTable } from './shared';
 import { AuditFilterBar } from './AuditFilterBar';
+import { AuditNeedsReviewPanel } from './AuditNeedsReviewPanel';
 import { AuditSavedViewChips } from './AuditSavedViewChips';
 import { AuditSummaryStrip } from './AuditSummaryStrip';
 import { useAuditLogSearchParams } from './useAuditLogSearchParams';
@@ -13,6 +14,7 @@ const RELATED_EVENTS_LIMIT = 20;
 const LIST_ERROR_MESSAGE = 'Could not load audit events. Refresh to try again.';
 const ENTRY_UNAVAILABLE_MESSAGE = 'That audit entry could not be loaded.';
 const NO_FILTERS: AuditLogFilters = {};
+const DEFAULT_SUMMARY_WINDOW: AuditSummaryWindow = 30;
 
 const relatedFiltersFor = (entry: AuditEntry | null | undefined): AuditLogFilters | null => {
   const impersonationSessionId = entry?.related?.impersonationSessionId;
@@ -25,6 +27,8 @@ const relatedFiltersFor = (entry: AuditEntry | null | undefined): AuditLogFilter
 const AuditLogPage: React.FC = () => {
   const { filters, entryId, setFilters, patchFilters, openEntry } = useAuditLogSearchParams();
   const { showSnackbar } = useSnackbar();
+  const [windowDays, setWindowDays] = useState<AuditSummaryWindow>(DEFAULT_SUMMARY_WINDOW);
+  const { data: alertStatus } = useAuditAlertStatus();
   const { data, isLoading, isError, hasNextPage, isFetchingNextPage, fetchNextPage } = useAuditLog(filters);
 
   const entries = useMemo(() => data?.pages.flatMap(page => page.entries) ?? [], [data]);
@@ -58,7 +62,18 @@ const AuditLogPage: React.FC = () => {
   return (
     <Stack spacing={2} sx={{ p: { xs: 1, sm: 2 } }} data-testid="audit-log-page">
       <Typography level="title-lg">Audit Log</Typography>
-      <AuditSummaryStrip onApply={setFilters} />
+      {alertStatus && !alertStatus.alertsEnabled && (
+        <Alert color="warning" variant="soft" data-testid="audit-alerts-off-banner">
+          Security alerts are off: critical entries are not posted to Slack. Set the Security Alerts Channel Webhook URL
+          in Admin Settings to turn them on.
+        </Alert>
+      )}
+      <AuditSummaryStrip windowDays={windowDays} onWindowChange={setWindowDays} onApply={setFilters} />
+      <AuditNeedsReviewPanel
+        windowDays={windowDays}
+        alertStatus={alertStatus}
+        onSelectEntry={entry => openEntry(entry.id)}
+      />
       <AuditSavedViewChips filters={filters} onSelect={setFilters} />
       <AuditFilterBar filters={filters} onChange={patchFilters} onClear={() => setFilters({})} />
       <AuditEventTable

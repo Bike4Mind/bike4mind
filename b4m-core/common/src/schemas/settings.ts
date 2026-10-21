@@ -39,6 +39,10 @@ import {
 } from '../constants/knowledgeBaseSearch';
 import { BULK_CHANGE_SHARE_PCT_DEFAULT } from '../constants/lakeConvergence';
 import {
+  ADMIN_AUDIT_DEFAULT_CRITICAL_GRANT_CREDITS,
+  ADMIN_AUDIT_DEFAULT_DAILY_GRANT_CREDITS,
+} from '../types/entities/adminAuditCatalogue';
+import {
   ORGANIZATION_SUBSCRIPTION_CREDITS_PER_SEAT,
   ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
   ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
@@ -486,6 +490,11 @@ export const SettingKeySchema = z.enum([
   'SlackFeedbackWebhookUrl',
   'SlackNonProdFeedbackWebhookUrl',
   'SlackEmailAuditWebhookUrl',
+  'SlackSecurityAlertsWebhookUrl',
+
+  // Admin Audit Log alerting
+  'AdminAuditCriticalGrantCredits',
+  'AdminAuditDailyGrantCredits',
 
   // Slack Analytics Bot (existing production bot - DO NOT CHANGE)
   'slackSigningSecret',
@@ -3238,6 +3247,35 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.FEEDBACK.id,
     order: 8,
     isSensitive: true,
+  }),
+  SlackSecurityAlertsWebhookUrl: makeStringSetting({
+    key: 'SlackSecurityAlertsWebhookUrl',
+    name: 'Security Alerts Channel Webhook URL',
+    defaultValue: '',
+    description:
+      'Incoming-webhook URL for the security Slack channel that receives critical Admin Audit Log entries and credit-grant bursts. Leave empty to turn alerts off; the Audit Log page then shows a banner. It never falls back to the default webhook.',
+    category: 'SecOps',
+    isSensitive: true,
+  }),
+  AdminAuditCriticalGrantCredits: makeNumberSetting({
+    key: 'AdminAuditCriticalGrantCredits',
+    name: 'Critical Single Credit Grant',
+    defaultValue: ADMIN_AUDIT_DEFAULT_CRITICAL_GRANT_CREDITS,
+    min: 1,
+    int: true,
+    description:
+      'An admin credit grant above this many credits is recorded as critical in the Admin Audit Log and alerts the security channel.',
+    category: 'SecOps',
+  }),
+  AdminAuditDailyGrantCredits: makeNumberSetting({
+    key: 'AdminAuditDailyGrantCredits',
+    name: 'Critical Daily Credit Grants per Admin',
+    defaultValue: ADMIN_AUDIT_DEFAULT_DAILY_GRANT_CREDITS,
+    min: 1,
+    int: true,
+    description:
+      'A grant that takes one admin past this many credits granted in the last 24 hours is recorded as critical in the Admin Audit Log and alerts the security channel.',
+    category: 'SecOps',
   }),
   liveFeedbackEmail: makeStringSetting({
     key: 'liveFeedbackEmail',

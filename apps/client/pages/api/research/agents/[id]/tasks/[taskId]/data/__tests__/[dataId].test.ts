@@ -41,6 +41,7 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: {},
   researchAgentRepository: {},
   researchDataRepository: {},
+  projectRepository: {},
   Session: {},
   sessionRepository: {},
   User: {},

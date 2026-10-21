@@ -27,6 +27,14 @@ export interface PremiumRouteDescriptor {
   path: string;
   lazyImport: () => Promise<{ default: ComponentType }>;
   /**
+   * STRUCTURAL field: optional card on the admin landing page, linking to the literal `path`.
+   * `partitionPremiumRoutes` throws when it is set on a path with a `$param` segment.
+   */
+  adminDashboard?: {
+    label: string;
+    description: string;
+  };
+  /**
    * STRUCTURAL field (like `path`/`lazyImport`, NOT a gating prop - the
    * "gating fields map 1:1 to RestrictedPage" rule above does not apply to it).
    * Selects the route's parent in the SPA tree:

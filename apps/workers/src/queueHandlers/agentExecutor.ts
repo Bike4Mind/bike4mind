@@ -205,6 +205,7 @@ import {
   type SubagentDispatchPayload,
 } from './agentExecutor.schemas';
 import { enforceCheckpointDepth } from './agentExecutor.checkpointDepth';
+import { createInflightStepPersister } from './agentExecutor.inflightSteps';
 import { runIterationWithDeadlineGuard } from './agentExecutor.iterationDeadline';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { createModelAdmission } from '@server/billing/meterPlatformCompletion';
@@ -746,10 +747,14 @@ export function attachedFileIdsForRun(
  *
  * Never throws. Extraction is an enhancement over the metadata preamble - a failure here has to
  * leave the run behaving exactly as it did before, not kill the turn.
+ *
+ * Exported so the run-time wiring (which session id the stale-reference scrub is scoped to, and the
+ * trim it reports back) is testable without driving the whole Lambda handler.
  */
-async function materializeAttachmentsForRun(args: {
+export async function materializeAttachmentsForRun(args: {
   execution: {
     userId: string;
+    sessionId?: string;
     query: string;
     messageFileIds?: string[];
     sessionFabFileIds?: string[];
@@ -761,6 +766,8 @@ async function materializeAttachmentsForRun(args: {
   modelInfo?: ModelInfo;
   apiKeyTable: ApiKeyTable;
   logger: Logger;
+  /** Told which pinned ids the stale-reference scrub detached, so the caller can trim its copy. */
+  onKnowledgeIdsScrubbed?: (removed: string[]) => void;
 }) {
   const { execution, sessionKnowledgeIds, scope, lakeAccess, modelInfo, apiKeyTable, logger } = args;
 
@@ -867,10 +874,13 @@ async function materializeAttachmentsForRun(args: {
     // every later run - the chat path does the same, through the same helper and the same two
     // gates. `materialized.delivery.droppedIds` is deliberately NOT the input: it also names live
     // files this run simply could not inline, and detaching those would destroy notebook contents.
-    await sessionService.scrubMissingKnowledgeIds(sessionKnowledgeIds, materialized.notices, {
-      db: { fabFiles: fabFileRepository, sessions: sessionRepository },
-      logger,
-    });
+    const scrubbed = await sessionService.scrubMissingKnowledgeIds(
+      sessionKnowledgeIds,
+      materialized.notices,
+      { db: { fabFiles: fabFileRepository, sessions: sessionRepository }, logger },
+      execution.sessionId
+    );
+    if (scrubbed.length > 0) args.onKnowledgeIdsScrubbed?.(scrubbed);
 
     return materialized;
   } catch (err) {
@@ -907,6 +917,14 @@ async function processExecution(
     sendWs,
   });
   if (terminated) return;
+
+  // Drained in the `finally` below so no in-flight write outlives this invocation.
+  const inflightSteps = createInflightStepPersister({
+    executionId,
+    persistSteps: agentExecutionRepository.updateInflightSteps.bind(agentExecutionRepository),
+    logger,
+    emitMetric,
+  });
 
   try {
     // Load execution document
@@ -2166,13 +2184,7 @@ async function processExecution(
       // boundary write and overwrite `checkpoint.steps` with a stale
       // snapshot.
       if (step.type !== 'final_answer') {
-        void agentExecutionRepository.updateInflightSteps(executionId, agent.getSteps()).catch(err => {
-          logger.warn('[Stream] Failed to persist in-flight steps', {
-            executionId,
-            error: err instanceof Error ? err.message : String(err),
-          });
-          void emitMetric('Lumina5/AgentExecutor', 'InflightStepsPersistFailed', 1);
-        });
+        inflightSteps.persist(agent.getSteps());
       }
     };
     agent.on('thought', streamStep);
@@ -2682,6 +2694,11 @@ async function processExecution(
           ? await materializeAttachmentsForRun({
               execution,
               sessionKnowledgeIds: session.knowledgeIds ?? [],
+              // Keeps the first-iteration preamble below from listing a file just detached.
+              onKnowledgeIdsScrubbed: removed => {
+                const dropped = new Set(removed);
+                session.knowledgeIds = (session.knowledgeIds ?? []).filter(id => !dropped.has(id));
+              },
               scope: fabFileReadScope,
               lakeAccess: await attachmentLakeAccess(),
               modelInfo,
@@ -3216,6 +3233,8 @@ async function processExecution(
         error: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr),
       });
     }
+  } finally {
+    await inflightSteps.drain();
   }
 }
 
