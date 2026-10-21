@@ -21,6 +21,7 @@
  *   server/premium-generated/premiumWorkspaceDeniedTools.generated.ts - tools denied per workspace
  *   server/premium-generated/premiumWorkspaceSessionSettings.generated.ts - session fields owned per workspace
  *   app/premium-generated/premiumToolDisplayLabels.generated.ts - overlay tool display names
+ *   app/premium-generated/premiumEntitlementGrants.generated.ts - entitlement registry rows
  *   server/premium-generated/premiumContracts.generated.ts - API contract contributions
  *   server/premium-generated/deploymentOpenApi.generated.ts - deployment spec (null form)
  *
@@ -800,6 +801,107 @@ function generateToolDisplayLabels(packages) {
   );
 }
 
+// --- Generate entitlement grants ---
+
+// Entitlement registry rows (b4mContributions.entitlementGrants), merged over the built-in rows in
+// lib/entitlements/registry.ts. Pure data like the labels above. Keys must already be normalized,
+// since the registry matches on the lowercase form.
+const GRANT_KEY_RE = /^[a-z0-9][a-z0-9:_-]*$/;
+const ENTITLEMENT_GRANT_FIELDS = ['tagGrants', 'impliedEntitlements', 'signupCredits', 'internalStaffEntitlements'];
+
+function generateEntitlementGrants(packages) {
+  const outPath = join(GENERATED_DIR, 'premiumEntitlementGrants.generated.ts');
+  const typeImport = `import type { PremiumEntitlementGrants } from '../premiumContract';`;
+
+  const fail = (pkg, detail) => {
+    throw new Error(`[codegen] invalid entitlementGrants from package "${pkg.name}": ${detail}`);
+  };
+  const readKey = (pkg, where, value) => {
+    if (typeof value !== 'string' || !GRANT_KEY_RE.test(value)) {
+      fail(pkg, `${where} ${JSON.stringify(value)} must be lowercase and match ${GRANT_KEY_RE}`);
+    }
+    return value;
+  };
+  const readKeyList = (pkg, where, value) => {
+    if (!Array.isArray(value) || value.length === 0) fail(pkg, `${where} must be a non-empty array of keys`);
+    return [...new Set(value.map(key => readKey(pkg, where, key)))];
+  };
+  const readRows = (pkg, field, value) => {
+    if (!Array.isArray(value)) fail(pkg, `${field} must be an array`);
+    return value.map(row => {
+      if (!isPlainObject(row)) fail(pkg, `${field} rows must be objects, got ${JSON.stringify(row)}`);
+      return row;
+    });
+  };
+  // One value per id across every package; an identical repeat collapses, a different one fails.
+  const claim = (table, field, id, value, pkg) => {
+    const prior = table.get(id);
+    if (prior && JSON.stringify(prior.value) !== JSON.stringify(value)) {
+      throw new Error(
+        `[codegen] entitlementGrants.${field} gives "${id}" different values in packages "${prior.from}" and ` +
+          `"${pkg.name}"; declare it in one.`
+      );
+    }
+    if (!prior) table.set(id, { value, from: pkg.name });
+  };
+
+  const tagGrants = new Map();
+  const implied = new Map();
+  const signupCredits = new Map();
+  const internalStaff = new Set();
+  for (const pkg of packages) {
+    const declared = pkg.contributions.entitlementGrants;
+    if (declared === undefined) continue;
+    if (!isPlainObject(declared)) fail(pkg, `expected an object, got ${JSON.stringify(declared)}`);
+    for (const field of Object.keys(declared)) {
+      if (!ENTITLEMENT_GRANT_FIELDS.includes(field)) fail(pkg, `unknown field ${JSON.stringify(field)}`);
+    }
+    if (declared.tagGrants !== undefined) {
+      for (const row of readRows(pkg, 'tagGrants', declared.tagGrants)) {
+        const tag = readKey(pkg, 'tagGrants tag', row.tag);
+        const keys = readKeyList(pkg, `tagGrants entitlements for "${tag}"`, row.entitlements).sort();
+        claim(tagGrants, 'tagGrants', tag, keys, pkg);
+      }
+    }
+    if (declared.impliedEntitlements !== undefined) {
+      for (const row of readRows(pkg, 'impliedEntitlements', declared.impliedEntitlements)) {
+        const ifHeld = readKey(pkg, 'impliedEntitlements ifHeld', row.ifHeld);
+        const keys = readKeyList(pkg, `impliedEntitlements alsoGrant for "${ifHeld}"`, row.alsoGrant).sort();
+        claim(implied, 'impliedEntitlements', ifHeld, keys, pkg);
+      }
+    }
+    if (declared.signupCredits !== undefined) {
+      for (const row of readRows(pkg, 'signupCredits', declared.signupCredits)) {
+        const key = readKey(pkg, 'signupCredits key', row.key);
+        if (typeof row.credits !== 'number' || !Number.isFinite(row.credits) || row.credits <= 0) {
+          fail(pkg, `signupCredits for "${key}" must be a positive finite number, got ${JSON.stringify(row.credits)}`);
+        }
+        claim(signupCredits, 'signupCredits', key, row.credits, pkg);
+      }
+    }
+    if (declared.internalStaffEntitlements !== undefined) {
+      for (const key of readKeyList(pkg, 'internalStaffEntitlements', declared.internalStaffEntitlements)) {
+        internalStaff.add(key);
+      }
+    }
+  }
+
+  const grants = {};
+  if (tagGrants.size > 0) grants.tagGrants = [...tagGrants].map(([tag, { value }]) => ({ tag, entitlements: value }));
+  if (implied.size > 0) {
+    grants.impliedEntitlements = [...implied].map(([ifHeld, { value }]) => ({ ifHeld, alsoGrant: value }));
+  }
+  if (signupCredits.size > 0) {
+    grants.signupCredits = [...signupCredits].map(([key, { value }]) => ({ key, credits: value }));
+  }
+  if (internalStaff.size > 0) grants.internalStaffEntitlements = [...internalStaff].sort();
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumEntitlementGrants: PremiumEntitlementGrants = ${JSON.stringify(grants, null, 2)};\n`
+  );
+}
+
 // --- Generate localStorage key prefixes ---
 
 // Overlays own localStorage keys core cannot name without naming their surface, so
@@ -1509,5 +1611,6 @@ generateLocalStorageKeyPrefixes(packages);
 generateWorkspaceCopyEntitlements(packages);
 generateWorkspaceDeniedTools(packages);
 generateToolDisplayLabels(packages);
+generateEntitlementGrants(packages);
 
 console.log('[codegen] done.');

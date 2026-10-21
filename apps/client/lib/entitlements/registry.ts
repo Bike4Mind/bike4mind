@@ -13,6 +13,10 @@
  * [DELETION-FOOTPRINT] are removed when their product is extracted. Do NOT
  * import constants from a product namespace into this file (wrong dependency
  * direction); keep the literals inline.
+ *
+ * Overlays add rows without editing this file: `b4mContributions.entitlementGrants` is validated
+ * at codegen and merged over the built-in rows by `mergeContributedRows`, so every map and helper
+ * below sees both.
  */
 import type {
   DomainGrantRow,
@@ -28,6 +32,8 @@ import {
   MAX_DATA_LAKE_SLUG_LENGTH,
   isOAuthSourceTag,
 } from '@bike4mind/common';
+import type { PremiumEntitlementGrants } from '@client/app/premiumContract';
+import { premiumEntitlementGrants } from '@client/app/premium-generated/premiumEntitlementGrants.generated';
 
 /**
  * Canonical tag/key normalization - the ONE comparison rule for the
@@ -273,19 +279,6 @@ const EXTERNAL_GRANT_DOMAINS = new Set(EXTERNAL_DOMAIN_GRANT_ROWS.map(row => row
 /** Entitlements internal staff domains confer - mirrors the external customer grant set. */
 const INTERNAL_STAFF_ENTITLEMENTS: EntitlementKey[] = ['optihashi:pro'];
 
-const DOMAIN_GRANT_ROWS: DomainGrantRow[] = [
-  ...EXTERNAL_DOMAIN_GRANT_ROWS,
-  // Internal staff domains -> same grant as external customer staff, sourced from
-  // env (above) so no B4M-account-tied literal ships in open-core code. De-duplicated
-  // against the external rows (structurally, via EXTERNAL_GRANT_DOMAINS) so an env
-  // value that overlaps one can't create a duplicate Map key - which would silently
-  // last-win and trip the registry invariant test.
-  ...INTERNAL_STAFF_DOMAINS.filter(domain => !EXTERNAL_GRANT_DOMAINS.has(domain)).map(domain => ({
-    domain,
-    entitlements: INTERNAL_STAFF_ENTITLEMENTS,
-  })),
-];
-
 /**
  * Per-entitlement one-time signup credit grant. A domain-grant user (see
  * DOMAIN_GRANT_ROWS) receives the SUM of these amounts for every entitlement
@@ -322,8 +315,120 @@ const SIGNUP_CREDIT_ROWS: ReadonlyArray<{ key: EntitlementKey; credits: number }
  */
 const IMPLIED_ENTITLEMENT_ROWS: ImpliedEntitlementRow[] = [{ ifHeld: 'optihashi:pro', alsoGrant: ['questmaster:pro'] }];
 
+/** The registry rows an overlay can extend; price and domain rows stay env-sourced. */
+export interface ExtensibleRegistryRows {
+  tagGrantRows: readonly TagGrantRow[];
+  impliedRows: readonly ImpliedEntitlementRow[];
+  signupCreditRows: readonly { key: EntitlementKey; credits: number }[];
+  internalStaffEntitlements: readonly EntitlementKey[];
+}
+
+const keyList = (value: unknown): EntitlementKey[] =>
+  Array.isArray(value)
+    ? [
+        ...new Set(
+          value
+            .filter((key): key is string => typeof key === 'string')
+            .map(normalizeTag)
+            .filter(Boolean)
+        ),
+      ]
+    : [];
+
+const rowList = (value: unknown): Record<string, unknown>[] =>
+  Array.isArray(value)
+    ? value.filter((row): row is Record<string, unknown> => typeof row === 'object' && row !== null)
+    : [];
+
+/**
+ * `builtIn` with `contributed` merged in. A contributed row for a tag or implying key the built-in
+ * rows already have adds its keys to that row; a signup-credit amount for a key that already has one
+ * is ignored, so a contribution can never change what a built-in product pays. Malformed input is
+ * dropped rather than thrown on: codegen validates it, and this runs at module load.
+ */
+export function mergeContributedRows(
+  builtIn: ExtensibleRegistryRows,
+  contributed: PremiumEntitlementGrants | undefined
+): ExtensibleRegistryRows {
+  const source: Record<string, unknown> =
+    typeof contributed === 'object' && contributed !== null ? (contributed as Record<string, unknown>) : {};
+
+  const mergeKeyed = (
+    base: readonly { id: string; keys: readonly EntitlementKey[] }[],
+    extra: { id: string; keys: EntitlementKey[] }[]
+  ) => {
+    const merged = new Map<string, EntitlementKey[]>();
+    for (const { id, keys } of [...base, ...extra]) {
+      if (!id || keys.length === 0) continue;
+      const prior = merged.get(id) ?? [];
+      merged.set(id, [...new Set([...prior, ...keys])]);
+    }
+    return [...merged];
+  };
+
+  const tagGrantRows = mergeKeyed(
+    builtIn.tagGrantRows.map(row => ({ id: normalizeTag(row.tag), keys: row.entitlements.map(normalizeTag) })),
+    rowList(source.tagGrants).map(row => ({
+      id: typeof row.tag === 'string' ? normalizeTag(row.tag) : '',
+      keys: keyList(row.entitlements),
+    }))
+  ).map(([tag, entitlements]) => ({ tag, entitlements }));
+
+  const impliedRows = mergeKeyed(
+    builtIn.impliedRows.map(row => ({ id: normalizeTag(row.ifHeld), keys: row.alsoGrant.map(normalizeTag) })),
+    rowList(source.impliedEntitlements).map(row => ({
+      id: typeof row.ifHeld === 'string' ? normalizeTag(row.ifHeld) : '',
+      keys: keyList(row.alsoGrant),
+    }))
+  ).map(([ifHeld, alsoGrant]) => ({ ifHeld, alsoGrant }));
+
+  const credits = new Map<EntitlementKey, number>();
+  for (const row of builtIn.signupCreditRows) credits.set(normalizeTag(row.key), row.credits);
+  for (const row of rowList(source.signupCredits)) {
+    if (typeof row.key !== 'string' || typeof row.credits !== 'number') continue;
+    const key = normalizeTag(row.key);
+    if (key && !credits.has(key) && Number.isFinite(row.credits) && row.credits > 0) credits.set(key, row.credits);
+  }
+  const signupCreditRows = [...credits].map(([key, amount]) => ({ key, credits: amount }));
+
+  const internalStaffEntitlements = [
+    ...new Set([...builtIn.internalStaffEntitlements.map(normalizeTag), ...keyList(source.internalStaffEntitlements)]),
+  ];
+
+  return { tagGrantRows, impliedRows, signupCreditRows, internalStaffEntitlements };
+}
+
+const BUILT_IN_ROWS: ExtensibleRegistryRows = {
+  tagGrantRows: TAG_GRANT_ROWS,
+  impliedRows: IMPLIED_ENTITLEMENT_ROWS,
+  signupCreditRows: SIGNUP_CREDIT_ROWS,
+  internalStaffEntitlements: INTERNAL_STAFF_ENTITLEMENTS,
+};
+
+const REGISTRY_ROWS: ExtensibleRegistryRows = (() => {
+  try {
+    return mergeContributedRows(BUILT_IN_ROWS, premiumEntitlementGrants);
+  } catch {
+    // Fail closed to the built-in rows; never throw at module load.
+    return BUILT_IN_ROWS;
+  }
+})();
+
+const DOMAIN_GRANT_ROWS: DomainGrantRow[] = [
+  ...EXTERNAL_DOMAIN_GRANT_ROWS,
+  // Internal staff domains -> same grant as external customer staff, sourced from
+  // env (above) so no B4M-account-tied literal ships in open-core code. De-duplicated
+  // against the external rows (structurally, via EXTERNAL_GRANT_DOMAINS) so an env
+  // value that overlaps one can't create a duplicate Map key - which would silently
+  // last-win and trip the registry invariant test.
+  ...INTERNAL_STAFF_DOMAINS.filter(domain => !EXTERNAL_GRANT_DOMAINS.has(domain)).map(domain => ({
+    domain,
+    entitlements: [...REGISTRY_ROWS.internalStaffEntitlements],
+  })),
+];
+
 export const IMPLIED_ENTITLEMENTS: ReadonlyMap<EntitlementKey, readonly EntitlementKey[]> = new Map(
-  IMPLIED_ENTITLEMENT_ROWS.map(row => [normalizeTag(row.ifHeld), row.alsoGrant.map(normalizeTag)])
+  REGISTRY_ROWS.impliedRows.map(row => [normalizeTag(row.ifHeld), row.alsoGrant.map(normalizeTag)])
 );
 
 /**
@@ -355,7 +460,7 @@ export function applyImpliedEntitlements(
 }
 
 export const SIGNUP_CREDITS: ReadonlyMap<EntitlementKey, number> = new Map(
-  SIGNUP_CREDIT_ROWS.map(row => [normalizeTag(row.key), row.credits])
+  REGISTRY_ROWS.signupCreditRows.map(row => [normalizeTag(row.key), row.credits])
 );
 
 export const PRICE_ENTITLEMENTS: ReadonlyMap<string, readonly EntitlementKey[]> = new Map(
@@ -363,7 +468,7 @@ export const PRICE_ENTITLEMENTS: ReadonlyMap<string, readonly EntitlementKey[]> 
 );
 
 export const TAG_GRANTS: ReadonlyMap<string, readonly EntitlementKey[]> = new Map(
-  TAG_GRANT_ROWS.map(row => [normalizeTag(row.tag), row.entitlements])
+  REGISTRY_ROWS.tagGrantRows.map(row => [normalizeTag(row.tag), row.entitlements])
 );
 
 export const DOMAIN_GRANTS: ReadonlyMap<string, readonly EntitlementKey[]> = new Map(
@@ -604,8 +709,10 @@ export const __registryRows = {
   // Per-stage rows let the tripwire validate BOTH stages, not just the one the
   // isTestMode ternary resolves to at import time.
   stagedPriceRows: PRICE_STAGED_ROWS,
-  tagGrantRows: TAG_GRANT_ROWS as readonly TagGrantRow[],
+  tagGrantRows: REGISTRY_ROWS.tagGrantRows,
   domainGrantRows: DOMAIN_GRANT_ROWS as readonly DomainGrantRow[],
-  signupCreditRows: SIGNUP_CREDIT_ROWS,
-  impliedRows: IMPLIED_ENTITLEMENT_ROWS as readonly ImpliedEntitlementRow[],
+  signupCreditRows: REGISTRY_ROWS.signupCreditRows,
+  impliedRows: REGISTRY_ROWS.impliedRows,
+  builtInRows: BUILT_IN_ROWS,
+  contributedRows: premiumEntitlementGrants,
 };

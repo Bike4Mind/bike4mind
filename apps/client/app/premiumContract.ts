@@ -311,6 +311,20 @@ export type PremiumWorkspaceGrantDisplays = Readonly<Record<string, readonly Pre
  */
 export type PremiumToolDisplayLabels = Readonly<Record<string, string>>;
 
+/**
+ * Entitlement registry rows an overlay adds (`b4mContributions.entitlementGrants`), merged over the
+ * built-in rows in lib/entitlements/registry.ts. Literal data like the labels above, so the client
+ * bundle never imports overlay code. Keys and tags arrive normalized (lowercase). Two overlays giving
+ * one tag, implying key or signup-credit key different values fail the build.
+ */
+export interface PremiumEntitlementGrants {
+  readonly tagGrants?: readonly { readonly tag: string; readonly entitlements: readonly string[] }[];
+  readonly impliedEntitlements?: readonly { readonly ifHeld: string; readonly alsoGrant: readonly string[] }[];
+  readonly signupCredits?: readonly { readonly key: string; readonly credits: number }[];
+  /** Keys conferred on internal staff domains, on top of the built-in set. */
+  readonly internalStaffEntitlements?: readonly string[];
+}
+
 /** What core hands a reply accessory about the reply it sits under. */
 export interface PremiumReplyAccessoryProps {
   /** The reply's quest id - the same key the UI side-effect bus dispatches as `dedupeKey`. */
