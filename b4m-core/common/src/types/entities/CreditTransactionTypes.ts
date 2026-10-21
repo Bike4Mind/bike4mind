@@ -126,12 +126,20 @@ const GENERIC_DEDUCT_REASON_PATTERN = /^[a-z][a-z0-9_]*$/;
 // symbol, so reads re-check the pattern rather than trusting what was added.
 const GENERIC_DEDUCT_REASON_REGISTRY_KEY = Symbol.for('b4m.credit.genericDeductReasons');
 
+// Each copy merges its own built-ins into whatever set it finds, so a copy that loads after an
+// older one with a shorter list still accepts every built-in it ships with.
+let seededRegistry: Set<string> | undefined;
+
 function genericDeductReasonRegistry(): Set<string> {
   const holder = globalThis as unknown as Record<symbol, Set<string> | undefined>;
   let registry = holder[GENERIC_DEDUCT_REASON_REGISTRY_KEY];
   if (!registry) {
-    registry = new Set<string>(GenericDeductReasons);
+    registry = new Set<string>();
     holder[GENERIC_DEDUCT_REASON_REGISTRY_KEY] = registry;
+  }
+  if (seededRegistry !== registry) {
+    for (const reason of GenericDeductReasons) registry.add(reason);
+    seededRegistry = registry;
   }
   return registry;
 }
@@ -177,7 +185,7 @@ export const GenericCreditDeductTransaction = BaseCreditTransaction.extend({
   reason: z
     .custom<GenericDeductReason>(isGenericDeductReason, {
       // Parse messages reach HTTP clients through secureParameters, so neither the input nor the
-      // registered names (some come from private packages) go into them.
+      // registered names go into them.
       error: issue =>
         typeof issue.input === 'string'
           ? 'Unregistered generic deduct reason'

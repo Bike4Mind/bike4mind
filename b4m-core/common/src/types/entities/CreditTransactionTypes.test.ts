@@ -101,6 +101,22 @@ describe('generic deduct reason registry', () => {
     expect(GenericCreditDeductTransaction.safeParse(deduct('registry_test_other_copy')).success).toBe(true);
   });
 
+  it('merges its own built-ins into a registry another copy created first', async () => {
+    const holder = globalThis as unknown as Record<symbol, Set<string> | undefined>;
+    const key = Symbol.for('b4m.credit.genericDeductReasons');
+    const original = holder[key];
+    holder[key] = new Set(['dispute_clawback']);
+    try {
+      vi.resetModules();
+      const newerCopy = await import('./CreditTransactionTypes');
+      for (const reason of GenericDeductReasons) {
+        expect(newerCopy.isGenericDeductReason(reason)).toBe(true);
+      }
+    } finally {
+      holder[key] = original;
+    }
+  });
+
   it('ignores a malformed reason written straight into the shared set', () => {
     const shared = (globalThis as unknown as Record<symbol, Set<string>>)[
       Symbol.for('b4m.credit.genericDeductReasons')
