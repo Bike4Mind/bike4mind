@@ -18,7 +18,7 @@ export const createSlackJobDeliveryDeps = (logger: Logger): SlackJobDeliveryDeps
     try {
       token = decryptToken(workspace.slackBotToken);
     } catch (error) {
-      // decryptToken throws on a wrong or rotated key; without this the user would get no Slack message at all.
+      // decryptToken throws on a wrong or rotated key.
       logger.warn('slack bot token could not be decrypted; skipping video delivery', { workspaceId, error });
       return null;
     }

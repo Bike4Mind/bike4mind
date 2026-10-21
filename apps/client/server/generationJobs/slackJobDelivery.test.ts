@@ -91,6 +91,45 @@ describe('deliverJobToSlack', () => {
     );
   });
 
+  it.each(['unavailable', 'pending_scan'] as const)(
+    'withholds the old link when a failed download is followed by %s',
+    async availability => {
+      const { poster, deps } = build();
+      vi.mocked(deps.downloadOutput).mockRejectedValue(new Error('generation output is not serveable'));
+      vi.mocked(deps.signOutputUrl)
+        .mockResolvedValueOnce({ availability: 'ready', url: 'https://example.test/old.mp4' })
+        .mockResolvedValue({ availability });
+      await deliverJobToSlack(job(), deps);
+      expect(poster.uploadFile).not.toHaveBeenCalled();
+      expect(poster.sendMessage).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ text: expect.stringContaining('could not post it here') })
+      );
+      expect(vi.mocked(poster.sendMessage).mock.calls[0][0].text).not.toContain('https://');
+    }
+  );
+
+  it('uses a fresh gated URL after an upload failure', async () => {
+    const { poster, deps } = build({ uploadFile: vi.fn().mockResolvedValue({ success: false }) });
+    vi.mocked(deps.signOutputUrl)
+      .mockResolvedValueOnce({ availability: 'ready', url: 'https://example.test/old.mp4' })
+      .mockResolvedValueOnce({ availability: 'ready', url: 'https://example.test/fresh.mp4' });
+    await deliverJobToSlack(job(), deps);
+    expect(poster.sendMessage).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ text: expect.stringContaining('<https://example.test/fresh.mp4|') })
+    );
+  });
+
+  it('withholds the old link if the fallback moderation lookup fails', async () => {
+    const { poster, deps } = build({ uploadFile: vi.fn().mockRejectedValue(new Error('upload failed')) });
+    vi.mocked(deps.signOutputUrl)
+      .mockResolvedValueOnce({ availability: 'ready', url: 'https://example.test/old.mp4' })
+      .mockRejectedValueOnce(new Error('moderation lookup failed'));
+    await deliverJobToSlack(job(), deps);
+    expect(poster.sendMessage).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ text: expect.stringContaining('could not post it here') })
+    );
+  });
+
   it('falls back to the could-not-post message when the moderation gate throws', async () => {
     const { poster, deps } = build();
     vi.mocked(deps.signOutputUrl).mockRejectedValue(new Error('no signer'));
@@ -131,7 +170,9 @@ describe('deliverJobToSlack', () => {
     expect(deps.sleep).not.toHaveBeenCalled();
     expect(deps.downloadOutput).not.toHaveBeenCalled();
     expect(poster.uploadFile).not.toHaveBeenCalled();
-    expect(vi.mocked(poster.sendMessage).mock.calls[0][0].text).not.toContain('https://');
+    expect(poster.sendMessage).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ text: "I could not post it here. Check your video's status in Bike4Mind." })
+    );
   });
 
   it.each([

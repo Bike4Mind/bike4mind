@@ -72,7 +72,7 @@ const post = async (
   if (ts === null) deps.logger.warn('slack video message was not delivered', { jobId: job.id });
 };
 
-const NOT_POSTED_TEXT = 'Your video is ready, but I could not post it here. You can find it in Bike4Mind.';
+const NOT_POSTED_TEXT = "I could not post it here. Check your video's status in Bike4Mind.";
 
 const waitUntilServeable = async (output: VideoJobOutput, deps: SlackJobDeliveryDeps): Promise<SignedOutput> => {
   for (let attempt = 1; ; attempt++) {
@@ -114,13 +114,24 @@ const deliverClip = async (
         deps.logger.warn('slack video upload failed; falling back to a link', { jobId: job.id, error });
       }
     }
+    // An upload can fail because the download gate observed a deletion or moderation change.
+    // Recheck before publishing a link rather than reusing the URL from before that failure.
+    const fallback = await deps.signOutputUrl(output, SLACK_VIDEO_LINK_TTL_SECONDS);
+    if (fallback.availability !== 'ready') {
+      deps.logger.warn('slack video link skipped: the output is no longer serveable', {
+        jobId: job.id,
+        availability: fallback.availability,
+      });
+      await post(client, job, target, NOT_POSTED_TEXT, deps);
+      return;
+    }
     // No duration is promised: a URL signed with the worker's temporary credentials can stop working sooner than
     // the TTL requested above.
     await post(
       client,
       job,
       target,
-      `Your video is ready: <${signed.url}|Download video> (the link is time-limited).`,
+      `Your video is ready: <${fallback.url}|Download video> (the link is time-limited).`,
       deps
     );
   } catch (error) {

@@ -120,7 +120,7 @@ export const GENERATION_JOB_DELIVERY_KINDS = ['slack'] as const;
 
 /** Where a finished job is posted besides the websocket update: the Slack thread that requested it. */
 export type GenerationJobDelivery = {
-  kind: 'slack';
+  kind: (typeof GENERATION_JOB_DELIVERY_KINDS)[number];
   workspaceId: string;
   channelId: string;
   threadTs: string;
