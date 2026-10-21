@@ -6,6 +6,7 @@ import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.generated';
 import { AdminTab } from './adminSidebarConfig';
 import { UsageBySourceCard } from './EventMetrics/components/UsageBySourceCard';
+import { AnalyticsTermHelp } from './EventMetrics/components/AnalyticsTermHelp';
 import { OverviewTab } from './EventMetrics/components/OverviewTab';
 import { useEventMetrics } from './EventMetrics/hooks/useEventMetrics';
 import type { EventMetric } from './EventMetrics/types';
@@ -16,23 +17,30 @@ const DASHBOARD_SHORTCUTS = [
     tab: AdminTab.EventMetrics,
     title: 'Feature activity',
     description: 'Explore tracked actions and event categories.',
+    help: 'An event is a recorded action, such as sending a message or uploading a file. Event categories group related actions. Counts measure recorded activity, not the number of people using a feature.',
   },
   {
     tab: AdminTab.Analytics,
     title: 'User activity & reports',
     description: 'Investigate user activity and read daily or weekly reports.',
   },
-  { tab: AdminTab.ModelMetrics, title: 'Model performance', description: 'Compare model usage, latency, and spend.' },
+  {
+    tab: AdminTab.ModelMetrics,
+    title: 'Model performance',
+    description: 'Compare AI model usage, response times, and costs.',
+    help: 'Models are the AI systems that generate responses. Latency means how long a response takes; spend means the cost of using those models.',
+  },
   {
     tab: AdminTab.CreditAnalytics,
     title: 'Credits & costs',
-    description: 'Review credit usage, pricing, and margins.',
+    description: 'Review credits used, prices charged, and underlying costs.',
+    help: 'Credits are the units used to pay for activity in Bike4Mind. Margins compare what is charged with the underlying cost of providing that activity.',
   },
   { tab: AdminTab.Users, title: 'Users', description: 'Find accounts and inspect individual user activity.' },
   {
     tab: AdminTab.SystemHealth,
     title: 'System health',
-    description: 'Check platform services and operational health.',
+    description: 'Check whether the services behind Bike4Mind are working.',
   },
 ] as const;
 
@@ -78,6 +86,10 @@ export default function AdminDashboardTab({ onNavigate }: AdminDashboardTabProps
         <Box>
           <Typography level="h2" sx={{ mb: 1.5 }}>
             More dashboards
+            <AnalyticsTermHelp
+              term="More dashboards"
+              description="Additional dashboards available from installed features. They may use different metrics and time ranges from this overview."
+            />
           </Typography>
           <Grid container spacing={2}>
             {additionalDashboards.map(dashboard => (
@@ -111,10 +123,16 @@ export default function AdminDashboardTab({ onNavigate }: AdminDashboardTabProps
       )}
 
       <Stack spacing={1}>
-        <Typography level="h2">Client usage</Typography>
+        <Typography level="h2">
+          Client usage
+          <AnalyticsTermHelp
+            term="Client usage"
+            description="A client is an app or tool used to access Bike4Mind. CLI means the command-line app used in a terminal; API means access by other software. Agents perform tasks automatically, while system activity comes from background jobs. Sources can also describe how an action started."
+          />
+        </Typography>
         <Typography level="body-sm">
-          Compare Web, Desktop, CLI, API, agent, and system activity. Only source-tagged events are included; Mobile is
-          not yet tracked separately. Users may appear under more than one client.
+          Compare activity from apps, connected software, and automated tasks. Only activity with a recorded source is
+          included; Mobile is not yet tracked separately. Users may appear in more than one source.
         </Typography>
         <UsageBySourceCard />
       </Stack>
@@ -127,7 +145,10 @@ export default function AdminDashboardTab({ onNavigate }: AdminDashboardTabProps
           {DASHBOARD_SHORTCUTS.map(shortcut => (
             <Grid xs={12} sm={6} lg={4} key={shortcut.tab}>
               <Card sx={{ height: '100%' }}>
-                <Typography level="title-lg">{shortcut.title}</Typography>
+                <Typography level="title-lg">
+                  {shortcut.title}
+                  {'help' in shortcut && <AnalyticsTermHelp term={shortcut.title} description={shortcut.help} />}
+                </Typography>
                 <Typography level="body-sm" sx={{ flex: 1 }}>
                   {shortcut.description}
                 </Typography>
@@ -150,7 +171,13 @@ export default function AdminDashboardTab({ onNavigate }: AdminDashboardTabProps
       <Stack spacing={2}>
         <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={2}>
           <Box>
-            <Typography level="h2">Recent activity</Typography>
+            <Typography level="h2">
+              Recent activity
+              <AnalyticsTermHelp
+                term="Recent activity"
+                description="A snapshot of up to the latest 1,000 recorded events in the last seven calendar days, using your browser's time zone. Today is still in progress. Busy periods may fill the limit, so these charts cannot establish overall feature popularity or adoption. Refresh activity reloads this snapshot only."
+              />
+            </Typography>
             <Typography level="body-sm">Last 7 days, including today</Typography>
           </Box>
           <Button
@@ -163,8 +190,9 @@ export default function AdminDashboardTab({ onNavigate }: AdminDashboardTabProps
           </Button>
         </Stack>
         <Alert variant="soft" color="neutral">
-          This snapshot shows up to the latest 1,000 matching events, not total feature adoption. Client usage above has
-          its own time range and includes all source-tagged events in that range.
+          This snapshot shows up to the latest 1,000 matching events. It does not tell you how many people use each
+          feature overall. Client usage above has its own time range and includes all events with a recorded source in
+          that range.
         </Alert>
         {isLoading && <LinearProgress aria-label="Loading recent activity" />}
         {isError && (

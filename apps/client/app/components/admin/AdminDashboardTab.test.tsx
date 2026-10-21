@@ -68,6 +68,22 @@ describe('AdminDashboardTab', () => {
     expect(screen.queryByText('More dashboards')).not.toBeInTheDocument();
   });
 
+  it.each([
+    ['Client usage', 'CLI means the command-line app'],
+    ['Feature activity', 'Counts measure recorded activity, not the number of people'],
+    ['Model performance', 'Latency means how long a response takes'],
+    ['Credits & costs', 'Margins compare what is charged'],
+    ['Recent activity', 'Today is still in progress'],
+  ])('explains %s without navigating away from the dashboard', async (term, explanation) => {
+    const onNavigate = vi.fn();
+    render(<AdminDashboardTab onNavigate={onNavigate} />, { wrapper: Wrapper });
+
+    fireEvent.click(screen.getByRole('button', { name: `About ${term}` }));
+
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(explanation);
+    expect(onNavigate).not.toHaveBeenCalled();
+  });
+
   it('links an installed dashboard to its registered route without loading its page', () => {
     const lazyImport = vi.fn();
     premiumRoutes.push(

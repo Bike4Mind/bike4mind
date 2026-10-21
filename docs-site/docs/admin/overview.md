@@ -43,6 +43,8 @@ The admin panel opens on **Dashboard** by default. You can link directly to it w
 
 Use **Refresh activity** to reload the activity snapshot. While activity loads or fails, client usage and the navigation shortcuts remain available. An empty snapshot means no matching events were returned; a request failure displays an error instead. If client usage is empty, check its selected time range: older events without source metadata do not appear there.
 
+Help icons across the landing page explain client types, events, categories, AI model response times, costs, and the activity snapshot's limits. The three activity charts also have help: **Events Over Time** counts loaded events by date, **Events by Category** groups related actions, and **Top 10 Events** ranks event names by frequency. These charts count recorded events, not distinct people. Dates use your browser's time zone; today is incomplete, and dates with no loaded events are omitted from the time chart. Hover over, focus, or tap a help icon to read its explanation.
+
 ## Sidebar Navigation
 
 The **Dashboard** button stays above the collapsible sidebar sections, so you can always return to the overview. On a narrow screen, open the admin menu to reach it. Each section can be independently expanded or collapsed, and your preferences are saved.
