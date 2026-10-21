@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 import { Quest, UsageEvent, User } from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../database/src/__test__/createMongoServer';
 
+import { formatUtcDay } from './externalActiveUsers';
 import { collectActivity, runExternalActivityReport } from './externalActiveUsersReport';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -266,6 +267,20 @@ describe('runExternalActivityReport', () => {
 
 describe('collectActivity', () => {
   const windowStart = new Date('2026-10-01T00:00:00Z');
+
+  it('excludes activity at or after windowEnd from every source', async () => {
+    const user = await insertUser('late@customer.example');
+    const windowEnd = at('2026-10-11');
+    await usage(user, '2026-10-10', { source: 'chat' });
+    await usage(user, '2026-10-11', { source: 'chat' });
+    await quest(user, '2026-10-12');
+    await agent(user, '2026-10-12');
+
+    const { userDays, sourceCounts } = await collectActivity(windowStart, 100, windowEnd);
+
+    expect([...(userDays.get(user) ?? [])].map(formatUtcDay)).toEqual(['2026-10-10']);
+    expect(sourceCounts.get(user)?.get('chat')).toBe(1);
+  });
 
   it('keeps only the given users when a user-id filter is passed, and every user without one', async () => {
     const kept = await insertUser('kept@customer.example');

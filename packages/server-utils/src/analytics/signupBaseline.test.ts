@@ -56,6 +56,26 @@ describe('signup baseline', () => {
     expect(result.total.day7PlusImmature).toBe(1);
   });
 
+  it('matures D7+ only once the UTC day of until is past signup day + 7', () => {
+    const facts = evidence();
+    const lastCompleteDay = toUtcDay(at('2026-10-19T12:00:00Z'));
+    facts.userDays.set('justMature', new Set([lastCompleteDay]));
+    facts.userDays.set('justImmature', new Set([lastCompleteDay]));
+    const result = report(
+      [
+        account('justMature', { createdAt: at('2026-10-12T23:59:59Z') }),
+        account('justImmature', { createdAt: at('2026-10-13T00:00:00Z') }),
+      ],
+      facts
+    );
+    expect(result.census.map(row => [row.userId, row.day7Plus])).toEqual([
+      ['justMature', true],
+      ['justImmature', null],
+    ]);
+    expect(result.total.day7PlusActive).toMatchObject({ count: 1, total: 1 });
+    expect(result.total.day7PlusImmature).toBe(1);
+  });
+
   it('separates ever sent from first-notebook send and limits timeline to first 24 hours', () => {
     const facts = evidence();
     facts.firstSessions.set('u', { id: 'first', at: at('2026-10-02T10:01:00Z') });
