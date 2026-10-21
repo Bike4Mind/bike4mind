@@ -604,4 +604,16 @@ describe('POST /api/user-api-keys - product scope entitlement', () => {
     await mockRefs.postHandler!(req, res);
     expect(res._getStatusCode()).toBe(201);
   });
+
+  it('mints both Bob scopes without any product', async () => {
+    // Every signed-in account can use Bob, so neither scope waits on a product flag.
+    const { req, res } = post({ name: 'k', scopes: ['bob:read', 'bob:run'] });
+    await mockRefs.postHandler!(req, res);
+    expect(res._getStatusCode()).toBe(201);
+    expect(createUserApiKey).toHaveBeenCalledWith(
+      'u1',
+      expect.objectContaining({ scopes: ['bob:read', 'bob:run'] }),
+      expect.anything()
+    );
+  });
 });

@@ -143,6 +143,29 @@ export enum ApiKeyScope {
    * key: it reaches only the routes that name it, and those still require a platform-admin owner.
    */
   RELEASE_NOTES_WRITE = 'release-notes:write',
+  /**
+   * Read the key owner's own Bob results: single-site reads, two-site comparisons and
+   * re-checks, the recent-reports list, and how many runs are left. It starts nothing and
+   * spends nothing, so the `:read` suffix that puts it in the New-Key modal's Read-only
+   * preset is deliberate, and safe there because every read is scoped to the key's owner.
+   * Split from {@link BOB_RUN} so an agent can be handed the read half alone.
+   *
+   * Like every scope, it authorizes but never entitles. The Bob routes, and the gate that
+   * decides which of the two scopes each one accepts, live in the Bob overlay package and
+   * have no implementation in this repository, so nothing here verifies either claim.
+   */
+  BOB_READ = 'bob:read',
+  /**
+   * Start a Bob site read, a two-site comparison or a re-check. This is the spend half of
+   * the Bob pair: it spends the key owner's credits and publishes a report as them, so it
+   * is never implied by {@link BOB_READ}, and it is deliberately unsuffixed so it stays out
+   * of the Read-only and Read & write presets, as {@link OPTIHASHI_COMPUTE} does. Nor does
+   * it imply {@link BOB_READ} at this repository's scope gate.
+   *
+   * Authorizes without entitling, like {@link BOB_READ}: the gate that enforces it lives in
+   * the Bob overlay package, with no implementation here.
+   */
+  BOB_RUN = 'bob:run',
 }
 
 /**

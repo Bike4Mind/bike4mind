@@ -37,7 +37,7 @@ const OPEN_TO_ANY_KEY = new Set(['GET /api/sessions']);
 
 // Routes served by premium overlays, which are not checked out here; their claims cannot be
 // verified in this repo and are skipped rather than failed.
-const OVERLAY_PATH_PREFIXES = ['/api/premium-overwatch/', '/api/overwatch/marketing-reports'];
+const OVERLAY_PATH_PREFIXES = ['/api/premium-overwatch/', '/api/overwatch/marketing-reports', '/api/premium-bob/'];
 
 // Files whose exported functions are scope-check helpers a route may call instead of naming a list.
 const HELPER_SOURCES = [
