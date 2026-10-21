@@ -149,20 +149,20 @@ describe('SessionList project cap', () => {
   it('caps 21 at the first 20 and counts the one hidden', () => {
     render({ sessions: projectSessions(21) });
     expect(groupTitles()).toEqual(projectSessions(20).map(session => session.title));
-    expect(showMore()?.textContent).toBe('Show 1 more(1 hidden)');
+    expect(showMore()?.textContent).toBe('Show more(1 hidden)');
   });
 
   it('renders only 20 rows for a 500-session project', () => {
     render({ sessions: projectSessions(500) });
     expect(all('chat-session-item')).toHaveLength(20);
-    expect(showMore()?.textContent).toBe('Show 10 more(480 hidden)');
+    expect(showMore()?.textContent).toBe('Show more(480 hidden)');
   });
 
   it('reveals 10 per click, the last click reveals the remainder, then only Show less is left', () => {
     render({ sessions: projectSessions(35) });
     click(showMore());
     expect(groupTitles()).toHaveLength(30);
-    expect(showMore()?.textContent).toBe('Show 5 more(5 hidden)');
+    expect(showMore()?.textContent).toBe('Show more(5 hidden)');
     expect(showLess()).not.toBeNull();
 
     click(showMore());
@@ -179,7 +179,7 @@ describe('SessionList project cap', () => {
     click(showLess());
     expect(groupTitles()).toHaveLength(20);
     expect(showLess()).toBeNull();
-    expect(showMore()?.textContent).toBe('Show 10 more(40 hidden)');
+    expect(showMore()?.textContent).toBe('Show more(40 hidden)');
   });
 
   it('keeps an active session past the cap in its own place, once', () => {
@@ -188,7 +188,7 @@ describe('SessionList project cap', () => {
     expect(titles).toHaveLength(21);
     expect(titles[20]).toBe('Task 300');
     expect(titles.filter(title => title === 'Task 300')).toHaveLength(1);
-    expect(showMore()?.textContent).toBe('Show 10 more(479 hidden)');
+    expect(showMore()?.textContent).toBe('Show more(479 hidden)');
   });
 
   it('keeps pinned, running and waiting sessions past the cap visible', () => {
@@ -208,7 +208,7 @@ describe('SessionList project cap', () => {
     const titles = groupTitles();
     expect(titles.slice(20)).toEqual(['Task 40', 'Task 50']);
     expect(titles).not.toContain('Task 60');
-    expect(showMore()?.textContent).toBe('Show 10 more(77 hidden)');
+    expect(showMore()?.textContent).toBe('Show more(77 hidden)');
   });
 
   it('shows every match uncapped while searching', () => {
@@ -249,7 +249,7 @@ describe('SessionList project cap', () => {
     const titles = groupTitles();
     expect(titles).toHaveLength(20);
     expect(titles[0]).toBe('Newest');
-    expect(showMore()?.textContent).toBe('Show 6 more(6 hidden)');
+    expect(showMore()?.textContent).toBe('Show more(6 hidden)');
   });
 
   it('is a focusable button that hands focus to Show less when it reveals the last rows', () => {

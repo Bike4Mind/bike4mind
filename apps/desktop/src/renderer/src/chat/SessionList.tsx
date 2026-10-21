@@ -16,6 +16,7 @@ import ListItemDecorator from '@mui/joy/ListItemDecorator';
 import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
+import type { Theme } from '@mui/joy/styles';
 import {
   normalizeSessionTitle,
   SESSION_TITLE_MAX_LENGTH,
@@ -609,7 +610,8 @@ const SHOW_MORE_SX = {
   '--Button-radius': '6px',
   fontSize: '0.8125rem',
   fontWeight: 'normal',
-  color: 'text.secondary',
+  // A step past text.tertiary, which is what the row titles already draw in.
+  color: (theme: Theme) => theme.vars.palette.neutral[theme.palette.mode === 'dark' ? 500 : 400],
 };
 
 /** Statuses a row is never hidden behind "Show more" in: the user is waiting on it or it on them. */
@@ -687,8 +689,8 @@ function CappedSessionRows({
               sx={{ ...SHOW_MORE_SX, flex: 1 }}
               data-testid={`${testIdPrefix}-show-more-btn`}
             >
-              Show {Math.min(GROUP_ROW_STEP, hidden)} more
-              <Typography component="span" level="body-xs" textColor="text.tertiary" sx={{ ml: 0.75 }}>
+              Show more
+              <Typography component="span" level="body-xs" textColor="inherit" sx={{ ml: 0.75 }}>
                 ({hidden} hidden)
               </Typography>
             </Button>
