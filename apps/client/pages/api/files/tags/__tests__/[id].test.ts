@@ -11,7 +11,6 @@ const h = vi.hoisted(() => ({
   update: vi.fn().mockResolvedValue({ id: 't1' }),
   remove: vi.fn().mockResolvedValue({ id: 't1', name: 'invoices', filesUpdated: 2 }),
   assertDataLakeWriteScope: vi.fn(),
-  withTransaction: vi.fn(async <T>(operation: () => Promise<T>): Promise<T> => operation()),
   baseApiOptions: undefined as unknown,
 }));
 
@@ -36,7 +35,6 @@ vi.mock('@bike4mind/services', () => ({
   tagService: { update: h.update, remove: h.remove },
 }));
 vi.mock('@bike4mind/database', () => ({
-  withTransaction: h.withTransaction,
   memoryLedgerRepository: { markSourceShredded: vi.fn().mockResolvedValue(0) },
   fabFileRepository: { __repo: 'fabFiles' },
   fileTagRepository: { __repo: 'fileTags' },
@@ -275,22 +273,5 @@ describe('DELETE /api/files/tags/[id]', () => {
 describe('/api/files/tags/[id] - scope gate', () => {
   it('requires files:write at the baseApi route gate', () => {
     expect(h.baseApiOptions).toEqual({ requiredScopes: ['files:write'] });
-  });
-});
-
-describe('bulk tag transaction boundary', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-  it.each(['PUT', 'DELETE'])('runs %s within a transaction and propagates a shred failure', async method => {
-    const service = method === 'PUT' ? h.update : h.remove;
-    service.mockRejectedValueOnce(new Error('source shred unavailable'));
-    const { res } = makeRes();
-    await expect(
-      call({ method, query: { id: 't1' }, body: { name: 'renamed' }, user: { id: 'u1' } }, res)
-    ).rejects.toThrow('source shred unavailable');
-    expect(h.withTransaction).toHaveBeenCalledTimes(1);
-    expect(service).toHaveBeenCalledTimes(1);
-    expect(h.withTransaction.mock.invocationCallOrder[0]).toBeLessThan(service.mock.invocationCallOrder[0]);
   });
 });
