@@ -19,6 +19,18 @@ export interface CustomCommandStoreOptions {
    *  merges them with the lowest precedence (local files always win on name
    *  collision). When omitted, the store is local-only. */
   remoteSource?: RemoteSkillSource;
+  /** Parsed files kept across stores by a long-lived caller, so an unchanged file is neither
+   *  re-parsed nor re-warned about on every scan. Keyed by file path. */
+  fileCache?: Map<string, CachedCommandFile>;
+}
+
+/** One file's parse, valid while its mtime and size hold. `command` is null when it was skipped
+ *  or failed, so a broken file is reported once per change rather than once per scan. */
+export interface CachedCommandFile {
+  source: 'global' | 'project';
+  mtimeMs: number;
+  size: number;
+  command: CustomCommand | null;
 }
 
 export class CustomCommandStore {
@@ -27,6 +39,7 @@ export class CustomCommandStore {
   private projectCommandsDirs: string[];
   private projectRoot: string;
   private remoteSource?: RemoteSkillSource;
+  private fileCache?: Map<string, CachedCommandFile>;
   // Live feature/plugin command names, injected once the FeatureModuleRegistry is
   // built (post-bootstrap). Lets the load gate reject a project command that
   // shadows a runtime plugin command, not just the static reserved set.
@@ -41,6 +54,7 @@ export class CustomCommandStore {
 
   constructor(projectRoot?: string, options: CustomCommandStoreOptions = {}) {
     this.remoteSource = options.remoteSource;
+    this.fileCache = options.fileCache;
     const home = os.homedir();
     const root = projectRoot || process.cwd();
     this.projectRoot = root;
@@ -245,21 +259,52 @@ export class CustomCommandStore {
       return;
     }
 
+    const command = this.fileCache
+      ? await this.parseCached(filePath, commandName, source, isSkillFile)
+      : await this.parseFile(filePath, commandName, source, isSkillFile);
+    if (!command) return;
+
+    // Since global commands load first, later commands (from project directories
+    // or later global directories) naturally override earlier ones by simply
+    // replacing the map entry
+    this.commands.set(commandName, command);
+  }
+
+  private async parseFile(
+    filePath: string,
+    commandName: string,
+    source: 'global' | 'project',
+    isSkillFile: boolean
+  ): Promise<CustomCommand | null> {
     const fileContent = await fs.readFile(filePath, 'utf-8');
 
     // A SKILL.md exported from Bike4Mind is a Claude Code copy of an account skill. Loading it here
     // would run market text as a trusted local command and shadow the account copy (local wins).
     if (isSkillFile && frontmatterHasSourceStamp(fileContent)) {
       logger.debug(`Skipping ${filePath}: exported from Bike4Mind; the account skill is used instead`);
-      return;
+      return null;
     }
 
-    const command = parseCommandFile(fileContent, filePath, commandName, source);
+    return parseCommandFile(fileContent, filePath, commandName, source);
+  }
 
-    // Since global commands load first, later commands (from project directories
-    // or later global directories) naturally override earlier ones by simply
-    // replacing the map entry
-    this.commands.set(commandName, command);
+  private async parseCached(
+    filePath: string,
+    commandName: string,
+    source: 'global' | 'project',
+    isSkillFile: boolean
+  ): Promise<CustomCommand | null> {
+    const cache = this.fileCache!;
+    const stats = await fs.stat(filePath);
+    const cached = cache.get(filePath);
+    if (cached && cached.source === source && cached.mtimeMs === stats.mtimeMs && cached.size === stats.size) {
+      return cached.command;
+    }
+    const entry: CachedCommandFile = { source, mtimeMs: stats.mtimeMs, size: stats.size, command: null };
+    cache.set(filePath, entry);
+    // Rethrown once for the caller's warning; the null entry keeps later scans quiet until the file changes.
+    entry.command = await this.parseFile(filePath, commandName, source, isSkillFile);
+    return entry.command;
   }
 
   /**

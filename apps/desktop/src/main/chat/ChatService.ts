@@ -1364,6 +1364,7 @@ export class ChatService {
     this.deps.approvals?.dispose();
     this.deps.videoJobs?.dispose();
     this.deps.permissions?.dispose?.();
+    this.deps.skills?.dispose();
   }
 
   /**
