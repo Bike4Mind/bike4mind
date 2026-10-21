@@ -13,14 +13,7 @@ export function Home() {
 
   // Signed in, the window belongs to the conversation; identity moves to the sidebar footer.
   if (state?.status === 'signed-in') {
-    return (
-      <ChatShell
-        auth={state}
-        account={(status, openSettings) => (
-          <SignedInPanel state={state} status={status} onOpenSettings={openSettings} />
-        )}
-      />
-    );
+    return <ChatShell auth={state} account={status => <SignedInPanel state={state} status={status} />} />;
   }
 
   return (

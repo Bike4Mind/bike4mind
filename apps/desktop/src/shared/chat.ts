@@ -10,6 +10,7 @@
  */
 
 import type { GenerationJobState, ValidationViolation } from '@bike4mind/common';
+import type { ChatImportOrigin } from './claudeImport';
 import type { ChatQuestionAnswer } from './questions';
 import type { SkillSource } from './skills';
 
@@ -1008,6 +1009,8 @@ interface ChatSessionMeta {
   pinned?: boolean;
   /** Set when the agent spawned this session rather than the user starting it. */
   origin?: ChatSessionOrigin;
+  /** Set on a session imported from Claude; see ChatImportOrigin. */
+  importOrigin?: ChatImportOrigin;
   /**
    * Out of the way but not gone: archived sessions drop into their own collapsed section at the
    * bottom of the sidebar instead of sitting among the live ones. Reversible from the same menu,
