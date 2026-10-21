@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request, Response } from 'express';
 
 const { getSettingByNameMock } = vi.hoisted(() => ({ getSettingByNameMock: vi.fn() }));
@@ -17,6 +17,7 @@ const mkCtx = (user?: { isAdmin?: boolean }) => {
 };
 
 beforeEach(() => getSettingByNameMock.mockReset());
+afterEach(() => vi.restoreAllMocks());
 
 describe('isStudioFeatureEnabled', () => {
   it('is off by default, even for an admin', async () => {
@@ -45,15 +46,26 @@ describe('requireStudioFeature', () => {
     await requireStudioFeature('createV2')(req, res, next);
     expect(next).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(403);
-    expect(json).toHaveBeenCalledWith(expect.objectContaining({ code: 'FEATURE_DISABLED' }));
+    expect(json).toHaveBeenCalledWith({ error: 'Feature not available', code: 'FEATURE_DISABLED', request_id: 'r1' });
   });
 
-  it('answers 403 to an admin when the flag is off', async () => {
-    getSettingByNameMock.mockResolvedValue(false);
-    const { req, res, next } = mkCtx({ isAdmin: true });
+  it('answers 403 to a caller with no user, without reading the setting', async () => {
+    getSettingByNameMock.mockResolvedValue(true);
+    const { req, res, next, json } = mkCtx();
     await requireStudioFeature('createV2')(req, res, next);
     expect(next).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(403);
+    expect(json).toHaveBeenCalledWith({ error: 'Feature not available', code: 'FEATURE_DISABLED', request_id: 'r1' });
+    expect(getSettingByNameMock).not.toHaveBeenCalled();
+  });
+
+  it('answers 403 to an admin when the flag is off, with the same body as a non-admin', async () => {
+    getSettingByNameMock.mockResolvedValue(false);
+    const { req, res, next, json } = mkCtx({ isAdmin: true });
+    await requireStudioFeature('createV2')(req, res, next);
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(json).toHaveBeenCalledWith({ error: 'Feature not available', code: 'FEATURE_DISABLED', request_id: 'r1' });
   });
 
   it('admits an admin when the flag is on', async () => {
@@ -66,9 +78,10 @@ describe('requireStudioFeature', () => {
   it('fails closed with 500 when the settings read throws', async () => {
     getSettingByNameMock.mockRejectedValueOnce(new Error('db down'));
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const { req, res, next } = mkCtx({ isAdmin: true });
+    const { req, res, next, json } = mkCtx({ isAdmin: true });
     await requireStudioFeature('createV2')(req, res, next);
     expect(next).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(500);
+    expect(json).toHaveBeenCalledWith({ error: 'Unable to verify feature access', request_id: 'r1' });
   });
 });
