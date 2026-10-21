@@ -2,7 +2,8 @@ import { userApiKeyService, userService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { User } from '@bike4mind/database';
 import { ApiKeyScope, resolveApiCompletionSource, type ScopeForbiddenErrorSchema } from '@bike4mind/common';
-import { UnauthorizedError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { UnauthorizedError, ForbiddenError, ServiceUnavailableError } from '@bike4mind/server-utils/utils/errors';
+import { isConnectionLostError } from '@bike4mind/db-core';
 import { logEvent } from '@server/utils/analyticsLog';
 import { UserApiKeyEvents } from '@bike4mind/common';
 import ability from '@server/auth/ability';
@@ -269,8 +270,13 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScope[], alsoRequiredScopes?: 
         throw error;
       }
 
+      // Every credential miss above throws Unauthorized/Forbidden, so anything else is our fault.
+      // A 401 here would tell a machine client its key is bad and stop it retrying an infra blip.
       req.logger?.error('API key authentication error', error);
-      throw new UnauthorizedError('Authentication failed');
+      if (isConnectionLostError(error)) {
+        throw new ServiceUnavailableError('Authentication temporarily unavailable');
+      }
+      throw error;
     }
   };
 };
