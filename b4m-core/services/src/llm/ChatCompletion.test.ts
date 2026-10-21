@@ -3558,12 +3558,15 @@ describe('ChatCompletionProcess', () => {
           expect(lastCompleteOpts().identityViaTool).toBe(false);
         });
 
-        it('keeps the identity line on a model that cannot call tools', async () => {
-          setModel({ supportsTools: false });
-          await service.process({ body: turnBody(), logger: mockLogger });
-          expect(offered()).not.toContain('current_model_details');
-          expect(lastCompleteOpts().identityViaTool).toBe(false);
-        });
+        it.each([{ supportsTools: false }, {}])(
+          'keeps the identity line on a model that cannot call tools (%j)',
+          async extra => {
+            setModel(extra);
+            await service.process({ body: turnBody(), logger: mockLogger });
+            expect(offered()).not.toContain('current_model_details');
+            expect(lastCompleteOpts().identityViaTool).toBe(false);
+          }
+        );
 
         it('does not cost a GPT-5.4 turn its reasoning effort when the tool would be the only one', async () => {
           setModel({ id: ChatModels.GPT5_4, supportsTools: true });
@@ -3575,42 +3578,74 @@ describe('ChatCompletionProcess', () => {
           expect(lastCompleteOpts().identityViaTool).toBe(false);
         });
 
-        it('hands a fallback onto a model without tool support its identity line, and does not require tools for it', async () => {
-          setModel({ supportsTools: true });
-          mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };
-          mockedShouldTriggerFallback.mockReturnValue(true);
-          mockedIsOverloadedError.mockReturnValue(false);
-          mockedGetLlmByModel.mockReturnValue({
-            complete: vi.fn().mockRejectedValue(new Error('ServiceUnavailableException: primary down')),
-            getModelInfo: vi.fn().mockResolvedValue([]),
-          } as any);
-          const fallbackComplete = vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
-            await cb(['Hello from fallback']);
+        it('keeps the tool on a GPT-5.4 turn that already carries another tool', async () => {
+          setModel({ id: ChatModels.GPT5_4, supportsTools: true });
+          await service.process({
+            body: turnBody({
+              tools: ['current_datetime'],
+              params: { ...startQuestParams.params, model: ChatModels.GPT5_4 },
+            }),
+            logger: mockLogger,
           });
-          mockedGetLlmWithFallback.mockResolvedValue({
-            model: {
-              id: 'fallback-no-tools',
-              type: 'text',
-              name: 'No Tools',
-              backend: ModelBackend.OpenAI,
-              max_tokens: 100,
-              contextWindow: 1000,
-              can_stream: false,
-              pricing: {},
-              supportsImageVariation: false,
-              supportsTools: false,
-            },
-            backend: { complete: fallbackComplete, getModelInfo: vi.fn().mockResolvedValue([]) },
-            attempt: 1,
-          } as any);
-
-          await service.process({ body: turnBody(), logger: mockLogger });
-
-          expect(mockedGetLlmWithFallback.mock.calls[0][5]).toMatchObject({ requireTools: false });
-          const hopOpts = fallbackComplete.mock.calls[0][2];
-          expect(hopOpts.identityViaTool).toBe(false);
-          expect(hopOpts.tools ?? []).toEqual([]);
+          expect(offered()).toContain('current_datetime');
+          expect(offered()).toContain('current_model_details');
+          expect(lastCompleteOpts().identityViaTool).toBe(true);
         });
+
+        it.each([{ supportsTools: false }, {}])(
+          'hands a fallback onto a model without tool support its identity line, and does not require tools for it (%j)',
+          async hopCaps => {
+            setModel({ supportsTools: true });
+            mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };
+            mockedShouldTriggerFallback.mockReturnValue(true);
+            mockedIsOverloadedError.mockReturnValue(false);
+            const primaryComplete = vi.fn().mockRejectedValue(new Error('ServiceUnavailableException: primary down'));
+            mockedGetLlmByModel.mockReturnValue({
+              complete: primaryComplete,
+              getModelInfo: vi.fn().mockResolvedValue([]),
+            } as any);
+            const fallbackComplete = vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+              await cb(['Hello from fallback']);
+            });
+            mockedGetLlmWithFallback.mockResolvedValue({
+              model: {
+                id: 'fallback-no-tools',
+                type: 'text',
+                name: 'No Tools',
+                backend: ModelBackend.OpenAI,
+                max_tokens: 100,
+                contextWindow: 1000,
+                can_stream: false,
+                pricing: {},
+                supportsImageVariation: false,
+                ...hopCaps,
+              },
+              backend: { complete: fallbackComplete, getModelInfo: vi.fn().mockResolvedValue([]) },
+              attempt: 1,
+            } as any);
+
+            await service.process({ body: turnBody(), logger: mockLogger });
+
+            // Precondition: the primary carried the tool, so the hop override below has something to undo.
+            const primaryOpts = primaryComplete.mock.calls[0][2];
+            expect(primaryOpts.identityViaTool).toBe(true);
+            expect(primaryOpts.tools.map((t: { toolSchema: { name: string } }) => t.toolSchema.name)).toContain(
+              'current_model_details'
+            );
+
+            expect(mockedGetLlmWithFallback.mock.calls[0][5]).toMatchObject({ requireTools: false });
+            expect(fallbackComplete).toHaveBeenCalledTimes(1);
+            expect(mockDb.quests.update).toHaveBeenCalledWith(
+              expect.objectContaining({
+                replies: ['Hello from fallback'],
+                fallbackInfo: expect.objectContaining({ fallbackModel: 'fallback-no-tools' }),
+              })
+            );
+            const hopOpts = fallbackComplete.mock.calls[0][2];
+            expect(hopOpts.identityViaTool).toBe(false);
+            expect(hopOpts.tools ?? []).toEqual([]);
+          }
+        );
       });
 
       // A session's first turn used to keep the in-flight quest in history, so the caller's message

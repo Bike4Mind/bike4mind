@@ -3381,12 +3381,14 @@ export class ChatCompletionProcess {
       }
 
       // A model that cannot call tools cannot call this one either, so it keeps its identity line.
-      if (modelInfo.supportsTools === false && allTools) {
+      // Unset counts as unsupported, matching canServeChat in the fallback selector.
+      if (!modelInfo.supportsTools && allTools) {
         allTools = allTools.filter(t => t.toolSchema.name !== 'current_model_details');
       }
 
-      // Alone, the tool would make a plain turn carry tools, and the OpenAI adapter then drops
-      // reasoning_effort for these models. Keep the effort and the identity line instead.
+      // Alone, the tool would make a plain turn carry tools. The 5.4 family then loses
+      // reasoning_effort on chat completions, and the rest of the set would move onto the
+      // Responses transport. Keep plain turns as they were, with the identity line.
       if (
         REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS.has(modelInfo.id) &&
         allTools?.length === 1 &&
@@ -5002,7 +5004,7 @@ export class ChatCompletionProcess {
                 ...options,
                 // A fallback hop onto a model that cannot call tools gets its identity line back
                 // rather than a tool it cannot call.
-                ...(options.identityViaTool && currentModel.supportsTools === false
+                ...(options.identityViaTool && !currentModel.supportsTools
                   ? {
                       tools: options.tools?.filter(t => t.toolSchema.name !== 'current_model_details'),
                       identityViaTool: false,
