@@ -109,6 +109,7 @@ export async function createVideoJob(
       idempotencyKey: input.idempotencyKey,
       creditHold: held.hold,
       questId: input.questId,
+      ...(input.delivery && { delivery: input.delivery }),
     },
     deps
   );
