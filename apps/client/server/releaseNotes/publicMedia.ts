@@ -37,13 +37,12 @@ export function ownModalMediaKey(url: string, bucket: string): string | null {
 }
 
 /**
- * A note's video for the public feed. Uploaded files are private, so each becomes an absolute URL to the
- * media route, which signs on request; a linked URL is passed through. Without APP_URL nothing can be
- * made absolute, so the stored URLs are served as they are.
+ * A note's video for the public feed. Uploaded files are private, so each becomes a URL to the media
+ * route, which signs on request; a linked URL is passed through. Without APP_URL the route path is
+ * emitted relative to the reader's own origin rather than exposing the private bucket URL.
  */
 export function toPublicFeedVideo(noteId: string, video: ModalVideo, bucket: string): PublicReleaseNoteVideo {
-  const origin = process.env.APP_URL?.trim().replace(/\/+$/, '');
-  if (!origin) return toPublicReleaseNoteVideo(video);
+  const origin = process.env.APP_URL?.trim().replace(/\/+$/, '') ?? '';
   const served: ModalVideo = { ...video };
   for (const [asset, field] of MEDIA_ASSETS) {
     const url = video[field];

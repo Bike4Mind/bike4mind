@@ -42,9 +42,14 @@ describe('toPublicFeedVideo', () => {
     });
   });
 
-  it('serves the stored URLs when APP_URL is unset', () => {
+  it('serves the media route relative to the reader when APP_URL is unset', () => {
     vi.stubEnv('APP_URL', '');
-    expect(toPublicFeedVideo('n1', video, BUCKET).landscape_url).toBe(video.landscapeUrl);
+    expect(toPublicFeedVideo('n1', video, BUCKET)).toEqual({
+      landscape_url: '/api/v1/whats-new/media/n1/landscape',
+      landscape_poster_url: '/api/v1/whats-new/media/n1/landscape-poster',
+      portrait_url: 'https://d111.cloudfront.net/tall.mp4',
+      portrait_poster_url: null,
+    });
   });
 });
 

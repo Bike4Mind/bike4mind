@@ -142,9 +142,10 @@ export const PublicReleaseNoteSchema = z.object({
       importance: z.number().int().min(1).max(3),
     })
   ),
-  // Additive: absent when the note has no video. An uploaded file is served as an absolute URL to
-  // GET /api/v1/whats-new/media/{id}/{asset}. Hosts are not checked here; an upstream feed's videos
-  // are vetted on ingest (server/releaseNotes/upstreamFeed.ts).
+  // Additive: absent when the note has no video. An uploaded file is served as a URL to
+  // GET /api/v1/whats-new/media/{id}/{asset}, absolute when APP_URL is set and root-relative otherwise.
+  // Hosts are not checked here; an upstream feed's videos are vetted on ingest
+  // (server/releaseNotes/upstreamFeed.ts).
   video: PublicReleaseNoteVideoSchema.nullable().optional(),
 });
 export type PublicReleaseNote = z.infer<typeof PublicReleaseNoteSchema>;
