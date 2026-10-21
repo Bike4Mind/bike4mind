@@ -1,4 +1,4 @@
-import { watch, type FSWatcher } from 'node:fs';
+import { existsSync, watch, type FSWatcher } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import {
@@ -255,13 +255,19 @@ export class SkillCatalog {
 
   /** `rearm` drops this root's watchers so the next scan watches it afresh. */
   private watchDirectory(directory: string, stopAt: string, into: FSWatcher[], rearm: () => void): void {
+    // Checked rather than caught: on Linux a recursive watch of a missing folder fails later, as
+    // an 'error' event, so a throw would never send it to watchForCreation.
+    if (!existsSync(directory)) {
+      this.watchForCreation(directory, stopAt, into, rearm);
+      return;
+    }
     try {
       this.track(
         watch(directory, { recursive: true, persistent: false }, () => this.changed()),
         into
       );
     } catch {
-      this.watchForCreation(directory, stopAt, into, rearm);
+      // Not watchable here: the TTL covers it.
     }
   }
 
@@ -272,6 +278,7 @@ export class SkillCatalog {
    */
   private watchForCreation(directory: string, stopAt: string, into: FSWatcher[], rearm: () => void): void {
     for (let missing = directory; missing !== stopAt && dirname(missing) !== missing; missing = dirname(missing)) {
+      if (!existsSync(dirname(missing))) continue;
       const leading = basename(missing);
       try {
         const watcher = watch(dirname(missing), { persistent: false }, (_event, name) => {
@@ -281,10 +288,10 @@ export class SkillCatalog {
           this.changed();
         });
         this.track(watcher, into);
-        return;
       } catch {
-        // That one is missing too; try its parent. Past `stopAt` the TTL covers it.
+        // Not watchable here: the TTL covers it.
       }
+      return;
     }
   }
 
