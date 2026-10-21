@@ -4,7 +4,7 @@ import { CreditHolderType } from '@bike4mind/common';
 /**
  * Acceptance test for the stale-settings bug: on an always-on host the settings cache only
  * invalidates locally, so an admin flipping `enforceCredits` from another process used to be
- * ignored until this process recycled. Here the real settings accessors run against a fake repo,
+ * ignored for up to the cache TTL (5 min). Here the real settings accessors run against a fake repo,
  * so the read path under test is the production one - no `getSettingsMap`/`getSettingsValue` stub.
  */
 vi.mock('./apiKeyService', () => ({ getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) }));
