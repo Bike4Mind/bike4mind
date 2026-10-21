@@ -3381,6 +3381,7 @@ export interface components {
         contextBuildMs?: number;
         semaphoreWaitMs: number;
         totalMs?: number;
+        fallbackHops: number;
         retries: {
           /** @enum {string} */
           reason:
@@ -3398,10 +3399,8 @@ export interface components {
           requestId?: string;
           delayMs: number;
           model: string;
-          /** Format: date-time */
-          at: string | null;
+          at: string;
         }[];
-        fallbackHops: number;
       };
       executionTracking?: unknown;
     };

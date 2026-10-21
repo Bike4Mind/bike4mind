@@ -157,6 +157,12 @@ export const TURN_RETRY_REASONS = [
 ] as const;
 export type TurnRetryReason = (typeof TURN_RETRY_REASONS)[number];
 
+/**
+ * Cap on the retries persisted per turn. A pathological turn stops growing the quest record
+ * here, so a full list means "at least this many" - the UI renders it as "50+".
+ */
+export const MAX_RECORDED_TURN_RETRIES = 50;
+
 /** One retry of the LLM call, recorded at the moment the retry was scheduled. */
 export interface ITurnRetry {
   reason: TurnRetryReason;

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { ChatQuestPollResultSchema } from './chat';
-import { TurnTimingSchema } from './turnTiming';
+import { TurnTimingPollSchema } from './turnTiming';
 
 export const QuestIdParamSchema = z.object({
   id: z.string().min(1).describe('The quest id returned by POST /api/chat or another async start.'),
@@ -37,7 +37,7 @@ export const QuestPollResponseSchema = ChatQuestPollResultSchema.extend({
   attachmentNotices: z.array(z.string()).optional(),
   // Loose: mirrors IAttachmentDelivery (requested, delivered, fullyDelivered, dropped, droppedIds).
   attachmentDelivery: z.record(z.string(), z.unknown()).optional(),
-  turnTiming: TurnTimingSchema.optional(),
+  turnTiming: TurnTimingPollSchema.optional(),
   executionTracking: z.unknown().optional(),
 });
 

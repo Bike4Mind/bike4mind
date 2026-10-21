@@ -6220,6 +6220,9 @@
               "totalMs": {
                 "type": "number"
               },
+              "fallbackHops": {
+                "type": "number"
+              },
               "retries": {
                 "type": "array",
                 "items": {
@@ -6255,11 +6258,16 @@
                       "type": "string"
                     },
                     "at": {
-                      "type": [
-                        "string",
-                        "null"
-                      ],
-                      "format": "date-time"
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      ]
                     }
                   },
                   "required": [
@@ -6269,16 +6277,13 @@
                     "at"
                   ]
                 }
-              },
-              "fallbackHops": {
-                "type": "number"
               }
             },
             "required": [
               "queueMs",
               "semaphoreWaitMs",
-              "retries",
-              "fallbackHops"
+              "fallbackHops",
+              "retries"
             ]
           },
           "executionTracking": {}

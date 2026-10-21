@@ -371,7 +371,6 @@ export const GenerationJobUpdatedAction = z.object({
 });
 export type IGenerationJobUpdatedAction = z.infer<typeof GenerationJobUpdatedAction>;
 
-/** Wire shape of ITurnTiming; `at` arrives as an ISO string over JSON. */
 export const StreamedChatCompletionAction = z.object({
   action: z.literal('streamed_chat_completion'),
   clientId: z.string().optional(),
