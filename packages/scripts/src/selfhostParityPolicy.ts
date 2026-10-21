@@ -122,7 +122,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     },
     ['bedrock:*']
   ),
-  gap('event:infra/llm.ts:slack-completion-start', 'ac698df8099dc31721aa456578e7ed20cab7130781b0c5d77022c6187dc818f4', [
+  gap('event:infra/llm.ts:slack-completion-start', 'd13c594715d23eeba00e73efb094df3e231efc7766d7fef590a8bb471097f0c9', [
     'bedrock:*',
     'cloudwatch:PutMetricData',
     'events:PutEvents',
