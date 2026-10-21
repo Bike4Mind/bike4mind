@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Box from '@mui/joy/Box';
 import IconButton from '@mui/joy/IconButton';
 import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import type { ChatAttachment } from '@shared/chat';
+import type { ChatAttachment, ChatImageRef } from '@shared/chat';
+import { useImageMenu } from './ImageContextMenu';
 import { ImageViewer } from './ImageViewer';
 
 /** Side of a thumbnail, in px. Big enough to recognise a screenshot, small enough to sit in a row. */
@@ -42,6 +43,12 @@ function useAttachmentContent(sessionId: string | null, attachment: ChatAttachme
 function ImageTile({ sessionId, attachment }: { sessionId: string | null; attachment: ChatAttachment }) {
   const src = useAttachmentContent(sessionId, attachment);
   const [viewing, setViewing] = useState(false);
+  const { id, mediaType, name } = attachment;
+  const imageRef = useMemo<ChatImageRef | null>(
+    () => (sessionId ? { source: 'attachment', sessionId, attachmentId: id, mediaType, name } : null),
+    [sessionId, id, mediaType, name]
+  );
+  const menu = useImageMenu(imageRef);
 
   const well = {
     width: THUMBNAIL,
@@ -65,6 +72,7 @@ function ImageTile({ sessionId, attachment }: { sessionId: string | null; attach
         onClick={() => setViewing(true)}
         aria-label={`View ${attachment.name} at full size`}
         sx={{ ...well, p: 0, border: 'none', cursor: 'zoom-in' }}
+        {...menu}
         data-testid="attachment-view-btn"
       >
         <Box
