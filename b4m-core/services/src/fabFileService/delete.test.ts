@@ -349,6 +349,22 @@ describe('deleteFabFile', () => {
         knowledgeIds: [],
       });
     });
+
+    it("returns the owner's and direct-share recipients' system-file and project references to unlink", async () => {
+      mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue({
+        ...mockFabFile,
+        users: [{ userId: 'recipient-1', permissions: ['read'] }],
+      });
+
+      const result = await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
+
+      const holders = [mockUserId, 'recipient-1'];
+      expect(result.references).toEqual({
+        fileIds: [mockFileId],
+        systemFileUserIds: holders,
+        projectUserIds: holders,
+      });
+    });
   });
 
   describe('searchIndex (self-host OpenSearch mirror)', () => {
@@ -429,6 +445,24 @@ describe('deleteFabFile', () => {
         id: 'session-1',
         knowledgeIds: ['other-file'],
       });
+    });
+
+    it("returns only the unsharing user's system-file reference to unlink, and no project ones", async () => {
+      mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(null);
+      mockAdapter.db.fabFiles.findById.mockResolvedValue(createMockSharedFile());
+
+      const result = await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
+
+      expect(result.references).toEqual({ fileIds: [mockFileId], systemFileUserIds: [mockUserId], projectUserIds: [] });
+    });
+
+    it('returns no references when there is nothing to unlink', async () => {
+      mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(null);
+      mockAdapter.db.fabFiles.findById.mockResolvedValue(null);
+
+      const result = await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
+
+      expect(result.references).toBeUndefined();
     });
   });
 

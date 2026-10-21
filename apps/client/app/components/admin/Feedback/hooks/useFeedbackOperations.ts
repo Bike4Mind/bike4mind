@@ -76,6 +76,9 @@ export const useFeedbackOperations = (params: FeedbackListParams): UseFeedbackOp
 
   const feedback = hasStatusSelection ? (listQuery.data?.items ?? []) : [];
   const total = hasStatusSelection ? (listQuery.data?.total ?? 0) : 0;
+  // keepPreviousData shows the last query's rows (and total) while the next loads, so `total` only
+  // describes these params once the list query has answered for them.
+  const totalSettled = !hasStatusSelection || (listQuery.isSuccess && !listQuery.isPlaceholderData);
 
   const refreshFeedback = useCallback(async () => {
     await Promise.all([
@@ -151,6 +154,7 @@ export const useFeedbackOperations = (params: FeedbackListParams): UseFeedbackOp
     feedback,
     organizations: organizationsQuery.data ?? [],
     total,
+    totalSettled,
     loading: (hasStatusSelection && listQuery.isFetching) || organizationsQuery.isFetching,
     refreshFeedback,
     handleStatusChange,

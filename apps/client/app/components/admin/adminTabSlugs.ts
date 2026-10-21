@@ -11,6 +11,7 @@ import { ADMIN_SETTINGS_TAB_SLUG } from './adminTabParams';
  * new tab without a slug a compile error. Never change an existing slug.
  */
 const ADMIN_TAB_TO_SLUG: Readonly<Record<AdminTab, string>> = {
+  [AdminTab.Dashboard]: 'dashboard',
   [AdminTab.Users]: ADMIN_USERS_TAB_SLUG,
   [AdminTab.AdminSettings]: ADMIN_SETTINGS_TAB_SLUG,
   [AdminTab.Feedback]: ADMIN_FEEDBACK_TAB_SLUG,

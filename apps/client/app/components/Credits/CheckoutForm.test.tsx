@@ -29,15 +29,20 @@ const TestWrapper = ({ children }: { children: ReactNode }) => (
 );
 
 // Callers pass an inline onPayment, so each render hands the form a new function identity.
-const formElement = (onPayment: () => void, onConfirmResult: () => void) => (
+const formElement = (onPayment: () => void, onConfirmResult: () => void, onPaymentPending = vi.fn()) => (
   <TestWrapper>
-    <CheckoutForm clientSecret="pi_1_secret_x" onPayment={() => onPayment()} onConfirmResult={onConfirmResult} />
+    <CheckoutForm
+      clientSecret="pi_1_secret_x"
+      onPayment={() => onPayment()}
+      onConfirmResult={onConfirmResult}
+      onPaymentPending={onPaymentPending}
+    />
   </TestWrapper>
 );
 
-const renderForm = (onPayment = vi.fn(), onConfirmResult = vi.fn()) => {
-  const utils = render(formElement(onPayment, onConfirmResult));
-  return { ...utils, onPayment, onConfirmResult };
+const renderForm = (onPayment = vi.fn(), onConfirmResult = vi.fn(), onPaymentPending = vi.fn()) => {
+  const utils = render(formElement(onPayment, onConfirmResult, onPaymentPending));
+  return { ...utils, onPayment, onConfirmResult, onPaymentPending };
 };
 
 describe('CheckoutForm', () => {
@@ -48,7 +53,7 @@ describe('CheckoutForm', () => {
 
   it('confirms in-page and reports a success once', async () => {
     confirmPayment.mockResolvedValue({ paymentIntent: { id: 'pi_1', status: 'succeeded' } });
-    const { onPayment, onConfirmResult, rerender } = renderForm();
+    const { onPayment, onConfirmResult, onPaymentPending, rerender } = renderForm();
 
     await userEvent.click(screen.getByTestId('checkout-submit-btn'));
 
@@ -59,7 +64,7 @@ describe('CheckoutForm', () => {
     // The status effect re-runs on a parent re-render and now sees the intent as succeeded.
     retrievePaymentIntent.mockResolvedValue({ paymentIntent: { status: 'succeeded' } });
     const retrievesBefore = retrievePaymentIntent.mock.calls.length;
-    rerender(formElement(onPayment, onConfirmResult));
+    rerender(formElement(onPayment, onConfirmResult, onPaymentPending));
     await waitFor(() => expect(retrievePaymentIntent.mock.calls.length).toBeGreaterThan(retrievesBefore));
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(onPayment).toHaveBeenCalledTimes(1);
@@ -105,6 +110,24 @@ describe('CheckoutForm', () => {
     await userEvent.click(screen.getByTestId('checkout-submit-btn'));
 
     await waitFor(() => expect(onConfirmResult).toHaveBeenCalledWith({ outcome: 'processing' }));
+    expect(onPayment).not.toHaveBeenCalled();
+  });
+
+  it.each(['processing', 'requires_action'])('notifies pending when confirming a %s intent', async status => {
+    confirmPayment.mockResolvedValue({ paymentIntent: { status } });
+    const { onPayment, onPaymentPending } = renderForm();
+    await userEvent.click(screen.getByTestId('checkout-submit-btn'));
+    await waitFor(() => expect(onPaymentPending).toHaveBeenCalledTimes(1));
+    expect(onPayment).not.toHaveBeenCalled();
+  });
+
+  it.each(['processing', 'requires_action'])('notifies pending when retrieving a %s intent', async status => {
+    retrievePaymentIntent.mockResolvedValue({ paymentIntent: { status } });
+    const { onPayment, onConfirmResult, onPaymentPending, rerender } = renderForm();
+    await waitFor(() => expect(onPaymentPending).toHaveBeenCalledTimes(1));
+    rerender(formElement(onPayment, onConfirmResult, onPaymentPending));
+    await waitFor(() => expect(retrievePaymentIntent).toHaveBeenCalledTimes(2));
+    expect(onPaymentPending).toHaveBeenCalledTimes(1);
     expect(onPayment).not.toHaveBeenCalled();
   });
 

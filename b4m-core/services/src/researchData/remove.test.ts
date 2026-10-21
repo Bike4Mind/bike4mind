@@ -12,9 +12,13 @@ import {
 vi.mock('../fabFileService/delete', () => ({
   deleteFabFile: vi.fn(),
 }));
+vi.mock('../fabFileService/cleanUpDeletedFileReferences', () => ({
+  cleanUpDeletedFileReferences: vi.fn(),
+}));
 
 // Mock must be imported after vi.mock for type inference
 import { deleteFabFile } from '../fabFileService/delete';
+import { cleanUpDeletedFileReferences } from '../fabFileService/cleanUpDeletedFileReferences';
 
 describe('researchDataService - remove', () => {
   const mockUserId = 'user-123';
@@ -392,5 +396,25 @@ describe('researchDataService - remove', () => {
 
     // Verify that research data deletion still occurred
     expect(mockResearchDataRepo.delete).toHaveBeenCalledWith(mockResearchDataId);
+  });
+
+  it('unlinks the references the delete left behind, once the file is gone', async () => {
+    const params = { id: mockResearchDataId, researchAgentId: mockResearchAgentId };
+    const references = { fileIds: [mockFabFileId], systemFileUserIds: [mockUserId], projectUserIds: [mockUserId] };
+
+    mockResearchAgentRepo.findByIdAndUserId.mockResolvedValueOnce({ id: mockResearchAgentId });
+    mockResearchDataRepo.findByIdAndResearchAgentId.mockResolvedValueOnce({
+      id: mockResearchDataId,
+      fabFileId: mockFabFileId,
+    });
+    mockResearchDataRepo.delete.mockResolvedValueOnce(undefined);
+    (deleteFabFile as Mock).mockResolvedValueOnce({ action: 'deleted', fabFile: null, references });
+
+    await remove(mockUserId, params, adapters);
+
+    expect(cleanUpDeletedFileReferences).toHaveBeenCalledWith(references, {
+      users: adapters.db.users,
+      projects: undefined,
+    });
   });
 });

@@ -103,6 +103,7 @@ test.describe('MFA', () => {
     await basePage.dismissModals();
 
     await adminPage.navigateToAdmin();
+    await adminPage.navigateToUsersTab();
     await adminPage.searchUser(targetName);
     await adminPage.waitForUserVisible(targetName);
 
@@ -111,6 +112,7 @@ test.describe('MFA', () => {
     // migration regression) - a non-enrolled admin would see login-as-mfa-required-modal instead.
     await adminPage.expectLoginAsMfaModal();
     await adminPage.fillLoginAsMfa(generateTotp(adminSecret, adminEnrolledStep));
+    await adminPage.fillLoginAsReason();
     await adminPage.confirmLoginAs();
 
     // Landing on /new is the success signal. The "logged in as user" toast is deliberately not

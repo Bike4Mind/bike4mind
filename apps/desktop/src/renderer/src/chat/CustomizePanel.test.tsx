@@ -23,6 +23,14 @@ window.matchMedia ??= ((query: string) => ({
 const market = vi.hoisted(() => ({
   imports: vi.fn(async () => ({ imports: [] as unknown[] })),
   openOnWeb: vi.fn(async () => true),
+  readLocalSkill: vi.fn(async () => ({
+    ok: true as const,
+    fields: { name: 'chrome-browser', description: 'Use the browser extension', body: 'Go.' },
+    dropped: [] as string[],
+    extraFiles: [] as string[],
+    extraFileCount: 0,
+  })),
+  pickUploadSource: vi.fn(async () => ({ ok: false as const, error: 'No SKILL.md in that folder.' })),
 }));
 
 (window as unknown as { b4m: unknown }).b4m = {
@@ -233,6 +241,27 @@ describe('the Customize screen', () => {
   it('keeps a way out of the screen', () => {
     renderScreen();
     expect(isVisible(byTestId('customize-close-btn'))).toBe(true);
+  });
+  it('offers Upload on local rows only, resolved by name in main, and opens the preview', async () => {
+    skills.state.skills = [
+      ...skills.state.skills,
+      { name: 'web-summary', description: 'Summarise', source: 'account', filePath: 'b4m:/api/skills/a1' },
+    ];
+    renderScreen();
+    const rows = allByTestId('customize-skill-row');
+    const account = rows.find(row => text(row)?.includes('/web-summary'));
+    expect(account?.querySelector('[data-testid="skill-row-upload-btn"]')).toBeNull();
+
+    const local = rows.find(row => text(row)?.includes('/chrome-browser'));
+    await act(async () => local?.querySelector<HTMLElement>('[data-testid="skill-row-upload-btn"]')?.click());
+    expect(market.readLocalSkill).toHaveBeenCalledWith({ sessionId: 'session-1', name: 'chrome-browser' });
+    expect(document.querySelector('[data-testid="skill-upload-dialog"]')).not.toBeNull();
+  });
+
+  it('shows a failed pick inline', async () => {
+    renderScreen();
+    await act(async () => byTestId('skill-upload-pick-btn')?.click());
+    expect(text(byTestId('skill-upload-pick-error'))).toContain('No SKILL.md in that folder.');
   });
 });
 

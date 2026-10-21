@@ -11,7 +11,7 @@ export const SKILL_MD_SOURCE_MARKER = 'Bike4Mind-Source:';
 /** Opening `---<lang>` fence, the frontmatter text, then the closing `---` line. */
 const FRONTMATTER = /^---([^\r\n]*)\r?\n(?:([\s\S]*?)\r?\n)?---[ \t]*(?:\r?\n|$)/;
 
-const SOURCE_LINE = new RegExp(`^[ \\t]*#[ \\t]*${SKILL_MD_SOURCE_MARKER}[ \\t]*(\\S*)`);
+const SOURCE_LINE = new RegExp(`^[ \\t]*#[ \\t]*${SKILL_MD_SOURCE_MARKER}[ \\t]*(\\S+)`);
 
 export interface SkillMdFrontmatterSplit {
   /** Lowercased language tag on the opening fence ('' for a plain `---`). */

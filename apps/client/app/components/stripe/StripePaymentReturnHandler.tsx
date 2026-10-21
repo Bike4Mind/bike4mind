@@ -1,6 +1,8 @@
 import { useEffect } from 'react';
 import { api } from '@client/app/contexts/ApiContext';
 import { trackPurchaseConversion } from '@client/app/utils/purchaseConversion';
+import { BILLING_SEARCH_PARAM } from '@client/app/utils/billingDeepLink';
+import { markBillingCheckoutReturn } from '@client/app/utils/billingCheckoutReturn';
 import { claimSessionForReporting, releaseSessionClaim } from './StripeCheckoutSuccessHandler';
 
 /**
@@ -41,6 +43,11 @@ const StripePaymentReturnHandler = () => {
     const searchParams = new URLSearchParams(window.location.search);
     const paymentIntentId = searchParams.get('payment_intent');
     if (!paymentIntentId) return;
+
+    const redirectStatus = searchParams.get('redirect_status');
+    if ((redirectStatus === 'succeeded' || redirectStatus === 'processing') && searchParams.has(BILLING_SEARCH_PARAM)) {
+      markBillingCheckoutReturn();
+    }
 
     // `processing` (bank debits) settles later and `failed` moved no money; only a
     // succeeded return is worth a lookup. The server checks again regardless.

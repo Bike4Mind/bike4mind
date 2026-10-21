@@ -51,7 +51,9 @@ describe('ChatService next-prompt model', () => {
     await service.send(id, 'Refactor the parser');
     await answer(null, 'Done. Want tests next?');
     await vi.waitUntil(
-      async () => (await service.getSession(id))?.messages.at(-1)?.content === 'Done. Want tests next?',
+      async () =>
+        (await service.getSession(id))?.messages.at(-1)?.content === 'Done. Want tests next?' &&
+        !service.isSessionBusy(id),
       {
         timeout: 5000,
         interval: 5,

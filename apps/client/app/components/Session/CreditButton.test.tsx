@@ -4,8 +4,9 @@ import { render, screen, fireEvent, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
-const { state } = vi.hoisted(() => ({
+const { state, logEvent } = vi.hoisted(() => ({
   state: { enforceCredits: true, credits: 9982.6, payerNote: null as string | null },
+  logEvent: vi.fn(),
 }));
 
 // The real modal pulls react-query and the account chain; a stub that reveals its open state
@@ -18,6 +19,7 @@ vi.mock('./CreditPayerNote', () => ({ useCreditPayerNote: () => state.payerNote 
 vi.mock('@client/app/hooks/data/settings', () => ({
   useGetSettingsValue: (key: string) => (key === 'enforceCredits' ? state.enforceCredits : undefined),
 }));
+vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: logEvent }) }));
 
 import CreditBalanceChip from './CreditButton';
 
@@ -34,6 +36,7 @@ describe('CreditBalanceChip', () => {
     state.enforceCredits = true;
     state.credits = 9982.6;
     state.payerNote = null;
+    logEvent.mockClear();
   });
 
   it('shows a labeled balance that opens the credits modal', () => {
@@ -44,6 +47,7 @@ describe('CreditBalanceChip', () => {
     expect(screen.queryByTestId('credits-modal-open')).not.toBeInTheDocument();
     fireEvent.click(chip);
     expect(screen.getByTestId('credits-modal-open')).toBeInTheDocument();
+    expect(logEvent).toHaveBeenCalledWith({ type: 'credits_chip_clicked' });
   });
 
   it('shows the full balance, with the same number in the accessible name', () => {

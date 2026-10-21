@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import { vi } from 'vitest';
-import { parseAdminSearch } from '../../adminTabParams';
+import { parseAdminSearch } from '../adminTabParams';
 
 type SearchRecord = Record<string, unknown>;
 type NavigateOptions = {
@@ -13,7 +13,7 @@ type NavigateOptions = {
  * A stand-in for the `/admin` route's search state: navigate applies the update and runs it through
  * the route's real `validateSearch`, and useSearch re-renders on change, so tests exercise the
  * URL round trip rather than a frozen mock. Use with
- * `vi.mock('@tanstack/react-router', async () => (await import('./__tests__/fakeAdminRouter')).fakeRouterModule)`.
+ * `vi.mock('@tanstack/react-router', async () => (await import('<relative>/__tests__/fakeAdminRouter')).fakeRouterModule)`.
  */
 let currentSearch: SearchRecord = {};
 const listeners = new Set<() => void>();

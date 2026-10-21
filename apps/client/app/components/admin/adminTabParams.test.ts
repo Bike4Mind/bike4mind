@@ -87,3 +87,45 @@ describe('Users tab params', () => {
     }
   });
 });
+
+describe('Feedback tab params', () => {
+  const feedbackSearch = {
+    tab: 'feedback',
+    feedbackStatus: 'New,Closed',
+    feedbackSubject: 'turn',
+    feedbackOrg: ['Acme'],
+    feedbackOrder: 'asc',
+    feedbackPage: 2,
+    feedbackLimit: 50,
+    [FEEDBACK_ID_PARAM]: 'feedback-1',
+  };
+
+  it('coerces each param in validateSearch and drops invalid ones', () => {
+    expect(
+      parseAdminSearch({
+        feedbackStatus: 'Closed,New',
+        feedbackSubject: 'nope',
+        feedbackOrg: 'Acme',
+        feedbackOrder: 'sideways',
+        feedbackPage: '2',
+        feedbackLimit: 7,
+      })
+    ).toMatchObject({
+      feedbackStatus: 'New,Closed',
+      feedbackSubject: undefined,
+      feedbackOrg: ['Acme'],
+      feedbackOrder: undefined,
+      feedbackPage: 2,
+      feedbackLimit: undefined,
+    });
+  });
+
+  it('keeps them on the feedback tab and drops them on a switch away', () => {
+    expect(adminSearchForTab(feedbackSearch, 'feedback')).toMatchObject(feedbackSearch);
+
+    const switched = adminSearchForTab(feedbackSearch, 'users');
+    for (const key of Object.keys(feedbackSearch).filter(key => key !== 'tab')) {
+      expect(switched[key as keyof typeof switched], key).toBeUndefined();
+    }
+  });
+});

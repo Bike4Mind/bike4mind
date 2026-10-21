@@ -134,6 +134,7 @@ import { buildSystemPromptSourceFiles } from './buildSystemPromptSourceFiles';
 import { resolveCorrectionContext } from './buildCorrectionContext';
 import { resolveDataSourceStatus } from './dataSourceStatus';
 import { scrubMissingKnowledgeIds } from '../sessionService/scrubMissingKnowledgeIds';
+import { scrubStaleSystemFiles } from '../sessionService/scrubStaleFileReferences';
 import { LATTICE_TOOL_NAMES } from './tools';
 import { createWebSearchBudget, MAX_WEB_SEARCHES_PER_TURN } from './tools/implementation/websearch';
 import { createToolFailureGuard } from './tools/toolFailureGuard';
@@ -3081,14 +3082,38 @@ export class ChatCompletionProcess {
       // inline (audio, an image on a vision-less model, a held or oversized image), and detaching
       // those would destroy notebook contents as a side effect of an ordinary prompt. The helper
       // re-checks both halves; see its docstring for the two gates.
-      const scrubbed = await scrubMissingKnowledgeIds(session.knowledgeIds ?? [], dataSources.fileNotices, {
-        db: { fabFiles: this.db.fabfiles, sessions: this.db.sessions },
-        logger: this.logger,
-      });
+      const scrubbed = await scrubMissingKnowledgeIds(
+        session.knowledgeIds ?? [],
+        dataSources.fileNotices,
+        { db: { fabFiles: this.db.fabfiles, sessions: this.db.sessions }, logger: this.logger },
+        session.id
+      );
       if (scrubbed.length > 0) {
         // Keep the in-memory copy in step so later reads in this run see the cleaned set.
         const removed = new Set(scrubbed);
         session.knowledgeIds = (session.knowledgeIds ?? []).filter((id: string) => !removed.has(id));
+      }
+      // The same ghost can live in the user's own system files, which are re-sent on every prompt of
+      // every session. Same gates; the admin-wide list is only reported, never edited from a turn.
+      const scrubbedSystemFiles = await scrubStaleSystemFiles(
+        this.user.id,
+        dataSources.enabledSystemFileIds,
+        dataSources.fileNotices,
+        { db: { fabFiles: this.db.fabfiles, users: this.db.users }, logger: this.logger }
+      );
+      if (scrubbedSystemFiles.length > 0) {
+        const removed = new Set(scrubbedSystemFiles);
+        this.user.systemFiles = (this.user.systemFiles ?? []).filter(entry => !removed.has(entry.fileId));
+        this.systemFilesCache?.delete(`system-files-${this.user.id}`);
+      }
+      const globalSystemFileIdSet = new Set(dataSources.globalSystemFileIds);
+      const unresolvedGlobalSystemFiles = dataSources.fileNotices.filter(
+        notice => notice.band === 'unresolved' && globalSystemFileIdSet.has(notice.fabFileId)
+      ).length;
+      if (unresolvedGlobalSystemFiles > 0) {
+        this.logger.warn('The SystemFiles admin setting lists files that did not resolve', {
+          count: unresolvedGlobalSystemFiles,
+        });
       }
 
       // Persisted before the completion runs: an attachment that failed to arrive is worth showing
@@ -5107,7 +5132,11 @@ export class ChatCompletionProcess {
             // the last error-severity log on the abort path; the backends and the
             // formatted summary below were already downgraded. Real failures still dump
             // at error with the full stack.
-            if (isAbortError(lastError) || lastError instanceof ResponsesStreamTruncatedError) {
+            if (
+              isAbortError(lastError) ||
+              isStreamIdleTimeoutError(lastError) ||
+              lastError instanceof ResponsesStreamTruncatedError
+            ) {
               logger.warn(lastError);
             } else {
               logger.error(lastError);

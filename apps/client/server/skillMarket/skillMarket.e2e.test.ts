@@ -215,12 +215,23 @@ async function call(
 }
 
 describe('Skill Market (real mongod)', () => {
+  it.each([false, true])(
+    'stores an emptied argument hint as an empty string (isGlobalRead: %j)',
+    async isGlobalRead => {
+      const skill = await makeSkill(AUTHOR, 'Rewrite the text as bullets.', {
+        argumentHint: '<topic>',
+        isGlobalRead,
+      });
+      const response = await call(updateSkillHandler, 'PUT', AUTHOR, { id: skill.id }, { argumentHint: '' }, true);
+      expect(response._getJSONData()).toHaveProperty('argumentHint', '');
+      expect(await skillRepository.findById(skill.id)).toHaveProperty('argumentHint', '');
+    }
+  );
+
   it.each([
-    { isGlobalRead: false, argumentHint: '' },
     { isGlobalRead: false, argumentHint: null },
-    { isGlobalRead: true, argumentHint: '' },
     { isGlobalRead: true, argumentHint: null },
-  ])('removes a cleared argument hint from storage (%j)', async ({ isGlobalRead, argumentHint }) => {
+  ])('removes a null argument hint from storage (%j)', async ({ isGlobalRead, argumentHint }) => {
     const skill = await makeSkill(AUTHOR, 'Rewrite the text as bullets.', {
       argumentHint: '<topic>',
       isGlobalRead,
