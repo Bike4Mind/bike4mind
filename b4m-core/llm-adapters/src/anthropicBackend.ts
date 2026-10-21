@@ -1491,7 +1491,9 @@ export class AnthropicBackend implements ICompletionBackend {
             // aborts leaves the queue instead of consuming a slot it can no longer use.
             let release: SlotRelease | undefined;
             try {
+              const slotRequestedAt = Date.now();
               release = await acquireSlot({ tenantKey: this._endUserId, signal: combinedSignal });
+              options._internal?.turnTelemetry?.onSemaphoreWait(Date.now() - slotRequestedAt);
               // Diagnostic logging: Capture payload size to help debug hanging issues
               const payloadForSize = { ...apiParams, stream: true };
               const payloadSizeBytes = Buffer.byteLength(JSON.stringify(payloadForSize), 'utf8');
@@ -1532,6 +1534,8 @@ export class AnthropicBackend implements ICompletionBackend {
                   isRetryable: err => isRetryableError(err) && !isUserInitiatedAbort(err, options.abortSignal),
                   logger: this.logger,
                   abortSignal: combinedSignal,
+                  onRetry: ({ error, delayMs }) =>
+                    options._internal?.turnTelemetry?.onRetry({ error, delayMs, model }),
                 }
               ).then(r => r.result);
 
@@ -2549,8 +2553,10 @@ export class AnthropicBackend implements ICompletionBackend {
         let roundStart = Date.now();
         let release: SlotRelease | undefined;
         try {
+          const slotRequestedAt = Date.now();
           release = await acquireSlot({ tenantKey: this._endUserId, signal: options.abortSignal });
           roundStart = Date.now();
+          options._internal?.turnTelemetry?.onSemaphoreWait(roundStart - slotRequestedAt);
           // Wrap with retry for transient network errors (TLS abort, fetch terminated)
           response = await withRetry(
             () =>
@@ -2566,6 +2572,7 @@ export class AnthropicBackend implements ICompletionBackend {
               isRetryable: err => isRetryableError(err) && !isUserInitiatedAbort(err, options.abortSignal),
               logger: this.logger,
               abortSignal: options.abortSignal,
+              onRetry: ({ error, delayMs }) => options._internal?.turnTelemetry?.onRetry({ error, delayMs, model }),
             }
           ).then(r => r.result);
         } finally {

@@ -3376,6 +3376,9 @@ export interface components {
       attachmentDelivery?: {
         [key: string]: unknown;
       };
+      turnTiming?: {
+        [key: string]: unknown;
+      };
       executionTracking?: unknown;
     };
     /**

@@ -1258,6 +1258,7 @@ export class OpenAIBackend implements ICompletionBackend {
         isRetryable: err => isRetryableError(err) && !isUserInitiatedAbort(err, options.abortSignal),
         logger: this.logger,
         abortSignal: options.abortSignal,
+        onRetry: ({ error, delayMs }) => options._internal?.turnTelemetry?.onRetry({ error, delayMs, model }),
       }
     ).then(r => r.result);
     // Non-streaming: the full response is back here. Streaming: reassigned once the stream is drained.
@@ -2242,6 +2243,7 @@ export class OpenAIBackend implements ICompletionBackend {
       isRetryable: err => isRetryableError(err) && !isUserInitiatedAbort(err, options.abortSignal),
       logger: this.logger,
       abortSignal: options.abortSignal,
+      onRetry: ({ error, delayMs }) => options._internal?.turnTelemetry?.onRetry({ error, delayMs, model }),
     }).then(r => r.result);
 
     // Stream text deltas live; capture the terminal Response for usage + tool handling.

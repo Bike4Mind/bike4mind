@@ -9,7 +9,7 @@ import {
 } from '@bike4mind/hearth';
 import { FallbackInfoSchema } from './llm';
 import { supportedChatModels } from '../models';
-import { shareableDocumentSchema, QUEST_ERROR_CODES, CHAT_HISTORY_ITEM_TYPES } from '../types';
+import { shareableDocumentSchema, QUEST_ERROR_CODES, CHAT_HISTORY_ITEM_TYPES, TURN_RETRY_REASONS } from '../types';
 import { AGENT_EXECUTION_STATUSES, type AgentExecutionStatus } from '../constants/agentExecutionStatus';
 import { PERSISTED_SESSION_SUMMARY_TRIGGERS } from '../constants/sessionSummary';
 import { GENERATION_JOB_KINDS, GENERATION_JOB_STATES } from '../types/entities/GenerationJobTypes';
@@ -370,6 +370,26 @@ export const GenerationJobUpdatedAction = z.object({
 });
 export type IGenerationJobUpdatedAction = z.infer<typeof GenerationJobUpdatedAction>;
 
+/** Wire shape of ITurnTiming; `at` arrives as an ISO string over JSON. */
+export const TurnTimingSchema = z.object({
+  queueMs: z.number(),
+  contextBuildMs: z.number().optional(),
+  semaphoreWaitMs: z.number(),
+  totalMs: z.number().optional(),
+  retries: z.array(
+    z.object({
+      reason: z.enum(TURN_RETRY_REASONS),
+      status: z.number().optional(),
+      retryAfterMs: z.number().optional(),
+      requestId: z.string().optional(),
+      delayMs: z.number(),
+      model: z.string(),
+      at: z.coerce.date(),
+    })
+  ),
+  fallbackHops: z.number(),
+});
+
 export const StreamedChatCompletionAction = z.object({
   action: z.literal('streamed_chat_completion'),
   clientId: z.string().optional(),
@@ -452,6 +472,7 @@ export const StreamedChatCompletionAction = z.object({
       // Add fallback info to support backend fallback mechanism. Nullish: a whole-quest payload
       // carries the null that clears a stale value (see IChatHistoryItem.fallbackInfo).
       fallbackInfo: FallbackInfoSchema.nullish(),
+      turnTiming: TurnTimingSchema.optional(),
       // MCP confirmation action awaiting user approval (confirm/cancel buttons)
       pendingAction: z
         .object({

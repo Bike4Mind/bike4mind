@@ -139,6 +139,17 @@ export interface ICompletionOptionTools {
   endsTurnAfterText?: boolean;
 }
 
+/**
+ * Receives the timing a backend observes inside one chat turn. Both calls are synchronous
+ * and must not throw - a telemetry fault must never fail the completion.
+ */
+export interface TurnTelemetrySink {
+  /** Time spent waiting for a provider concurrency slot before one API request, in ms. */
+  onSemaphoreWait: (waitMs: number) => void;
+  /** A retry the backend scheduled for a failed API request, before its backoff sleep. */
+  onRetry: (event: { error: Error; delayMs: number; model: string }) => void;
+}
+
 export interface ICompletionOptions {
   maxTokens?: number;
   temperature?: number;
@@ -299,6 +310,12 @@ export interface ICompletionOptions {
      * Internal - do not set manually.
      */
     downgradedToolChoice?: DowngradedToolChoice;
+    /**
+     * Per-turn timing sink, set by ChatCompletionProcess and threaded unchanged through recursive
+     * tool rounds so every round's semaphore wait and transport retry lands on one turn record.
+     * Anthropic and OpenAI only so far. Internal - do not set manually.
+     */
+    turnTelemetry?: TurnTelemetrySink;
   };
   /** Provider-agnostic caching strategy configuration */
   cacheStrategy?: ICacheStrategy;

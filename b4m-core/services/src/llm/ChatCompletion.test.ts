@@ -10361,6 +10361,47 @@ describe('ChatCompletionProcess', () => {
       );
     });
 
+    it('persists the idle-timeout retry on quest.turnTiming and hands the backend a telemetry sink', async () => {
+      setupStreamIdleTimeoutMocks();
+
+      const complete = vi
+        .fn()
+        .mockImplementationOnce(async () => {
+          throw new Error(
+            'Anthropic API stream timeout - no response received within 90 seconds. The model may be overloaded.'
+          );
+        })
+        .mockImplementationOnce(
+          async (_model: unknown, _messages: unknown, _opts: unknown, cb: (chunks: string[]) => Promise<void>) => {
+            await cb(['Recovered']);
+          }
+        );
+      mockedGetLlmByModel.mockReturnValue({
+        complete,
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await runWithFakeTimers(service.process({ body, logger: mockLogger }));
+
+      expect(complete.mock.calls[0][2]._internal.turnTelemetry).toEqual(
+        expect.objectContaining({ onSemaphoreWait: expect.any(Function), onRetry: expect.any(Function) })
+      );
+      const saved = mockDb.quests.update.mock.calls.map(call => call[0]?.turnTiming).filter(Boolean);
+      const turnTiming = saved[saved.length - 1];
+      expect(turnTiming).toMatchObject({
+        queueMs: expect.any(Number),
+        contextBuildMs: expect.any(Number),
+        semaphoreWaitMs: 0,
+        totalMs: expect.any(Number),
+        fallbackHops: 0,
+      });
+      expect(turnTiming.retries).toEqual([
+        expect.objectContaining({ reason: 'stream_idle_timeout', model: ChatModels.GPT4, delayMs: expect.any(Number) }),
+      ]);
+    });
+
     it('should send status update during stream idle timeout retry', async () => {
       setupStreamIdleTimeoutMocks();
 

@@ -97,6 +97,7 @@ export async function toQuestPollBody(
     // two states apart.
     attachmentNotices: quest.attachmentNotices,
     attachmentDelivery: quest.attachmentDelivery,
+    turnTiming: quest.turnTiming,
     executionTracking: quest.promptMeta?.executionTracking,
   };
 }

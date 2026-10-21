@@ -36,6 +36,8 @@ export const QuestPollResponseSchema = ChatQuestPollResultSchema.extend({
   attachmentNotices: z.array(z.string()).optional(),
   // Loose: mirrors IAttachmentDelivery (requested, delivered, fullyDelivered, dropped, droppedIds).
   attachmentDelivery: z.record(z.string(), z.unknown()).optional(),
+  // Loose: mirrors ITurnTiming (queueMs, contextBuildMs, semaphoreWaitMs, totalMs, retries, fallbackHops).
+  turnTiming: z.record(z.string(), z.unknown()).optional(),
   executionTracking: z.unknown().optional(),
 });
 

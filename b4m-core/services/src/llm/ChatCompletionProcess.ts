@@ -94,6 +94,8 @@ import {
   safeInputWindow,
   withTokenEstimateMultiplier,
 } from '@bike4mind/utils';
+import { isRequestTimeoutError, isStreamIdleTimeoutError, isToolPairingError } from './llmErrorPredicates';
+import { TurnTimingRecorder } from './turnTiming';
 import type { FabFileNotice, EmbeddingCredential } from '@bike4mind/utils';
 import { buildAttachmentNoticePrompt, toAttachmentNoticeStrings } from './attachmentNotices';
 import { buildPromptMetaModel } from './buildPromptMetaModel';
@@ -520,19 +522,7 @@ export function resolveQuestErrorCode(error: unknown): QuestErrorCode | undefine
  */
 export const FORCE_FALLBACK_TEST_MARKER = '[[force-provider-fallback]]';
 
-function isToolPairingError(error: Error): boolean {
-  const msg = error.message.toLowerCase();
-  // Match known Anthropic tool-pairing failure patterns:
-  // - messages mentioning both "tool_use" and "tool_result"
-  // - messages mentioning "tool_use_id" (e.g., "unexpected tool_use_id")
-  const hasToolUseAndResult = msg.includes('tool_use') && msg.includes('tool_result');
-  const hasToolUseIdVariant = msg.includes('tool_use_id');
-  return hasToolUseAndResult || hasToolUseIdVariant;
-}
-
-export function isRequestTimeoutError(error: Error): boolean {
-  return error.message.includes('request timeout') || error.message.includes('Request timeout');
-}
+export { isRequestTimeoutError, isStreamIdleTimeoutError };
 
 /**
  * True when an error is a request abort/cancellation (user stop, client
@@ -550,9 +540,6 @@ export function isAbortError(error: unknown): boolean {
   return error.message.toLowerCase().includes('aborted');
 }
 
-export function isStreamIdleTimeoutError(error: Error): boolean {
-  return error.message.includes('stream timeout') || error.message.includes('Stream timeout');
-}
 
 /**
  * True when a completion failure is a service fault worth counting on the operator
@@ -1882,6 +1869,7 @@ export class ChatCompletionProcess {
     const enableMementos = initialEnableMementos;
     let enableAgents = initialEnableAgents;
     const { questId, sessionId, promptMode } = parsedBody;
+    const turnTiming = new TurnTimingRecorder(quest.createdAt, processStartTime, logger);
 
     // Variables to store actual timing durations
     let actualArtifactProcessingDuration = 0;
@@ -4763,6 +4751,7 @@ export class ChatCompletionProcess {
       );
 
       timer.phase('llm_completion');
+      turnTiming.markLlmRequestStarted();
       logger.info(`⏱️ [${Date.now() - processStartTime}ms] === LLM STREAMING PHASE START ===`);
 
       // Bounded multi-hop fallback: a provider-wide outage walks the preference chain one
@@ -4981,6 +4970,7 @@ export class ChatCompletionProcess {
                 cacheStrategy,
                 _internal: {
                   ...options._internal,
+                  turnTelemetry: turnTiming.sink,
                   enableIdleTimeout,
                   enableRequestTimeout: enableIdleTimeout,
                   idleTimeoutMs: idleTimeoutSeconds * 1000,
@@ -5226,6 +5216,8 @@ export class ChatCompletionProcess {
               );
               messages = stripAllToolBlocks(messages, logger);
               outboundMessages = stripAllToolBlocks(outboundMessages, logger);
+              turnTiming.recordRetry(lastError, 0, currentModel.id);
+              quest.turnTiming = turnTiming.snapshot();
 
               resetStreamStateForRetry();
 
@@ -5260,6 +5252,8 @@ export class ChatCompletionProcess {
                   { statusAt: new Date() }
                 );
 
+                turnTiming.recordRetry(lastError, totalDelay, currentModel.id);
+                quest.turnTiming = turnTiming.snapshot();
                 await new Promise(resolve => setTimeout(resolve, totalDelay));
 
                 resetStreamStateForRetry();
@@ -5285,6 +5279,8 @@ export class ChatCompletionProcess {
 
               this.sendStatusUpdate(quest, 'AI service is slow, retrying...', { statusAt: new Date() });
 
+              turnTiming.recordRetry(lastError, TIMEOUT_RETRY_DELAY_MS + jitter, currentModel.id);
+              quest.turnTiming = turnTiming.snapshot();
               await new Promise(resolve => setTimeout(resolve, TIMEOUT_RETRY_DELAY_MS + jitter));
 
               resetStreamStateForRetry();
@@ -5306,6 +5302,8 @@ export class ChatCompletionProcess {
 
               this.sendStatusUpdate(quest, 'AI service is slow, retrying...', { statusAt: new Date() });
 
+              turnTiming.recordRetry(lastError, STREAM_IDLE_RETRY_DELAY_MS + jitter, currentModel.id);
+              quest.turnTiming = turnTiming.snapshot();
               await new Promise(resolve => setTimeout(resolve, STREAM_IDLE_RETRY_DELAY_MS + jitter));
 
               resetStreamStateForRetry();
@@ -5357,6 +5355,8 @@ export class ChatCompletionProcess {
               primaryFailureReason ??= sanitizeTelemetryError(lastError);
               fallbackAttempt++;
               triedModelIds.add(currentModel.id);
+              turnTiming.recordFallbackHop();
+              quest.turnTiming = turnTiming.snapshot();
 
               logger.info(`🔄 [Fallback] Switching to fallback model: ${currentModel.id} (attempt ${fallbackAttempt})`);
 
@@ -6565,6 +6565,8 @@ export class ChatCompletionProcess {
         const phases = timer.toRecord();
         quest.promptMeta!.performance!.phases = phases;
         this.pipelinePhases = phases;
+        turnTiming.finish();
+        quest.turnTiming = turnTiming.snapshot();
         logger.info(`📊 Pipeline phases:\n${timer.summary()}`);
 
         // P4-c: Fire-and-forget final save - only adds performance metadata to quest.
@@ -6591,6 +6593,9 @@ export class ChatCompletionProcess {
       }
     } catch (err) {
       const totalResponseTime = Date.now() - processStartTime;
+      // Every branch below saves the quest, so a failed turn keeps its timing too.
+      turnTiming.finish();
+      quest.turnTiming = turnTiming.snapshot();
 
       // A Stop or disconnect that threw still bills what streamed; the rollback below then has
       // nothing left to refund. Any other failure refunds the whole hold. Keyed on the basis, not
