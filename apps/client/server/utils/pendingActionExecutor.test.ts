@@ -10,6 +10,11 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: { findByIdAndUserId: vi.fn(), shareable: { findAccessibleById: vi.fn() } },
 }));
 
+vi.mock('@bike4mind/database/infra', () => ({
+  SlackDevWorkspace: { findById: vi.fn() },
+  OrgSlackWorkspace: { findById: vi.fn() },
+}));
+
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => {
   const storage = { getSignedUrl: vi.fn(), download: vi.fn().mockResolvedValue(Buffer.from('file-bytes')) };
   return { getFilesStorage: () => storage };
@@ -35,6 +40,7 @@ vi.mock('@bike4mind/slack', () => {
 });
 
 import { fabFileRepository, Quest, Session } from '@bike4mind/database';
+import { SlackDevWorkspace, OrgSlackWorkspace } from '@bike4mind/database/infra';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
 import { downloadAttachmentUrl } from '@server/utils/downloadAttachmentUrl';
@@ -374,16 +380,26 @@ describe('isPendingActionRequester', () => {
 });
 
 describe('confirmed curated-file sharing', () => {
-  const destination = { workspaceId: 'T123', channelId: 'C123' };
+  const storedWorkspaceId = 'dddddddddddddddddddddddd';
+  const destination = { slackTeamId: 'T123', channelId: 'C123' };
   const fileId = 'cccccccccccccccccccccccc';
+  const selectResolving = (value: unknown) => ({ select: () => Promise.resolve(value) });
   let ts: number;
   beforeEach(() => {
     vi.clearAllMocks();
     ts = Date.now();
     vi.mocked(Quest.findById).mockReturnValue({
-      pendingAction: { tool: 'share_curated_file', ts, params: { fileId, userId: dbUser.id, ...destination } },
+      pendingAction: {
+        tool: 'share_curated_file',
+        ts,
+        params: { fileId, userId: dbUser.id, workspaceId: storedWorkspaceId, channelId: destination.channelId },
+      },
       select: () => Promise.resolve({ promptMeta: { session: { userId: dbUser.id } } }),
     } as never);
+    vi.mocked(SlackDevWorkspace.findById).mockReturnValue(
+      selectResolving({ slackTeamId: destination.slackTeamId }) as never
+    );
+    vi.mocked(OrgSlackWorkspace.findById).mockReturnValue(selectResolving(null) as never);
     vi.mocked(fabFileRepository.findByIdAndUserId).mockResolvedValue({
       id: fileId,
       filePath: 'private/report.pdf',
@@ -415,6 +431,71 @@ describe('confirmed curated-file sharing', () => {
     expect(result.success).toBe(false);
     expect(Quest.findOneAndUpdate).not.toHaveBeenCalled();
     expect(getFilesStorage().getSignedUrl).not.toHaveBeenCalled();
+  });
+
+  it('refuses a confirmation clicked in another Slack team', async () => {
+    const result = await executePendingAction(QUEST_ID, dbUser, logger, ts, {
+      ...destination,
+      slackTeamId: 'TOTHER',
+    });
+    expect(result.success).toBe(false);
+    expect(getFilesStorage().getSignedUrl).not.toHaveBeenCalled();
+  });
+
+  it('refuses a confirmation that names no destination', async () => {
+    expect((await executePendingAction(QUEST_ID, dbUser, logger, ts)).success).toBe(false);
+    expect(getFilesStorage().getSignedUrl).not.toHaveBeenCalled();
+  });
+
+  it('refuses a confirmation from someone other than the turn requester', async () => {
+    vi.mocked(Quest.findById).mockReturnValue({
+      pendingAction: {
+        tool: 'share_curated_file',
+        ts,
+        params: { fileId, userId: dbUser.id, workspaceId: storedWorkspaceId, channelId: destination.channelId },
+      },
+      select: () => Promise.resolve({ promptMeta: { session: { userId: 'user-2' } } }),
+    } as never);
+
+    expect((await executePendingAction(QUEST_ID, dbUser, logger, ts, destination)).success).toBe(false);
+    expect(getFilesStorage().getSignedUrl).not.toHaveBeenCalled();
+  });
+
+  it('accepts an org-install destination resolved from the org workspace', async () => {
+    vi.mocked(SlackDevWorkspace.findById).mockReturnValue(selectResolving(null) as never);
+    vi.mocked(OrgSlackWorkspace.findById).mockReturnValue(
+      selectResolving({ slackTeamId: destination.slackTeamId }) as never
+    );
+
+    expect((await executePendingAction(QUEST_ID, dbUser, logger, ts, destination)).success).toBe(true);
+    expect(getFilesStorage().getSignedUrl).toHaveBeenCalled();
+  });
+
+  it('refuses an action whose file id is not an object id', async () => {
+    vi.mocked(Quest.findById).mockReturnValue({
+      pendingAction: {
+        tool: 'share_curated_file',
+        ts,
+        params: {
+          fileId: 'not-an-id',
+          userId: dbUser.id,
+          workspaceId: storedWorkspaceId,
+          channelId: destination.channelId,
+        },
+      },
+      select: () => Promise.resolve({ promptMeta: { session: { userId: dbUser.id } } }),
+    } as never);
+
+    expect((await executePendingAction(QUEST_ID, dbUser, logger, ts, destination)).success).toBe(false);
+    expect(fabFileRepository.findByIdAndUserId).not.toHaveBeenCalled();
+    expect(Quest.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('consumes the action and reports failure when signing the link fails', async () => {
+    vi.mocked(getFilesStorage().getSignedUrl).mockRejectedValue(new Error('storage down'));
+
+    expect((await executePendingAction(QUEST_ID, dbUser, logger, ts, destination)).success).toBe(false);
+    expect(Quest.findOneAndUpdate).toHaveBeenCalled();
   });
 
   it('refuses a stale confirmation', async () => {

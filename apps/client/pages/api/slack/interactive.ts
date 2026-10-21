@@ -689,14 +689,14 @@ async function handleInteractiveAction(
         // Execute and send result via response_url for reliable update
         if (response_url) {
           const confirmResult = await handleConfirmAction(dbUser, parseConfirmationButtonValue(action.value), {
-            workspaceId: workspaceId ?? '',
+            slackTeamId: payload.team?.id,
             channelId: payload.channel?.id,
           });
           await sendSlackResponse(response_url, confirmResult);
           return {}; // Empty response since we sent via response_url
         }
         return await handleConfirmAction(dbUser, parseConfirmationButtonValue(action.value), {
-          workspaceId: workspaceId ?? '',
+          slackTeamId: payload.team?.id,
           channelId: payload.channel?.id,
         });
 
@@ -1296,7 +1296,7 @@ const NOT_REQUESTER_RESPONSE = {
 async function handleConfirmAction(
   dbUser: any,
   { questId, pendingActionTs }: { questId: string; pendingActionTs?: number },
-  clickedDestination: { workspaceId: string; channelId: string }
+  clickedDestination: { slackTeamId: string; channelId: string }
 ): Promise<any> {
   const logger = new Logger({ metadata: { component: 'slack-interactive-confirm' } });
 

@@ -167,7 +167,7 @@ describe('POST /api/slack/interactive confirmation buttons', () => {
           expect.objectContaining({ id: 'user-1' }),
           expect.anything(),
           PENDING_ACTION_TS,
-          { workspaceId: 'workspace-1', channelId: 'C123' }
+          { slackTeamId: 'T123', channelId: 'C123' }
         );
         expect(cancelPendingActionOnQuest).not.toHaveBeenCalled();
       } else {
@@ -193,7 +193,7 @@ describe('POST /api/slack/interactive confirmation buttons', () => {
         expect.objectContaining({ id: 'user-1' }),
         expect.anything(),
         PENDING_ACTION_TS,
-        { workspaceId: 'workspace-1', channelId: 'C123' }
+        { slackTeamId: 'T123', channelId: 'C123' }
       );
       expect(cancelPendingActionOnQuest).not.toHaveBeenCalled();
       return;

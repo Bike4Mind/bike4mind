@@ -2,6 +2,7 @@ import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { Logger } from '@bike4mind/observability';
 import { IUserDocument, isImageServeable } from '@bike4mind/common';
 import { Quest, Session, fabFileRepository } from '@bike4mind/database';
+import { SlackDevWorkspace, OrgSlackWorkspace } from '@bike4mind/database/infra';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { downloadAttachmentUrl } from '@server/utils/downloadAttachmentUrl';
 import { isFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
@@ -55,6 +56,21 @@ export interface PendingActionResult {
   message: string;
 }
 
+/**
+ * The Slack team a conversation's destination workspace belongs to. The pending action stores the
+ * destination as a workspace document id, which is a SlackDevWorkspace for an app install and an
+ * OrgSlackWorkspace for an org install; resolving it back to the team lets a click be checked
+ * against the team Slack actually delivered it from, without depending on which document kind the
+ * creating flow happened to store.
+ */
+async function resolveDestinationTeamId(workspaceId: unknown): Promise<string | undefined> {
+  if (typeof workspaceId !== 'string' || !isValidObjectId(workspaceId)) return undefined;
+  const devWorkspace = await SlackDevWorkspace.findById(workspaceId).select('slackTeamId');
+  if (devWorkspace?.slackTeamId) return devWorkspace.slackTeamId;
+  const orgWorkspace = await OrgSlackWorkspace.findById(workspaceId).select('slackTeamId');
+  return orgWorkspace?.slackTeamId ?? undefined;
+}
+
 export const MCP_DISABLED_MESSAGE = 'MCP integrations are turned off by your administrator.';
 
 /**
@@ -69,7 +85,7 @@ export async function executePendingAction(
   dbUser: IUserDocument,
   logger: Logger,
   expectedTs: number,
-  clickedDestination?: { workspaceId: string; channelId: string }
+  clickedDestination?: { slackTeamId: string; channelId: string }
 ): Promise<PendingActionResult> {
   const questWithPending = await Quest.findById(questId);
 
@@ -99,8 +115,8 @@ export async function executePendingAction(
     if (
       userId !== dbUser.id ||
       !clickedDestination ||
-      workspaceId !== clickedDestination.workspaceId ||
       channelId !== clickedDestination.channelId ||
+      (await resolveDestinationTeamId(workspaceId)) !== clickedDestination.slackTeamId ||
       !(await isPendingActionRequester(questId, dbUser.id))
     ) {
       return { success: false, message: 'Confirm this action in the original Slack conversation.' };
