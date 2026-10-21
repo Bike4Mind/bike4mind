@@ -109,10 +109,6 @@ const event = createEventBuilder({
   getEventBusName: () => Resource.AppEventBus.name,
 });
 
-const slackEvent = createEventBuilder({
-  getEventBusName: () => Resource.SlackEventBus.name,
-});
-
 export const EmailEvents = {
   Send: event(
     'email.send',
@@ -197,8 +193,8 @@ export const SessionEvents = {
 
 export const LLMEvents = {
   CompletionStart: event('completion.started', QuestStartBodySchema),
-  // Slack-originated completions publish here - routed to slackQuestProcessor, not questProcessor
-  SlackCompletionStart: slackEvent('slack.completion.started', QuestStartBodySchema),
+  // Slack-originated completions: the distinct detail type routes them to slackQuestProcessor
+  SlackCompletionStart: event('slack.completion.started', QuestStartBodySchema),
   CompletionCompleted: event(
     'completion.completed',
     z.object({
