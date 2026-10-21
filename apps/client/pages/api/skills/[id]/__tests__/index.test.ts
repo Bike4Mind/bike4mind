@@ -114,7 +114,7 @@ describe('/api/skills/[id] PUT — edit permission', () => {
     mockFindById.mockResolvedValue(skillDoc({ argumentHint: '<previous>' }));
     const { req, res } = makeReqRes('PUT', OWNER, { argumentHint: '' });
     await handler(req, res);
-    expect(mockUpdate).toHaveBeenCalledWith({ id: 'skill-1', argumentHint: '' }, { new: true });
+    expect(mockUpdateIfNonGlobal).toHaveBeenCalledWith({ id: 'skill-1', argumentHint: '' }, { new: true });
     expect(res._getJSONData()).toMatchObject({ argumentHint: '' });
   });
 
@@ -122,7 +122,7 @@ describe('/api/skills/[id] PUT — edit permission', () => {
     mockFindById.mockResolvedValue(skillDoc({ argumentHint: '<previous>' }));
     const { req, res } = makeReqRes('PUT', OWNER, { description: 'new' });
     await handler(req, res);
-    expect(mockUpdate).toHaveBeenCalledWith({ id: 'skill-1', description: 'new' }, { new: true });
+    expect(mockUpdateIfNonGlobal).toHaveBeenCalledWith({ id: 'skill-1', description: 'new' }, { new: true });
   });
 
   it('allows a share-recipient with update permission to edit', async () => {
