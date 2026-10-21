@@ -27,11 +27,16 @@ vi.mock('@bike4mind/database', async () => ({
   organizationRepository: { findById: m.findOrg },
   userRepository: { findById: async () => ({ id: 'u1', currentCredits: m.balance }) },
 }));
-vi.mock('@bike4mind/utils', async importOriginal => ({
-  ...(await importOriginal<typeof import('@bike4mind/utils')>()),
-  getSettingsMap: async () => ({}),
-  getSettingsValue: (name: string) => (name === 'enforceCredits' ? m.enforce : undefined),
-}));
+vi.mock('@bike4mind/utils', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/utils')>();
+  return {
+    ...actual,
+    // Settlement rounds stochastically; draw 0 always rounds up so the charge is exact.
+    usdToCreditsStochastic: (usd: number) => actual.usdToCreditsStochastic(usd, () => 0),
+    getSettingsMap: async () => ({}),
+    getSettingsValue: (name: string) => (name === 'enforceCredits' ? m.enforce : undefined),
+  };
+});
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveApiKey: async () => 'sk-test' },
   creditService: {
