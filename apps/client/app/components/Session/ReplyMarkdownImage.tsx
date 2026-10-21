@@ -2,7 +2,7 @@ import { Button } from '@mui/joy';
 import { useState, type ComponentProps } from 'react';
 import ImageContainer from './ImageContainer';
 
-type Props = Pick<ComponentProps<typeof ImageContainer>, 'src' | 'onSendMessage'> & { alt?: string };
+type Props = Pick<ComponentProps<typeof ImageContainer>, 'src' | 'alt' | 'onSendMessage'>;
 
 export function ReplyMarkdownImage({ src, alt, onSendMessage }: Props) {
   const [approvedSource, setApprovedSource] = useState<string | null>(null);
@@ -22,5 +22,5 @@ export function ReplyMarkdownImage({ src, alt, onSendMessage }: Props) {
       </Button>
     );
   }
-  return <ImageContainer src={src} index={0} totalImages={1} images={[src]} onSendMessage={onSendMessage} />;
+  return <ImageContainer src={src} index={0} totalImages={1} images={[src]} alt={alt} onSendMessage={onSendMessage} />;
 }
