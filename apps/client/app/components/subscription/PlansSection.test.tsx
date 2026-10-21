@@ -355,6 +355,21 @@ describe('PlansSection', () => {
     expect(screen.getByRole('button', { name: 'Subscribe to Professional' })).toBeEnabled();
   });
 
+  it('reports a successful change from a legacy plan to Billing', async () => {
+    subscriptions = [subRow({ priceId: 'price_legacy' })];
+    const onSubscriptionChanged = vi.fn();
+    render(
+      <TestWrapper>
+        <PlansSection onSubscriptionChanged={onSubscriptionChanged} />
+      </TestWrapper>
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Change subscription to Professional' }));
+    expect(onSubscriptionChanged).not.toHaveBeenCalled();
+    const options = changeMutate.mock.calls[0][1] as { onSuccess: () => void };
+    options.onSuccess();
+    expect(onSubscriptionChanged).toHaveBeenCalledTimes(1);
+  });
+
   it('still offers Change when the user holds a plan in good standing at another price', () => {
     subscriptions = [subRow({ status: 'active', priceId: 'price_legacy' })];
 
