@@ -10,7 +10,7 @@ vi.mock('@bike4mind/utils', () => ({
   getSettingsValue: (key: string, settings: Record<string, string>) => getSettingsValueMock(key, settings),
 }));
 
-import { isOperationalBillingEnabled } from './isOperationalBillingEnabled';
+import { areCreditsEnforced, isOperationalBillingEnabled } from './isOperationalBillingEnabled';
 
 const db = { adminSettings: {} as never };
 
@@ -70,5 +70,35 @@ describe('isOperationalBillingEnabled', () => {
     getSettingsMapMock.mockRejectedValue(new Error('mongo down'));
 
     await expect(isOperationalBillingEnabled(db)).rejects.toThrow('mongo down');
+  });
+});
+
+describe('areCreditsEnforced', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    getSettingsMapMock.mockResolvedValue({});
+  });
+
+  it.each([true, false, undefined])(
+    'returns the enforcement flag %s with absent settings defaulting off',
+    async flag => {
+      getSettingsValueMock.mockReturnValue(flag);
+
+      await expect(areCreditsEnforced(db)).resolves.toBe(flag ?? false);
+
+      expect(getSettingsMapMock).toHaveBeenCalledWith(db, {
+        logger: undefined,
+        names: ['enforceCredits'],
+        skipCache: true,
+      });
+      expect(getSettingsValueMock).toHaveBeenCalledWith('enforceCredits', {});
+    }
+  );
+
+  it('propagates a settings-store failure instead of treating billing as disabled', async () => {
+    getSettingsMapMock.mockRejectedValue(new Error('mongo down'));
+
+    await expect(areCreditsEnforced(db)).rejects.toThrow('mongo down');
+    expect(getSettingsValueMock).not.toHaveBeenCalled();
   });
 });

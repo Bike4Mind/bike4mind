@@ -23,7 +23,7 @@ export type OperationalBillingSettingsAdapter = {
  * wrong keys: under `skipCache` a `names` list that omits a key reads `undefined` for
  * it and silently gates billing OFF - turning a pre-flight into a no-op with no error
  * anywhere. `skipCache` is required for the same reason: a long-lived host's process
- * cache never sees another process's admin write.
+ * cache can lag another process's admin write until its TTL expires.
  *
  * Throws if the settings store does: a caller that must not fail on a billing-store
  * blip has to catch this and decide its own fallback.
@@ -35,7 +35,7 @@ export async function isOperationalBillingEnabled(
   const settings = await getSettingsMap(db, {
     logger,
     // Both keys the caller could narrow away are listed here; the read bypasses the process
-    // cache so an admin flip is honoured on the next call, not on the next process.
+    // cache so an admin flip is honoured on the next call rather than after the TTL.
     names: ['billOperationalUsage', 'enforceCredits'],
     skipCache: true,
   });
@@ -62,6 +62,6 @@ export async function isOperationalBillingEnabled(
  */
 export async function areCreditsEnforced(db: OperationalBillingSettingsAdapter, logger?: Logger): Promise<boolean> {
   // Same cross-process staleness as isOperationalBillingEnabled: this gates a forced debit.
-  const settings = await getSettingsMap(db, { logger, skipCache: true });
+  const settings = await getSettingsMap(db, { logger, names: ['enforceCredits'], skipCache: true });
   return getSettingsValue('enforceCredits', settings) ?? false;
 }

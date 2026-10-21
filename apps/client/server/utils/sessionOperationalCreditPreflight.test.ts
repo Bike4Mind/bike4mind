@@ -402,12 +402,46 @@ describe('filterSessionIdsByOperationalCredits', () => {
     mockFindOrgById.mockResolvedValue(null);
   });
 
-  const filter = (sessions: { id: string; userId: string }[], logger?: { warn: ReturnType<typeof vi.fn> }) =>
+  const filter = (
+    sessions: { id: string; userId: string }[],
+    logger?: { warn: ReturnType<typeof vi.fn>; error?: ReturnType<typeof vi.fn> }
+  ) =>
     filterSessionIdsByOperationalCredits(sessions as never, {
       operationsPerSession: 2,
       operation: 'session summarization',
       logger: logger as never,
     });
+
+  it('allows the whole batch with a diagnostic when its billing gate read fails', async () => {
+    const error = new Error('settings unavailable');
+    mockBillingEnabled.mockRejectedValueOnce(error);
+    const logger = { warn: vi.fn(), error: vi.fn() };
+
+    const allowed = await filter(
+      [
+        { id: 's1', userId: USER_ID },
+        { id: 's2', userId: OTHER_USER_ID },
+        { id: 's3', userId: '' },
+      ],
+      logger
+    );
+
+    expect(allowed).toEqual(new Set(['s1', 's2', 's3']));
+    expect(mockBillingEnabled).toHaveBeenCalledTimes(1);
+    expect(mockFindUserById).not.toHaveBeenCalled();
+    expect(mockFindOrgById).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledExactlyOnceWith(
+      '[sessionOperationalCreditPreflight] gate disabled: failed to read billing settings',
+      error
+    );
+  });
+
+  it('skips all billing reads for an empty batch', async () => {
+    await expect(filter([])).resolves.toEqual(new Set());
+    expect(mockBillingEnabled).not.toHaveBeenCalled();
+    expect(mockFindUserById).not.toHaveBeenCalled();
+    expect(mockFindOrgById).not.toHaveBeenCalled();
+  });
 
   it('passes every session through when operational billing is off', async () => {
     mockBillingEnabled.mockResolvedValue(false);
@@ -492,7 +526,9 @@ describe('filterSessionIdsByOperationalCredits', () => {
     const allowed = await filter([{ id: 's1', userId: '' }]);
 
     expect(allowed).toEqual(new Set(['s1']));
+    expect(mockBillingEnabled).not.toHaveBeenCalled();
     expect(mockFindUserById).not.toHaveBeenCalled();
+    expect(mockFindOrgById).not.toHaveBeenCalled();
   });
 
   // Each owner is sized to THEIR share of the batch, not to the batch. The mixed shape is what
