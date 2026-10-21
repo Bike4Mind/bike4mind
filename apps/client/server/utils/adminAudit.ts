@@ -1,5 +1,8 @@
 import type { Request } from 'express';
 import {
+  ADMIN_AUDIT_CREDIT_GRANT_ACTIONS,
+  ADMIN_AUDIT_DEFAULT_CRITICAL_GRANT_CREDITS,
+  ADMIN_AUDIT_DEFAULT_DAILY_GRANT_CREDITS,
   AdminActionReasonSchema,
   BadRequestError,
   ForbiddenError,
@@ -9,10 +12,11 @@ import {
   type AuditEntry,
   type AuditTarget,
 } from '@bike4mind/common';
-import { adminAuditLogRepository } from '@bike4mind/database';
+import { adminAuditLogRepository, adminSettingsRepository } from '@bike4mind/database';
 import { userRepository } from '@bike4mind/database/auth';
 import { adminAuditService } from '@bike4mind/services';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
+import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 
 // Typed routes pass Request<unknown, ...>; this accepts those as well as the express default.
 type AuditRequest = Request<unknown, unknown, unknown, unknown, Record<string, unknown>>;
@@ -73,13 +77,43 @@ const buildContext = (req: AuditRequest): AuditContext => ({
   source: req.apiKeyInfo ? 'api_key' : 'admin_ui',
 });
 
+/** Reads the grant thresholds from AdminSettings; recordAdminAction escalates a grant above either. */
+export const loadCreditGrantPolicy = async (): Promise<adminAuditService.CreditGrantPolicy> => {
+  const settings = await getSettingsMap(
+    { adminSettings: adminSettingsRepository },
+    { names: ['AdminAuditCriticalGrantCredits', 'AdminAuditDailyGrantCredits'] }
+  );
+  return {
+    singleGrantCredits: getSettingsValue(
+      'AdminAuditCriticalGrantCredits',
+      settings,
+      ADMIN_AUDIT_DEFAULT_CRITICAL_GRANT_CREDITS
+    ),
+    dailyTotalCredits: getSettingsValue(
+      'AdminAuditDailyGrantCredits',
+      settings,
+      ADMIN_AUDIT_DEFAULT_DAILY_GRANT_CREDITS
+    ),
+    sumCreditsGranted: (actorUserId, since) => adminAuditLogRepository.sumCreditsGranted(actorUserId, since),
+  };
+};
+
+const writerAdapters = async (
+  req: AuditRequest,
+  action: AdminAuditAction
+): Promise<adminAuditService.RecordAdminActionAdapters> => ({
+  db: { adminAuditLog: adminAuditLogRepository },
+  creditGrantPolicy: ADMIN_AUDIT_CREDIT_GRANT_ACTIONS.includes(action) ? await loadCreditGrantPolicy() : undefined,
+  logger: req.logger,
+});
+
 export const recordAdminActionFromRequest = async (
   req: AuditRequest,
   { actorScope, ...input }: RecordAdminActionFromRequestInput
 ): Promise<AuditEntry | null> =>
   adminAuditService.recordAdminAction(
     { ...input, actor: await resolveActor(req, actorScope ?? 'platform'), context: buildContext(req) },
-    { db: { adminAuditLog: adminAuditLogRepository }, logger: req.logger }
+    await writerAdapters(req, input.action)
   );
 
 /** For routes with no req.user (returnToAdmin authenticates by cookie): the caller names the actor. */
@@ -90,7 +124,7 @@ export const recordAdminActionForActor = async (
 ): Promise<AuditEntry | null> =>
   adminAuditService.recordAdminAction(
     { ...input, actor, context: buildContext(req) },
-    { db: { adminAuditLog: adminAuditLogRepository }, logger: req.logger }
+    await writerAdapters(req, input.action)
   );
 
 /** Validates a reason-required admin action's reason; a missing or short reason is a 400. */
