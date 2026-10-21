@@ -242,20 +242,32 @@ describe('billIteration (#657 context-window guard)', () => {
   });
 
   it('zero-priced model: the next iteration records only its own tokens', async () => {
-    const counters = makeCounters({ inputTokens: 100, outputTokens: 20 });
+    const counters = makeCounters();
     const { effects, spies } = makeEffects();
+    const bill = (iterationIndex: number, totals: ReturnType<typeof checkpoint>) =>
+      billIteration({
+        iterationIndex,
+        checkpoint: totals,
+        counters,
+        modelInfo: makeModelInfo(1000, 0),
+        model: 'test-model',
+        startTime: 0,
+        effects,
+      });
 
-    await billIteration({
-      iterationIndex: 2,
-      checkpoint: checkpoint(150, { output: 30 }),
-      counters,
-      modelInfo: makeModelInfo(1000, 0),
-      model: 'test-model',
-      startTime: 0,
-      effects,
-    });
+    await bill(1, checkpoint(100, { output: 20 }));
+    await bill(2, checkpoint(150, { output: 30 }));
 
-    expect(spies.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({ inputTokens: 50, outputTokens: 10 }));
+    expect(spies.recordUsageEvent).toHaveBeenCalledTimes(2);
+    expect(spies.recordUsageEvent).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ inputTokens: 50, outputTokens: 10 })
+    );
+    expect(spies.addIterationBilling).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ iteration: 2, inputTokens: 50, outputTokens: 10, credits: 0 })
+    );
+    expect(counters).toMatchObject({ inputTokens: 150, outputTokens: 30 });
   });
 
   it('sub-credit settlement: skips the ledger deduction but still records COGS + billing', async () => {
