@@ -12099,9 +12099,7 @@ describe('prompt moderation', () => {
     wireModMocks({ openaiKey: 'demo-key', guardrailId: null });
     vi.mocked(sharedAdminKeyProviders).mockReturnValue({ openai: true, anthropic: false });
     vi.stubEnv('B4M_PROVIDER_AUTH', 'federated');
-    vi.spyOn(service as any, 'getDefaultSettingValue').mockImplementation((key: string) =>
-      key === 'ModerationEnabled' ? true : false
-    );
+    enableAdminFlags('ModerationEnabled');
 
     try {
       await service.process({ body: startParams, logger: mockLogger });
