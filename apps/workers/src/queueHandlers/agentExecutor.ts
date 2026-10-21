@@ -743,8 +743,11 @@ export function attachedFileIdsForRun(
  *
  * Never throws. Extraction is an enhancement over the metadata preamble - a failure here has to
  * leave the run behaving exactly as it did before, not kill the turn.
+ *
+ * Exported so the run-time wiring (which session id the stale-reference scrub is scoped to, and the
+ * trim it reports back) is testable without driving the whole Lambda handler.
  */
-async function materializeAttachmentsForRun(args: {
+export async function materializeAttachmentsForRun(args: {
   execution: {
     userId: string;
     sessionId?: string;

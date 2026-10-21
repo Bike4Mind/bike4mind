@@ -596,6 +596,90 @@ describe('ChatCompletionProcess', () => {
     return { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
   };
 
+  describe('stale attachment scrub', () => {
+    const SOFT_DELETED = '507f1f77bcf86cd799439201';
+    const GONE_SYSTEM_FILE = '507f1f77bcf86cd799439202';
+    const GLOBAL_GONE = '507f1f77bcf86cd799439203';
+
+    const unresolved = (fabFileId: string): FabFileNotice => ({
+      fabFileId,
+      fileName: fabFileId,
+      band: 'unresolved',
+      message: 'not found',
+      delivered: false,
+    });
+
+    const wireDataSources = (over: Record<string, unknown>) =>
+      vi.spyOn(service as any, 'buildDataSources').mockResolvedValue({
+        urlMessages: [],
+        remainingUserPrompt: 'Hello',
+        fabMessages: [],
+        convertedFabFiles: [],
+        globalSystemFileIds: [],
+        enabledSystemFileIds: [],
+        allFileIdsBeforeDedup: [],
+        dedupedFileIds: [],
+        featureContextMessages: [],
+        actuallyInlinedKnowledgeIds: [],
+        fullyInlinedAttachmentIds: [],
+        attachmentNotices: [],
+        attachmentDelivery: undefined,
+        fileNotices: [],
+        ...over,
+      });
+
+    it('detaches a soft-deleted pinned knowledge id from this session and a gone system file from the user', async () => {
+      const fabfileProbes = {
+        findExistingIdsIncludingDeletedByIds: vi.fn(async (ids: string[]) => ids.filter(id => id === SOFT_DELETED)),
+        findExistingIdsByIds: vi.fn(async () => []),
+      };
+      mockSession.userId = 'user1';
+      mockSession.knowledgeIds = [SOFT_DELETED];
+      mockDb.fabfiles = fabfileProbes;
+      mockDb.sessions.pullKnowledgeIdsFromSession = vi.fn().mockResolvedValue(true);
+      mockDb.users.pullSystemFilesForUsers = vi.fn().mockResolvedValue(undefined);
+      (service as any).user = {
+        id: 'user1',
+        currentCredits: 10000,
+        systemFiles: [{ fileId: GONE_SYSTEM_FILE, enabled: true }],
+      };
+      (service as any).systemFilesCache = new Map([['system-files-user1', [['global'], [GONE_SYSTEM_FILE]]]]);
+      wireDataSources({
+        enabledSystemFileIds: [GONE_SYSTEM_FILE],
+        fileNotices: [unresolved(SOFT_DELETED), unresolved(GONE_SYSTEM_FILE)],
+      });
+
+      await service.process({ body: wireMinimalTurn(), logger: mockLogger });
+
+      // The session id is what scopes a soft-deleted id to this notebook alone.
+      expect(mockDb.sessions.pullKnowledgeIdsFromSession).toHaveBeenCalledWith('session1', [SOFT_DELETED]);
+      expect(mockDb.users.pullSystemFilesForUsers).toHaveBeenCalledWith(['user1'], [GONE_SYSTEM_FILE]);
+      expect((service as any).user.systemFiles).toEqual([]);
+      expect((service as any).systemFilesCache.has('system-files-user1')).toBe(false);
+    });
+
+    it('warns about unresolved ids in the admin-wide SystemFiles setting without writing to it', async () => {
+      mockSession.userId = 'user1';
+      mockDb.sessions.pullKnowledgeIdsFromSession = vi.fn().mockResolvedValue(true);
+      mockDb.users.pullSystemFilesForUsers = vi.fn().mockResolvedValue(undefined);
+      (service as any).user = { id: 'user1', currentCredits: 10000, systemFiles: [] };
+      wireDataSources({
+        globalSystemFileIds: [GLOBAL_GONE],
+        fileNotices: [unresolved(GLOBAL_GONE)],
+      });
+
+      await service.process({ body: wireMinimalTurn(), logger: mockLogger });
+
+      // The turn logs through the logger it was constructed with, not the per-call one.
+      expect((service as any).logger.warn).toHaveBeenCalledWith(
+        'The SystemFiles admin setting lists files that did not resolve',
+        { count: 1 }
+      );
+      expect(mockDb.users.pullSystemFilesForUsers).not.toHaveBeenCalled();
+      expect(mockDb.sessions.pullKnowledgeIdsFromSession).not.toHaveBeenCalled();
+    });
+  });
+
   describe('a deprecated-model redirect', () => {
     const successor = {
       id: ChatModels.GPT4_1,
