@@ -355,7 +355,7 @@ beforeEach(() => {
   retryMutate.mockClear();
   // managerTab is module state in the real store, so a test left in Discover would otherwise
   // decide what the next one renders.
-  useDataLakeWizardStore.setState({ managerTab: 'mine', gitHubConnectFailure: null });
+  useDataLakeWizardStore.setState({ managerTab: 'mine', managerLakeId: null, gitHubConnectFailure: null });
   toastError.mockClear();
 });
 
@@ -664,6 +664,27 @@ describe('DataLakeManagerPanel - lake navigation', () => {
     );
     expect(screen.queryByTestId('datalake-manager-lakeinfo')).not.toBeInTheDocument();
     expect(screen.getByTestId('datalake-manager-overview')).toBeInTheDocument();
+  });
+
+  it('opens a deep-linked lake on its categories, not on a folder named after its prefix', () => {
+    useDataLakeWizardStore.setState({ managerLakeId: 'mine' });
+    renderPanel();
+
+    expect(screen.getByTestId('datalake-manager-node-genre')).toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-manager-node-lk')).not.toBeInTheDocument();
+  });
+
+  it('seeds past the prefix once a deep-linked lake appears in the list (GitHub connect lands before the refetch)', () => {
+    useGetDataLakes.mockReturnValue({ data: [theirsLake], isLoading: false });
+    useDataLakeWizardStore.setState({ managerLakeId: 'mine' });
+    const { rerender } = renderPanel();
+    expect(screen.queryByTestId('datalake-manager-lakeinfo')).not.toBeInTheDocument();
+
+    useGetDataLakes.mockReturnValue({ data: [mineLake, theirsLake], isLoading: false });
+    rerenderPanel(rerender);
+
+    expect(screen.getByTestId('datalake-manager-node-genre')).toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-manager-node-lk')).not.toBeInTheDocument();
   });
 });
 
