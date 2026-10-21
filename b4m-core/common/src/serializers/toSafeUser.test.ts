@@ -48,7 +48,7 @@ const fullUser = {
     excludedPageIds: ['ex1', 'ex2'],
     connectedAt: new Date(),
   },
-  slackSettings: { slackUserId: 'U1', slackUserToken: 'SLACK-TOKEN', defaultNotebookId: 'n1' },
+  slackSettings: { slackUserId: 'U1', slackTeamId: 'T1', slackUserToken: 'SLACK-TOKEN', defaultNotebookId: 'n1' },
   blogIntegration: { apiKey: 'BLOG-KEY', baseUrl: 'https://blog', defaultAuthor: 'Jane' },
   totpLastStep: 56789,
   resetPasswordToken: 'RESET-TOKEN',
@@ -208,6 +208,7 @@ describe('redactUserSecretsForSelf', () => {
 
     const slack = self.slackSettings as Record<string, unknown>;
     expect(slack.slackUserId).toBe('U1');
+    expect(slack.slackTeamId).toBe('T1');
     expect('slackUserToken' in slack).toBe(false);
 
     const blog = self.blogIntegration as Record<string, unknown>;
@@ -369,6 +370,7 @@ describe('redactUserSecretsForSelf - authProviders', () => {
 describe('redactUserSecretsForSelf - slackSettings', () => {
   const slackSettings = {
     slackUserId: 'U1',
+    slackTeamId: 'T1',
     slackUserToken: 'slack-secret-token',
     slackUserScopes: ['identity.basic', 'reminders:write'],
     defaultNotebookId: 'nb-1',
@@ -389,6 +391,7 @@ describe('redactUserSecretsForSelf - slackSettings', () => {
     const slack = out?.slackSettings as Record<string, unknown>;
 
     expect(slack.slackUserId).toBe('U1');
+    expect(slack.slackTeamId).toBe('T1');
     expect(slack.defaultNotebookId).toBe('nb-1');
     expect(slack.autoCreateNotebook).toBe(true);
     expect(slack.notebookNamePrefix).toBe('daily-');
@@ -416,6 +419,7 @@ describe('redactUserSecretsForSelf - slackSettings', () => {
 
     expect(out?.slackSettings).toEqual({
       slackUserId: 'U1',
+      slackTeamId: 'T1',
       defaultNotebookId: 'nb-1',
       autoCreateNotebook: true,
       notebookNamePrefix: 'daily-',
@@ -515,6 +519,7 @@ describe('redactUserSecretsForSelf - rebuild-block allowlists stay pinned', () =
       field: 'slackSettings',
       input: {
         slackUserId: 'U1',
+        slackTeamId: 'T1',
         defaultNotebookId: 'nb-1',
         autoCreateNotebook: true,
         notebookNamePrefix: 'daily-',
@@ -530,6 +535,7 @@ describe('redactUserSecretsForSelf - rebuild-block allowlists stay pinned', () =
       },
       allowed: [
         'slackUserId',
+        'slackTeamId',
         'defaultNotebookId',
         'autoCreateNotebook',
         'notebookNamePrefix',

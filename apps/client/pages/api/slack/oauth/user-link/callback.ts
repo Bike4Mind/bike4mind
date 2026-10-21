@@ -146,8 +146,11 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     const slackUserId = tokenData.authed_user?.id;
     const slackTeamId = tokenData.team?.id;
 
-    if (!slackUserId) {
-      logger.error('🔐 No Slack user ID in token response', { tokenData: JSON.stringify(tokenData) });
+    if (!slackUserId || !slackTeamId) {
+      logger.error('Slack OAuth response is missing a verified identity', {
+        hasSlackUserId: !!slackUserId,
+        hasSlackTeamId: !!slackTeamId,
+      });
       auditLogger.failure('no_user_id');
       return res.redirect('/profile?tab=integrations&slack_error=no_user_id');
     }
@@ -200,6 +203,7 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     // Token is protected by select: false in the schema
     const updatePayload: Record<string, unknown> = {
       'slackSettings.slackUserId': slackUserId,
+      'slackSettings.slackTeamId': slackTeamId,
       'slackSettings.slackUserScopes': grantedScopes,
     };
 

@@ -48,12 +48,9 @@ import {
   jiraWebhookSubscriptionRepository,
   jiraWebhookDeliveryRepository,
 } from '@bike4mind/database';
-import { slackDevWorkspaceRepository } from '@bike4mind/database/infra';
-import { User } from '@bike4mind/database';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { decryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
-import { decryptToken } from '@server/security/tokenEncryption';
-import { SlackClient } from '@bike4mind/slack';
+import { SlackClient, resolveNotificationDestination } from '@bike4mind/slack';
 import {
   verifyJiraSignature,
   getRawBody,
@@ -190,39 +187,6 @@ export const config = {
     externalResolver: true,
   },
 };
-
-/**
- * Get Slack bot token from the first active workspace.
- */
-async function getSlackBotToken(): Promise<string | null> {
-  const workspaces = await slackDevWorkspaceRepository.findAllActiveWithCredentials();
-  if (workspaces.length === 0) return null;
-
-  const workspace = workspaces[0];
-  if (workspace.slackBotToken) {
-    return decryptToken(workspace.slackBotToken);
-  }
-
-  const workspaceWithToken = await slackDevWorkspaceRepository.findByIdWithCredentials(workspace.id);
-  return decryptToken(workspaceWithToken?.slackBotToken) ?? null;
-}
-
-/**
- * Resolve the Slack channel for a subscription.
- * - 'channel' type: use the specified channel ID directly
- * - 'dm' type: look up the subscription owner's slackUserId for a DM
- */
-async function resolveSlackChannel(subscription: IJiraWebhookSubscriptionDocument): Promise<string | null> {
-  const { slackTarget } = subscription;
-
-  if (slackTarget.type === 'channel') {
-    return slackTarget.channelId;
-  }
-
-  // DM fallback: look up user's linked Slack account
-  const user = await User.findById(subscription.userId).select('slackSettings.slackUserId').lean();
-  return (user as { slackSettings?: { slackUserId?: string } } | null)?.slackSettings?.slackUserId || null;
-}
 
 /**
  * Send message to Slack via bot token using chat.postMessage.
@@ -544,24 +508,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
     const issueInfo = extractIssueInfo(payload);
 
-    const botToken = await getSlackBotToken();
-
     // Capture config values for use in async closure
     const webhookConfigId = jiraWebhookConfig.id;
     const atlassianSiteUrl = jiraWebhookConfig.atlassianSiteUrl;
 
     // Process each subscription (fire and forget - don't block response)
     const processSubscriptions = async () => {
-      if (!botToken) {
-        logger.error('[JIRA-WEBHOOK] No Slack bot token available — cannot deliver notifications', { correlationId });
-        return;
-      }
-
-      const slackClient = new SlackClient(botToken, logger);
-
       const results = await Promise.all(
         subscriptions.map(async subscription => {
           const startTime = Date.now();
+          let failureCounted = false;
 
           try {
             // Check issue filters (only for issue/comment events)
@@ -578,16 +534,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
               }
             }
 
-            // Resolve Slack channel (channel ID or DM via slackUserId)
-            const channel = await resolveSlackChannel(subscription);
-            if (!channel) {
-              await recordDelivery(
-                subscription,
-                JiraWebhookDeliveryStatus.Failed,
-                'No Slack channel or user ID configured'
-              );
-              return { subscriptionId: subscription.id, status: JiraWebhookDeliveryStatus.Failed };
-            }
+            const { botToken, channel } = await resolveNotificationDestination(
+              subscription.userId,
+              subscription.slackTarget.type === 'channel' ? subscription.slackTarget.channelId : undefined
+            );
+            const slackClient = new SlackClient(botToken, logger);
 
             const slackMessage = formatEventForSlack(webhookEventType, payload, atlassianSiteUrl);
 
@@ -607,6 +558,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
                 slackResult.error || 'Unknown error'
               );
 
+              failureCounted = true;
               if (wasAutoDisabled) {
                 logger.warn('[JIRA-WEBHOOK] Subscription auto-disabled due to failures', {
                   subscriptionId: subscription.id,
@@ -624,6 +576,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
               return { subscriptionId: subscription.id, status: JiraWebhookDeliveryStatus.Failed };
             }
           } catch (err) {
+            if (!failureCounted) {
+              await jiraWebhookSubscriptionRepository.incrementConsecutiveFailuresAtomic(
+                subscription.id,
+                10,
+                err instanceof Error ? err.message : 'Slack delivery failed'
+              );
+            }
+            await recordDelivery(
+              subscription,
+              JiraWebhookDeliveryStatus.Failed,
+              err instanceof Error ? err.message : 'Slack delivery failed',
+              Date.now() - startTime
+            );
             logger.error('[JIRA-WEBHOOK] Error processing subscription', {
               subscriptionId: subscription.id,
               error: err,

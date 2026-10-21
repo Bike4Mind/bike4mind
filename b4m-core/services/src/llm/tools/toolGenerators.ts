@@ -49,6 +49,8 @@ export const generateTools = (
     authOrigin,
     apiKeyId,
     questId,
+    requestConfirmation,
+    slackDestination,
     numberCitables,
     decide,
     getAbortSignal,
@@ -70,6 +72,8 @@ export const generateTools = (
     authOrigin: ToolContext['authOrigin'];
     apiKeyId?: ToolContext['apiKeyId'];
     questId?: ToolContext['questId'];
+    requestConfirmation?: ToolContext['requestConfirmation'];
+    slackDestination?: ToolContext['slackDestination'];
     numberCitables?: ToolContext['numberCitables'];
     decide?: ToolContext['decide'];
     getAbortSignal?: ToolContext['getAbortSignal'];
@@ -101,6 +105,8 @@ export const generateTools = (
     user,
     sessionId,
     questId,
+    requestConfirmation,
+    slackDestination,
     logger,
     db,
     storage,

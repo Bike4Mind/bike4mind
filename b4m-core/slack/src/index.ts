@@ -328,3 +328,6 @@ export {
   SLACK_USER_ERROR_MESSAGE_PATTERNS,
 } from './slack-export-errors';
 export type { SlackUserValidationError, SlackErrorType, SlackErrorMetadata } from './slack-export-errors';
+
+export { resolveNotificationDestination } from './notificationDestination';
+export { findVerifiedGitHubAccounts } from './github/verifiedIdentity';

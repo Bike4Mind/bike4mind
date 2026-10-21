@@ -370,6 +370,7 @@ export interface IUser extends ICreditHolder {
   // Slack integration settings
   slackSettings?: {
     slackUserId?: string;
+    slackTeamId?: string;
     // User access token for user-scoped APIs (e.g., reminders). Protected by select: false in DB schema.
     slackUserToken?: string;
     // OAuth scopes granted by the user (e.g., ['identity.basic', 'reminders:write'])

@@ -1,6 +1,7 @@
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { Logger } from '@bike4mind/observability';
-import { IUserDocument } from '@bike4mind/common';
-import { Quest, Session } from '@bike4mind/database';
+import { IUserDocument, isImageServeable } from '@bike4mind/common';
+import { Quest, Session, fabFileRepository } from '@bike4mind/database';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { downloadAttachmentUrl } from '@server/utils/downloadAttachmentUrl';
 import { isFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
@@ -11,6 +12,8 @@ import { TOKEN_EXPIRATION_MS } from '@bike4mind/slack';
 import { JIRA_UPLOAD_ATTACHMENT, CONFLUENCE_UPLOAD_ATTACHMENT } from '@bike4mind/mcp/atlassian/constants';
 
 export { TOKEN_EXPIRATION_MS };
+
+const CURATED_FILE_SHARE_EXPIRATION_SECONDS = 7 * 24 * 60 * 60;
 
 /**
  * Atomically takes the pending action off the quest so exactly one confirm can execute it: two
@@ -65,13 +68,9 @@ export async function executePendingAction(
   questId: string,
   dbUser: IUserDocument,
   logger: Logger,
-  expectedTs: number
+  expectedTs: number,
+  clickedDestination?: { workspaceId: string; channelId: string }
 ): Promise<PendingActionResult> {
-  // The flag gates tool loading, but an action created before an admin turned it off is still on the quest.
-  if (!(await isFeatureEnabled('EnableMCPServer'))) {
-    return { success: false, message: MCP_DISABLED_MESSAGE };
-  }
-
   const questWithPending = await Quest.findById(questId);
 
   if (!questWithPending?.pendingAction) {
@@ -93,6 +92,48 @@ export async function executePendingAction(
     });
     await claimPendingAction(questId, pendingAction.ts);
     return { success: false, message: 'This action has expired. Please start the request again.' };
+  }
+
+  if (pendingAction.tool === 'share_curated_file') {
+    const { fileId, userId, workspaceId, channelId } = pendingAction.params;
+    if (
+      userId !== dbUser.id ||
+      !clickedDestination ||
+      workspaceId !== clickedDestination.workspaceId ||
+      channelId !== clickedDestination.channelId ||
+      !(await isPendingActionRequester(questId, dbUser.id))
+    ) {
+      return { success: false, message: 'Confirm this action in the original Slack conversation.' };
+    }
+    if (typeof fileId !== 'string' || !isValidObjectId(fileId)) {
+      return { success: false, message: 'This file is unavailable.' };
+    }
+    const file = await fabFileRepository.findByIdAndUserId(fileId, dbUser.id);
+    if (
+      !file?.filePath ||
+      !file.tags?.some(tag => tag.name === 'curated-notebook') ||
+      file.deletedAt ||
+      !isImageServeable(file)
+    ) {
+      return { success: false, message: 'This file is unavailable.' };
+    }
+    if (!(await claimPendingAction(questId, pendingAction.ts))) {
+      return { success: false, message: 'This action has already been processed.' };
+    }
+    try {
+      const url = await getFilesStorage().getSignedUrl(file.filePath, 'get', {
+        expiresIn: CURATED_FILE_SHARE_EXPIRATION_SECONDS,
+      });
+      return { success: true, message: `Shared curated file: <${url}|Download file>` };
+    } catch (error) {
+      logger.error('Failed to create a confirmed file share link', { questId, error });
+      return { success: false, message: 'File sharing failed. Please request a new confirmation.' };
+    }
+  }
+
+  // The flag gates tool loading, but an action created before an admin turned it off is still on the quest.
+  if (!(await isFeatureEnabled('EnableMCPServer'))) {
+    return { success: false, message: MCP_DISABLED_MESSAGE };
   }
 
   logger.info('[PendingActionExecutor] Executing pending action', {

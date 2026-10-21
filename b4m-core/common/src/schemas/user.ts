@@ -253,6 +253,7 @@ export const selfUserResponseSchema = z.object({
   ]),
   slackSettings: redactedSubdocument([
     'slackUserId',
+    'slackTeamId',
     'defaultNotebookId',
     'autoCreateNotebook',
     'notebookNamePrefix',

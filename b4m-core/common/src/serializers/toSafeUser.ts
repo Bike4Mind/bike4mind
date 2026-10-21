@@ -220,6 +220,7 @@ export function redactUserSecretsForSelf(
     const s = user.slackSettings;
     u.slackSettings = {
       slackUserId: s.slackUserId,
+      slackTeamId: s.slackTeamId,
       defaultNotebookId: s.defaultNotebookId,
       autoCreateNotebook: s.autoCreateNotebook,
       notebookNamePrefix: s.notebookNamePrefix,

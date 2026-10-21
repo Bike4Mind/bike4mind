@@ -1024,7 +1024,10 @@ export class ToolBuilder {
           });
         },
         onPendingAction: async action => {
-          quest.pendingAction = action;
+          quest.pendingAction =
+            action.tool === 'share_curated_file' && quest.pendingAction
+              ? { ...action, ts: Math.max(action.ts, quest.pendingAction.ts + 1) }
+              : action;
           await saveQuest(quest);
           this.deps.logger.debug(`[MCP] pendingAction saved to quest ${quest.id}`);
         },
@@ -1035,6 +1038,7 @@ export class ToolBuilder {
         },
         sessionId: quest.sessionId,
         questId: quest.id,
+        slackDestination: quest.slackNotification,
         // Synchronous so parallel tool calls cannot claim the same numbers: the stamped citables
         // land on the live quest before the next call reads its length.
         numberCitables:

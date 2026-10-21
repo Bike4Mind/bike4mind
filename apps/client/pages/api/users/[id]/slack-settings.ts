@@ -1,3 +1,7 @@
+import { initializeSlackPackage } from '@server/integrations/slack/slackPackageInit';
+import { resolveNotificationDestination } from '@bike4mind/slack';
+initializeSlackPackage();
+
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { User, Session, Agent, Project } from '@bike4mind/database';
@@ -34,11 +38,6 @@ const SlackSettingsSchema = z.object({
   githubNotifications: z
     .object({
       enabled: z.boolean(),
-      githubUsername: z
-        .string()
-        .max(39)
-        .transform(s => s.toLowerCase())
-        .optional(),
       prOpened: z.boolean().optional(),
       prReviewRequested: z.boolean().optional(),
       prApproved: z.boolean().optional(),
@@ -155,23 +154,24 @@ const handler = baseApi()
           }
         }
 
-        // Check if Slack ID is already in use by another user
         if (slackSettings.slackUserId) {
-          const existingUser = await User.findOne({
-            'slackSettings.slackUserId': slackSettings.slackUserId,
-            _id: { $ne: userId },
-          });
+          const linkedUser = await User.findById(userId).select('slackSettings');
+          if (
+            !linkedUser?.slackSettings?.slackTeamId ||
+            linkedUser.slackSettings.slackUserId !== slackSettings.slackUserId
+          ) {
+            return res.status(400).json({ error: 'Use Connect with Slack to verify your Slack identity' });
+          }
+        }
 
-          if (existingUser) {
-            Logger.warn(`Slack ID already in use`, {
-              slackUserId: slackSettings.slackUserId,
-              requestingUserId: userId,
-              existingUserId: existingUser.id,
-            });
-            return res.status(409).json({
-              error:
-                'This Slack Member ID is already linked to another account. Each Slack ID can only be linked to one account.',
-            });
+        for (const channelId of Object.values(slackSettings.githubNotifications?.channels ?? {})) {
+          if (channelId) {
+            try {
+              await resolveNotificationDestination(userId!, channelId);
+            } catch (error) {
+              Logger.warn('Slack notification destination verification failed', { userId, channelId, error });
+              return res.status(400).json({ error: 'Choose a channel you belong to in your linked Slack workspace' });
+            }
           }
         }
 
@@ -194,7 +194,23 @@ const handler = baseApi()
 
         const updatedUser = await User.findByIdAndUpdate(
           userId,
-          { $set: { slackSettings } },
+          {
+            $set: Object.fromEntries(
+              Object.entries(slackSettings)
+                .filter(([key]) => key !== 'slackUserId')
+                .map(([key, value]) => [`slackSettings.${key}`, value])
+            ),
+            ...(slackSettings.slackUserId === ''
+              ? {
+                  $unset: {
+                    'slackSettings.slackUserId': 1,
+                    'slackSettings.slackTeamId': 1,
+                    'slackSettings.slackUserToken': 1,
+                    'slackSettings.slackUserScopes': 1,
+                  },
+                }
+              : {}),
+          },
           { new: true, runValidators: true }
         );
 
@@ -216,7 +232,7 @@ const handler = baseApi()
         }
 
         // Handle MongoDB duplicate key error (from unique index)
-        if ((error as any).code === 11000) {
+        if (typeof error === 'object' && error !== null && 'code' in error && error.code === 11000) {
           return res.status(409).json({
             error:
               'This Slack Member ID is already linked to another account. Each Slack ID can only be linked to one account.',

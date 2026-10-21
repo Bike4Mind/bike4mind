@@ -54,7 +54,7 @@ import {
   sessionRepository,
   defineAbilitiesFor as dbDefineAbilitiesFor,
 } from '@bike4mind/database';
-import { slackDevWorkspaceRepository } from '@bike4mind/database/infra';
+import { slackDevWorkspaceRepository, orgSlackWorkspaceRepository } from '@bike4mind/database/infra';
 
 // Route Slack-originated completions to SlackEventBus (slackQuestProcessor),
 // keeping them separate from web-originated completions on AppEventBus (questProcessor).
@@ -135,6 +135,7 @@ export function initializeSlackPackage(): void {
     apiKeyRepository,
     adminSettingsRepository,
     slackDevWorkspaceRepository,
+    orgSlackWorkspaceRepository,
     slackChannelConfigRepository,
     slackAuditLogRepository,
     webhookSubscriptionRepository,

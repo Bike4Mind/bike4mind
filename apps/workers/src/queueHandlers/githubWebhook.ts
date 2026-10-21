@@ -499,7 +499,7 @@ async function processMcpServerWebhook(message: z.infer<typeof McpServerWebhookP
 
   // Get MCP server (may have been deleted since enqueueing)
   const mcpServer = await mcpServerRepository.findById(mcpServerId);
-  if (!mcpServer) {
+  if (!mcpServer || mcpServer.userId.toString() !== userId || !mcpServer.enabled) {
     logger.warn('MCP server not found, skipping', { mcpServerId });
     return; // Don't retry - server was deleted
   }
@@ -521,7 +521,7 @@ async function processMcpServerWebhook(message: z.infer<typeof McpServerWebhookP
     return;
   }
 
-  const registry = createHandlerRegistry(logger);
+  const registry = createHandlerRegistry(logger, mcpServer.userId.toString());
   const handler = getHandler(registry, eventType);
 
   if (handler) {

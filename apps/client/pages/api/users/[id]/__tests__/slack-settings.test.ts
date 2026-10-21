@@ -1,12 +1,24 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-const { mockSessionFindOne, mockProjectFindOne, mockUserFindOne, mockUserFindByIdAndUpdate } = vi.hoisted(() => ({
+const {
+  mockUserFindById,
+  mockDestination,
+  mockSessionFindOne,
+  mockProjectFindOne,
+  mockUserFindOne,
+  mockUserFindByIdAndUpdate,
+} = vi.hoisted(() => ({
+  mockUserFindById: vi.fn(),
+  mockDestination: vi.fn(),
   mockSessionFindOne: vi.fn(),
   mockProjectFindOne: vi.fn(),
   mockUserFindOne: vi.fn(),
   mockUserFindByIdAndUpdate: vi.fn(),
 }));
+
+vi.mock('@server/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
+vi.mock('@bike4mind/slack', () => ({ resolveNotificationDestination: mockDestination }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
@@ -35,6 +47,7 @@ const selectResolving = (value: unknown) => ({ select: () => Promise.resolve(val
 
 vi.mock('@bike4mind/database', () => ({
   User: {
+    findById: (...a: unknown[]) => selectResolving(mockUserFindById(...a)),
     findOne: (...a: unknown[]) => mockUserFindOne(...a),
     findByIdAndUpdate: (...a: unknown[]) => mockUserFindByIdAndUpdate(...a),
   },
@@ -137,5 +150,53 @@ describe('PATCH /api/users/:id/slack-settings - defaultProjectId access', () => 
     await promise;
     expect(res._getStatusCode()).toBe(200);
     expect(mockUserFindByIdAndUpdate).toHaveBeenCalled();
+  });
+});
+
+describe('Slack identity and preference boundaries', () => {
+  it('rejects a manually claimed Slack identity', async () => {
+    mockUserFindById.mockReturnValue({ slackSettings: {} });
+    const { res, promise } = run({ slackUserId: 'UVICTIM' });
+    await promise;
+    expect(res._getStatusCode()).toBe(400);
+    expect(mockUserFindByIdAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('preserves OAuth identity when updating preferences', async () => {
+    const { res, promise } = run({ autoCreateNotebook: false });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUserFindByIdAndUpdate).toHaveBeenCalledWith(
+      OWN,
+      { $set: { 'slackSettings.autoCreateNotebook': false } },
+      { new: true, runValidators: true }
+    );
+  });
+
+  it('unlinks the identity, workspace and user token together', async () => {
+    const { promise } = run({ slackUserId: '' });
+    await promise;
+    expect(mockUserFindByIdAndUpdate).toHaveBeenCalledWith(
+      OWN,
+      {
+        $set: {},
+        $unset: {
+          'slackSettings.slackUserId': 1,
+          'slackSettings.slackTeamId': 1,
+          'slackSettings.slackUserToken': 1,
+          'slackSettings.slackUserScopes': 1,
+        },
+      },
+      { new: true, runValidators: true }
+    );
+  });
+
+  it('refuses notification destinations whose membership cannot be verified', async () => {
+    mockDestination.mockRejectedValueOnce(new Error('not a member'));
+    const { res, promise } = run({ githubNotifications: { enabled: true, channels: { default: 'CFOREIGN' } } });
+    await promise;
+    expect(res._getStatusCode()).toBe(400);
+    expect(mockDestination).toHaveBeenCalledWith(OWN, 'CFOREIGN');
+    expect(mockUserFindByIdAndUpdate).not.toHaveBeenCalled();
   });
 });

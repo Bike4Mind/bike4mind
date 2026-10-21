@@ -7,11 +7,11 @@ import { JIRA_UPLOAD_ATTACHMENT } from '@bike4mind/mcp/atlassian/constants';
 vi.mock('@bike4mind/database', () => ({
   Quest: { findById: vi.fn(), findOneAndUpdate: vi.fn(), findByIdAndUpdate: vi.fn() },
   Session: { findById: vi.fn() },
-  fabFileRepository: { shareable: { findAccessibleById: vi.fn() } },
+  fabFileRepository: { findByIdAndUserId: vi.fn(), shareable: { findAccessibleById: vi.fn() } },
 }));
 
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => {
-  const storage = { download: vi.fn().mockResolvedValue(Buffer.from('file-bytes')) };
+  const storage = { getSignedUrl: vi.fn(), download: vi.fn().mockResolvedValue(Buffer.from('file-bytes')) };
   return { getFilesStorage: () => storage };
 });
 
@@ -370,5 +370,84 @@ describe('isPendingActionRequester', () => {
   it('is false for a malformed quest id without querying', async () => {
     await expect(isPendingActionRequester('not-an-id', 'user-1')).resolves.toBe(false);
     expect(Quest.findById).not.toHaveBeenCalled();
+  });
+});
+
+describe('confirmed curated-file sharing', () => {
+  const destination = { workspaceId: 'T123', channelId: 'C123' };
+  const fileId = 'cccccccccccccccccccccccc';
+  let ts: number;
+  beforeEach(() => {
+    vi.clearAllMocks();
+    ts = Date.now();
+    vi.mocked(Quest.findById).mockReturnValue({
+      pendingAction: { tool: 'share_curated_file', ts, params: { fileId, userId: dbUser.id, ...destination } },
+      select: () => Promise.resolve({ promptMeta: { session: { userId: dbUser.id } } }),
+    } as never);
+    vi.mocked(fabFileRepository.findByIdAndUserId).mockResolvedValue({
+      id: fileId,
+      filePath: 'private/report.pdf',
+      moderationStatus: 'clean',
+      tags: [{ name: 'curated-notebook' }],
+      mimeType: 'application/pdf',
+    } as never);
+    vi.mocked(Quest.findOneAndUpdate).mockResolvedValue({} as never);
+    vi.mocked(getFilesStorage().getSignedUrl).mockResolvedValue('https://example.test/download');
+  });
+
+  it('rechecks file ownership and claims the action before minting a link', async () => {
+    const result = await executePendingAction(QUEST_ID, dbUser, logger, ts, destination);
+    expect(result.success).toBe(true);
+    expect(fabFileRepository.findByIdAndUserId).toHaveBeenCalledWith(fileId, dbUser.id);
+    expect(Quest.findOneAndUpdate).toHaveBeenCalledWith(
+      { _id: QUEST_ID, 'pendingAction.ts': ts },
+      { $unset: { pendingAction: 1 } }
+    );
+    expect(getFilesStorage().getSignedUrl).toHaveBeenCalledWith('private/report.pdf', 'get', { expiresIn: 604800 });
+    expect(vi.mocked(Quest.findOneAndUpdate).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(getFilesStorage().getSignedUrl).mock.invocationCallOrder[0]
+    );
+    expect(invokeMcpHandler).not.toHaveBeenCalled();
+  });
+
+  it('refuses confirmation from another destination', async () => {
+    const result = await executePendingAction(QUEST_ID, dbUser, logger, ts, { ...destination, channelId: 'COTHER' });
+    expect(result.success).toBe(false);
+    expect(Quest.findOneAndUpdate).not.toHaveBeenCalled();
+    expect(getFilesStorage().getSignedUrl).not.toHaveBeenCalled();
+  });
+
+  it('refuses a stale confirmation', async () => {
+    expect((await executePendingAction(QUEST_ID, dbUser, logger, ts - 1, destination)).success).toBe(false);
+    expect(getFilesStorage().getSignedUrl).not.toHaveBeenCalled();
+  });
+
+  it('refuses a duplicate click that lost the atomic claim', async () => {
+    vi.mocked(Quest.findOneAndUpdate).mockResolvedValue(null);
+    expect((await executePendingAction(QUEST_ID, dbUser, logger, ts, destination)).success).toBe(false);
+    expect(getFilesStorage().getSignedUrl).not.toHaveBeenCalled();
+  });
+
+  it.each([{ deletedAt: new Date() }, { moderationStatus: 'blocked' }, { moderationStatus: 'pending' }, { tags: [] }])(
+    'refuses a file that became unavailable after preview: %j',
+    async changedState => {
+      vi.mocked(fabFileRepository.findByIdAndUserId).mockResolvedValue({
+        id: fileId,
+        filePath: 'private/report.pdf',
+        tags: [{ name: 'curated-notebook' }],
+        moderationStatus: 'clean',
+        mimeType: 'application/pdf',
+        ...changedState,
+      } as never);
+      expect((await executePendingAction(QUEST_ID, dbUser, logger, ts, destination)).success).toBe(false);
+      expect(Quest.findOneAndUpdate).not.toHaveBeenCalled();
+      expect(getFilesStorage().getSignedUrl).not.toHaveBeenCalled();
+    }
+  );
+
+  it('refuses a file that is no longer owned by the requester', async () => {
+    vi.mocked(fabFileRepository.findByIdAndUserId).mockResolvedValue(null);
+    expect((await executePendingAction(QUEST_ID, dbUser, logger, ts, destination)).success).toBe(false);
+    expect(getFilesStorage().getSignedUrl).not.toHaveBeenCalled();
   });
 });
