@@ -201,6 +201,8 @@ const handler = baseApi()
         // Preference keys a PATCH may clear. A key missing from the body is removed, so clearing a
         // field in the profile UI clears it here too. The OAuth identity fields are excluded: they
         // are written by the callback and removed only by an explicit unlink below.
+        // githubNotifications is excluded too: its own settings section always sends the whole
+        // object, so only an unlink clears it and a Slack settings save cannot wipe it.
         const $set: Record<string, unknown> = {};
         const $unset: Record<string, 1> = {};
         const providedKeys = new Set<string>();
@@ -217,11 +219,11 @@ const handler = baseApi()
           'agentNotebookRouting',
           'keywordRouting',
           'customAgentId',
-          'githubNotifications',
         ]) {
           if (!providedKeys.has(key)) $unset[`slackSettings.${key}`] = 1;
         }
         if (slackSettings.slackUserId === '') {
+          $unset['slackSettings.githubNotifications'] = 1;
           $unset['slackSettings.slackUserId'] = 1;
           $unset['slackSettings.slackTeamId'] = 1;
           $unset['slackSettings.slackUserToken'] = 1;

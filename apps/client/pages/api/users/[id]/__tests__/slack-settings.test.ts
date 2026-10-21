@@ -195,11 +195,30 @@ describe('Slack identity and preference boundaries', () => {
           'slackSettings.agentNotebookRouting': 1,
           'slackSettings.keywordRouting': 1,
           'slackSettings.customAgentId': 1,
-          'slackSettings.githubNotifications': 1,
         },
       },
       { new: true, runValidators: true }
     );
+  });
+
+  it('keeps GitHub notification preferences when the Slack section saves', async () => {
+    // Shape of SlackIntegrationSection.handleSave, which never sends githubNotifications.
+    mockUserFindById.mockReturnValue({ slackSettings: { slackUserId: 'U1', slackTeamId: 'T1' } });
+    mockSessionFindOne.mockReturnValue({ _id: OWN_NOTEBOOK });
+    mockProjectFindOne.mockReturnValue({ _id: OWN_PROJECT });
+    const { res, promise } = run({
+      slackUserId: 'U1',
+      defaultNotebookId: OWN_NOTEBOOK,
+      autoCreateNotebook: true,
+      notebookNamePrefix: 'Slack Chat',
+      defaultProjectId: OWN_PROJECT,
+      agentNotebookRouting: {},
+    });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    const [, update] = mockUserFindByIdAndUpdate.mock.calls[0];
+    expect(update.$unset).not.toHaveProperty('slackSettings.githubNotifications');
+    expect(update.$set).not.toHaveProperty('slackSettings.githubNotifications');
   });
 
   it('clears a keyword routing list the caller no longer sends', async () => {
