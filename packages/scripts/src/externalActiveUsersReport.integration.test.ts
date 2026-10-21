@@ -3,7 +3,8 @@ import mongoose from 'mongoose';
 import { Quest, UsageEvent, User } from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../database/src/__test__/createMongoServer';
 
-import { runExternalActivityReport } from './externalActiveUsersReport';
+import { formatUtcDay } from './externalActiveUsers';
+import { collectActivity, runExternalActivityReport, type MessageAttempt } from './externalActiveUsersReport';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -120,7 +121,7 @@ describe('runExternalActivityReport', () => {
     const report = await run();
 
     expect(report.externalUsers).toBe(3);
-    expect(report.excluded).toEqual({ noUser: 2, admin: 1, staffDomain: 1, testPattern: 1 });
+    expect(report.excluded).toEqual({ noUser: 2, admin: 1, staffDomain: 1, testPattern: 1, synthetic: 0 });
     const dau = Object.fromEntries(report.dau.map(row => [row.day, row.users]));
     expect(report.dau).toHaveLength(30);
     expect(dau['2026-10-09']).toBe(0); // carol's voice quest is not a chat message
@@ -158,7 +159,7 @@ describe('runExternalActivityReport', () => {
     expect(internal['2026-10-11']).toBe(0); // API UsageEvents only
     expect(internal['2026-10-12']).toBe(2); // AgentExecutions
     expect(report.externalUsers).toBe(3); // internal users are in no external figure
-    expect(report.excluded).toEqual({ noUser: 2, admin: 1, staffDomain: 2, testPattern: 1 });
+    expect(report.excluded).toEqual({ noUser: 2, admin: 1, staffDomain: 2, testPattern: 1, synthetic: 0 });
     expect(lines[0]).toMatch(/Day\s+DAU\s+API users\s+Internal/);
     expect(lines[0]).toMatch(/2026-10-10\s+3\s+0\s+2/);
     expect(lines[0]).toContain('Internal users with app, CLI or desktop activity: 2');
@@ -261,6 +262,72 @@ describe('runExternalActivityReport', () => {
     expect(lines[0]).toContain('UsageEvent rows by source');
     expect(lines[0]).toContain('Weekly signup cohorts');
     expect(lines[0]).not.toContain('@');
+  });
+});
+
+describe('collectActivity', () => {
+  const windowStart = new Date('2026-10-01T00:00:00Z');
+
+  it('streams only original non-API cohort attempts and opts into failures without changing legacy activity', async () => {
+    const kept = await insertUser('kept@customer.example');
+    const other = await insertUser('other@customer.example');
+    await quest(kept, '2026-10-10');
+    await quest(kept, '2026-10-11', { type: 'error', prompt: 'SECRET_PROMPT' });
+    await quest(other, '2026-10-11', { type: 'error' });
+    await quest(kept, '2026-10-12', { type: 'error', sessionId: 'api-session' });
+    await quest(kept, '2026-10-12', { type: 'error', deletedAt: NOW });
+    await quest(kept, '2026-10-12', { type: 'error', _id: idAt(NOW) });
+    const apiRun = await agent(kept, '2026-10-12', { apiKeyId: 'key1' });
+    await quest(kept, '2026-10-12', { type: 'error', agentExecutionId: String(apiRun.insertedId) });
+    await quest(kept, '2026-10-13', { type: 'error', timestamp: NOW, _id: idAt(NOW) });
+    const attempts: MessageAttempt[] = [];
+    const baseline = await collectActivity(windowStart, 100, NOW, new Set(['api-session']), new Set([kept]), {
+      includeFailedAttempts: true,
+      onAttempt: attempt => attempts.push(attempt),
+    });
+    const legacy = await collectActivity(windowStart, 100, NOW, new Set(['api-session']), new Set([kept]));
+
+    expect(attempts).toHaveLength(2);
+    expect(attempts).toContainEqual({ userId: kept, at: at('2026-10-11'), sessionId: 's1', outcome: 'failed' });
+    expect(attempts).toContainEqual({ userId: kept, at: at('2026-10-10'), sessionId: 's1', outcome: 'recorded' });
+    expect(JSON.stringify(attempts)).not.toContain('SECRET_PROMPT');
+    expect([...(baseline.userDays.get(kept) ?? [])].map(formatUtcDay).sort()).toEqual(['2026-10-10', '2026-10-11']);
+    expect([...(legacy.userDays.get(kept) ?? [])].map(formatUtcDay)).toEqual(['2026-10-10']);
+  });
+
+  it('excludes activity at or after windowEnd from every source', async () => {
+    const user = await insertUser('late@customer.example');
+    const windowEnd = at('2026-10-11');
+    await usage(user, '2026-10-10', { source: 'chat' });
+    await usage(user, '2026-10-11', { source: 'chat' });
+    await quest(user, '2026-10-12');
+    await agent(user, '2026-10-12');
+
+    const { userDays, sourceCounts } = await collectActivity(windowStart, 100, windowEnd);
+
+    expect([...(userDays.get(user) ?? [])].map(formatUtcDay)).toEqual(['2026-10-10']);
+    expect(sourceCounts.get(user)?.get('chat')).toBe(1);
+  });
+
+  it('keeps only the given users when a user-id filter is passed, and every user without one', async () => {
+    const kept = await insertUser('kept@customer.example');
+    const other = await insertUser('other@customer.example');
+    for (const id of [kept, other]) {
+      await usage(id, '2026-10-10', { source: 'chat' });
+      await usage(id, '2026-10-10', { source: 'api' });
+      await quest(id, '2026-10-11');
+      await agent(id, '2026-10-12', { apiKeyId: 'key1' });
+    }
+
+    const filtered = await collectActivity(windowStart, 100, NOW, new Set(), new Set([kept]));
+    const all = await collectActivity(windowStart, 100, NOW);
+
+    expect([...filtered.userDays.keys()]).toEqual([kept]);
+    expect([...filtered.apiUserDays.keys()]).toEqual([kept]);
+    expect([...filtered.sourceCounts.keys()]).toEqual([kept]);
+    expect(filtered.apiExecutionIds.size).toBe(1);
+    expect([...all.userDays.keys()].sort()).toEqual([kept, other].sort());
+    expect(all.apiExecutionIds.size).toBe(2);
   });
 });
 
