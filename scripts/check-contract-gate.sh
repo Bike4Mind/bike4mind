@@ -123,10 +123,11 @@ Do NOT add to the allowlist -- this file is for permanent exceptions, not new ha
 list_files "$API_ROOT" -path "$API_DIR" -prune -o
 outside_violators=$(files_missing "auth:[[:space:]]*['\"]jwtOnly['\"]")
 report "$ALLOWLIST_API_KEY" "$outside_violators" \
-  "outside pages/api/v1 accept API keys (not auth: 'jwtOnly')" \
+  "outside pages/api/v1 do not declare auth: 'jwtOnly' (so may accept API keys)" \
   "Fix: add auth: 'jwtOnly' to the handler, or, if it is a genuinely public endpoint, expose it
 under /api/v1 behind a contract (CONVENTIONS.md: unversioned /api/* is frozen).
-Last resort: add it to $ALLOWLIST_API_KEY with a trailing '# reason'." || failed=1
+Last resort (e.g. a deliberately unauthenticated auth: false route, which has no jwtOnly
+form): add it to $ALLOWLIST_API_KEY with a trailing '# reason'." || failed=1
 
 if [ "$failed" -eq 0 ]; then
   echo "OK: No contract-gate violations."

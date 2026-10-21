@@ -1,14 +1,16 @@
 # contract-gate-api-key-allowlist.txt
 #
 # Frozen baseline for scripts/check-contract-gate.sh scan 2: handlers under
-# apps/client/pages/api (outside v1) that do not declare `auth: 'jwtOnly'`, so
-# they still accept API keys. Generated mechanically with the script's own
-# predicate. Additions are reviewed; prefer regenerating over hand-editing.
+# apps/client/pages/api (outside v1) that do not declare `auth: 'jwtOnly'`. Most
+# still accept API keys; some are `auth: false` (unauthenticated). Generated
+# mechanically with the script's own predicate. Additions are reviewed by hand:
+# never regenerate to make the gate pass, that would absorb new violators.
 #
 # Rules:
-#   - This list only shrinks. Never add a new handler: make it `auth: 'jwtOnly'`
+#   - This list only shrinks. Do not add a new handler: make it `auth: 'jwtOnly'`
 #     or expose it under /api/v1 behind a contract (CONVENTIONS.md).
-#   - A last-resort new entry needs a trailing `# reason`.
+#   - The one exception is a reviewed last-resort entry with a trailing `# reason`,
+#     e.g. a deliberately unauthenticated `auth: false` route.
 #   - When a route becomes jwtOnly (or is deleted), remove its entry. The gate
 #     prints an INFO line for entries that no longer need exemption.
 
