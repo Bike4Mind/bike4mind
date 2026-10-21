@@ -113,6 +113,15 @@ describe('PermissionService', () => {
     });
   });
 
+  it('loads imported user sources for a settings snapshot before start finishes', async () => {
+    await writeSettings(join(home, '.claude', 'settings.json'), { deny: ['Bash(rm:*)'] });
+    const state = await service.state();
+    expect(state.claudeCode.find(source => source.id === 'cc-user')).toMatchObject({
+      status: 'loaded',
+      rules: [{ rule: 'Bash(rm:*)', list: 'deny' }],
+    });
+  });
+
   it('reads the user local file and keeps desktop project rules to their project', async () => {
     await writeSettings(join(home, '.claude', 'settings.local.json'), { allow: ['Bash(gh pr view:*)'] });
     await service.start();
@@ -181,7 +190,11 @@ describe('PermissionService', () => {
     await service.start();
     expect((await decide(bash('git log'))).decision).toBeNull();
 
-    await savedUntil(join(home, '.claude', 'settings.json'), { allow: ['Bash(git log:*)'] }, async () => changes > 0);
+    await savedUntil(
+      join(home, '.claude', 'settings.json'),
+      { allow: ['Bash(git log:*)'] },
+      async () => changes > 0 && (await decide(bash('git log'))).decision === 'allow'
+    );
     expect((await decide(bash('git log'))).decision).toBe('allow');
   });
 

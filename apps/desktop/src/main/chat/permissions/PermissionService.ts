@@ -63,6 +63,11 @@ export class PermissionService {
     await Promise.all([this.options.store.read(), this.options.claudeCode.loadUser()]);
   }
 
+  dispose(): void {
+    this.options.claudeCode.dispose();
+    this.invalidate();
+  }
+
   /** Drop every compiled set; the next call recompiles from what is in memory. */
   invalidate(): void {
     this.cache.clear();
@@ -81,6 +86,7 @@ export class PermissionService {
   }
 
   async state(): Promise<PermissionsState> {
+    await this.options.claudeCode.loadUser();
     const stored = await this.options.store.read();
     const trusted = new Map<string, boolean>();
     const claudeCode: ClaudeCodeSourceView[] = [];

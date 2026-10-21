@@ -65,11 +65,13 @@ describe('ChatService permission rules', () => {
     rules = ruleSet({});
     rulesFailure = undefined;
     rememberAllows = vi.fn<(rules: readonly string[]) => Promise<void>>().mockResolvedValue(undefined);
-    events = [];
-    streams = [];
+    const testEvents: ChatStreamEvent[] = [];
+    const testStreams: PassThrough[] = [];
+    events = testEvents;
+    streams = testStreams;
     const post = vi.fn().mockImplementation(() => {
       const stream = new PassThrough();
-      streams.push(stream);
+      testStreams.push(stream);
       return Promise.resolve({ data: stream, status: 200 });
     });
     service = new ChatService({
@@ -92,7 +94,7 @@ describe('ChatService permission rules', () => {
           getAxiosInstance: () => ({ post }),
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
-      emit: event => events.push(event),
+      emit: event => testEvents.push(event),
     });
   });
 
@@ -119,6 +121,36 @@ describe('ChatService permission rules', () => {
     expect(refused.error).toContain('Cannot load permission rules');
     expect(refused.error).toContain('permission file unreadable');
     expect(calls('file_read', 'done')).toHaveLength(0);
+  });
+
+  it.each(['request_directory', 'mcp_add_server', 'ask_user'])(
+    'honors a deny rule before showing the interactive %s card',
+    async name => {
+      rules = ruleSet({ deny: [name] });
+      await run('full', name, {});
+
+      const refused = await awaitCall(name, 'denied');
+      expect(refused.error).toContain(`deny rule ${name}`);
+      expect(calls(name, 'awaiting-approval')).toHaveLength(0);
+    }
+  );
+
+  it('never auto-answers an interactive question because of an allow rule', async () => {
+    rules = ruleSet({ allow: ['ask_user'] });
+    await run('full', 'ask_user', {
+      questions: [
+        {
+          id: 'choice',
+          question: 'Which one?',
+          options: [
+            { label: 'One', description: 'First' },
+            { label: 'Two', description: 'Second' },
+          ],
+        },
+      ],
+    });
+    await awaitCall('ask_user', 'awaiting-approval');
+    expect(calls('ask_user', 'done')).toHaveLength(0);
   });
 
   it('refuses a denied command in every mode, naming the rule and its source', async () => {
@@ -225,6 +257,21 @@ describe('ChatService permission rules', () => {
     approvals.resolve(asked.approvalId!, { decision: 'always', everywhere: true });
     await awaitCall('bash_execute', 'running');
     expect(rememberAllows).toHaveBeenCalledWith(['Bash(git status:*)']);
+  });
+
+  it('shows a failed every-session save instead of silently claiming persistence', async () => {
+    rememberAllows.mockRejectedValueOnce(new Error('disk full'));
+    await run('ask', 'bash_execute', { command: 'git status', cwd: root });
+    const asked = await awaitCall('bash_execute', 'awaiting-approval');
+    approvals.resolve(asked.approvalId!, { decision: 'always', everywhere: true });
+    const settled = await vi.waitUntil(() => calls('bash_execute', 'done')[0] ?? calls('bash_execute', 'error')[0], {
+      timeout: 5000,
+      interval: 10,
+    });
+    expect(rememberAllows).toHaveBeenCalledTimes(1);
+    expect(settled).toMatchObject({ notice: { kind: 'permissions-save-failed' } });
+    expect(settled.notice?.text).toContain('disk full');
+    expect(settled.notice?.text).toContain('Settings > Permissions');
   });
 
   it('saves nothing on a plain "Always allow"', async () => {

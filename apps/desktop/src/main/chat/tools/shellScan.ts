@@ -1,6 +1,6 @@
 import { stat } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, parse, resolve } from 'node:path';
 import type { Node } from 'web-tree-sitter';
 import { arityPrefix, commandTokens, directoryOptionValues, droppedOnlySafeOptions } from './bashArity';
 import { parseBash } from './bashParser';
@@ -343,6 +343,7 @@ export function opaqueForm(tokens: readonly string[]): string | null {
   const args = normalised.slice(start + 1);
   const head = (count: number) => tokens.slice(0, start + count).join(' ');
   if (program === 'eval' || program === 'source' || program === '.') return head(1);
+  if (program === 'deno' && args[0] === 'eval') return head(2);
   const inline = /^python[\d.]*$/.test(program) ? DASH_C : INLINE_SCRIPT[program];
   if (!inline && !STDIN_SCRIPT.test(program)) return null;
   const { options, operands } = interpreterOptions(program, args);
@@ -781,7 +782,20 @@ export async function scanShell(
       if (sends || assigns || arithmetic || !containedCommand(tokens)) contained = false;
       for (const arg of rest) if (!arg.startsWith('-')) noteEnvFile(arg);
       for (const directory of directoryOptionValues(tokens)) await check(directory, state.cwd);
-      if (!TOUCHES_FILES.has(program)) return;
+      if (!TOUCHES_FILES.has(program)) {
+        // Programs outside the folder-discovery list can still name permission files (sed,
+        // awk, dd, ...). Record static operands for the permission-file floor too, including
+        // option values, without treating every ordinary argument as an outside folder grant.
+        for (const arg of rest) {
+          const value = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : arg;
+          if (value.startsWith('-')) continue;
+          const prefix = globPrefix(expandHome(unquote(value)));
+          if (!prefix || isDynamic(prefix)) continue;
+          const filesystemRoot = parse(resolve(state.cwd, prefix)).root;
+          paths.add(await resolveWithinRootsPhysically(prefix, [filesystemRoot], state.cwd));
+        }
+        return;
+      }
       for (const arg of rest) {
         if (arg.startsWith('-') || (program === 'chmod' && arg.startsWith('+'))) continue;
         await check(arg, state.cwd);

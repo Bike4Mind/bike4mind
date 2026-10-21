@@ -90,7 +90,7 @@ export interface ChatMedia {
 }
 
 /**
- * An outcome of a server-backed tool that costs money, surfaced on its own rather than folded
+ * A tool outcome or failed permission save, surfaced on its own rather than folded
  * into the result text.
  *
  * Both of these are things the user is entitled to see without expanding a tool call:
@@ -99,7 +99,7 @@ export interface ChatMedia {
  * are about to hear.
  */
 export interface ChatToolNotice {
-  kind: 'insufficient-credits' | 'provider-substituted';
+  kind: 'insufficient-credits' | 'provider-substituted' | 'permissions-save-failed';
   text: string;
 }
 

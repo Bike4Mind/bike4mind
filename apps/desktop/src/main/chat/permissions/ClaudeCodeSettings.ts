@@ -112,7 +112,7 @@ export class ClaudeCodeSettings {
     this.userLoaded ??= (async () => {
       await Promise.all(this.userFiles().map(file => this.read(file)));
       this.watchFolder(join(this.options.home, '.claude'));
-      this.watchFolder(dirname(this.managedPath), true);
+      this.watchFolder(dirname(this.managedPath));
     })();
     return this.userLoaded;
   }
@@ -193,15 +193,15 @@ export class ClaudeCodeSettings {
 
   /**
    * Watch a folder for its settings files. A folder that is not there yet is watched for from its
-   * parent, unless `existingOnly` - the managed folder is an administrator's, not worth a watch on `/Library`.
+   * parent, including a managed directory installed after the app started.
    */
-  private watchFolder(folder: string, existingOnly = false): void {
+  private watchFolder(folder: string): void {
     if (this.disposed) return;
     const parent = dirname(folder);
     const parentKey = `${folder}\x00parent`;
     // Keep the parent watch after creation: a folder watch follows the old inode when an
     // editor replaces the entire .claude directory, and would otherwise miss future edits.
-    if (!existingOnly && !this.watchers.has(parentKey) && existsSync(parent)) {
+    if (!this.watchers.has(parentKey) && existsSync(parent)) {
       this.listen(
         parent,
         name => name === basename(folder),

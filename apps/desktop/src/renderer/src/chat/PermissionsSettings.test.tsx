@@ -215,6 +215,25 @@ describe('PermissionsSettings mutation failures', () => {
     expect(host.textContent).not.toContain('disk full');
   });
 
+  it('keeps an edited rule available for correction after validation fails', async () => {
+    setRules.mockResolvedValueOnce({ ok: false, error: 'not a rule' });
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('[data-testid="permissions-rule-edit-btn"]')?.click();
+    });
+    const input = host.querySelector<HTMLInputElement>('[data-testid="permissions-rule-edit-input"]');
+    if (!input) throw new Error('Edit input missing');
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, 'Bash(');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('[data-testid="permissions-rule-save-btn"]')?.click();
+    });
+    expect(host.textContent).toContain('not a rule');
+    expect(host.querySelector<HTMLInputElement>('[data-testid="permissions-rule-edit-input"]')?.value).toBe('Bash(');
+    expect(onState).not.toHaveBeenCalled();
+  });
+
   it('shows load failures with a retry action', async () => {
     const retry = vi.fn();
     await act(async () => {

@@ -118,6 +118,7 @@ describe('everySessionRules', () => {
 
   it.each([
     'node -e "fetch(1)"',
+    'deno eval "fetch(1)"',
     '"node" -e "fetch(1)"',
     '/usr/bin/node -e "fetch(1)"',
     'node "-e" "fetch(1)"',

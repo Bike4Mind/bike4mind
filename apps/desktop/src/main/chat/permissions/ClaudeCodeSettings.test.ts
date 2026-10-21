@@ -99,4 +99,38 @@ describe('ClaudeCodeSettings failure and replacement handling', () => {
       { timeout: 5000 }
     );
   });
+
+  it('loads managed policies installed after startup and watches a replaced managed directory', async () => {
+    settings.dispose();
+    const folder = join(home, 'managed');
+    const path = join(folder, 'managed-settings.json');
+    settings = new ClaudeCodeSettings({
+      home,
+      managedPath: path,
+      logger: { warn },
+      onChange: changed,
+      debounceMs: 10,
+    });
+    await settings.loadUser();
+    expect(settings.filesFor(null).find(file => file.id === 'cc-managed')?.status).toBe('missing');
+    await new Promise(resolve => setTimeout(resolve, 100));
+    await mkdir(folder);
+    await writeFile(path, '{"permissions":{"deny":["Bash(rm:*)"]}}');
+    await vi.waitFor(
+      () => expect(settings.filesFor(null).find(file => file.id === 'cc-managed')?.lists.deny).toEqual(['Bash(rm:*)']),
+      { timeout: 5000 }
+    );
+    await rename(folder, join(home, 'old-managed'));
+    await mkdir(folder);
+    await writeFile(path, '{"permissions":{"deny":["Bash(curl:*)"]}}');
+    await vi.waitFor(
+      () => expect(settings.filesFor(null).find(file => file.id === 'cc-managed')?.lists.deny).toEqual(['Bash(curl:*)']),
+      { timeout: 5000 }
+    );
+    await writeFile(path, '{"permissions":{"deny":["Bash(git push:*)"]}}');
+    await vi.waitFor(
+      () => expect(settings.filesFor(null).find(file => file.id === 'cc-managed')?.lists.deny).toEqual(['Bash(git push:*)']),
+      { timeout: 5000 }
+    );
+  });
 });

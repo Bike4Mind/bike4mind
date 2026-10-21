@@ -214,6 +214,14 @@ describe('PermissionRuleSet', () => {
     );
   });
 
+  it('requires an explicit eval form for Deno inline code', async () => {
+    const script = 'deno eval "fetch(1)"';
+    const scan = await scanShell(script, PROJECT, [PROJECT]);
+    if (!scan) throw new Error('Expected the inline command to parse');
+    expect(decide(set({ allow: ['Bash(deno:*)'] }), shell(script, scan.commands))).toBeNull();
+    expect(decide(set({ allow: ['Bash(deno eval:*)'] }), shell(script, scan.commands))).toBe('allow');
+  });
+
   it.each([
     'GIT_CONFIG_PARAMETERS=evil git status',
     'GIT_EXTERNAL_DIFF=./payload git status',
@@ -290,6 +298,34 @@ describe('PermissionRuleSet', () => {
   it('never allows an irreversible call, but still denies or asks', () => {
     expect(decide(set({ allow: ['session_delete'] }), { tool: 'session_delete', irreversible: true })).toBeNull();
     expect(decide(set({ deny: ['session_delete'] }), { tool: 'session_delete', irreversible: true })).toBe('deny');
+  });
+
+  it.each([
+    "sed -i.bak 's/old/new/' alias/settings.local.json",
+    "awk -i inplace '{ print }' alias/settings.local.json",
+    'dd if=payload of=alias/settings.local.json',
+  ])('keeps the permission-file floor for static operands of %s', async script => {
+    const directory = await realpath(await mkdtemp(join(tmpdir(), 'permission-operands-')));
+    try {
+      await mkdir(join(directory, '.claude'));
+      await writeFile(join(directory, '.claude/settings.local.json'), '{}');
+      await symlink(join(directory, '.claude'), join(directory, 'alias'));
+      const scan = await scanShell(script, directory, [directory]);
+      if (!scan) throw new Error('Expected the operand command to parse');
+      expect(scan.paths).toContain(join(directory, '.claude/settings.local.json'));
+      expect(decide(set({ allow: ['Bash'] }), {
+        tool: 'bash_execute', shell: { script, ...scan },
+      })).toBeNull();
+      const harmless = "sed 's/old/new/' public.txt";
+      const harmlessScan = await scanShell(harmless, directory, [directory]);
+      if (!harmlessScan) throw new Error('Expected the harmless command to parse');
+      expect(harmlessScan.directories).toEqual([]);
+      expect(decide(set({ allow: ['Bash'] }), {
+        tool: 'bash_execute', shell: { script: harmless, ...harmlessScan },
+      })).toBe('allow');
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it('matches file paths, domains and MCP tools', () => {

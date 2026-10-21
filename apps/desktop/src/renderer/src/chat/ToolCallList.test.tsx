@@ -38,6 +38,18 @@ function withMove(calls: ChatToolCall[]): string {
 }
 
 describe('ToolCallList', () => {
+  it('shows a failed permission save outside the collapsed tool result', () => {
+    const html = markup([
+      bash({
+        status: 'done',
+        notice: { kind: 'permissions-save-failed', text: 'Rules could not be saved: disk full.' },
+      }),
+    ]);
+    expect(html).toContain('data-testid="chat-tool-permissions-notice"');
+    expect(html).toContain('Permission rule was not saved');
+    expect(html).toContain('disk full');
+  });
+
   it('draws the approval card for a call waiting in this conversation', () => {
     const html = markup([awaiting()]);
     expect(html).toContain('data-testid="chat-tool-approval"');

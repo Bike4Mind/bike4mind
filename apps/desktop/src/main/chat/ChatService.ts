@@ -342,7 +342,8 @@ export interface ChatServiceDeps {
    * Standing allow, ask and deny rules - the desktop's and Claude Code's. Read here, and written
    * only by the approval card's "Always, in every session"; no tool can reach it.
    */
-  permissions?: Pick<PermissionService, 'rulesFor' | 'rememberAllows' | 'invalidate'>;
+  permissions?: Pick<PermissionService, 'rulesFor' | 'rememberAllows' | 'invalidate'> &
+    Partial<Pick<PermissionService, 'dispose'>>;
   /** Owns long-running commands. Absent in tests, which then have no background tools. */
   background?: BackgroundProcessRegistry;
   /** Where a running command offers itself up for moving. Absent in tests, which never move one. */
@@ -1310,6 +1311,7 @@ export class ChatService {
     this.active.clear();
     this.deps.approvals?.dispose();
     this.deps.videoJobs?.dispose();
+    this.deps.permissions?.dispose?.();
   }
 
   /**
@@ -3597,20 +3599,8 @@ export class ChatService {
     directories: DirectoryTurn = { declined: [], granted: [] },
     permissionScope: PermissionScopeKey = { project: null, workingDirectory: null }
   ): Promise<ApprovalOutcome> {
-    // Interactive tools never reach the approval mode below, so no mode - "Approve for me" and
-    // full access included - can answer a folder request on the user's behalf.
-    if (tool.interactive && call.name === REQUEST_DIRECTORY_TOOL_NAME) {
-      return this.awaitDirectory(call, context, sessionId, messageId, signal, directories);
-    }
-    // The same structural exclusion for an MCP server's config: which program runs on this
-    // machine, and with which keys, is decided by a click on every mode's behalf.
-    if (tool.interactive && isMcpConfigToolName(call.name)) {
-      return this.awaitMcpConfig(call, sessionId, messageId, signal);
-    }
-    if (tool.interactive) return this.awaitAnswer(call, sessionId, messageId, signal);
-
     const gate = this.deps.approvals;
-    if (!gate) return { input: call.input };
+    if (!gate && !tool.interactive) return { input: call.input };
     let rules: PermissionRuleSet | undefined;
     try {
       rules = await this.deps.permissions?.rulesFor(permissionScope);
@@ -3622,7 +3612,7 @@ export class ChatService {
       this.emit({ type: 'tool-end', sessionId, messageId, call: refused });
       return { settled: refused, input: call.input };
     }
-    if (!tool.approval && !rules?.size) return { input: call.input };
+    if (!tool.interactive && !tool.approval && !rules?.size) return { input: call.input };
 
     // Building the prompt reads the filesystem for a write tool, and a refusal there - a path
     // outside every granted folder, a binary file - has to settle the call WITHOUT asking. A
@@ -3672,6 +3662,19 @@ export class ChatService {
       this.emit({ type: 'tool-end', sessionId, messageId, call: refused });
       return { settled: refused, input: call.input };
     }
+    // Interactive tools never reach the approval mode below, so no mode - "Approve for me" and
+    // full access included - can answer a folder request on the user's behalf.
+    if (tool.interactive && call.name === REQUEST_DIRECTORY_TOOL_NAME) {
+      return this.awaitDirectory(call, context, sessionId, messageId, signal, directories);
+    }
+    // The same structural exclusion for an MCP server's config: which program runs on this
+    // machine, and with which keys, is decided by a click on every mode's behalf.
+    if (tool.interactive && isMcpConfigToolName(call.name)) {
+      return this.awaitMcpConfig(call, sessionId, messageId, signal);
+    }
+    if (tool.interactive) return this.awaitAnswer(call, sessionId, messageId, signal);
+    if (!gate) return { input: call.input };
+
     const askedByRule = verdict.decision === 'ask' ? `Asked because of the rule ${describeRule(verdict.rule)}.` : null;
     if (!gatedPrompt && !askedByRule) return { input: call.input };
     let prompt: ApprovalPrompt = gatedPrompt ?? {
@@ -3775,6 +3778,10 @@ export class ChatService {
     if (answer.decision === 'always' && answer.everywhere && everywhere.length > 0) {
       await this.deps.permissions?.rememberAllows(everywhere).catch(error => {
         this.deps.logger.warn(`PERMISSIONS: could not save ${everywhere.join(', ')}: ${String(error)}`);
+        context.report?.notice({
+          kind: 'permissions-save-failed',
+          text: `The rule could not be saved for every session: ${String(error)}. This conversation's approval still applies. Retry in Settings > Permissions.`,
+        });
       });
     }
 

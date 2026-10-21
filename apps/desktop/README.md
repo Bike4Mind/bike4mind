@@ -703,6 +703,8 @@ Open Settings -> Permissions to add allow, ask, or deny rules for every project 
 project. Rules use Claude Code syntax, for example `Bash(git status:*)`,
 `Read(~/notes/**)`, and `WebFetch(domain:docs.example.com)`. Deny takes precedence over
 ask, and ask over allow. A shell command needs an allow for every subcommand.
+Native tool rules such as `request_directory` also apply to interactive tools:
+a deny refuses the call, while an allow still requires the tool's interactive response.
 
 The approval card's "Always, in every session" saves the displayed allow rules.
 Irreversible calls cannot save a standing allow. Settings also shows imported Claude

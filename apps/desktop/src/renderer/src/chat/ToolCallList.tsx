@@ -131,15 +131,26 @@ const APPROVAL_QUESTION: Record<ChatDiff['operation'], string> = {
  */
 function NoticeBanner({ notice }: { notice: ChatToolNotice }) {
   const outOfCredits = notice.kind === 'insufficient-credits';
+  const permissionSaveFailed = notice.kind === 'permissions-save-failed';
   return (
     <Sheet
       variant="soft"
       color="warning"
       sx={{ borderRadius: 'sm', px: 1.5, py: 1, mt: 0.5 }}
-      data-testid={outOfCredits ? 'chat-tool-credits-notice' : 'chat-tool-provider-notice'}
+      data-testid={
+        permissionSaveFailed
+          ? 'chat-tool-permissions-notice'
+          : outOfCredits
+            ? 'chat-tool-credits-notice'
+            : 'chat-tool-provider-notice'
+      }
     >
       <Typography level="body-xs" fontWeight="lg">
-        {outOfCredits ? 'Out of credits' : 'A different provider was used'}
+        {permissionSaveFailed
+          ? 'Permission rule was not saved'
+          : outOfCredits
+            ? 'Out of credits'
+            : 'A different provider was used'}
       </Typography>
       <Typography level="body-xs" sx={{ mt: 0.25 }}>
         {notice.text}

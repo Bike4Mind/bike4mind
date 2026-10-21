@@ -135,15 +135,19 @@ function RuleRow({
   onRemove,
 }: {
   view: PermissionRuleView;
-  onSave: (next: PermissionRuleView) => void;
+  onSave: (next: PermissionRuleView) => Promise<boolean>;
   onRemove: () => void;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
+  const saveDraft = async () => {
+    if (!draft?.trim()) return;
+    if (await onSave({ rule: draft.trim(), list: view.list })) setDraft(null);
+  };
   return (
     <Stack direction="row" spacing={1} alignItems="center" data-testid="permissions-rule-row" data-rule={view.rule}>
       <ListSelect
         value={view.list}
-        onChange={list => onSave({ rule: view.rule, list })}
+        onChange={list => void onSave({ rule: view.rule, list })}
         testId="permissions-rule-list-select"
       />
       {draft === null ? (
@@ -165,8 +169,7 @@ function RuleRow({
           onChange={event => setDraft(event.target.value)}
           onKeyDown={event => {
             if (event.key === 'Enter' && draft.trim()) {
-              onSave({ rule: draft.trim(), list: view.list });
-              setDraft(null);
+              void saveDraft();
             }
             if (event.key === 'Escape') setDraft(null);
           }}
@@ -189,10 +192,7 @@ function RuleRow({
           size="sm"
           variant="soft"
           disabled={!draft.trim()}
-          onClick={() => {
-            onSave({ rule: draft.trim(), list: view.list });
-            setDraft(null);
-          }}
+          onClick={() => void saveDraft()}
           data-testid="permissions-rule-save-btn"
         >
           Save
@@ -367,7 +367,7 @@ export function PermissionsSettings({
                 <RuleRow
                   key={`${view.list}:${view.rule}`}
                   view={view}
-                  onSave={next => void save(rules.map((each, at) => (at === index ? next : each)))}
+                  onSave={next => save(rules.map((each, at) => (at === index ? next : each)))}
                   onRemove={() => void save(rules.filter((_each, at) => at !== index))}
                 />
               ))}
