@@ -5,7 +5,7 @@ import {
   organizationRepository,
   sessionRepository,
 } from '@bike4mind/database';
-import { isValidObjectId } from '@server/utils/objectId';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { resolveRetrievalLakeScope, type RetrievalLakeScope } from './resolveRetrievalLakeScope';
 
 /**

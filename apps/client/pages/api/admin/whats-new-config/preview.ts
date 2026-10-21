@@ -2,8 +2,8 @@ import { Request, Response } from 'express';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { ForbiddenError } from '@server/utils/errors';
-import { buildWhatsNewPrompt, PromptParams, SanitizedContent } from '@server/queueHandlers/whatsNewGeneration.utils';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { buildWhatsNewPrompt, PromptParams, SanitizedContent } from '@server/whatsNew/whatsNewGeneration.utils';
 import { z } from 'zod';
 
 // Rate limiting constants

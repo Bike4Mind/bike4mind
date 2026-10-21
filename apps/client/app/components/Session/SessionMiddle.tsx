@@ -7,7 +7,7 @@ import { CircularProgress } from '@mui/joy';
 import Box from '@mui/joy/Box';
 import IconButton from '@mui/joy/IconButton';
 import { useTheme } from '@mui/joy/styles';
-import React, { memo, useEffect, useMemo, useRef, useState } from 'react';
+import React, { memo, useEffect, useMemo, useState } from 'react';
 import { useGetSessionQuests } from '@client/app/hooks/data/sessions';
 import { useConversationalVoiceStore } from '@client/app/components/Session/ConversationalVoice/useConversationalVoice';
 import { LLMSettings, handleLLMCommand } from '../commands/LLMCommand';
@@ -32,18 +32,23 @@ import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import { useAdminTools } from '@client/app/hooks/useAdminTools';
 import { useStableCallback } from '@client/app/hooks/useStableCallback';
 import ChatHistory from '@client/app/components/Session/ChatHistory';
+import ReplyAnnouncer from '@client/app/components/Session/ReplyAnnouncer';
 import ActiveAgentExecutions from '@client/app/components/Session/AgentExecution/ActiveAgentExecutions';
 import PendingApprovalBeacon from '@client/app/components/Session/AgentExecution/PendingApprovalBeacon';
 import ReplyStatus from '@client/app/components/common/ReplyStatus';
 import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import Typography from '@mui/joy/Typography';
-import { dispatchUiSideEffects } from '@client/app/utils/uiSideEffectDispatcher';
 import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import { useVirtuosoPagination } from './hooks/useVirtuosoPagination';
 import { useStreamingMessageMerge } from './hooks/useStreamingMessageMerge';
 import { shouldShowEmptySessionSplash } from './emptySessionSplashGate';
+import { useSessionReadOnly } from './SessionReadOnlyContext';
 import { buildChatHistory } from './buildChatHistory';
 import { useReplyChoices, type NewestTurn } from '@client/app/hooks/useReplyChoices';
+import { useSessionReconnectProbe } from './AgentExecution/useSessionReconnectProbe';
+import { useLatestReplySideEffectReplay } from './hooks/useLatestReplySideEffectReplay';
+import { useComposerMenuOpen } from '@client/app/stores/useComposerMenuOpen';
+import { useComposerNotesHeight } from '@client/app/stores/useComposerNotesHeight';
 
 interface IProps {
   isFullWidth?: boolean;
@@ -58,13 +63,19 @@ interface IProps {
 // of the scroll container - including Footer content (streaming messages).
 const ScrollToBottomButton = memo(
   ({ isAtBottom, scrollerRef }: { isAtBottom: boolean; scrollerRef: React.RefObject<HTMLElement | null> }) => {
-    if (isAtBottom) return null;
+    // It would cover the composer's plus menu, which lives in a lower stacking layer.
+    const composerMenuOpen = useComposerMenuOpen(state => state.open);
+    const composerNotesHeight = useComposerNotesHeight(state => state.height);
+    if (isAtBottom || composerMenuOpen) return null;
 
     return (
       <Box
         sx={{
           position: 'absolute',
-          bottom: 0,
+          // Hangs down into the composer's status line (its empty middle) and stops 16px above the
+          // composer box. That line is 36px tall, 44px on phones (ComposerStatusLine) - keep in sync.
+          // Account notes above the line push this pane's bottom up by their height, so add it back.
+          bottom: { xs: `${-28 - composerNotesHeight}px`, sm: `${-20 - composerNotesHeight}px` },
           left: '50%',
           transform: 'translateX(-50%)',
           zIndex: 1100,
@@ -244,53 +255,29 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
     }
   }, [isPreparingQuest, flattenQuests.length, clearPreparingQuest]);
 
-  // Scan loaded quests for uiSideEffects and dispatch them. Handles the
-  // notebook-switch case where quests load from the API - the rendering-based
-  // UiSideEffectDispatcher in PromptReplies has timing issues during pagination
-  // loading. Tracking dispatched quest IDs prevents duplicate dispatches.
-  const dispatchedQuestIds = useRef(new Set<string>());
-  useEffect(() => {
-    // Reset tracking when session changes
-    dispatchedQuestIds.current.clear();
-  }, [sessionId]);
+  useSessionReconnectProbe(sessionId);
 
-  useEffect(() => {
-    // Find the most recent completed quest with uiSideEffects
-    for (const quest of flattenQuests) {
-      if (
-        quest.id &&
-        quest.status === 'done' &&
-        quest.uiSideEffects &&
-        quest.uiSideEffects.length > 0 &&
-        !dispatchedQuestIds.current.has(quest.id)
-      ) {
-        dispatchedQuestIds.current.add(quest.id);
-        // Replay path (no `live` flag): this scans persisted quests as a session
-        // loads, so it must stay NON-destructive - surface the "Load Problem" review
-        // banner rather than auto-applying, which would clobber a brief the user
-        // hand-edited after the AI first formulated it. The live auto-apply path is
-        // PromptReplies / useSubscribeChatCompletion.
-        dispatchUiSideEffects(quest.uiSideEffects);
-        break; // Only dispatch the most recent one
-      }
-    }
-  }, [flattenQuests]);
+  // Replay loaded quests' uiSideEffects (see the hook for why rendering alone is not enough).
+  useLatestReplySideEffectReplay(sessionId, flattenQuests);
 
   const [historyLines] = useState<number>(INFINITE_VALUE);
   const liveAI = useAdvancedAISettings(state => state.liveAI);
   const { sendJsonMessage } = useWebsocket();
+  // Read-only hides the controls in MessageContent and ImageContainer; these guards keep any
+  // remaining path (a stale menu, a programmatic call) from sending or mutating anyway.
+  const readOnly = useSessionReadOnly();
 
   // useCallback is not enough here as it won't work when calling react query hooks
   // Using only useCallback will cause ChatHistory component to rerender every time chatCompletion is being streamed
   const onDelete = useStableCallback(async (messageData: IChatHistoryItem) => {
-    if (!messageData?.id) return;
+    if (readOnly || !messageData?.id) return;
     deleteQuest.mutate({ sessionId: messageData.sessionId, id: messageData.id });
   });
 
   // useCallback is not enough here as it won't work when calling react query hooks
   // Using only useCallback will cause ChatHistory component to rerender every time chatCompletion is being streamed
   const handlePinToggle = useStableCallback(async (messageData: IChatHistoryItem) => {
-    if (!messageData.id) return;
+    if (readOnly || !messageData.id) return;
     const newPinnedState = !messageData.pinned;
 
     updateQuest.mutate({
@@ -307,6 +294,7 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
   const sendMessage = useStableCallback(
     async (messageData: Partial<IChatHistoryItem>, options: SendMessageOptions = { isRetry: false }) => {
       const { isRetry, isImageEdit, isVariation, correctsQuestId } = options;
+      if (readOnly) return;
       if (!sessionId) return;
       if (!messageData.prompt) return;
       if (isRetry && !messageData.id) return;
@@ -488,6 +476,11 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
           }}
         >
           <ScrollToBottomButton isAtBottom={isAtBottom} scrollerRef={scrollerElementRef} />
+          <ReplyAnnouncer
+            sessionId={sessionId}
+            activeStreamingQuestId={activeStreamingQuestId}
+            chatHistory={flattenQuests}
+          />
           {/* Surfaces a pending agent permission request at the bottom (the inline PermissionCard
               can scroll far out of view in a long/streaming transcript). */}
           <PendingApprovalBeacon sessionId={sessionId} scrollerRef={scrollerElementRef} />

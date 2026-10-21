@@ -1,0 +1,1 @@
+{"error":{"message":"Invalid value: 'noul'. Supported values are: 'predicate', 'choice', and 'score'.","type":"invalid_request_error","param":"questions[0].type","code":"invalid_value"}}

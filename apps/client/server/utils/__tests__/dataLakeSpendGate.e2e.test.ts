@@ -46,6 +46,8 @@ beforeAll(async () => {
     UsageEvent.syncIndexes(),
     DataLakeSpendNotificationModel.syncIndexes(),
     User.syncIndexes(),
+    // The fixed-window limiter relies on Cache's unique `key` index.
+    Cache.syncIndexes(),
   ]);
 });
 

@@ -36,9 +36,16 @@ export function unsearchableLakeReason(lake: ReasonLake): string {
 }
 
 export function UnsearchableLakeIcon({ lake, testId }: { lake: ReasonLake; testId: string }) {
+  const reason = unsearchableLakeReason(lake);
   return (
-    <Tooltip size="sm" title={unsearchableLakeReason(lake)}>
-      <SearchOffIcon data-testid={testId} sx={{ fontSize: 14, color: 'warning.400', flexShrink: 0 }} />
+    <Tooltip size="sm" title={reason}>
+      <SearchOffIcon
+        data-testid={testId}
+        role="img"
+        aria-hidden={false}
+        aria-label={reason}
+        sx={{ fontSize: 14, color: 'warning.400', flexShrink: 0 }}
+      />
     </Tooltip>
   );
 }

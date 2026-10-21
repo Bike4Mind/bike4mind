@@ -50,8 +50,8 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://test/%STAGE%' } }));
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://test/%STAGE%' } }));
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   emitMetric: vi.fn(async (_ns: string, name: string, value: number) => {
     metrics.push({ name, value });
   }),
@@ -68,7 +68,7 @@ vi.mock('@bike4mind/observability', () => ({
 }));
 
 import { handler, runAbandonedExecutionSweep } from './agentExecutionAbandonedSweep';
-import { ABANDONED_REPLY } from '@server/chatCompletion/questTimeoutRecovery';
+import { ABANDONED_REPLY } from '@bike4mind/server-utils/chatCompletion/questTimeoutRecovery';
 
 describe('agentExecutionAbandonedSweep - handler', () => {
   beforeEach(() => {
@@ -98,7 +98,7 @@ describe('agentExecutionAbandonedSweep - handler', () => {
     const result = await handler();
 
     expect(result).toMatchObject({ status: 'OK', marked: 1, questsSettled: 1 });
-    expect(updates).toEqual([{ id: 'q1', status: 'done', type: 'error', reply: ABANDONED_REPLY }]);
+    expect(updates).toEqual([{ id: 'q1', status: 'done', type: 'error', reply: ABANDONED_REPLY, fallbackInfo: null }]);
   });
 
   it('logs a non-empty sweep at error level so the ERROR subscription forwards it to Slack', async () => {
@@ -191,7 +191,9 @@ describe('agentExecutionAbandonedSweep - handler', () => {
 
         expect(second.questsSettled).toBe(1);
         expect(settlementMarkers.has('exec1')).toBe(false);
-        expect(updates).toEqual([{ id: 'q1', status: 'done', type: 'error', reply: ABANDONED_REPLY }]);
+        expect(updates).toEqual([
+          { id: 'q1', status: 'done', type: 'error', reply: ABANDONED_REPLY, fallbackInfo: null },
+        ]);
       } finally {
         vi.useRealTimers();
       }

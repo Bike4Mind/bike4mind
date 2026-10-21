@@ -5,9 +5,12 @@ import { fileURLToPath } from 'node:url';
 import {
   assertBudgetConfig,
   completedResult,
+  describeStall,
   gatedAverageSec,
   incompleteResult,
   isLatencyObservation,
+  isStreamComplete,
+  latencyBreach,
   mergeResults,
   msToSec,
   StreamingTimeoutError,
@@ -88,6 +91,19 @@ describe('module boundary', () => {
     expect(workflow).not.toMatch(/repeat-each/);
     const config = fs.readFileSync(path.resolve(e2eDir, '../playwright.config.ts'), 'utf8');
     expect(config).not.toMatch(/repeatEach/);
+  });
+
+  it('keeps the latency gate title in sync with the workflow Quality filter', () => {
+    // The workflow excludes the gate from the Quality column by title; a rename on one side only
+    // would turn every slow-but-correct cell into a quality failure.
+    const factory = fs.readFileSync(FACTORY, 'utf8');
+    const title = factory.match(/const LATENCY_GATE_TITLE = '([^']+)'/)?.[1];
+    expect(title).toBeTruthy();
+    const workflow = fs.readFileSync(
+      path.resolve(path.dirname(FACTORY), '../../../.github/workflows/e2e-ai-latency.yml'),
+      'utf8'
+    );
+    expect(workflow).toContain(`--arg gate '${title}'`);
   });
 
   it('imports nothing that would drag in a Playwright runner', () => {
@@ -311,5 +327,109 @@ describe('gatedAverageSec', () => {
   it('returns 0 when no gated prompt is present', () => {
     expect(gatedAverageSec([])).toBe(0);
     expect(gatedAverageSec([incompleteResult(scenario({ id: 'img', expectsImage: true }), 1000)])).toBe(0);
+  });
+});
+
+describe('latencyBreach', () => {
+  const text = (id: string, sec: number): PromptResult =>
+    completedResult(scenario({ id }), { response: 'x', responseTimeMs: sec * 1000, renderTimeMs: 0 });
+
+  it('passes a cell whose average is at or under the threshold', () => {
+    expect(latencyBreach([text('a', 5), text('b', 15)], 10)).toBeNull();
+  });
+
+  it('fails a cell whose average exceeds the threshold, even if one prompt was fast', () => {
+    const breach = latencyBreach([text('a', 2), text('b', 30)], 10);
+    expect(breach).toContain('average AI latency 16s exceeds the 10s threshold');
+    expect(breach).toContain('a=2s');
+  });
+
+  it('fails on an abandoned prompt even when the average stays under the threshold', () => {
+    const breach = latencyBreach([text('a', 1), text('b', 1), incompleteResult(scenario({ id: 'c' }), 5000)], 10);
+    expect(breach).toContain('1 prompt(s) never finished: c');
+    expect(breach).not.toContain('exceeds');
+  });
+
+  it('reports both causes when the average is over and a prompt never finished', () => {
+    expect(latencyBreach([text('a', 30), incompleteResult(scenario({ id: 'c' }), 5000)], 10)).toBe(
+      'Latency breach - average AI latency 17.5s exceeds the 10s threshold; 1 prompt(s) never finished: c [a=30s, c=5s (incomplete)]'
+    );
+  });
+
+  it('ignores deliverable prompts and reports no breach when nothing is gated', () => {
+    const slowImage = completedResult(scenario({ id: 'img', expectsImage: true }), {
+      response: '',
+      responseTimeMs: 600_000,
+      renderTimeMs: 0,
+    });
+    expect(latencyBreach([text('a', 5), slowImage], 10)).toBeNull();
+    expect(
+      latencyBreach([text('a', 1), incompleteResult(scenario({ id: 'img', expectsImage: true }), 5000)], 10)
+    ).toBeNull();
+    expect(latencyBreach([slowImage], 10)).toBeNull();
+    expect(latencyBreach([], 10)).toBeNull();
+  });
+});
+
+describe('isStreamComplete', () => {
+  const PREVIOUS = 'Brazil, Argentina';
+  // A bare list renders <ol><li> with no markdown <p>, so it carries no `ai-response` test id.
+  // Reading only that id saw '' here, and the old wait sat out its whole budget (~152s) on a
+  // reply that had already arrived.
+  const LIST_ONLY_REPLY = 'Mercury\nVenus\nEarth\nMars\nJupiter';
+
+  it('completes a list-only reply whose stop button flashed by unseen', () => {
+    expect(isStreamComplete({ stopVisible: false, text: LIST_ONLY_REPLY }, PREVIOUS, false)).toBe(true);
+  });
+
+  it('completes once a seen stop button hides, even with no new text (image-only reply)', () => {
+    expect(isStreamComplete({ stopVisible: false, text: PREVIOUS }, PREVIOUS, true)).toBe(true);
+  });
+
+  it('never completes while the stop button is visible, however stable the text', () => {
+    expect(isStreamComplete({ stopVisible: true, text: LIST_ONLY_REPLY }, PREVIOUS, true)).toBe(false);
+  });
+
+  it('does not mistake the prior turn for this one before anything streamed', () => {
+    expect(isStreamComplete({ stopVisible: false, text: PREVIOUS }, PREVIOUS, false)).toBe(false);
+    expect(isStreamComplete({ stopVisible: false, text: '' }, '', false)).toBe(false);
+    expect(isStreamComplete({ stopVisible: false, text: '' }, PREVIOUS, false)).toBe(false);
+  });
+
+  it('completes once a seen stop button hides, even if no reply text was read', () => {
+    expect(isStreamComplete({ stopVisible: false, text: '' }, PREVIOUS, true)).toBe(true);
+  });
+});
+
+describe('describeStall', () => {
+  it('names the stage the wait ran out in', () => {
+    expect(describeStall({ stopVisible: true, text: '' })).toMatch(/no text streamed/);
+    expect(describeStall({ stopVisible: true, text: 'partial' })).toMatch(/stop button never hid/);
+    expect(describeStall({ stopVisible: false, text: '' })).toMatch(/never appeared/);
+    expect(describeStall({ stopVisible: false, text: 'Brazil, Argentina' })).toMatch(/never appeared/);
+  });
+});
+
+describe('ChatPage reply reader', () => {
+  const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+  const CHAT_PAGE = path.join(REPO, 'apps/client/e2e/pages/ChatPage.ts');
+  const PROMPT_REPLIES = path.join(REPO, 'apps/client/app/components/Session/PromptReplies.tsx');
+
+  it('reads replies from the body inside the root container, never the <p>-only ai-response id', () => {
+    // ChatPage imports Playwright, so no vitest project can load it; the selector is pinned as
+    // text. Reverting to `ai-response` brings back the list-only-reply stall above.
+    const source = fs.readFileSync(CHAT_PAGE, 'utf8');
+    // Strip comment lines: the doc comment names both ids, so it must satisfy neither half.
+    const code = source
+      .split('\n')
+      .filter(line => !/^\s*(\/\/|\*|\/\*)/.test(line))
+      .join('\n');
+    expect(code).not.toMatch(/getByTestId\(\s*['"`]ai-response['"`]/);
+    expect(code).not.toMatch(/data-testid=['"]?ai-response['"\]]/);
+    expect(code).toMatch(/getByTestId\(\s*['"`]ai-response-body['"`]/);
+    expect(code).toMatch(/isStreamComplete\(/);
+    // The reader falls back to the whole root when the body id is absent, so renaming the test id
+    // would silently put reasoning text back into the returned string.
+    expect(fs.readFileSync(PROMPT_REPLIES, 'utf8')).toMatch(/data-testid="ai-response-body"/);
   });
 });

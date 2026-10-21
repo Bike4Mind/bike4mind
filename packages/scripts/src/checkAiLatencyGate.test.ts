@@ -22,7 +22,7 @@ import path from 'node:path';
  * assertion is not worth the supply chain.
  */
 
-// Checked up front, as checkBotFoldWritePath.test.ts does: without jq the lifted selector would
+// Checked up front: without jq the lifted selector would
 // fail inside execFileSync and read as a defect in the gate rather than a missing prerequisite.
 if (spawnSync('sh', ['-c', 'command -v jq'], { encoding: 'utf8' }).status !== 0) {
   throw new Error('checkAiLatencyGate: required host tool not on PATH: jq');

@@ -1,0 +1,62 @@
+B4M_SELF_HOST: 'true'
+APP_NAME: bike4mind
+APP_STAGE: selfhost
+APP_FILES_BUCKET: b4m-app-files
+EMAIL_INGESTION_BUCKET: b4m-email-ingestion
+FAB_FILE_BUCKET: b4m-fab-file
+GENERATED_IMAGES_BUCKET: b4m-generated-images
+HISTORY_IMPORT_BUCKET: b4m-history-import
+PUBLISHED_ARTIFACTS_BUCKET: b4m-published-artifacts
+SLACK_EXPORT_BUCKET: b4m-slack-export
+NEXT_PUBLIC_CDN_URL: /api/app-files/serve
+AGENT_CONTINUATION_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/agentContinuationQueue
+AGENT_PROACTIVE_MESSAGE_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/agentProactiveMessageQueue
+DATA_LAKE_RESEARCH_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/dataLakeResearchQueue
+DATA_LAKE_TAXONOMY_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/dataLakeTaxonomyQueue
+DEEP_AGENT_WAKE_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/deepAgentWakeQueue
+DRIVE_DISCONNECT_PURGE_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/driveDisconnectPurgeQueue
+DRIVE_LAKE_INGEST_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/driveLakeIngestQueue
+GITHUB_LAKE_INGEST_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/githubLakeIngestQueue
+GITHUB_LAKE_REVOKE_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/githubLakeRevokeQueue
+EMAIL_ANALYSIS_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/emailAnalysisQueue
+EMAIL_BATCH_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/emailBatchQueue
+EMAIL_INGESTION_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/emailIngestionQueue
+EMAIL_JOB_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/emailJobQueue
+FAB_FILE_CHUNK_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/fabFileChunkQueue
+FAB_FILE_VECTORIZE_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/fabFileVectorizeQueue
+GENERATION_CALLBACK_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/generationCallbackQueue
+GENERATION_JOB_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/generationJobQueue
+IMAGE_EDIT_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/imageEditQueue
+IMAGE_GENERATION_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/imageGenerationQueue
+LAKE_INCONSISTENCY_MODEL_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/lakeInconsistencyModelQueue
+DATA_LAKE_CLEANUP_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/dataLakeCleanupQueue
+DATA_LAKE_CLEANUP_QUEUE_DLQ: http://{{ .Release.Name }}-sqs:9324/000000000000/dataLakeCleanupQueueDLQ
+LAKE_MEMORY_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/lakeMemoryQueue
+LIVE_OPS_TRIAGE_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/liveOpsTriageQueue
+NOTEBOOK_CURATION_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/notebookCurationQueue
+NOTEBOOK_CURATION_QUEUE_DLQ: http://{{ .Release.Name }}-sqs:9324/000000000000/notebookCurationQueueDLQ
+QUEST_EXPORT_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/questExportQueue
+QUEST_EXPORT_QUEUE_DLQ: http://{{ .Release.Name }}-sqs:9324/000000000000/questExportQueueDLQ
+RESEARCH_ENGINE_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/researchEngineQueue
+SELF_HOST_EVENT_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/selfHostEventQueue
+SELF_HOST_EVENT_QUEUE_DLQ: http://{{ .Release.Name }}-sqs:9324/000000000000/selfHostEventQueueDLQ
+SRE_FIX_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/sreFixQueue
+TAVERN_HEARTBEAT_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/tavernHeartbeatQueue
+AGENT_EXECUTOR: agent-executor
+APP_EVENT_BUS: app-event-bus
+HISTORY_UPLOAD_COMPLETE_FUNCTION: history-upload-complete-function
+IMAGE_PROCESSOR: image-processor
+NOTEBOOK_IMPORT_COMPLETE_FUNCTION: notebook-import-complete-function
+SLACK_EVENT_BUS: slack-event-bus
+MCP_HANDLER: mcp-handler
+MONGODB_URI: mongodb://{{ .Release.Name }}-mongo-0.{{ .Release.Name }}-mongo:27017/bike4mind?replicaSet=rs0
+AWS_ENDPOINT_URL_S3: http://{{ .Release.Name }}-minio:9000
+AWS_ENDPOINT_URL_SQS: http://{{ .Release.Name }}-sqs:9324
+WEBSOCKET_MANAGEMENT_ENDPOINT: http://{{ .Release.Name }}-ws:3001
+CHAT_COMPLETION: http://{{ .Release.Name }}-chatcompletion:8080
+MAIL_HOST: '{{ .Release.Name }}-mail'
+MAIL_PORT: '1025'
+MAIL_FROM: bike4mind@selfhost.local
+AWS_REGION: us-east-1
+AWS_EC2_METADATA_DISABLED: 'true'
+WEBSOCKET_DISABLE_CHUNKING: 'true'

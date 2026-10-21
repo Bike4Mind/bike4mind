@@ -1,27 +1,29 @@
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, usernameSchema } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { userRepository, pendingOtcTokenRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { BadRequestError, ForbiddenError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { requireStepUp } from '@server/auth/stepUp';
 import { EmailEvents } from '@server/utils/eventBus';
-import { getLogoUrl, buildEmailLogoImg } from '@server/utils/mailer/emailHelpers';
-import { Config } from '@server/utils/config';
+import { getLogoUrl, buildEmailLogoImg } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
+import { emitSignupFunnelEvents, recordSyntheticIdentity } from '@server/analytics/funnel';
 
 const createUserSchema = z.object({
-  username: z.string().min(1, 'Username is required'),
+  username: usernameSchema,
   email: z.email('Invalid email address'),
   name: z.string().min(1, 'Name is required'),
   // Passwordless (OTC): a password is no longer used to sign in. Optional for
   // backward compat; if omitted, an unusable random value is stored.
   password: z.string().min(6, 'Password must be at least 6 characters').optional(),
-  isAdmin: z.boolean().optional().prefault(false),
-  level: z.enum(['DemoUser', 'PaidUser', 'VIPUser', 'ManagerUser', 'AdminUser']).optional().prefault('DemoUser'),
-  initialCredits: z.number().min(0).optional().prefault(0),
-  storageLimit: z.number().min(0).optional().prefault(1000),
-  tags: z.array(z.string()).optional().prefault([]),
+  isAdmin: z.boolean().prefault(false),
+  level: z.enum(['DemoUser', 'PaidUser', 'VIPUser', 'ManagerUser', 'AdminUser']).prefault('DemoUser'),
+  initialCredits: z.number().min(0).prefault(0),
+  storageLimit: z.number().min(0).prefault(1000),
+  tags: z.array(z.string()).prefault([]),
 });
 
 type CreateUserInput = z.infer<typeof createUserSchema>;
@@ -47,6 +49,15 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         throw new BadRequestError(errorMessages);
       }
       throw new BadRequestError('Invalid input data');
+    }
+
+    // A new admin account is an admin-role grant: session-only, and a browser session must have
+    // recently re-verified. A non-admin account takes over no existing account, so it is ungated.
+    if (validatedData.isAdmin) {
+      if (req.apiKeyInfo) {
+        throw new ForbiddenError('Credential and admin-role changes require a signed-in session.');
+      }
+      await requireStepUp(req);
     }
 
     try {
@@ -77,6 +88,14 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
           },
         }
       );
+
+      const isSynthetic = await recordSyntheticIdentity(newUser);
+      await emitSignupFunnelEvents({
+        user: { id: newUser.id, isSynthetic },
+        method: 'admin',
+        emailVerified: newUser.emailVerified === true,
+        creditsGranted: newUser.currentCredits ?? validatedData.initialCredits,
+      });
 
       // Send OTC welcome email so the new user knows how to sign in.
       // Failures are non-fatal - the user is created regardless.
@@ -119,7 +138,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
           }
         );
         if (result.nonce) {
-          await pendingOtcTokenRepository.storeNonce(newUser.email!, result.nonce);
+          await pendingOtcTokenRepository.storeNonce(newUser.email!, result.nonce, result.otcHash);
         }
       } catch (err) {
         req.logger.error('Failed to send OTC welcome email for admin-created user', err);

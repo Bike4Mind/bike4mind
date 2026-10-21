@@ -21,8 +21,10 @@ import {
 } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { moderateImportedKnowledgeFiles } from '@server/s3/moderateImportedKnowledgeFiles';
+import { chargeStampedKnowledgeStorage, stampImportedKnowledgeRows } from '@bike4mind/server-utils/s3/storageCharge';
 import { buildKnowledgeModerationDeps } from '@server/s3/knowledgeModerationDeps';
 import { withContext } from '@server/s3/utils';
+import { createOwnedArtifactSourceRefsGuard } from '@server/utils/artifactSourceRefsGuards';
 import type { ClientSession, FilterQuery } from 'mongoose';
 import type {
   IArtifactContentDocument,
@@ -33,7 +35,7 @@ import type {
 } from '@bike4mind/common';
 import { parseNotebookImportKey } from '@server/utils/notebookImportKeys';
 import { Resource } from 'sst';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { v4 as uuidv4 } from 'uuid';
 import { updateImportProgress, markImportComplete, markImportFailed } from '@server/utils/importHistoryProgress';
 
@@ -166,6 +168,7 @@ export const createArtifactWrites = (session?: ClientSession) => ({
         tags: [],
       },
       {
+        assertSourceRefsAccessible: createOwnedArtifactSourceRefsGuard(),
         db: {
           artifacts: withSession<IArtifactDocument>(session, Artifact),
           artifactContents: withSession<IArtifactContentDocument>(session, ArtifactContent),
@@ -209,6 +212,7 @@ const processNotebookImport = async (
   logger: Logger,
   importHistoryJobId: string
 ) => {
+  let importStamp: Date | undefined;
   const result = await withTransaction(async session => {
     const s3 = new S3Storage(bucket);
     // Hoisted out of the try so the catch below can reach the paths THIS attempt uploaded. It has
@@ -320,6 +324,8 @@ const processNotebookImport = async (
         throw new Error(`Imported no notebooks: ${result.errors.join('; ')}`);
       }
 
+      importStamp = await stampImportedKnowledgeRows(userId, result.importedKnowledgeFilePaths ?? [], session);
+
       await markImportComplete(importHistoryJobId, userId, {
         processedItems: result.importedNotebooks + result.importedMessages,
         skippedItems: result.skippedNotebooks,
@@ -379,6 +385,18 @@ const processNotebookImport = async (
   // does. Keyed by filePath. Attacker-supplied bytes, so this is not optional - it is the moderation
   // gate imports would otherwise skip.
   const filePaths = result.importedKnowledgeFilePaths ?? [];
+  if (filePaths.length && importStamp) {
+    // Best-effort like the scan below: a failure leaves the rows stamped but uncharged, so it is
+    // logged rather than thrown, which would flip the committed import to failed.
+    try {
+      await chargeStampedKnowledgeStorage(userId, filePaths, importStamp);
+    } catch (chargeErr) {
+      logger.error('Post-commit storage charge failed; quota under-counts this import', {
+        userId,
+        error: chargeErr,
+      });
+    }
+  }
   if (filePaths.length) {
     // Best-effort and strictly post-commit: the import already succeeded and told the user. A
     // failure here must NOT propagate - the outer dispatch catch would then flip the committed,

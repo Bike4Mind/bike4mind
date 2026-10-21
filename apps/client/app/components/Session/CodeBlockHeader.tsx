@@ -1,6 +1,7 @@
 import React from 'react';
 import { Box, Typography } from '@mui/joy';
 import { CopyCodeButton } from './CopyCodeButton';
+import { CodeBlockActionControls, useCodeBlockActionOutlet } from '../common/CodeBlockActions';
 
 export { CODE_SURFACE_STYLE } from '../common/HighlightedCode';
 
@@ -26,6 +27,7 @@ export const CodeBlockHeader: React.FC<{ code: string; language?: string; childr
   // 'text'/'plain' is the fallback for a fence with no language, and announcing "plain"
   // tells a reader nothing.
   const label = language && language !== 'text' && language !== 'plain' ? language : null;
+  const { outputSlot, outlet } = useCodeBlockActionOutlet();
 
   return (
     <Box
@@ -59,9 +61,13 @@ export const CodeBlockHeader: React.FC<{ code: string; language?: string; childr
         <Typography level="body-xs" sx={{ color: 'text.tertiary', fontFamily: 'monospace' }}>
           {label}
         </Typography>
-        <CopyCodeButton code={code} language={language} />
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <CodeBlockActionControls code={code} language={language ?? 'text'} outputSlot={outputSlot} />
+          <CopyCodeButton code={code} language={language} />
+        </Box>
       </Box>
       {children}
+      {outlet}
     </Box>
   );
 };

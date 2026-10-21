@@ -5,12 +5,14 @@ vi.mock('../../../billing', () => ({
   recordOperationalUsage: (...args: unknown[]) => recordOperationalUsageMock(...args),
 }));
 
-// getTextModelCost is pure; pin it so the cost assertion is deterministic.
+// Pin the aggregate price so its assertions are deterministic; getTurnsCost stays real so the
+// per-request test checks the turns the recorder actually passed.
 vi.mock('@bike4mind/common', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/common')>();
-  return { ...actual, getTextModelCost: () => 0.0042 };
+  return { ...actual, getTextModelCost: vi.fn<typeof actual.getTextModelCost>(() => 0.0042) };
 });
 
+import { getTextModelCost, getTurnsCost, type ModelInfo } from '@bike4mind/common';
 import { recordToolOperationalUsage } from './recordToolOperationalUsage';
 import type { ToolContext } from './types';
 
@@ -56,6 +58,70 @@ describe('recordToolOperationalUsage', () => {
       source: 'system',
     });
   });
+
+  it('prices the per-request usage when the backend reported it (each request on its own tier)', async () => {
+    // Each request sits under the 200K tier; their sum does not.
+    const tiered = {
+      id: 'tiered-model',
+      backend: 'bedrock',
+      pricing: {
+        200_000: { input: 0.000003, output: 0.000015 },
+        1_000_000: { input: 0.000006, output: 0.0000225 },
+      },
+    } as unknown as ModelInfo;
+    const turnUsage = [
+      { inputTokens: 150_000, outputTokens: 500 },
+      { inputTokens: 151_000, outputTokens: 700 },
+    ];
+    await recordToolOperationalUsage(makeContext({ availableModels: [tiered] }), {
+      model: 'tiered-model',
+      completionInfo: { inputTokens: 301_000, outputTokens: 1_200, turnUsage } as never,
+      startTime: Date.now(),
+    });
+
+    const recorded = recordOperationalUsageMock.mock.calls[0][0];
+    expect(recorded).toMatchObject({ inputTokens: 301_000 });
+    expect(recorded.costUsd).toBeCloseTo(301_000 * 0.000003 + 1_200 * 0.000015, 12);
+    expect(recorded.costUsd).toBeCloseTo(getTurnsCost(tiered, turnUsage), 12);
+  });
+
+  it.each([
+    { cacheReadInputTokens: 190_000, cacheCreationInputTokens: 0, expectedCost: 0.174 },
+    { cacheReadInputTokens: 0, cacheCreationInputTokens: 190_000, expectedCost: 1.048 },
+    { cacheReadInputTokens: 95_000, cacheCreationInputTokens: 95_000, expectedCost: 0.611 },
+  ])(
+    'tiers aggregate usage on the whole prompt with $cacheReadInputTokens reads and $cacheCreationInputTokens writes',
+    async ({ cacheReadInputTokens, cacheCreationInputTokens, expectedCost }) => {
+      const actual = await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
+      vi.mocked(getTextModelCost).mockImplementationOnce(actual.getTextModelCost);
+      const tieredModel = {
+        id: 'tiered-model',
+        backend: 'bedrock',
+        pricing: {
+          200_000: { input: 0.000002, output: 0.000012 },
+          1_000_000: { input: 0.000004, output: 0.000018 },
+        },
+      } as unknown as ModelInfo;
+      const onToolLlmUsage = vi.fn();
+
+      await recordToolOperationalUsage(makeContext({ availableModels: [tieredModel], onToolLlmUsage }), {
+        model: 'tiered-model',
+        completionInfo: {
+          inputTokens: 20_000,
+          outputTokens: 1_000,
+          cacheReadInputTokens,
+          cacheCreationInputTokens,
+        },
+        startTime: Date.now(),
+      });
+
+      expect(onToolLlmUsage).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ costUsd: expect.closeTo(expectedCost, 10) })
+      );
+      expect(recordOperationalUsageMock).toHaveBeenCalledTimes(1);
+      expect(recordOperationalUsageMock.mock.calls[0][0].costUsd).toBeCloseTo(expectedCost, 10);
+    }
+  );
 
   it('skips recording when the backend reported no token usage', async () => {
     await recordToolOperationalUsage(makeContext(), {

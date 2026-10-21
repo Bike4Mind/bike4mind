@@ -59,6 +59,10 @@ export interface GenericAddItemsModalProps<T> {
   value?: string[];
   showButtonBadge?: boolean;
   emptyResultMessage?: string;
+  /** Replaces the generic "No results found" line once a search term is entered. */
+  renderNoResults?: (searchTerm: string) => ReactNode;
+  /** Label for the submit button; defaults to "Add N items". */
+  getAddLabel?: (count: number) => string;
   triggerTestId?: string;
   searchMinLength?: number;
 
@@ -104,6 +108,8 @@ function GenericAddItemsModal<T>({
   modalWidth = '950px',
   value,
   showButtonBadge = true,
+  renderNoResults,
+  getAddLabel,
   triggerTestId,
   searchMinLength,
   open: controlledOpen,
@@ -333,15 +339,19 @@ function GenericAddItemsModal<T>({
                         alignItems="center"
                         py={4}
                       >
-                        <Typography className="generic-add-items-empty-message" level="body-lg" color="neutral">
-                          {searchMinLength && searchTerm.length > 0 && searchTerm.length < searchMinLength
-                            ? t('common.search_min_length', 'Type at least {{count}} characters to search.', {
-                                count: searchMinLength,
-                              })
-                            : searchTerm
-                              ? 'No results found. Try adjusting your search.'
-                              : emptyResultMessage}
-                        </Typography>
+                        {searchMinLength && searchTerm.length > 0 && searchTerm.length < searchMinLength ? (
+                          <Typography className="generic-add-items-empty-message" level="body-lg" color="neutral">
+                            {t('common.search_min_length', 'Type at least {{count}} characters to search.', {
+                              count: searchMinLength,
+                            })}
+                          </Typography>
+                        ) : searchTerm && renderNoResults ? (
+                          renderNoResults(searchTerm)
+                        ) : (
+                          <Typography className="generic-add-items-empty-message" level="body-lg" color="neutral">
+                            {searchTerm ? 'No results found. Try adjusting your search.' : emptyResultMessage}
+                          </Typography>
+                        )}
                       </Box>
                     ) : (
                       items.map(item => {
@@ -400,7 +410,8 @@ function GenericAddItemsModal<T>({
                 disabled={isPending || selectedIds.length === 0}
               >
                 {isPending ? <CircularProgress /> : <AddIcon />}{' '}
-                {t('projects.modals.generic.add_items', { count: selectedIds.length })}
+                {getAddLabel?.(selectedIds.length) ??
+                  t('projects.modals.generic.add_items', { count: selectedIds.length })}
               </Button>
             </DialogActions>
           )}

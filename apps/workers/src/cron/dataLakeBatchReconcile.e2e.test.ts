@@ -19,7 +19,7 @@ const h = vi.hoisted(() => ({
   recordForced: vi.fn(),
   recordGauge: vi.fn(),
 }));
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   recordReconcilerForcedTerminal: (...a: unknown[]) => h.recordForced(...a),
   recordStuckBatchGauge: (...a: unknown[]) => h.recordGauge(...a),
 }));

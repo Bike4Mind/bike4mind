@@ -14,6 +14,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { ReActAgent } from '@bike4mind/agents';
 import { isEarlyStop } from '@bike4mind/common';
 import type { ModelInfo } from '@bike4mind/common';
+import { PENDING_ASSISTANT_CONTENT } from '../storage';
 import type { SessionStore, ConfigStore, CommandHistoryStore, Session, Message, CliConfig } from '../storage';
 import type { CustomCommandStore } from '../storage/CustomCommandStore.js';
 import type { MessageBuilder } from '../utils/messageBuilder.js';
@@ -33,11 +34,12 @@ import { buildWorkflowState, withFlushedWorkflowState, type WorkflowStores } fro
 import { formatStep, extractCompactInstructions } from '../utils';
 import { renderWorkflowReminder } from '../utils/workflowReminder.js';
 import { logger } from '../utils/Logger';
-import { isTransientNetworkError } from '../llm/retryPolicy';
-import { isReadOnlyTool } from '../config/toolSafety.js';
+import { isConnectionDrop } from '../llm/modelCallError';
+import type { ToolCatalog } from '../tools/gateway/toolCatalog.js';
 import type { TodoStore } from '../tools/writeTodosTool.js';
 import type { DecisionStore } from '../tools/decisionLogTool.js';
 import type { BlockerStore } from '../tools/blockerTool.js';
+import { DRAIN_BUDGET_MS, type PostEditDiagnostics } from '../diagnostics/PostEditDiagnostics.js';
 
 /**
  * Collaborators a single turn needs. React-free by design: the two setters are
@@ -58,6 +60,8 @@ export interface TurnContext {
   additionalDirectories: string[];
   featureRegistry: FeatureModuleRegistry | null;
   backgroundManager: BackgroundAgentManager | null;
+  /** Resolves which tools are read-only for parallel execution. */
+  toolCatalog: ToolCatalog;
   /**
    * Live workflow stores (todos / decisions / blockers) backing the
    * per-iteration workflow reminder (issue: re-inject live workflow state).
@@ -66,6 +70,12 @@ export interface TurnContext {
   todoStore: TodoStore | null;
   decisionStore: DecisionStore | null;
   blockerStore: BlockerStore | null;
+  /**
+   * Background tsc/eslint checker for files the agent edits. Null when the host
+   * has no file-writing tools; only active when the postEditDiagnostics
+   * preference is on.
+   */
+  postEditDiagnostics: PostEditDiagnostics | null;
   /**
    * In-memory durable-workflow stores. Flushed onto the session before
    * compaction so decisions/blockers logged this turn are not dropped when a
@@ -84,6 +94,16 @@ export interface TurnContext {
  * recurses with the same context for messages submitted mid-turn.
  */
 export async function runTurn(message: string, ctx: TurnContext): Promise<void> {
+  // Held across the whole turn: it snapshots the session below and writes it back after awaits.
+  const releaseSession = useCliStore.getState().holdSession();
+  try {
+    await runHeldTurn(message, ctx);
+  } finally {
+    releaseSession();
+  }
+}
+
+async function runHeldTurn(message: string, ctx: TurnContext): Promise<void> {
   const {
     agent,
     sessionStore,
@@ -98,9 +118,11 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
     additionalDirectories,
     featureRegistry,
     backgroundManager,
+    toolCatalog,
     todoStore,
     decisionStore,
     blockerStore,
+    postEditDiagnostics,
     workflowStores,
     setCommandHistory,
     setAbortController,
@@ -136,7 +158,8 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
   // Check for auto-compact before processing
   let activeSession = storeSession;
   if (config?.preferences.autoCompact !== false && activeSession.messages.length >= 6) {
-    const tokenCounter = getTokenCounter();
+    // Calibrate to the session's model so the 80% trigger matches its real tokenizer.
+    const tokenCounter = getTokenCounter().forModel(activeSession.model);
     const contextWindow = tokenCounter.getContextWindow(activeSession.model, availableModels);
 
     const systemPrompt = buildSystemPrompt(config?.preferences.promptVariant ?? 'current', {
@@ -176,7 +199,7 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
         });
 
         if (compactionPrompt) {
-          const result = await agent.run(compactionPrompt, { maxIterations: 1 });
+          const result = await agent.run(compactionPrompt, { maxIterations: 1, streamText: false });
 
           // Flush decisions/blockers logged in prior turns but not yet synced
           // onto the session, so the compacted session carries current workflow
@@ -212,6 +235,7 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
   const abortController = new AbortController();
   setAbortController(abortController);
 
+  let pendingAssistantId: string | undefined;
   try {
     // Check if message contains images and build multimodal message if needed.
     // any: content is either the raw string or the adapter's multimodal content
@@ -237,12 +261,13 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
     const pendingAssistantMessage: Message = {
       id: uuidv4(),
       role: 'assistant',
-      content: '...',
+      content: PENDING_ASSISTANT_CONTENT,
       timestamp: new Date().toISOString(),
       metadata: {
         steps: [],
       },
     };
+    pendingAssistantId = pendingAssistantMessage.id;
 
     // Add user message to session.messages (already complete)
     // Use activeSession which may have been updated by auto-compact
@@ -295,20 +320,27 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
           }
         : undefined;
 
+    const diagnostics = cliConfig.preferences.postEditDiagnostics === true ? postEditDiagnostics : null;
+    diagnostics?.beginTurn();
+
     let result;
     try {
       result = await agent.run(messageContent, {
         previousMessages: previousMessages.length > 0 ? previousMessages : undefined,
         signal: abortController.signal,
         parallelExecution: cliConfig.preferences.enableParallelToolExecution === true,
-        isReadOnlyTool,
+        isReadOnlyTool: toolName => toolCatalog.isReadOnly(toolName),
         workflowReminder,
+        drainFeedback: diagnostics
+          ? phase => diagnostics.drain(DRAIN_BUDGET_MS[phase], abortController.signal)
+          : undefined,
         // Mid-loop recovery if a provider context-window error interrupts this
         // turn: compact the in-flight history once and retry, instead of
         // failing the turn and losing the user's work.
-        onContextLimit: createReactiveCompactionHandler(agent, activeSession, 1 + previousMessages.length + 1),
+        onContextLimit: createReactiveCompactionHandler(agent, activeSession),
       });
     } finally {
+      diagnostics?.endTurn();
       backgroundManager?.setCurrentTurn(null);
     }
 
@@ -376,6 +408,11 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
     // Auto-save session
     await sessionStore.save(updatedSession);
   } catch (error) {
+    // Read before clearing: on abort the live trace is the only record of the
+    // steps that ran, since agent.run never returned its result.steps.
+    const stepsBeforeAbort = useCliStore.getState().pendingMessages.find(m => m.id === pendingAssistantId)
+      ?.metadata?.steps;
+
     // Clear pending messages on error
     useCliStore.getState().clearPendingMessages();
 
@@ -393,6 +430,7 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
           timestamp: new Date().toISOString(),
           metadata: {
             cancelled: true,
+            ...(stepsBeforeAbort?.length ? { steps: stepsBeforeAbort } : {}),
           },
         };
 
@@ -426,14 +464,13 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
     // Defense in depth: a bare network-level abort (e.g. `Error: aborted`
     // from a TLS socket close, the symptom that rendered as a cryptic
     // "❌ aborted") is not the user cancelling - it's the connection dropping.
-    // The streaming backend retries these and rewrites the message, but if a
+    // The streaming backend retries these (until reply text has streamed) and
+    // rewrites the message either way, but if a
     // bare one ever reaches here from another path (other backends, etc.),
     // surface something the user can act on rather than a one-word error.
-    // Reuse the shared retry-policy classifier so this stays in lockstep with
-    // the full set of transient patterns both transports retry (ETIMEDOUT,
-    // terminated, fetch failed, UND_ERR_SOCKET, ...) - not a hand-maintained subset.
+    // Same classifier the retry decision uses, so the two cannot drift.
     const rawMessage = error instanceof Error ? error.message : String(error);
-    if (error instanceof Error && isTransientNetworkError(error)) {
+    if (isConnectionDrop(error)) {
       console.error('\n❌ The connection to the server dropped mid-response. Type "continue" to resume.\n');
       logger.debug(`Full error details: ${error.stack || error.message}`);
       return;

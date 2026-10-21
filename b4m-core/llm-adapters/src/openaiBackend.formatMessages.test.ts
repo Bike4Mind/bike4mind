@@ -8,7 +8,7 @@
  * which consolidates them. These tests lock in the hoisting behavior:
  *  - caller system messages are merged into the lead system message
  *  - caller system messages are removed from the conversation body (no dupes)
- *  - the generic preamble + model-identity reminder are preserved
+ *  - the lead closes with the shared identity reminder, with no persona or tool protocol
  *  - multiple caller system messages are joined in order
  *  - O1 models still emit no system message
  */
@@ -18,6 +18,7 @@ import { ChatModels, type ICompletionOptions } from '@bike4mind/common';
 import type { IMessage } from '@bike4mind/common';
 import type OpenAI from 'openai';
 import { OpenAIBackend } from './openaiBackend';
+import { buildIdentityReminder } from './identityReminder';
 
 // formatMessages is private; access it through a narrow typed cast.
 type FormatMessages = (
@@ -76,7 +77,7 @@ describe('OpenAIBackend.formatMessages — caller system consolidation (#8844)',
     expect(formatted.slice(1).every(m => m.role !== 'system')).toBe(true);
   });
 
-  it('preserves the generic preamble and model-identity reminder in the lead message', () => {
+  it('closes the lead with the shared identity reminder, after caller text', () => {
     const messages: IMessage[] = [
       { role: 'system', content: ORG_GUARD },
       { role: 'user', content: 'Hello.' },
@@ -84,10 +85,35 @@ describe('OpenAIBackend.formatMessages — caller system consolidation (#8844)',
 
     const lead = leadSystemText(formatMessages(backend, messages, false, ChatModels.GPT5_4));
 
-    expect(lead).toContain('You are a helpful assistant.');
-    expect(lead).toContain(`you are specifically the ${ChatModels.GPT5_4} model`);
-    // Caller content is appended after the preamble, not replacing it.
-    expect(lead.indexOf('You are a helpful assistant.')).toBeLessThan(lead.indexOf(ORG_GUARD));
+    expect(lead).toBe(`${ORG_GUARD}\n\n${buildIdentityReminder(ChatModels.GPT5_4)}`);
+  });
+
+  it.each([ChatModels.GPT5_4, ChatModels.GPT4_1])(
+    'synthesizes no persona or tool protocol for %s, with or without tools',
+    model => {
+      const tools = [{ toolSchema: { name: 'web_search' } }, { toolSchema: { name: 'current_datetime' } }];
+      for (const options of [{}, { tools }] as Partial<ICompletionOptions>[]) {
+        const lead = leadSystemText(formatMessages(backend, [{ role: 'user', content: 'hi' }], false, model, options));
+
+        expect(lead).toBe(buildIdentityReminder(model));
+        expect(lead).not.toContain('helpful assistant');
+        expect(lead).not.toContain('web_search');
+        expect(lead).not.toContain('current_datetime');
+      }
+    }
+  );
+
+  it('gives the Responses API path the same lead', () => {
+    // The Responses path is formatMessages(..., false, ...) piped through toResponsesInput.
+    const formatted = formatMessages(backend, [{ role: 'user', content: 'hi' }], false, ChatModels.GPT5_4);
+    const toResponsesInput = (
+      backend as unknown as { toResponsesInput: (m: OpenAI.ChatCompletionMessageParam[]) => unknown[] }
+    ).toResponsesInput;
+
+    expect(toResponsesInput.call(backend, formatted)[0]).toEqual({
+      role: 'system',
+      content: buildIdentityReminder(ChatModels.GPT5_4),
+    });
   });
 
   it('joins multiple caller system messages in order', () => {
@@ -182,9 +208,9 @@ describe('OpenAIBackend.formatMessages - omitIdentityReminder', () => {
     expect(leadSystemText(formatted)).toBe(ORG_GUARD);
   });
 
-  it('still synthesizes the preamble by default, so product traffic is unchanged', () => {
+  it('still synthesizes the identity reminder by default', () => {
     const formatted = formatMessages(backend, [{ role: 'user', content: 'hi' }], false, ChatModels.GPT5, {});
 
-    expect(leadSystemText(formatted)).toContain('You are a helpful assistant');
+    expect(leadSystemText(formatted)).toBe(buildIdentityReminder(ChatModels.GPT5));
   });
 });

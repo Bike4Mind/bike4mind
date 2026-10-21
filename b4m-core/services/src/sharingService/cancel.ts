@@ -17,6 +17,9 @@ const cancelInviteSchema = z.object({
   id: z.string(),
   type: z.enum(InviteType),
   email: z.email().optional(),
+  // Names the recipient to cancel by id, for callers the sharer-facing views no longer hand the
+  // recipient's address to (inviteManager.toSharerInviteViews, the org pendingUsers route).
+  userId: z.string().optional(),
 });
 
 type CancelInviteParameters = z.infer<typeof cancelInviteSchema>;
@@ -52,7 +55,7 @@ export const cancelInvite = async (
   parameters: CancelInviteParameters,
   { db }: CancelInviteAdapters
 ) => {
-  const { id, type, email } = secureParameters(parameters, cancelInviteSchema);
+  const { id, type, email: givenEmail, userId } = secureParameters(parameters, cancelInviteSchema);
   // Typed errors, not bare `Error`: errorHandler cannot map a bare Error, so it falls through to a
   // 500, which trips the LiveOps CloudWatch filter on what are ordinary client conditions.
   if (!user.email) throw new UnprocessableEntityError('User has no email');
@@ -90,6 +93,14 @@ export const cancelInvite = async (
     throw new NotFoundError('Invite not found');
   }
 
+  // A userId that resolves to no address must not fall through to the cancel-everything branch below.
+  let email = givenEmail;
+  if (userId) {
+    const recipient = await db.users.findById(userId);
+    if (!recipient?.email) throw new NotFoundError('Invite not found');
+    email = recipient.email;
+  }
+
   const invites = await db.invites.findAllByDocumentId(id);
   if (invites.length === 0) throw new NotFoundError('Invite not found');
 
@@ -101,7 +112,9 @@ export const cancelInvite = async (
     // If email is provided, we need to remove it from the pending list
     if (email && invite.recipients?.pending) {
       const before = invite.recipients.pending.length;
-      invite.recipients.pending = invite.recipients.pending.filter(p => p !== email);
+      // Case-insensitive, matching how createInvite resolved the address in the first place.
+      const target = email.toLowerCase();
+      invite.recipients.pending = invite.recipients.pending.filter(p => p.toLowerCase() !== target);
       if (invite.recipients.pending.length < before) {
         // Clamped, not decremented. A named invite can carry a `remaining` larger than its
         // recipient count (the create body takes `available` at face value), and every gate that

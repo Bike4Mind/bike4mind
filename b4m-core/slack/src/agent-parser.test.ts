@@ -20,7 +20,7 @@ vi.mock('@server/utils/mcpEnv', () => ({
   buildMcpEnvVariables: vi.fn(async () => []),
 }));
 
-vi.mock('@server/utils/storage', () => {
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => {
   const filesStorage = {
     download: vi.fn(async () => Buffer.from('')),
     getSignedUrl: vi.fn(async () => 'https://example.com/presigned'),
@@ -143,7 +143,8 @@ describe('Agent Command Parser', () => {
       });
       expect(prompt).toContain('PENDING ACTION');
       expect(prompt).toContain('github_create_issue');
-      expect(prompt).toContain('confirm_pending_action');
+      expect(prompt).toContain('clicking Confirm');
+      expect(prompt).not.toContain('confirm_pending_action');
     });
 
     it('should include conversation context when provided', async () => {

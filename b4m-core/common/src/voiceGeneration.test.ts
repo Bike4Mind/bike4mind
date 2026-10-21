@@ -3,6 +3,7 @@ import {
   VOICE_VENDOR_SUPPORTED_FORMATS,
   voiceOutputFormatSchema,
   supportedVoiceGenerationVendor,
+  ttsBase64ResponseSchema,
   ttsRequestSchema,
 } from './voiceGeneration';
 
@@ -61,5 +62,26 @@ describe('ttsRequestSchema languageCode', () => {
       expect(result.error.issues[0].path).toEqual(['languageCode']);
       expect(result.error.issues[0].message).toMatch(/ISO 639-1/);
     }
+  });
+});
+
+describe('ttsBase64ResponseSchema', () => {
+  const metadata = { format: 'mp3', contentType: 'audio/mpeg' };
+
+  it('parses a url-delivery body', () => {
+    const body = { ...metadata, delivery: 'url', url: 'https://s3/audio.mp3', bytes: 5_000_000 };
+    expect(ttsBase64ResponseSchema.parse(body)).toMatchObject({ delivery: 'url', url: body.url, bytes: body.bytes });
+  });
+
+  it('parses a legacy inline body that predates `delivery`', () => {
+    const parsed = ttsBase64ResponseSchema.parse({ ...metadata, audio: 'AAA=' });
+    expect(parsed).toMatchObject({ audio: 'AAA=' });
+    expect('delivery' in parsed ? parsed.delivery : undefined).toBeUndefined();
+  });
+
+  it('rejects a url-delivery body without `bytes`', () => {
+    expect(ttsBase64ResponseSchema.safeParse({ ...metadata, delivery: 'url', url: 'https://s3/audio.mp3' }).success).toBe(
+      false
+    );
   });
 });

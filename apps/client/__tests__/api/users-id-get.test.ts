@@ -191,4 +191,24 @@ describe('GET /api/users/[id]', () => {
     expect(payload.loginRecords).toBeUndefined();
     expect(payload.slackSettings).toBeUndefined();
   });
+
+  // The redactor copies unknown keys; only the response schema strips them. This fails if the
+  // self/admin branch stops going through respond().
+  it('strips a field IUser does not declare from the self and admin views', async () => {
+    for (const [viewer, isAdmin] of [
+      ['user-self-123', false],
+      ['admin-user-789', true],
+    ] as const) {
+      vi.clearAllMocks();
+      (User.findById as ReturnType<typeof vi.fn>).mockReturnValue({
+        populate: vi.fn().mockReturnThis(),
+        select: vi.fn().mockResolvedValue(mockUserDoc({ id: 'user-self-123', notAUserField: 'x' })),
+      });
+      const res = mockRes();
+      await (handler as (req: unknown, res: unknown) => Promise<void>)(mockReq('user-self-123', viewer, isAdmin), res);
+      const payload = (res.json as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(payload.id).toBe('user-self-123');
+      expect(payload).not.toHaveProperty('notAUserField');
+    }
+  });
 });

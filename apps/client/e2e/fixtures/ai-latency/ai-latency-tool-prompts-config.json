@@ -1,5 +1,5 @@
 {
-  "thresholdSec": 90,
+  "thresholdSec": 20,
   "prompts": [
     {
       "id": "city-no-cars-image",

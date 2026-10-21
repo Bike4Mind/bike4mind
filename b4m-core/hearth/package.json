@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/hearth",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "publishConfig": {
     "access": "restricted"
   },
@@ -32,7 +32,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "zod": "^4.4.3"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "tsdown": "^0.22.3",

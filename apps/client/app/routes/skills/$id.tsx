@@ -4,6 +4,8 @@ import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
 import ShareIcon from '@mui/icons-material/Share';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import StorefrontIcon from '@mui/icons-material/Storefront';
+import TerminalIcon from '@mui/icons-material/Terminal';
 import { useNavigate, useParams } from '@tanstack/react-router';
 import { Permission } from '@bike4mind/common';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
@@ -11,6 +13,10 @@ import { useDeleteSkill, useGetSkill } from '@client/app/hooks/data/skills';
 import { useUser } from '@client/app/contexts/UserContext';
 import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
 import SkillShareDialog from '@client/app/components/SkillsManagement/SkillShareDialog';
+import SkillUpdatePanel from '@client/app/components/SkillMarket/SkillUpdatePanel';
+import PublishDialog from '@client/app/components/SkillMarket/PublishDialog';
+import MarketStatusBadge from '@client/app/components/SkillMarket/MarketStatusBadge';
+import ClaudeCodeExportDialog from '@client/app/components/SkillsManagement/ClaudeCodeExportDialog';
 
 const SkillDetailPage: FC = () => {
   const { id } = useParams({ strict: false }) as { id: string };
@@ -19,6 +25,8 @@ const SkillDetailPage: FC = () => {
   const deleteSkill = useDeleteSkill();
   const { currentUser } = useUser();
   const [shareOpen, setShareOpen] = useState(false);
+  const [publishOpen, setPublishOpen] = useState(false);
+  const [claudeCodeOpen, setClaudeCodeOpen] = useState(false);
 
   useDocumentTitle(skill ? `/${skill.name}` : 'Skill');
 
@@ -102,13 +110,34 @@ const SkillDetailPage: FC = () => {
             <Typography level="body-md" textColor="text.tertiary" sx={{ mt: 1 }}>
               {skill.description}
             </Typography>
-            {skill.disableModelInvocation ? (
-              <Chip size="sm" color="warning" sx={{ mt: 1 }}>
-                Hidden from LLM auto-invocation
-              </Chip>
-            ) : null}
+            <Stack direction="row" spacing={1} sx={{ mt: 1 }} flexWrap="wrap" useFlexGap>
+              {skill.disableModelInvocation ? (
+                <Chip size="sm" color="warning">
+                  Hidden from LLM auto-invocation
+                </Chip>
+              ) : null}
+              <MarketStatusBadge status={skill.marketStatus} />
+            </Stack>
           </Box>
-          <Stack direction="row" spacing={1}>
+          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap justifyContent="flex-end">
+            <Button
+              variant="outlined"
+              startDecorator={<TerminalIcon />}
+              onClick={() => setClaudeCodeOpen(true)}
+              data-testid="skill-claude-code-btn"
+            >
+              Use in Claude Code
+            </Button>
+            {isOwner && !skill.importedFrom ? (
+              <Button
+                variant="outlined"
+                startDecorator={<StorefrontIcon />}
+                onClick={() => setPublishOpen(true)}
+                data-testid="skill-detail-publish"
+              >
+                Publish to market
+              </Button>
+            ) : null}
             {canManageSharing ? (
               <Button
                 variant="outlined"
@@ -143,6 +172,8 @@ const SkillDetailPage: FC = () => {
           </Stack>
         </Stack>
 
+        {isOwner ? <SkillUpdatePanel skill={skill} /> : null}
+
         <Card variant="outlined" sx={{ p: 0 }}>
           <Box
             component="pre"
@@ -162,6 +193,20 @@ const SkillDetailPage: FC = () => {
       </Stack>
 
       {canManageSharing && shareOpen ? <SkillShareDialog onClose={() => setShareOpen(false)} skill={skill} /> : null}
+      {publishOpen ? <PublishDialog onClose={() => setPublishOpen(false)} skill={skill} /> : null}
+      {claudeCodeOpen ? (
+        <ClaudeCodeExportDialog
+          onClose={() => setClaudeCodeOpen(false)}
+          skill={skill}
+          sourcePath={
+            skill.importedFrom
+              ? `/skills/market/${encodeURIComponent(skill.importedFrom.listingId)}`
+              : `/skills/${encodeURIComponent(skill.id)}`
+          }
+          version={skill.importedFrom?.version}
+          thirdParty={!!skill.importedFrom}
+        />
+      ) : null}
     </Box>
   );
 };

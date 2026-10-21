@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { Box, Input, Modal, ModalDialog, Typography } from '@mui/joy';
 import SearchIcon from '@mui/icons-material/Search';
+import StorefrontIcon from '@mui/icons-material/Storefront';
 import AddCommentIcon from '@mui/icons-material/AddComment';
 import HomeIcon from '@mui/icons-material/Home';
 import FolderIcon from '@mui/icons-material/Folder';
@@ -77,6 +78,14 @@ const CommandPalette = () => {
         icon: <ExtensionIcon />,
         keywords: ['skills', 'slash', 'commands', 'templates', 'prompts'],
         onSelect: () => navigate({ to: '/skills' }),
+      },
+      {
+        id: 'skill-market',
+        label: t('skills.market_title', 'Skill Market'),
+        description: t('skills.market_command_palette_description', 'Browse, import and publish community skills'),
+        icon: <StorefrontIcon />,
+        keywords: ['skill', 'market', 'marketplace', 'store', 'import', 'publish', 'community'],
+        onSelect: () => navigate({ to: '/skills/market' }),
       },
       {
         id: 'organizations',

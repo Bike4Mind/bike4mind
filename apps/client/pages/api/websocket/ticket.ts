@@ -3,6 +3,7 @@ import { BadRequestError } from '@bike4mind/utils';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { randomBytes } from 'crypto';
+import { ACCESS_TOKEN_TTL_SECONDS } from '@server/auth/tokenGenerator';
 
 // Short window: a ticket is minted immediately before each (re)connect and
 // burned at $connect. 30s absorbs clock skew and a slow handshake without
@@ -27,6 +28,10 @@ const TICKET_TTL_MS = 30 * 1000;
  * kill-switch). `$connect` re-runs that kill-switch against the snapshot: if a
  * revoke bumps the version between mint and connect, the snapshot goes stale
  * and the connection is rejected.
+ *
+ * `sid` and `authExpiresAt` carry the minting session and access-token expiry onto the
+ * Connection row, so revoking that session ends the socket and the socket must reauth (see
+ * websocket/reauthConnection.ts) before the token would have expired.
  */
 const handler = baseApi({ auth: 'jwtOnly' }).post(
   asyncHandler(async (req, res) => {
@@ -37,11 +42,14 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
       throw new BadRequestError('Missing authenticated user');
     }
 
+    const minter = req.user as { tokenVersion?: number; sid?: string; accessTokenExpiresAt?: Date };
     const ticket = randomBytes(32).toString('hex');
     await wsConnectTicketRepository.create({
       ticket,
       userId,
-      tokenVersion: (req.user as { tokenVersion?: number }).tokenVersion ?? 0,
+      tokenVersion: minter.tokenVersion ?? 0,
+      ...(minter.sid && { sid: minter.sid }),
+      authExpiresAt: minter.accessTokenExpiresAt ?? new Date(Date.now() + ACCESS_TOKEN_TTL_SECONDS * 1000),
       expiresAt: new Date(Date.now() + TICKET_TTL_MS),
     });
 

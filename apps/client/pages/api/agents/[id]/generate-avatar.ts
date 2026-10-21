@@ -1,10 +1,10 @@
 import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
-import { agentRepository, imageModerationIncidentRepository } from '@bike4mind/database';
+import { AGENTS_WRITE_SCOPES } from '@server/agents/agentScopes';
+import { assertAgentAccess } from '@server/agents/assertAgentAccess';
+import { agentRepository } from '@bike4mind/database';
 import { ImageModels, IAgent, ModelInfo } from '@bike4mind/common';
 import {
-  NotFoundError,
-  ForbiddenError,
   BadRequestError,
   getSettingsByNames,
   getSettingsMap,
@@ -14,14 +14,15 @@ import {
 import { RekognitionImageModerationService, ImageModerationBlockedError } from '@bike4mind/utils/imageModeration';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
 import { apiKeyService } from '@bike4mind/services';
-import { moderateImageOrThrow } from '@bike4mind/services/llm';
+import { moderateImageOrThrow } from '@bike4mind/services/llm/imageModerationGate';
 import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
 import { OperationsModelService } from '@client/services/operationsModelService';
 
 import { KnowledgeType } from '@bike4mind/common';
 import { fabFileRepository } from '@bike4mind/database';
 import axios from 'axios';
-import imageLogger from '@client/app/utils/imageLogger';
+import imageLogger from '@bike4mind/server-utils/utils/imageLogger';
+import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
 
 // System prompt for creating visual prompts from agent descriptions
 const AGENT_AVATAR_PROMPT_SYSTEM = `You are an expert at translating rich personality descriptions and agent metadata into detailed visual prompts for AI image generation.
@@ -121,7 +122,9 @@ const downloadImageBuffer = async (imageUrl: string): Promise<Buffer> => {
   return Buffer.from(response.data);
 };
 
-const handler = baseApi().post<Request<{ id: string }, AgentAvatarResponse, AgentAvatarRequest>>(async (req, res) => {
+const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
+  Request<{ id: string }, AgentAvatarResponse, AgentAvatarRequest>
+>(async (req, res) => {
   const { id } = req.query;
   const userId = req.user!.id;
   const { imageModel: userImageModel } = req.body;
@@ -133,14 +136,7 @@ const handler = baseApi().post<Request<{ id: string }, AgentAvatarResponse, Agen
 
   // Find the agent
   const agent = await agentRepository.findById(id);
-  if (!agent) {
-    throw new NotFoundError('Agent not found');
-  }
-
-  // Check ownership
-  if (agent.userId !== userId) {
-    throw new ForbiddenError("You don't have permission to modify this agent");
-  }
+  assertAgentAccess(agent, userId, 'own');
 
   // Cheap early refusal: checkStorageLimit does no DB I/O (b4m-core/utils/src/user.ts),
   // it only reads fields already on req.user, so an already-over-quota user is turned
@@ -355,10 +351,10 @@ const handler = baseApi().post<Request<{ id: string }, AgentAvatarResponse, Agen
     await moderateImageOrThrow({
       service: new RekognitionImageModerationService(req.logger),
       enabled: getSettingsValue('ImageModerationEnabled', moderationSettings) ?? true,
-      incidents: imageModerationIncidentRepository,
+      incidents: imageModerationIncidents,
       buffer: imageBuffer,
       mimeType: 'image/png',
-      incidentMeta: { userId, provider: 'avatar', model: 'avatar' },
+      incidentMeta: { userId, provider: 'avatar', model: 'avatar', surface: 'generation' },
       logger: req.logger,
     });
 
@@ -374,7 +370,7 @@ const handler = baseApi().post<Request<{ id: string }, AgentAvatarResponse, Agen
       const filePath = fileName; // Simple filename without directories
 
       // Import storage service
-      const { getFilesStorage } = await import('@server/utils/storage');
+      const { getFilesStorage } = await import('@bike4mind/server-utils/utils/storage/index');
 
       // Upload to S3 (returns just the file path)
       const uploadedPath = await getFilesStorage().upload(imageBuffer, filePath, { ContentType: 'image/png' });
@@ -382,6 +378,13 @@ const handler = baseApi().post<Request<{ id: string }, AgentAvatarResponse, Agen
       if (!uploadedPath) {
         throw new Error('Failed to upload generated image to storage');
       }
+      // The version the up-front 'clean' below covers, so this upload's own S3 event does not send it
+      // back to pending (recordLandedObject). Unknown only costs that one rescan.
+      const { normalizeETag } = await import('@server/s3/moderationScan');
+      const moderationETag = await getFilesStorage()
+        .getMetadata(uploadedPath)
+        .then(head => normalizeETag(head.etag))
+        .catch(() => undefined);
 
       // Generate a signed URL for accessing the uploaded image
       const uploadedUrl = await getFilesStorage().getSignedUrl(uploadedPath, 'get', { expiresIn: 3600 });
@@ -408,6 +411,7 @@ const handler = baseApi().post<Request<{ id: string }, AgentAvatarResponse, Agen
         // transient throttle could strand it un-servable. The atomic scan-claim in
         // objectCreated makes that re-scan a no-op once it observes 'clean'.
         moderationStatus: 'clean' as const,
+        moderationETag,
         // Initialize required shareable fields
         groups: [],
         users: [],
@@ -499,7 +503,7 @@ const handler = baseApi().post<Request<{ id: string }, AgentAvatarResponse, Agen
     });
 
     // Let the shared error handler render this with its real status and message
-    // (400, "File size exceeds storage limit"), same as every other upload door.
+    // (400 with a storage `code` and byte counts), same as every other upload door.
     if (error instanceof BadRequestError) {
       throw error;
     }

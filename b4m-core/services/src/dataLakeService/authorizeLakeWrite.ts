@@ -9,7 +9,7 @@ import type {
 import { acceptsConnectorContent, DATA_LAKES, DATALAKE_TAG_PREFIX, normalizeTagPrefix } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
-import { assertLakeAccess, assertLakeWritable, isFallbackLake } from './assertLakeAccess';
+import { assertLakeAccess, assertLakeAccessById, assertLakeWritable, isFallbackLake } from './assertLakeAccess';
 import { type LakeAccessLogger } from './resolveLakeReadAccess';
 import { type ManageActor } from './manageRule';
 import { resolveCanManageLake } from './authorizeLakeManage';
@@ -17,6 +17,15 @@ import { assertLakeAdmission, type AdmissionMember } from './lakeAdmissionGate';
 import { resolveScopedSetting, scopeForLake, type ScopedSettingsDb } from '../settings/resolveScopedSetting';
 
 export { canManageLake, type ManageActor } from './manageRule';
+
+/**
+ * `idOnly` drops the gate's slug arms (`assertLakeAccessById`), for a door whose action must land on
+ * the one lake the caller meant: a slug skips a deleted/purging lake and resolves the next lake that
+ * shares it.
+ */
+interface LakeGateOptions {
+  idOnly?: boolean;
+}
 
 /**
  * Resolve a lake by id-or-slug and assert the caller may WRITE into it. Read access is checked
@@ -41,9 +50,10 @@ export const assertLakeWriteAccess = async (
       // below, which uses it to resolve a foreign-org owner/curator grant by slug.
       dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'listByPrincipal'>;
     };
-  }
+  },
+  { idOnly = false }: LakeGateOptions = {}
 ): Promise<IDataLakeDocument> => {
-  const lake = await assertLakeAccess(lakeIdOrSlug, ctx, { db });
+  const lake = await (idOnly ? assertLakeAccessById : assertLakeAccess)(lakeIdOrSlug, ctx, { db });
   assertLakeWritable(lake);
   if (!(await resolveCanManageLake(lake, ctx, { db }))) {
     throw new BadRequestError('You do not have permission to add files to this data lake');
@@ -83,9 +93,10 @@ export const assertLakeRebuildAccess = async (
       // below, which uses it to resolve a foreign-org owner/curator grant by slug.
       dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'listByPrincipal'>;
     };
-  }
+  },
+  { idOnly = false }: LakeGateOptions = {}
 ): Promise<IDataLakeDocument> => {
-  const lake = await assertLakeAccess(lakeIdOrSlug, ctx, { db });
+  const lake = await (idOnly ? assertLakeAccessById : assertLakeAccess)(lakeIdOrSlug, ctx, { db });
   const allowed = isFallbackLake(lake) ? ctx.isAdmin : await resolveCanManageLake(lake, ctx, { db });
   if (!allowed) {
     throw new BadRequestError("You do not have permission to rebuild this data lake's passages");
@@ -94,8 +105,9 @@ export const assertLakeRebuildAccess = async (
 };
 
 /**
- * Resolve a lake by id-or-slug and assert the caller may edit its FALLBACK SETTINGS OVERLAY (see
- * IFallbackLakeSetting) - currently `groundingMode` only. Exists only for a static registry lake: a
+ * Resolve a lake by id (`assertLakeAccessById`; a registry lake still resolves by its config slug)
+ * and assert the caller may edit its FALLBACK SETTINGS OVERLAY (see IFallbackLakeSetting) -
+ * currently `groundingMode` only. Exists only for a static registry lake: a
  * DB lake's settings live on its document and go through the ordinary `updateDataLake` write path
  * (PUT /api/data-lakes/:id), which this gate deliberately refuses so the two paths cannot both
  * claim to own a persisted lake's settings.
@@ -108,7 +120,7 @@ export const assertLakeRebuildAccess = async (
  * the UI affordance this gate enforces server-side.
  */
 export const assertFallbackLakeSettingsWriteAccess = async (
-  lakeIdOrSlug: string,
+  lakeId: string,
   ctx: AccessContext,
   {
     db,
@@ -132,7 +144,7 @@ export const assertFallbackLakeSettingsWriteAccess = async (
     logger?: LakeAccessLogger;
   }
 ): Promise<IDataLakeDocument> => {
-  const lake = await assertLakeAccess(lakeIdOrSlug, ctx, { db, logger });
+  const lake = await assertLakeAccessById(lakeId, ctx, { db, logger });
   if (!isFallbackLake(lake)) {
     throw new BadRequestError('This data lake has its own settings editor; use the standard update endpoint');
   }
@@ -193,6 +205,9 @@ export const isStaticRegistryDatalakeTag = (tag: string): boolean =>
  * tags - there is no creator to check against). Any other meta-tag that resolves to no lake, or to
  * a lake the caller can't manage, is rejected - this is the check that stops a read-only member
  * from injecting a file into a lake they don't own, mirroring the creator check on the remove path.
+ *
+ * Returns the lake documents it authorized (static registry lakes have none), so a caller needing
+ * them - createFabFile's owner resolution - does not look them up a second time.
  */
 export const assertCanWriteDataLakeTags = async (
   actor: ManageActor,
@@ -234,7 +249,7 @@ export const assertCanWriteDataLakeTags = async (
      */
     unattended?: boolean;
   }
-): Promise<void> => {
+): Promise<IDataLakeDocument[]> => {
   const metaTags = extractDataLakeMetaTags(tagNames);
   const targetLakes: IDataLakeDocument[] = [];
   for (const tag of metaTags) {
@@ -284,6 +299,7 @@ export const assertCanWriteDataLakeTags = async (
   if (members?.length) {
     await assertLakeAdmission(targetLakes, members, { db, logger });
   }
+  return targetLakes;
 };
 
 /**

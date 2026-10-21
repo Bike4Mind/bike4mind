@@ -1,4 +1,4 @@
-import { test, type APIRequestContext } from '@playwright/test';
+import { test, type APIRequestContext, type APIResponse } from '@playwright/test';
 import { Resource } from 'sst';
 import crypto from 'crypto';
 import type { DataLakeOrigin } from '@bike4mind/common';
@@ -96,6 +96,8 @@ export async function apiCreateTestUser(
     password: string;
     isAdmin?: boolean;
     tags?: string[];
+    // Pass false to skip the server's PREDEFINED_USER_TAGS, so the user gets only `tags`.
+    includePredefinedTags?: boolean;
     emailVerified?: boolean;
     // Pass false to mint an UNCONSENTED user (for a spec that exercises the consent gate /
     // /accept-policies interstitial). Suppresses both the server-side stamp and the auto-accept
@@ -248,7 +250,7 @@ export async function apiLoginViaOtc(
 /**
  * Pull the refresh token out of a Set-Cookie response header. Playwright joins multiple
  * Set-Cookie headers with newlines, so scan line by line. Mirrors REFRESH_COOKIE_NAME in
- * apps/client/server/auth/refreshCookie.ts - keep in sync.
+ * packages/server-utils/src/auth/refreshCookie.ts - keep in sync.
  */
 export function refreshTokenFromSetCookie(setCookieHeader: string | undefined): string | null {
   if (!setCookieHeader) return null;
@@ -570,6 +572,28 @@ export async function apiUpdateDataLake(
   return response.status();
 }
 
+export interface ResearchConfigSummary {
+  id: string;
+  name: string;
+  model?: string;
+  maxResults: number;
+  maxProposals: number;
+  costCeilingMicroUsd: number;
+}
+
+export async function apiListResearchConfigs(
+  request: APIRequestContext,
+  token: string,
+  dataLakeId: string
+): Promise<ResearchConfigSummary[]> {
+  const baseURL = process.env.API_URL || 'http://localhost:3000';
+  const response = await request.get(`${baseURL}/api/data-lakes/${dataLakeId}/research/configs`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok()) throw new Error(`List research configs failed: ${response.status()} ${await response.text()}`);
+  return ((await response.json()) as { data: ResearchConfigSummary[] }).data;
+}
+
 /**
  * Best-effort teardown for a created lake. Purges via the lifecycle: soft-delete (phase 1)
  * then irreversible cleanup (phase 2). The DELETE route only *archives* (reversible), which
@@ -623,18 +647,24 @@ export async function apiCreateSkill(
 export async function apiListSkills(
   request: APIRequestContext,
   token: string
-): Promise<Array<{ id: string; name: string }>> {
+): Promise<Array<{ id: string; name: string; userId: string }>> {
   const baseURL = process.env.API_URL || 'http://localhost:3000';
   const response = await request.get(`${baseURL}/api/skills?limit=100&page=1`, {
     headers: { Authorization: `Bearer ${token}` },
   });
 
+  // Throw rather than return []: an empty list on a failed fetch (e.g. an expired token) would
+  // silently skip every delete in apiDeleteAllSkills.
   if (!response.ok()) {
-    return [];
+    throw new Error(`GET /api/skills failed: ${response.status()} ${await response.text()}`);
   }
 
   const body = await response.json();
-  return (body.data || []).map((s: Record<string, unknown>) => ({ id: (s.id || s._id) as string, name: s.name }));
+  return (body.data || []).map((s: Record<string, unknown>) => ({
+    id: (s.id || s._id) as string,
+    name: s.name as string,
+    userId: s.userId as string,
+  }));
 }
 
 export async function apiDeleteSkill(request: APIRequestContext, token: string, skillId: string): Promise<void> {
@@ -644,10 +674,31 @@ export async function apiDeleteSkill(request: APIRequestContext, token: string, 
   });
 }
 
-/** Delete every skill the caller owns - idempotent teardown so a shared preview stays clean. */
-export async function apiDeleteAllSkills(request: APIRequestContext, token: string): Promise<void> {
+/**
+ * PUT /api/skills/:id/share. Returns the raw response rather than throwing, so a caller can assert
+ * a 403 as readily as a 200.
+ */
+export async function apiShareSkill(
+  request: APIRequestContext,
+  token: string,
+  skillId: string,
+  body: { isGlobalRead?: boolean; isGlobalWrite?: boolean }
+): Promise<APIResponse> {
+  const baseURL = process.env.API_URL || 'http://localhost:3000';
+  return request.put(`${baseURL}/api/skills/${skillId}/share`, {
+    headers: { Authorization: `Bearer ${token}` },
+    data: body,
+  });
+}
+
+/**
+ * Delete every skill `ownerId` owns - idempotent teardown so a shared preview stays clean.
+ * The list is the caller's accessible set (global-read, and system skills for an admin), and an
+ * admin may delete any skill, so the owner filter is what keeps teardown off other users' skills.
+ */
+export async function apiDeleteAllSkills(request: APIRequestContext, token: string, ownerId: string): Promise<void> {
   const skills = await apiListSkills(request, token);
-  for (const skill of skills) {
+  for (const skill of skills.filter(s => s.userId === ownerId)) {
     await apiDeleteSkill(request, token, skill.id);
   }
 }

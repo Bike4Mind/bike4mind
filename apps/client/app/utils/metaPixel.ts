@@ -98,6 +98,11 @@ export function trackMetaEvent(eventName: string, params?: MetaEventParams): voi
   fbq(...args);
 }
 
+/** Whether this build has a Meta pixel; the consent banner names Meta only when it does. */
+export function isMetaPixelConfigured(): boolean {
+  return Boolean(process.env.NEXT_PUBLIC_META_PIXEL_ID);
+}
+
 /**
  * Load the real pixel script, flushing anything queued. Call ONLY once the
  * visitor has granted cookie consent. Idempotent.

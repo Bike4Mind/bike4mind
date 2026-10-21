@@ -3,7 +3,7 @@
  * parallel and merges them; the /api/files/search hooks come in one-shot, infinite,
  * and paginated flavors keyed under the 'search' namespace of fabFileKeys.
  */
-import type { IFabFileDocument } from '@bike4mind/common';
+import type { FabFileTypeFilter, IFabFileDocument } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { keepPreviousData, useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
@@ -110,9 +110,12 @@ export interface ISearchFabFilesParams {
   search?: string;
   filters?: {
     tags?: string[];
-    type?: 'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code' | 'audio';
+    type?: FabFileTypeFilter;
     shared?: boolean;
     curated?: boolean;
+    generated?: boolean;
+    /** Only the caller's own files, without the group, personal-share and data-lake widening of the default view. */
+    owned?: boolean;
   };
   pagination?: { page: number; limit: number };
   order?: { by: 'fileName' | 'fileSize' | 'createdAt'; direction: 'asc' | 'desc' };

@@ -1,8 +1,8 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ensureAdmin, BadRequestError } from '@server/utils/errors';
-import { getDlqByLabel, getDlqUrl, getSourceQueueUrl } from '@server/utils/dlqRegistry';
-import { receiveFromQueue, sendToQueue, deleteFromQueue } from '@server/utils/sqs';
+import { ensureAdmin, BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { getDlqByLabel, getDlqUrl, getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
+import { receiveFromQueue, sendToQueue, deleteFromQueue } from '@bike4mind/server-utils/utils/sqs';
 import type { Message } from '@aws-sdk/client-sqs';
 import { dlqReplayLogRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';

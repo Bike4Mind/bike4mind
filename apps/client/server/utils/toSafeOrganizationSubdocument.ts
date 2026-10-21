@@ -26,3 +26,11 @@ export function toSafeOrganizationSubdocument(value: unknown, viewer: { userId: 
 
   return toSafeOrganization(plain as Parameters<typeof toSafeOrganization>[0], viewer);
 }
+
+/** Returns a shallow copy of `row` with its `organizationId` serialized through the organization boundary. */
+export function withSafeOrganization<T extends { organizationId?: unknown }>(
+  row: T,
+  viewer: { userId: string; isAdmin: boolean }
+): T {
+  return { ...row, organizationId: toSafeOrganizationSubdocument(row.organizationId, viewer) };
+}

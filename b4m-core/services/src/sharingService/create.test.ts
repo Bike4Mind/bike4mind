@@ -42,8 +42,8 @@ describe('sharingService - createInvite (group arm authority)', () => {
         findAllByEmailsOrUsernames: vi.fn(async () => [{ email: 'x@y.com', username: 'x' }]),
         findByIds: vi.fn(async () => []),
       },
-      fabFiles: { findByIdAndUserId: vi.fn(), shareable: { findShareAccessById: vi.fn() } },
-      sessions: { findByIdAndUserId: vi.fn() },
+      fabFiles: { shareable: { findShareAccessById: vi.fn() } },
+      sessions: { shareable: { findShareAccessById: vi.fn() } },
       projects: { shareable: { findShareAccessById: vi.fn() } },
       organizations: { findById: vi.fn(async () => organization) },
       groups: { findById: vi.fn(async () => group) },
@@ -217,6 +217,88 @@ describe('sharingService - createInvite (project arm authority)', () => {
 });
 
 /**
+ * Authority tests for the InviteType.Session arm. A notebook shared by link grants its recipients
+ * [read, share], so the lookup is scoped to share access (not ownership), matching the FabFile and
+ * Project arms; the permission cap still bounds what a sharee can hand on.
+ */
+describe('sharingService - createInvite (session arm authority)', () => {
+  const SESSION_ID = 'session-1';
+  const OWNER = 'owner-s';
+  const SHAREE = 'sharee-s';
+
+  const asUser = (id: string) => ({ id, username: 'u', isAdmin: false, groups: [] }) as unknown as IUserDocument;
+
+  const notebook = {
+    id: SESSION_ID,
+    name: 'Shared Notebook',
+    userId: OWNER,
+    users: [{ userId: SHAREE, permissions: [Permission.read, Permission.share] }],
+    groups: [],
+  };
+
+  let db: any;
+  let findShareAccessById: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    findShareAccessById = vi.fn();
+    db = {
+      invites: { create: vi.fn(async (build: unknown) => ({ id: 'invite-s', ...(build as object) })) },
+      users: { findAllByEmailsOrUsernames: vi.fn(async () => []), findByIds: vi.fn(async () => []) },
+      sessions: { shareable: { findShareAccessById } },
+    };
+  });
+
+  const mintLink = (user: IUserDocument, permissions: Permission[] = [Permission.read]) =>
+    createInvite(user, { id: SESSION_ID, type: InviteType.Session, permissions } as any, { db });
+
+  it('lets a non-owner sharee holding [read, share] mint a link that passes share on', async () => {
+    findShareAccessById.mockResolvedValue(notebook);
+    const user = asUser(SHAREE);
+
+    // ShareModal sends [read, share] for a link, so that is the shape that has to clear the cap.
+    const invite = await mintLink(user, [Permission.read, Permission.share]);
+
+    expect(invite.name).toBe('Shared Notebook');
+    expect((invite as any).permissions).toEqual([Permission.read, Permission.share]);
+    // accept.ts re-checks this minter's current access on redemption, keyed on inviterId.
+    expect((invite as any).inviterId).toBe(SHAREE);
+    expect(findShareAccessById).toHaveBeenCalledWith(user, SESSION_ID);
+  });
+
+  it('lets a user holding share through a group mint a link', async () => {
+    findShareAccessById.mockResolvedValue({
+      ...notebook,
+      users: [],
+      groups: [{ groupId: 'group-1', permissions: [Permission.read, Permission.share] }],
+    });
+    const user = { ...asUser('group-member'), groups: ['group-1'] } as unknown as IUserDocument;
+
+    const invite = await mintLink(user, [Permission.read, Permission.share]);
+
+    expect((invite as any).permissions).toEqual([Permission.read, Permission.share]);
+    expect((invite as any).inviterId).toBe('group-member');
+  });
+
+  it('refuses a caller the share-access lookup does not match, e.g. a read-only sharee', async () => {
+    // findShareAccessById matches owner, users[].share and groups[].share only, so a read-only
+    // sharee comes back null; the mock stands in for that query result.
+    findShareAccessById.mockResolvedValue(null);
+
+    await expect(mintLink(asUser('reader-s'))).rejects.toThrow('Document not found');
+    expect(db.invites.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a sharee granting update, which they do not hold', async () => {
+    findShareAccessById.mockResolvedValue(notebook);
+
+    await expect(mintLink(asUser(SHAREE), [Permission.read, Permission.update])).rejects.toSatisfy(
+      (e: Error) => e instanceof BadRequestError && e.message.includes('update')
+    );
+    expect(db.invites.create).not.toHaveBeenCalled();
+  });
+});
+
+/**
  * A recipient that findAllByEmailsOrUsernames does not resolve previously fell through
  * silently: the invite was still created with an empty pending list and the route returned
  * 200, so the recipient's inbox stayed empty with no visible failure anywhere (#1151). Scoped
@@ -294,6 +376,74 @@ describe('sharingService - createInvite (recipient resolution)', () => {
     expect(db.users.findByIds).toHaveBeenCalledWith(['user-id-123']);
     expect((invite as any).recipients.pending).toEqual(['member@x.com']);
     expect((invite as any).isLinkOnly).toBe(false);
+  });
+
+  describe('typedRecipients', () => {
+    it('records an address the inviter typed, matched case-insensitively', async () => {
+      db.users.findAllByEmailsOrUsernames = vi.fn(async () => [{ email: 'Friend@Example.com', username: 'friend' }]);
+
+      const invite = await createFabFile(['friend@example.com']);
+
+      expect((invite as any).typedRecipients).toEqual(['friend@example.com']);
+    });
+
+    it('does not record an address resolved from a username', async () => {
+      db.users.findAllByEmailsOrUsernames = vi.fn(async () => [{ email: 'friend@example.com', username: 'friend' }]);
+
+      const invite = await createFabFile(['friend']);
+
+      expect((invite as any).recipients.pending).toEqual(['friend@example.com']);
+      expect((invite as any).typedRecipients).toEqual([]);
+    });
+
+    it('does not record an address resolved from a user id', async () => {
+      db.users.findByIds = vi.fn(async () => [{ id: 'user-id-123', email: 'member@x.com', username: 'member' }]);
+
+      const invite = await createProject(['user-id-123']);
+
+      expect((invite as any).recipients.pending).toEqual(['member@x.com']);
+      expect((invite as any).typedRecipients).toEqual([]);
+    });
+
+    it('records only the typed entry when a project invite mixes an id and an address', async () => {
+      db.users.findAllByEmailsOrUsernames = vi.fn(async () => [{ email: 'typed@x.com', username: 'typed' }]);
+      db.users.findByIds = vi.fn(async () => [{ id: 'user-id-123', email: 'member@x.com', username: 'member' }]);
+
+      const invite = await createProject(['typed@x.com', 'user-id-123']);
+
+      expect((invite as any).typedRecipients).toEqual(['typed@x.com']);
+    });
+  });
+
+  describe('project invite to an address with no account', () => {
+    it('keeps the typed address, normalized, as a pending recipient', async () => {
+      const invite = await createProject([' New.Person@Example.com ']);
+
+      expect((invite as any).recipients.pending).toEqual(['new.person@example.com']);
+      expect((invite as any).typedRecipients).toEqual(['new.person@example.com']);
+      expect((invite as any).remaining).toBe(1);
+    });
+
+    it('stores the account email once when the typed address does belong to an account', async () => {
+      db.users.findAllByEmailsOrUsernames = vi.fn(async () => [{ email: 'Friend@Example.com', username: 'friend' }]);
+
+      const invite = await createProject(['friend@example.com']);
+
+      expect((invite as any).recipients.pending).toEqual(['Friend@Example.com']);
+    });
+
+    it('does not let a self-set username that looks like the address claim the invite', async () => {
+      db.users.findAllByEmailsOrUsernames = vi.fn(async () => [{ email: 'impostor@x.com', username: 'victim@x.com' }]);
+
+      const invite = await createProject(['victim@x.com']);
+
+      expect((invite as any).recipients.pending).toEqual(['victim@x.com']);
+    });
+
+    it('still refuses a recipient that is neither a known id nor a valid address', async () => {
+      await expect(createProject(['not-an-email@'])).rejects.toBeInstanceOf(BadRequestError);
+      expect(db.invites.create).not.toHaveBeenCalled();
+    });
   });
 
   it('throws rather than minting a Project invite whose recipients all fail to resolve', async () => {
@@ -427,8 +577,8 @@ describe('sharingService - createInvite (organization arm authority)', () => {
         findAllByEmailsOrUsernames: vi.fn(async () => []),
         findByIds: vi.fn(async () => [{ id: RECIPIENT_ID, email: 'r@x.com', username: 'r' }]),
       },
-      fabFiles: { findByIdAndUserId: vi.fn(), shareable: { findShareAccessById: vi.fn() } },
-      sessions: { findByIdAndUserId: vi.fn() },
+      fabFiles: { shareable: { findShareAccessById: vi.fn() } },
+      sessions: { shareable: { findShareAccessById: vi.fn() } },
       projects: { shareable: { findShareAccessById: vi.fn() } },
       organizations: { findById: vi.fn(async () => organization) },
       groups: { findById: vi.fn() },

@@ -19,7 +19,7 @@ const { getSlackDeps, getSlackDb, invoke, findQuestById } = vi.hoisted(() => ({
   findQuestById: vi.fn(),
 }));
 vi.mock('./di/registry', () => ({ getSlackDeps, getSlackDb, configureSlackPackage: vi.fn() }));
-vi.mock('@bike4mind/services/llm', () => ({
+vi.mock('@bike4mind/services/llm/ChatCompletionInvoke', () => ({
   ChatCompletionInvoke: function MockChatCompletionInvoke() {
     return { invoke, db: { quests: { findById: findQuestById } } };
   },
@@ -93,6 +93,16 @@ describe('triggerAIResponseWithContext', () => {
     const result = await makeHandler().triggerAIResponseWithContext('session-1', 'hi', '');
 
     expect(result).toBe(`${'x'.repeat(300)}...`);
+  });
+
+  it('runs the turn as an internal-origin caller with no api key', async () => {
+    invoke.mockResolvedValue({ id: 'quest-1' });
+    findQuestById.mockResolvedValue({ type: 'done', replies: ['ok'] });
+
+    await makeHandler().triggerAIResponseWithContext('session-1', 'hi', '', undefined, [], undefined, false);
+
+    expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ authOrigin: 'internal' }));
+    expect(invoke.mock.calls[0][0]).not.toHaveProperty('apiKeyId');
   });
 
   it('surfaces an HTTPError message thrown before/during invoke()', async () => {

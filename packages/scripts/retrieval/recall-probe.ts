@@ -211,7 +211,7 @@ const waitForEvent = (capture: Capture, timeoutMs?: number): Promise<RecordLakeA
 
 /**
  * Assemble the repository graph `search_knowledge_base` needs. Mirrors the agent executor's wiring
- * (`apps/client/server/queueHandlers/agentExecutor.ts`), minus every adapter this one tool never
+ * (`apps/workers/src/queueHandlers/agentExecutor.ts`), minus every adapter this one tool never
  * touches - a narrower context than the real one would silently change behavior, a wider one would
  * just be noise.
  */

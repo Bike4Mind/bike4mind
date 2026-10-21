@@ -32,6 +32,12 @@ vi.mock('../useAccessToken', () => ({
   useAccessToken: vi.fn(),
 }));
 
+// The interceptor tags a dismissed verification prompt with a private symbol; stand in a marker.
+const CANCELLED = 'verification-dismissed';
+vi.mock('@client/app/utils/stepUpInterceptor', () => ({
+  isStepUpCancelled: (error: unknown) => error instanceof Error && error.message === CANCELLED,
+}));
+
 const { useUser } = await import('@client/app/contexts/UserContext');
 const { useAccessToken } = await import('../useAccessToken');
 const { toast } = await import('sonner');
@@ -158,5 +164,25 @@ describe('useUpdateUser', () => {
     expect(invalidatedKeys).toContainEqual(['users']);
     expect(invalidatedKeys).toContainEqual(['sessions']);
     expect(invalidatedKeys).toContainEqual(['organizations']);
+  });
+
+  const fail = async (error: Error) => {
+    vi.mocked(updateUserToServer).mockRejectedValue(error);
+    const { Wrapper } = createWrapper();
+    const { result } = renderHook(() => useUpdateUser(), { wrapper: Wrapper });
+    result.current.mutate({ id: 'u1', data: { email: 'new@example.com' } });
+    await waitFor(() => expect(result.current.isError).toBe(true));
+  };
+
+  it('does not toast an error when the verification prompt was dismissed', async () => {
+    await fail(new Error(CANCELLED));
+
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('toasts the error for any other failure', async () => {
+    await fail(new Error('boom'));
+
+    expect(toast.error).toHaveBeenCalledWith('Failed to update Profile.');
   });
 });

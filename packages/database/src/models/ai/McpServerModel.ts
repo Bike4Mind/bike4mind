@@ -16,6 +16,7 @@ const McpServerSchema = new Schema<IMcpServerDocument>(
     enabled: { type: Boolean, required: true },
     tools: { type: [String], default: [] },
     toolSchemas: { type: Schema.Types.Mixed, default: undefined },
+    toolSchemasFetchedAt: { type: Date, default: undefined },
     metadata: {
       type: {
         githubLogin: { type: String },

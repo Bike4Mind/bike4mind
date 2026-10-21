@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  * the hourly re-sync poll forever. These pin the wiring, which nothing else can catch.
  */
 const h = vi.hoisted(() => ({
-  assertLakeAccess: vi.fn(),
+  assertLakeAccessById: vi.fn(),
   assertLakeWritable: vi.fn(),
   archiveDataLake: vi.fn(),
   toAccessContext: vi.fn(),
@@ -30,7 +30,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {},
   dataLakeBatchRepository: {},
@@ -61,7 +61,7 @@ vi.mock('@server/integrations/github/dataLake/githubLakeConnection', () => ({
 }));
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
-    assertLakeAccess: h.assertLakeAccess,
+    assertLakeAccessById: h.assertLakeAccessById,
     assertLakeWritable: h.assertLakeWritable,
     archiveDataLake: h.archiveDataLake,
     openSearchRetrievalIndex: h.openSearchRetrievalIndex,
@@ -83,7 +83,7 @@ describe("DELETE /api/data-lakes/[id] - the archive door's Drive-connection port
   beforeEach(() => {
     vi.clearAllMocks();
     h.toAccessContext.mockResolvedValue({ userId: 'owner', isAdmin: false, userTags: [] });
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', createdByUserId: 'owner' });
+    h.assertLakeAccessById.mockResolvedValue({ id: 'lake1', createdByUserId: 'owner' });
     h.archiveDataLake.mockResolvedValue({ id: 'lake1', status: 'archived' });
     h.disableDriveConnectionForLake.mockResolvedValue(true);
     h.selfHostOpenSearchEnabled.mockReturnValue(false);
@@ -171,6 +171,20 @@ describe("DELETE /api/data-lakes/[id] - the archive door's Drive-connection port
       'lake1',
       expect.objectContaining({ retrievalIndex: expect.objectContaining({ removeForDataLake: expect.anything() }) })
     );
+  });
+
+  it('returns the archived lake through the response schema, stripping undeclared keys', async () => {
+    h.archiveDataLake.mockResolvedValue({
+      id: 'lake1',
+      status: 'archived',
+      _id: 'raw-object-id',
+      __v: 3,
+      notInSchema: 'x',
+    });
+    const { res, json } = makeRes();
+    await run(del({ user: { id: 'owner' } }), res);
+
+    expect(json.mock.calls[0][0]).toEqual({ id: 'lake1', status: 'archived' });
   });
 
   // Pins the IDENTITY of the object, not merely that something truthy rides along - a stub or a

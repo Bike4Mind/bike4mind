@@ -22,10 +22,10 @@ vi.mock('@bike4mind/database', async () => {
     memoryLedgerRepository: {},
   };
 });
-vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'unused' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'unused' } }));
 vi.mock('sst', () => ({ Resource: { App: { stage: 'selfhost' } } }));
 const { metric, compute } = vi.hoisted(() => ({ metric: vi.fn(), compute: vi.fn() }));
-vi.mock('@server/utils/cloudwatch', () => ({ emitMetric: metric }));
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetric: metric }));
 vi.mock('@bike4mind/services', () => ({ dataLakeService: { computeLakeHealth: compute } }));
 import { runLakeHealthSweep } from './lakeHealthSweep';
 let mongo: Awaited<ReturnType<typeof createMongoServer>>;

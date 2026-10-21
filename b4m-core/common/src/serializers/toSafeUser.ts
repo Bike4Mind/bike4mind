@@ -28,6 +28,7 @@ import type { SafeUser } from '../schemas/user';
 export const USER_SECRET_FIELDS = [
   'password',
   'mfa',
+  'totpLastStep',
   'oauthCredentials',
   'authProviders',
   'googleDrive',

@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 import { scrapeWithRetry } from './scrapeWithRetry';
-import type FirecrawlApp from '@mendable/firecrawl-js';
+import { UnsafeScrapeTargetError } from './errors';
+import { type FirecrawlClient } from './firecrawlApp';
 
-const createMockApp = (scrapeUrl: Mock) => ({ scrapeUrl }) as unknown as FirecrawlApp;
+const createMockApp = (scrapeUrl: Mock) => ({ scrapeUrl }) as unknown as FirecrawlClient;
 
 const createMockLogger = () => ({
   info: vi.fn(),
@@ -21,6 +22,16 @@ describe('scrapeWithRetry', () => {
 
   beforeEach(() => {
     mockLogger = createMockLogger();
+  });
+
+  it('does not retry a scrape refused by the SSRF pre-flight', async () => {
+    const refusal = new UnsafeScrapeTargetError('Refusing to fetch http://10.0.0.1/: private');
+    const mockScrapeUrl = vi.fn().mockRejectedValue(refusal);
+
+    await expect(scrapeWithRetry(createMockApp(mockScrapeUrl), 'http://10.0.0.1/', mockLogger, NO_DELAY)).rejects.toBe(
+      refusal
+    );
+    expect(mockScrapeUrl).toHaveBeenCalledTimes(1);
   });
 
   it('returns scraped content on first successful attempt', async () => {

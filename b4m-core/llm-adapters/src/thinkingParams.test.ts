@@ -1,11 +1,27 @@
 import { describe, it, expect } from 'vitest';
 import {
   ADAPTIVE_THINKING_MAX_TOKENS_FLOOR,
+  ANTHROPIC_EFFORT_LEVELS,
   buildThinkingParams,
+  DEFAULT_ANTHROPIC_EFFORT,
+  DEFAULT_QUEST_MASTER_ANTHROPIC_EFFORT,
+  isAdaptiveThinkingByDefault,
+  planReasoningEffort,
   reasonsWithinOutputBudget,
+  resolveAnthropicEffort,
   resolveOutputMaxTokens,
+  supportsAnthropicEffort,
+  toAnthropicEffort,
+  type AnthropicEffort,
+  THINKING_ANSWER_HEADROOM_TOKENS,
 } from './thinkingParams';
-import { ChatModels, ModelBackend, type ModelInfo } from '@bike4mind/common';
+import {
+  ANTHROPIC_OUTPUT_CONFIG_EFFORT_MODELS,
+  ChatModels,
+  ModelBackend,
+  type ModelInfo,
+  type ReasoningEffort,
+} from '@bike4mind/common';
 
 const baseModelInfo: ModelInfo = {
   id: ChatModels.CLAUDE_4_6_OPUS,
@@ -62,6 +78,12 @@ describe('buildThinkingParams', () => {
     it('inflates max_tokens to budget + 1000', () => {
       const result = buildThinkingParams(ChatModels.CLAUDE_4_6_OPUS, legacyModel, 16000, 4096);
       expect(result.maxTokens).toBe(17000);
+    });
+
+    it('clamps a budget past MAX_THINKING_BUDGET_TOKENS, so it cannot raise max_tokens past that ceiling', () => {
+      const result = buildThinkingParams(ChatModels.CLAUDE_4_6_OPUS, legacyModel, 10_000_000, 4096);
+      expect(result.thinkingConfig.thinking).toEqual({ type: 'enabled', budget_tokens: 32_000 });
+      expect(result.maxTokens).toBe(33_000);
     });
 
     it('keeps caller max_tokens when already larger than budget + 1000', () => {
@@ -149,6 +171,33 @@ describe('resolveOutputMaxTokens', () => {
 
     it('defaults a legacy model to the caller-supplied fallback', () => {
       expect(resolve(undefined, legacyModel)).toBe(4096);
+    });
+
+    describe('Gemini thinking models', () => {
+      const geminiModel: ModelInfo = {
+        ...baseModelInfo,
+        id: 'gemini-3-pro' as ModelInfo['id'],
+        name: 'Gemini 3 Pro',
+        backend: ModelBackend.Gemini,
+        max_tokens: 65_536,
+        can_think: true,
+      };
+
+      it('defaults an unset budget to the declared model cap', () => {
+        expect(resolve(undefined, geminiModel)).toBe(65_536);
+      });
+
+      it('does not raise an explicit budget', () => {
+        expect(resolve(2048, geminiModel)).toBe(2048);
+      });
+
+      it('keeps the fallback when the cap is derived', () => {
+        expect(resolve(undefined, { ...geminiModel, max_tokens: 4096, maxOutputTokensDerived: true })).toBe(4096);
+      });
+
+      it('keeps the fallback when the model cannot think', () => {
+        expect(resolve(undefined, { ...geminiModel, max_tokens: 8192, can_think: false })).toBe(4096);
+      });
     });
 
     // The starvation this fixes: OpenAI spends reasoning inside max_completion_tokens,
@@ -397,6 +446,256 @@ describe('resolveOutputMaxTokens', () => {
 
     it('still honors an explicit budget on Bedrock DeepSeek R1', () => {
       expect(resolve(8192, deepseekR1Bedrock)).toBe(8192);
+    });
+  });
+});
+
+const effortOf = (result: ReturnType<typeof buildThinkingParams>): AnthropicEffort | undefined =>
+  (result.thinkingConfig as { output_config?: { effort: AnthropicEffort } }).output_config?.effort;
+
+describe('Anthropic effort levels', () => {
+  it('offers exactly the five levels the current Claude models accept', () => {
+    expect(ANTHROPIC_EFFORT_LEVELS).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+  });
+
+  it.each(ANTHROPIC_EFFORT_LEVELS)('sends %s through to output_config', level => {
+    const result = buildThinkingParams(ChatModels.CLAUDE_5_OPUS, adaptiveModel, 16000, 4096, level);
+    expect(effortOf(result)).toBe(level);
+  });
+
+  // A legacy model has no output_config at all, so no level can reach it.
+  it.each(ANTHROPIC_EFFORT_LEVELS)('never emits output_config on a legacy model for %s', level => {
+    const result = buildThinkingParams(ChatModels.CLAUDE_4_6_OPUS, legacyModel, 16000, 4096, level);
+    expect('output_config' in result.thinkingConfig).toBe(false);
+  });
+});
+
+describe('supportsAnthropicEffort', () => {
+  it.each(Array.from(ANTHROPIC_OUTPUT_CONFIG_EFFORT_MODELS))('accepts %s from the capability set', id => {
+    expect(supportsAnthropicEffort(id, undefined)).toBe(true);
+  });
+
+  // The record is the fallback for a model only the catalog knows about.
+  it('accepts a catalog-only model whose record says adaptive', () => {
+    expect(supportsAnthropicEffort('claude-opus-9-unreleased', adaptiveModel)).toBe(true);
+  });
+
+  it('rejects a legacy Claude model', () => {
+    expect(supportsAnthropicEffort(ChatModels.CLAUDE_4_6_OPUS, legacyModel)).toBe(false);
+  });
+
+  it('rejects an OpenAI reasoning model, whose effort is a different wire field', () => {
+    expect(supportsAnthropicEffort(ChatModels.GPT5_6_SOL, openAiReasoningModel)).toBe(false);
+  });
+
+  // A set member must get the effort shape even when its catalog row is sparse, which
+  // is the whole reason the set is consulted ahead of the record.
+  it('builds the adaptive shape for a set member whose record omits thinkingStyle', () => {
+    const sparse: ModelInfo = { ...baseModelInfo, id: ChatModels.CLAUDE_5_OPUS, thinkingStyle: undefined };
+    const result = buildThinkingParams(ChatModels.CLAUDE_5_OPUS, sparse, 16000, 4096, 'xhigh');
+    expect(result.thinkingConfig.thinking).toEqual({ type: 'adaptive' });
+    expect(effortOf(result)).toBe('xhigh');
+  });
+});
+
+describe('toAnthropicEffort', () => {
+  // The four shared names mean the same depth on both sides, so they pass through.
+  // Promoting 'xhigh' to 'max' (what Kimi and DeepSeek do) would buy more reasoning
+  // than was asked for, because unlike those providers Anthropic has both levels.
+  it.each([
+    ['low', 'low'],
+    ['medium', 'medium'],
+    ['high', 'high'],
+    ['xhigh', 'xhigh'],
+  ] as const)('passes %s through unchanged', (input, expected) => {
+    expect(toAnthropicEffort(input)).toBe(expected);
+  });
+
+  // Omitting instead would leave the turn on the 'high' default - MORE reasoning than
+  // a least-effort request asked for, not less.
+  it.each(['none', 'minimal'] as const)('resolves %s to the least level Anthropic can express', input => {
+    expect(toAnthropicEffort(input)).toBe('low');
+  });
+
+  it('maps an unstated effort to undefined so the default survives', () => {
+    expect(toAnthropicEffort(undefined)).toBeUndefined();
+  });
+
+  // The guarantee the mapping exists for: nothing outside Anthropic's vocabulary
+  // can reach output_config.effort.
+  it('only ever produces a level Anthropic accepts', () => {
+    const everyValue: readonly ReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+    for (const value of everyValue) {
+      const mapped = toAnthropicEffort(value);
+      expect(mapped).toBeDefined();
+      expect(ANTHROPIC_EFFORT_LEVELS).toContain(mapped);
+    }
+  });
+});
+
+describe('resolveAnthropicEffort', () => {
+  describe('an unstated effort behaves exactly as before effort was wired', () => {
+    it('is high for an ordinary turn', () => {
+      expect(resolveAnthropicEffort({})).toBe('high');
+      expect(resolveAnthropicEffort({})).toBe(DEFAULT_ANTHROPIC_EFFORT);
+    });
+
+    it('is medium for a QuestMaster turn', () => {
+      expect(resolveAnthropicEffort({ questMaster: true })).toBe('medium');
+      expect(resolveAnthropicEffort({ questMaster: true })).toBe(DEFAULT_QUEST_MASTER_ANTHROPIC_EFFORT);
+    });
+
+    it('is unchanged when both effort options are explicitly undefined', () => {
+      expect(resolveAnthropicEffort({ anthropicEffort: undefined, reasoningEffort: undefined })).toBe('high');
+      expect(
+        resolveAnthropicEffort({ questMaster: true, anthropicEffort: undefined, reasoningEffort: undefined })
+      ).toBe('medium');
+    });
+
+    // buildThinkingParams defaults to the same value, so a caller that passes no
+    // effort argument at all is on the old behavior too.
+    it('matches what buildThinkingParams sends with no effort argument', () => {
+      const result = buildThinkingParams(ChatModels.CLAUDE_5_OPUS, adaptiveModel, 16000, 4096);
+      expect(effortOf(result)).toBe(resolveAnthropicEffort({}));
+    });
+  });
+
+  describe('a stated effort wins', () => {
+    it.each(ANTHROPIC_EFFORT_LEVELS)('takes the native option %s over the default', level => {
+      expect(resolveAnthropicEffort({ anthropicEffort: level })).toBe(level);
+    });
+
+    it('takes the native option over a QuestMaster default', () => {
+      expect(resolveAnthropicEffort({ questMaster: true, anthropicEffort: 'max' })).toBe('max');
+    });
+
+    it('maps reasoningEffort when the native option is unset', () => {
+      expect(resolveAnthropicEffort({ reasoningEffort: 'xhigh' })).toBe('xhigh');
+      expect(resolveAnthropicEffort({ reasoningEffort: 'none' })).toBe('low');
+    });
+
+    // The native option is in Anthropic's own vocabulary, so it is the more specific
+    // statement of the two and the only route to 'max'.
+    it('prefers the native option to a conflicting reasoningEffort', () => {
+      expect(resolveAnthropicEffort({ anthropicEffort: 'max', reasoningEffort: 'low' })).toBe('max');
+    });
+
+    it('overrides the QuestMaster default from reasoningEffort', () => {
+      expect(resolveAnthropicEffort({ questMaster: true, reasoningEffort: 'xhigh' })).toBe('xhigh');
+    });
+  });
+});
+
+describe('planReasoningEffort', () => {
+  const adaptive = (id: string): ModelInfo => ({ ...baseModelInfo, id, thinkingStyle: 'adaptive' });
+  const legacy: ModelInfo = { ...baseModelInfo, id: ChatModels.CLAUDE_4_5_SONNET };
+
+  describe('adaptive models', () => {
+    it.each([ChatModels.CLAUDE_5_SONNET, ChatModels.CLAUDE_5_5_HAIKU, ChatModels.CLAUDE_5_5_HAIKU_BEDROCK])(
+      'turns thinking off with `disabled` where the model accepts it (%s)',
+      id => {
+        expect(planReasoningEffort(id, adaptive(id), 'none', 800)).toEqual({
+          kind: 'off',
+          thinking: { type: 'disabled' },
+        });
+      }
+    );
+
+    it('uses `between_tools` for Sonnet 5.5, which rejects `disabled`', () => {
+      const id = ChatModels.CLAUDE_5_5_SONNET_BEDROCK;
+      expect(planReasoningEffort(id, adaptive(id), 'none', 800)).toEqual({
+        kind: 'off',
+        thinking: { type: 'between_tools' },
+      });
+    });
+
+    it('falls back to the lowest effort on a model with no off switch', () => {
+      const id = ChatModels.CLAUDE_5_5_OPUS;
+      expect(planReasoningEffort(id, adaptive(id), 'none', 800)).toEqual({
+        kind: 'adaptive',
+        thinking: { type: 'adaptive' },
+        output_config: { effort: 'low' },
+      });
+    });
+
+    it.each([
+      ['minimal', 'low'],
+      ['low', 'low'],
+      ['medium', 'medium'],
+      ['high', 'high'],
+      ['xhigh', 'xhigh'],
+    ] as const)('maps %s to effort %s', (requested, expected) => {
+      const plan = planReasoningEffort(ChatModels.CLAUDE_5_OPUS, adaptive(ChatModels.CLAUDE_5_OPUS), requested, 800);
+      expect(plan).toEqual({ kind: 'adaptive', thinking: { type: 'adaptive' }, output_config: { effort: expected } });
+    });
+  });
+
+  describe('legacy models', () => {
+    it('leaves the request alone for `none`, since they do not think unless asked', () => {
+      expect(planReasoningEffort(legacy.id, legacy, 'none', 8192)).toEqual({ kind: 'default' });
+    });
+
+    it('maps effort to a thinking budget', () => {
+      expect(planReasoningEffort(legacy.id, legacy, 'medium', 8192)).toEqual({
+        kind: 'budget',
+        thinking: { type: 'enabled', budget_tokens: 4096 },
+        temperature: 1,
+      });
+    });
+
+    it('clamps the budget under max_tokens instead of raising max_tokens', () => {
+      const plan = planReasoningEffort(legacy.id, legacy, 'high', 8192);
+      expect(plan).toMatchObject({
+        kind: 'budget',
+        thinking: { budget_tokens: 8192 - THINKING_ANSWER_HEADROOM_TOKENS },
+      });
+    });
+
+    it('skips thinking when even the minimum budget cannot fit', () => {
+      expect(planReasoningEffort(legacy.id, legacy, 'low', 800)).toEqual({ kind: 'default' });
+    });
+  });
+
+  it('leaves a model that cannot think alone', () => {
+    const noThinking: ModelInfo = { ...baseModelInfo, id: ChatModels.CLAUDE_3_5_HAIKU_ANTHROPIC, can_think: false };
+    expect(planReasoningEffort(noThinking.id, noThinking, 'high', 8192)).toEqual({ kind: 'default' });
+  });
+});
+
+describe('isAdaptiveThinkingByDefault', () => {
+  const adaptive = (id: string): ModelInfo => ({ ...baseModelInfo, id, thinkingStyle: 'adaptive' });
+  const byDefault = Object.values(ChatModels).filter(id => isAdaptiveThinkingByDefault(id, adaptive(id)));
+
+  it('covers the Sonnet 5, Fable, Opus 5 and Haiku 5.5 lines, direct and Bedrock', () => {
+    expect(byDefault).toEqual(
+      expect.arrayContaining([
+        ChatModels.CLAUDE_5_SONNET,
+        ChatModels.CLAUDE_5_5_SONNET_BEDROCK,
+        ChatModels.CLAUDE_FABLE_5,
+        ChatModels.CLAUDE_FABLE_5_1_BEDROCK,
+        ChatModels.CLAUDE_5_OPUS,
+        ChatModels.CLAUDE_5_5_OPUS_BEDROCK,
+        ChatModels.CLAUDE_5_5_HAIKU,
+      ])
+    );
+  });
+
+  it('excludes adaptive models that only think when asked, and legacy ones', () => {
+    expect(isAdaptiveThinkingByDefault(ChatModels.CLAUDE_4_7_OPUS, adaptive(ChatModels.CLAUDE_4_7_OPUS))).toBe(false);
+    expect(isAdaptiveThinkingByDefault(ChatModels.CLAUDE_4_6_SONNET, baseModelInfo)).toBe(false);
+  });
+
+  it('requires a model that can think', () => {
+    const id = ChatModels.CLAUDE_5_OPUS;
+    expect(isAdaptiveThinkingByDefault(id, { ...adaptive(id), can_think: false })).toBe(false);
+  });
+
+  it.each(byDefault)('accepts effort and plans medium as adaptive thinking on %s', id => {
+    expect(supportsAnthropicEffort(id, adaptive(id))).toBe(true);
+    expect(planReasoningEffort(id, adaptive(id), 'medium', 8192)).toEqual({
+      kind: 'adaptive',
+      thinking: { type: 'adaptive' },
+      output_config: { effort: 'medium' },
     });
   });
 });

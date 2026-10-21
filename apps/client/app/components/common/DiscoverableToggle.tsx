@@ -59,7 +59,12 @@ export function DiscoverableToggle({
       sx={{ justifyContent: 'space-between', alignItems: 'center', gap: 1 }}
       data-testid={`${testIdPrefix}-control`}
     >
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+      {/* flex: 1 + minWidth: 0 here and flexShrink: 0 on the Switch stop the long helper from squeezing the
+          switch on narrow screens. Keep in sync with the discoverable row in PublishShareModal. */}
+      <Box
+        sx={{ display: 'flex', alignItems: 'center', gap: 1, flex: 1, minWidth: 0 }}
+        data-testid={`${testIdPrefix}-text`}
+      >
         <TravelExploreIcon fontSize="small" />
         <Box>
           <FormLabel sx={{ mb: 0 }}>List in search engines</FormLabel>
@@ -75,6 +80,8 @@ export function DiscoverableToggle({
       <Switch
         checked={discoverable}
         disabled={busy}
+        sx={{ flexShrink: 0 }}
+        data-testid={`${testIdPrefix}-switch`}
         onChange={e => void onToggle(e.target.checked)}
         // On the INPUT slot, not the root: Joy spreads bare props to the root span,
         // where a test can't read `.checked`.

@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { AxiosError, AxiosHeaders } from 'axios';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { IFabFileDocument } from '@bike4mind/common';
@@ -42,5 +43,30 @@ describe('EditFileDialog', () => {
 
     resolveSubmit();
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+  });
+
+  it("shows the server's storage-limit message instead of the generic axios text", async () => {
+    const message = 'File size exceeds storage limit';
+    const onSubmit = vi.fn(async () => {
+      throw new AxiosError('Request failed with status code 400', 'ERR_BAD_REQUEST', undefined, undefined, {
+        status: 400,
+        statusText: 'Bad Request',
+        data: { error: message },
+        headers: {},
+        config: { headers: new AxiosHeaders() },
+      });
+    });
+
+    render(
+      <TestWrapper>
+        <EditFileDialog open file={testFile} onClose={vi.fn()} onSubmit={onSubmit} />
+      </TestWrapper>
+    );
+
+    const user = userEvent.setup({ delay: null });
+    await user.type(screen.getByTestId('edit-file-dialog-instruction-input'), 'Make it longer');
+    await user.click(screen.getByTestId('edit-file-dialog-submit-btn'));
+
+    expect(await screen.findByText(message)).toBeTruthy();
   });
 });

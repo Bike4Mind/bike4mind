@@ -1,4 +1,14 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+
+const serverExecute = vi.hoisted(() => vi.fn());
+vi.mock('./ServerToolExecutor', () => ({
+  ServerToolExecutor: class {
+    executeTool(...args: unknown[]) {
+      return serverExecute(...args);
+    }
+  },
+}));
+
 import { executeTool } from './ToolRouter';
 import type { ApiClient } from '../auth/ApiClient';
 import { MAX_TOOL_OUTPUT_CHARS } from '../utils/toolOutputSanitizer';
@@ -45,5 +55,31 @@ describe('executeTool choke point', () => {
     const result = await executeTool(LOCAL_TOOL, {}, apiClient, async () => `token is ${secret}`);
     expect(result).not.toContain(secret);
     expect(result).toContain('[REDACTED]');
+  });
+});
+
+describe('executeTool routing', () => {
+  it.each(['mcp__demo__ping', 'skill', 'find_definition', 'get_file_structure', 'some_plugin_tool'])(
+    'runs %s through its local implementation',
+    async toolName => {
+      expect(await executeTool(toolName, { q: 1 }, apiClient, async args => `ran with ${JSON.stringify(args)}`)).toBe(
+        'ran with {"q":1}'
+      );
+    }
+  );
+
+  it('routes decide to the server and never reaches the local implementation', async () => {
+    serverExecute.mockResolvedValue('{"id":"dec_1","model":"gpt-6-luna","answers":[]}');
+    const local = vi.fn(async () => 'ran locally');
+
+    const result = await executeTool('decide', { input: 'x', questions: [] }, apiClient, local);
+
+    expect(result).toBe('{"id":"dec_1","model":"gpt-6-luna","answers":[]}');
+    expect(serverExecute).toHaveBeenCalledWith('decide', { input: 'x', questions: [] });
+    expect(local).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-server tool with no implementation', async () => {
+    await expect(executeTool('mcp__demo__ping', {}, apiClient)).rejects.toThrow('Unknown tool: mcp__demo__ping');
   });
 });

@@ -3,9 +3,9 @@ import { ApiKeyScope, BadRequestError, UnauthorizedError } from '@bike4mind/comm
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
-import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { requireUser } from '@server/middlewares/requireUser';
-import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
+import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 import { assertHearthWriteScope } from '@server/utils/hearthWire';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { z } from 'zod';

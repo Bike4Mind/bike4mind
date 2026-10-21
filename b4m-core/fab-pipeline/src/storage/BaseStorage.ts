@@ -1,5 +1,6 @@
 export abstract class BaseStorage {
   abstract upload(input: string | Buffer, destination: string, options: any): Promise<string>;
+  abstract uploadFile(localPath: string, destination: string, options?: Record<string, unknown>): Promise<string>;
   abstract download(path: string): Promise<Buffer>;
   abstract delete(path: string): Promise<void>;
   abstract getSignedUrl(
@@ -8,6 +9,8 @@ export abstract class BaseStorage {
     options?: {
       expiresIn?: number;
       ACL?: any;
+      /** PUT only: the exact byte length the upload must have (see S3Storage.getSignedUrl). */
+      ContentLength?: number;
     }
   ): Promise<string>;
   abstract getPublicUrl(path: string): string;

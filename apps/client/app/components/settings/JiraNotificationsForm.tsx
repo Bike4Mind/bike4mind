@@ -42,6 +42,7 @@ import {
   useUpdateJiraWebhookSubscription,
 } from '@client/app/hooks/data/useJiraWebhooks';
 import { useConfirmationModal } from '@client/app/hooks/useConfirmation';
+import { useUser } from '@client/app/contexts/UserContext';
 import { toast } from 'sonner';
 
 const PRIORITY_OPTIONS: { key: JiraPriorityLevel; label: string }[] = [
@@ -56,6 +57,7 @@ const JiraNotificationsForm: FC = () => {
   const setConfirmationModal = useConfirmationModal.setState;
   const isDirty = useRef(false);
   const [showSecret, setShowSecret] = useState(false);
+  const currentUser = useUser(s => s.currentUser);
 
   // Data hooks
   const {
@@ -72,7 +74,10 @@ const JiraNotificationsForm: FC = () => {
 
   // Derived state (404 returns null from queryFn, so isError is only for real failures)
   const hasConfig = !!config;
+  // Keep in sync with canManageConfig in server/integrations/jira/webhookUtils.ts
+  const canManageConfig = !!config && (config.createdBy === currentUser?.id || !!currentUser?.isAdmin);
   const isEnabled = hasConfig && config.enabled;
+  const isLocked = !isEnabled && !canManageConfig;
   const existingSub = subscriptions?.[0]; // First subscription (simplified single-sub model)
   const isLoading = configLoading || subsLoading;
 
@@ -174,6 +179,14 @@ const JiraNotificationsForm: FC = () => {
             priorityFilter: getSelectedPriorities(),
           },
         });
+      } else if (config) {
+        await createSubscription.mutateAsync({
+          webhookConfigId: config.id,
+          slackTarget: buildSlackTarget(),
+          projectFilter: getParsedProjects(),
+          priorityFilter: getSelectedPriorities(),
+          name: 'Slack notifications',
+        });
       }
 
       isDirty.current = false;
@@ -181,7 +194,7 @@ const JiraNotificationsForm: FC = () => {
     } catch {
       // Errors are handled by the mutation hooks (toast)
     }
-  }, [slackChannelId, projectFilter, priorityPrefs, existingSub, updateSubscription]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [slackChannelId, projectFilter, priorityPrefs, existingSub, config, updateSubscription, createSubscription]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleDisable = useCallback(async () => {
     try {
@@ -267,50 +280,56 @@ const JiraNotificationsForm: FC = () => {
             <Input
               readOnly
               size="sm"
-              type={showSecret ? 'text' : 'password'}
-              value={showSecret ? config.secret || config.secretMasked || '' : config.secretMasked || '****'}
+              type={showSecret && canManageConfig ? 'text' : 'password'}
+              value={
+                showSecret && canManageConfig
+                  ? config.secret || config.secretMasked || ''
+                  : config.secretMasked || '****'
+              }
               endDecorator={
-                <Box sx={{ display: 'flex', gap: 0.5 }}>
-                  <IconButton
-                    variant="plain"
-                    size="sm"
-                    onClick={() => setShowSecret(prev => !prev)}
-                    data-testid="toggle-jira-secret-visibility"
-                  >
-                    {showSecret ? (
-                      <VisibilityOffIcon sx={{ fontSize: 16 }} />
-                    ) : (
-                      <VisibilityIcon sx={{ fontSize: 16 }} />
-                    )}
-                  </IconButton>
-                  <IconButton
-                    variant="plain"
-                    size="sm"
-                    onClick={async () => {
-                      if (config.secret) {
-                        handleCopy(config.secret, 'Secret');
-                      } else {
-                        // Fetch with revealSecret to get the plain secret for copying
-                        try {
-                          const res = await import('@client/app/contexts/ApiContext').then(m =>
-                            m.api.get('/api/webhooks/jira/config', { params: { revealSecret: 'true' } })
-                          );
-                          const secret = res.data?.secret;
-                          if (secret) {
-                            handleCopy(secret, 'Secret');
-                          } else {
-                            toast.error('Could not retrieve secret');
+                canManageConfig && (
+                  <Box sx={{ display: 'flex', gap: 0.5 }}>
+                    <IconButton
+                      variant="plain"
+                      size="sm"
+                      onClick={() => setShowSecret(prev => !prev)}
+                      data-testid="toggle-jira-secret-visibility"
+                    >
+                      {showSecret ? (
+                        <VisibilityOffIcon sx={{ fontSize: 16 }} />
+                      ) : (
+                        <VisibilityIcon sx={{ fontSize: 16 }} />
+                      )}
+                    </IconButton>
+                    <IconButton
+                      variant="plain"
+                      size="sm"
+                      onClick={async () => {
+                        if (config.secret) {
+                          handleCopy(config.secret, 'Secret');
+                        } else {
+                          // Fetch with revealSecret to get the plain secret for copying
+                          try {
+                            const res = await import('@client/app/contexts/ApiContext').then(m =>
+                              m.api.get('/api/webhooks/jira/config', { params: { revealSecret: 'true' } })
+                            );
+                            const secret = res.data?.secret;
+                            if (secret) {
+                              handleCopy(secret, 'Secret');
+                            } else {
+                              toast.error('Could not retrieve secret');
+                            }
+                          } catch {
+                            toast.error('Failed to retrieve secret');
                           }
-                        } catch {
-                          toast.error('Failed to retrieve secret');
                         }
-                      }
-                    }}
-                    data-testid="copy-jira-secret"
-                  >
-                    <ContentCopyIcon sx={{ fontSize: 16 }} />
-                  </IconButton>
-                </Box>
+                      }}
+                      data-testid="copy-jira-secret"
+                    >
+                      <ContentCopyIcon sx={{ fontSize: 16 }} />
+                    </IconButton>
+                  </Box>
+                )
               }
             />
           </FormControl>
@@ -347,7 +366,7 @@ const JiraNotificationsForm: FC = () => {
                 isDirty.current = true;
                 setSlackChannelId(e.target.value);
               }}
-              disabled={isLoading}
+              disabled={isLoading || isLocked}
               data-testid="jira-slack-channel-id"
               sx={{
                 backgroundColor: theme => theme.palette.loginRegister.inputFieldBg,
@@ -382,7 +401,7 @@ const JiraNotificationsForm: FC = () => {
                       isDirty.current = true;
                       setProjectFilter(e.target.value);
                     }}
-                    disabled={isLoading}
+                    disabled={isLoading || isLocked}
                     data-testid="jira-project-filter"
                     sx={{
                       backgroundColor: theme => theme.palette.loginRegister.inputFieldBg,
@@ -409,6 +428,7 @@ const JiraNotificationsForm: FC = () => {
                         variant={priorityPrefs[p.key] ? 'solid' : 'outlined'}
                         color={priorityPrefs[p.key] ? 'primary' : 'neutral'}
                         size="sm"
+                        disabled={isLocked}
                         onClick={() => {
                           isDirty.current = true;
                           setPriorityPrefs(prev => ({ ...prev, [p.key]: !prev[p.key] }));
@@ -426,23 +446,31 @@ const JiraNotificationsForm: FC = () => {
             </Grid>
           </Box>
 
+          {!isEnabled && !canManageConfig && (
+            <Alert color="neutral" variant="soft" size="sm" data-testid="jira-notifications-off-alert">
+              Notifications are turned off for this site.
+            </Alert>
+          )}
+
           {/* Actions */}
           <Box sx={{ display: 'flex', gap: 1 }}>
-            <Button
-              onClick={
-                isEnabled
-                  ? handleSave
-                  : async () => {
-                      await updateConfig.mutateAsync({ enabled: true });
-                      toast.success('Jira notifications enabled');
-                    }
-              }
-              loading={isSaving}
-              data-testid="jira-notifications-save"
-            >
-              {isEnabled ? 'Save Settings' : 'Enable Notifications'}
-            </Button>
-            {isEnabled && (
+            {(isEnabled || canManageConfig) && (
+              <Button
+                onClick={
+                  isEnabled
+                    ? handleSave
+                    : async () => {
+                        await updateConfig.mutateAsync({ enabled: true });
+                        toast.success('Jira notifications enabled');
+                      }
+                }
+                loading={isSaving}
+                data-testid="jira-notifications-save"
+              >
+                {isEnabled ? 'Save Settings' : 'Enable Notifications'}
+              </Button>
+            )}
+            {isEnabled && canManageConfig && (
               <Button
                 variant="plain"
                 color="neutral"
@@ -453,16 +481,18 @@ const JiraNotificationsForm: FC = () => {
                 Disable
               </Button>
             )}
-            <Button
-              variant="plain"
-              color="danger"
-              onClick={handleDelete}
-              loading={deleteConfig.isPending}
-              data-testid="jira-notifications-delete"
-              sx={{ ml: 'auto' }}
-            >
-              Delete
-            </Button>
+            {canManageConfig && (
+              <Button
+                variant="plain"
+                color="danger"
+                onClick={handleDelete}
+                loading={deleteConfig.isPending}
+                data-testid="jira-notifications-delete"
+                sx={{ ml: 'auto' }}
+              >
+                Delete
+              </Button>
+            )}
           </Box>
         </>
       )}

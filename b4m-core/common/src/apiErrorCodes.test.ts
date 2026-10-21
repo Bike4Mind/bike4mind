@@ -1,8 +1,19 @@
 import { describe, it, expect } from 'vitest';
-import { API_ERROR_CODES, API_KEY_USER_CAP_ERROR_CODE } from './apiErrorCodes';
+import {
+  BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
+  AGENT_LIMIT_REACHED_ERROR_CODE,
+  API_ERROR_CODES,
+  API_KEY_USER_CAP_ERROR_CODE,
+  UNKNOWN_MODEL_ERROR_CODE,
+  REQUEST_TIMEOUT_ERROR_CODE,
+} from './apiErrorCodes';
 import { QUEST_ERROR_CODES } from './types/entities/SessionTypes';
 import { TTS_ERROR_CODES, ttsErrorResponseSchema } from './voiceGeneration';
-import { CompletionSseErrorEventSchema } from './schemas/cliCompletions';
+import { COMPLETION_TOOL_ERROR_CODES, CompletionSseErrorEventSchema } from './schemas/cliCompletions';
+import { VIDEO_GENERATION_API_ERROR_CODES, VIDEO_JOB_PUBLIC_ERROR_CODES } from './schemas/videoGenerations';
+import { MUSIC_GENERATION_API_ERROR_CODES, MUSIC_JOB_PUBLIC_ERROR_CODES } from './schemas/musicGenerations';
+import { DECISIONS_ERROR_CODES } from './schemas/decisions';
+import { STORAGE_ERROR_CODES } from './errors';
 
 /**
  * The `satisfies readonly ApiErrorCode[]` on each narrowing tuple is what actually
@@ -28,9 +39,30 @@ describe('API_ERROR_CODES', () => {
   // adding it HERE too - which is the point: a code with no surface should have to
   // justify itself rather than sit in the published vocabulary unemitted.
   it('carries no code that no surface emits', () => {
-    const NARROWING_TUPLES = [QUEST_ERROR_CODES, TTS_ERROR_CODES];
+    const NARROWING_TUPLES = [
+      QUEST_ERROR_CODES,
+      TTS_ERROR_CODES,
+      VIDEO_GENERATION_API_ERROR_CODES,
+      VIDEO_JOB_PUBLIC_ERROR_CODES,
+      MUSIC_GENERATION_API_ERROR_CODES,
+      MUSIC_JOB_PUBLIC_ERROR_CODES,
+      DECISIONS_ERROR_CODES,
+      STORAGE_ERROR_CODES,
+      COMPLETION_TOOL_ERROR_CODES,
+    ];
     // API_KEY_USER_CAP_ERROR_CODE has no narrowing tuple; its emission is proven by userApiKeyService/__tests__/create.test.ts (the additionalInfo assertion).
-    const emitted = new Set<string>([...NARROWING_TUPLES.flat(), API_KEY_USER_CAP_ERROR_CODE]);
+    // AGENT_LIMIT_REACHED_ERROR_CODE likewise; proven by apps/client/server/agents/createAgent.test.ts.
+    // UNKNOWN_MODEL_ERROR_CODE likewise; proven by b4m-core/services/src/cliCompletions.modelAlias.test.ts.
+    // BILLING_ORGANIZATION_MISMATCH_ERROR_CODE likewise; proven by apps/client/server/billing/resolveMediaBillingOrgId.test.ts.
+    // REQUEST_TIMEOUT_ERROR_CODE likewise; proven by apps/client/pages/api/__tests__/chat.integration.test.ts (over the wait=true deadline).
+    const emitted = new Set<string>([
+      ...NARROWING_TUPLES.flat(),
+      UNKNOWN_MODEL_ERROR_CODE,
+      API_KEY_USER_CAP_ERROR_CODE,
+      AGENT_LIMIT_REACHED_ERROR_CODE,
+      BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
+      REQUEST_TIMEOUT_ERROR_CODE,
+    ]);
     expect(API_ERROR_CODES.filter(code => !emitted.has(code))).toEqual([]);
   });
 

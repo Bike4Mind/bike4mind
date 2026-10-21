@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { OMITTED_QUALITY_TIER, OpenAIImageCostCalculator } from './OpenAIImageCostCalculator';
-import { ImageModels, OPENAI_IMAGE_MODELS } from '@bike4mind/common';
+import { ImageModels, isGPTImage25Model, OPENAI_IMAGE_MODELS } from '@bike4mind/common';
 
 describe('OpenAIImageCostCalculator', () => {
   const calculator = new OpenAIImageCostCalculator();
@@ -240,6 +240,84 @@ describe('OpenAIImageCostCalculator', () => {
         });
       });
     }
+  });
+
+  describe('getInputImageCost', () => {
+    // Worst-case USD per input image; keyed by every registered OpenAI model, so one added
+    // without an input rate (or without an entry here) fails.
+    const LOW = 581;
+    const HIGH = 6821;
+    const expectedPerImage: Record<(typeof OPENAI_IMAGE_MODELS)[number], number> = {
+      [ImageModels.GPT_IMAGE_1]: (LOW * 10) / 1e6,
+      [ImageModels.GPT_IMAGE_1_5]: (LOW * 8) / 1e6,
+      [ImageModels.GPT_IMAGE_1_MINI]: (LOW * 2.5) / 1e6,
+      [ImageModels.GPT_IMAGE_2]: (HIGH * 8) / 1e6,
+      [ImageModels.GPT_IMAGE_2_5_SUNBURST]: (HIGH * 8) / 1e6,
+      [ImageModels.GPT_IMAGE_2_5_FLARE]: (HIGH * 8) / 1e6,
+    };
+
+    for (const model of OPENAI_IMAGE_MODELS) {
+      it(`${model}: prices 0, 1 and 16 input images at the per-model rate`, () => {
+        expect(calculator.getInputImageCost({ model, inputImageCount: 0 })).toBe(0);
+        expect(calculator.getInputImageCost({ model, inputImageCount: 1 })).toBeCloseTo(expectedPerImage[model], 10);
+        expect(calculator.getInputImageCost({ model, inputImageCount: 16 })).toBeCloseTo(
+          16 * expectedPerImage[model],
+          10
+        );
+      });
+
+      it(`${model}: input term does not depend on quality or size`, () => {
+        const qualities = isGPTImage25Model(model)
+          ? (['low', 'medium', 'high', 'xhigh', 'max', 'auto', undefined] as const)
+          : (['low', 'medium', 'high', 'auto', undefined] as const);
+        const costs = qualities.flatMap(quality =>
+          (['1024x1024', '1536x1024', '3840x2160', undefined] as const).map(size =>
+            calculator.getInputImageCost({ model, quality, size, inputImageCount: 2 })
+          )
+        );
+        expect(new Set(costs)).toEqual(new Set([calculator.getInputImageCost({ model, inputImageCount: 2 })]));
+      });
+    }
+
+    it('bills gpt-image-2 inputs about 9x a gpt-image-1.5 input (high vs low fidelity)', () => {
+      expect(calculator.getInputImageCost({ model: ImageModels.GPT_IMAGE_2, inputImageCount: 1 })).toBeCloseTo(
+        0.054568,
+        10
+      );
+      expect(calculator.getInputImageCost({ model: ImageModels.GPT_IMAGE_1_5, inputImageCount: 1 })).toBeCloseTo(
+        0.004648,
+        10
+      );
+    });
+
+    it('resolves versioned model ids', () => {
+      expect(calculator.getInputImageCost({ model: 'gpt-image-2-2026-04-21', inputImageCount: 3 })).toBe(
+        calculator.getInputImageCost({ model: ImageModels.GPT_IMAGE_2, inputImageCount: 3 })
+      );
+    });
+
+    it('treats a missing, negative or fractional count leniently', () => {
+      const model = ImageModels.GPT_IMAGE_2;
+      expect(calculator.getInputImageCost({ model })).toBe(0);
+      expect(calculator.getInputImageCost({ model, inputImageCount: -3 })).toBe(0);
+      expect(calculator.getInputImageCost({ model, inputImageCount: 1.9 })).toBe(
+        calculator.getInputImageCost({ model, inputImageCount: 1 })
+      );
+    });
+
+    it('bills an unrecognized GPT model id at the highest rate rather than throwing', () => {
+      expect(calculator.getInputImageCost({ model: 'gpt-image-9', inputImageCount: 1 })).toBeCloseTo(
+        (HIGH * 8) / 1e6,
+        10
+      );
+    });
+
+    it('leaves getCost (the per-output price) unaffected by inputImageCount', () => {
+      const model = ImageModels.GPT_IMAGE_2;
+      expect(calculator.getCost({ model, quality: 'high', size: '1024x1024', inputImageCount: 16 })).toBe(
+        calculator.getCost({ model, quality: 'high', size: '1024x1024' })
+      );
+    });
   });
 
   describe('unsupported models', () => {

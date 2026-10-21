@@ -33,7 +33,7 @@ import UploadFileIcon from '@mui/icons-material/UploadFile';
 import FolderSharedIcon from '@mui/icons-material/FolderShared';
 import EmbeddedFileBrowser, { EmbeddedFileBrowserHandle } from '@client/app/components/Files/EmbeddedFileBrowser';
 import { createFabFileOnServerWithUpload } from '@client/app/utils/filesAPICalls';
-import { toast } from 'react-hot-toast';
+import { toast } from 'sonner';
 import { getErrorMessage } from '@client/app/utils/error';
 import { GetFileIcon } from '@client/app/utils/fabFileUtils';
 import SquareSlideToggle from '@client/app/components/SquareSlideToggle';

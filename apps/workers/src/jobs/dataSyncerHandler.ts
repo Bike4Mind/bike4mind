@@ -1,7 +1,7 @@
 /**
  * DataSyncer Lambda Handler
  *
- * Seeds a preview environment (pr* stages) with staging's config on its first deploy:
+ * Seeds a preview environment (pr* stages) with staging's config on preview deploys:
  * adminsettings (minus sensitive rows) and rapid reply mappings, copied directly between
  * the two MongoDB databases. A syncmarkers doc makes later deploys of the same preview skip.
  *
@@ -14,8 +14,9 @@ import { MongoClient } from 'mongodb';
 import { settingsMap } from '@bike4mind/common';
 
 interface DataSyncerEvent {
-  // Whether to sync preview settings from staging (only on initial PR deploy)
+  // Whether to sync preview settings from staging on preview deploys; the syncmarker makes repeat runs skip
   syncPreviewSettings?: boolean;
+  resultVersion?: 1;
 }
 
 interface DataSyncerResponse {
@@ -23,6 +24,14 @@ interface DataSyncerResponse {
   message: string;
   previewSettingsSyncedCount?: number;
   error?: string;
+}
+
+interface StrictSeedResponse {
+  schemaVersion: 1;
+  status: 'seeded' | 'already_seeded' | 'failed' | 'misconfigured';
+  stage: string;
+  copiedCount: number;
+  marker?: { key: string; stage: string };
 }
 
 // Collections to sync from staging to preview environments
@@ -54,6 +63,8 @@ function syncSourceFilter(collectionName: string): Record<string, unknown> {
 // Batch size for memory-efficient streaming
 const BATCH_SIZE = 1000;
 
+const PREVIEW_STAGE_PATTERN = /^pr\d+$/;
+
 const SYNC_MARKER_COLLECTION = 'syncmarkers';
 const SYNC_MARKER_KEY = 'staging-config-sync';
 
@@ -62,13 +73,19 @@ const SYNC_MARKER_KEY = 'staging-config-sync';
 
 // `skipped` names why nothing was copied, so the deploy log (which only sees the response) can tell
 // an already-synced preview from a misconfigured one.
-async function syncPreviewSettingsFromStaging(): Promise<{ synced: number; skipped?: string }> {
+async function syncPreviewSettingsFromStaging(strict = false): Promise<{
+  synced: number;
+  alreadySeeded?: boolean;
+  markerStage?: string;
+  skipped?: string;
+  emptyCollections?: string[];
+}> {
   console.log('=== Syncing Preview Settings from Staging ===');
 
   const stage = process.env.SEED_STAGE_NAME || 'unknown';
 
   // Strict validation: only allow preview stages (pr<number>), never staging/production
-  if (!/^pr\d+$/.test(stage)) {
+  if (!PREVIEW_STAGE_PATTERN.test(stage)) {
     console.error(
       `✗ Error: Target stage "${stage}" is not a valid preview environment (must match pr<number>). Sync aborted for safety.`
     );
@@ -96,6 +113,7 @@ async function syncPreviewSettingsFromStaging(): Promise<{ synced: number; skipp
   const targetClient = new MongoClient(previewUri);
 
   let totalSynced = 0;
+  const skippedCollections: string[] = [];
 
   try {
     // Connect to target first to check sync marker
@@ -105,10 +123,16 @@ async function syncPreviewSettingsFromStaging(): Promise<{ synced: number; skipp
     // Skip if already synced for this preview environment
     const existingMarker = await targetDb.collection(SYNC_MARKER_COLLECTION).findOne({ key: SYNC_MARKER_KEY });
     if (existingMarker) {
-      const markerDoc = existingMarker as { syncedAt?: Date };
+      const markerDoc = existingMarker as { syncedAt?: Date; stage?: string };
+      if (strict && markerDoc.stage !== stage) throw new Error('Sync marker stage does not match');
       console.log(`✓ Staging configs already synced at ${markerDoc.syncedAt?.toISOString()}, skipping`);
       console.log('  (To force re-sync, delete the marker from the syncmarkers collection)');
-      return { synced: 0, skipped: `already synced at ${markerDoc.syncedAt?.toISOString()}` };
+      return {
+        synced: 0,
+        alreadySeeded: true,
+        markerStage: markerDoc.stage,
+        skipped: `already synced at ${markerDoc.syncedAt?.toISOString()}`,
+      };
     }
 
     await sourceClient.connect();
@@ -137,6 +161,7 @@ async function syncPreviewSettingsFromStaging(): Promise<{ synced: number; skipp
 
       if (totalDocs === 0) {
         console.log(`  - No documents found in ${collectionName}. Skipping.`);
+        skippedCollections.push(collectionName);
         continue;
       }
 
@@ -197,6 +222,7 @@ async function syncPreviewSettingsFromStaging(): Promise<{ synced: number; skipp
           insertedCount += batchResult.insertedCount;
         }
 
+        if (strict && insertedCount !== totalDocs) throw new Error('Source copy was incomplete');
         console.log(`  ✓ Sync complete: ${insertedCount} documents.`);
         totalSynced += insertedCount;
 
@@ -234,9 +260,15 @@ async function syncPreviewSettingsFromStaging(): Promise<{ synced: number; skipp
               }
             });
           } catch (rollbackError) {
+            const originalMessage = error instanceof Error ? error.message : String(error);
+            const rollbackMessage = rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
             console.error(
               `  ✗ Rollback failed:`,
               rollbackError instanceof Error ? rollbackError.message : rollbackError
+            );
+            throw new Error(
+              `Sync of ${collectionName} failed: ${originalMessage} (rollback also failed: ${rollbackMessage})`,
+              { cause: error }
             );
           }
         } else {
@@ -247,10 +279,34 @@ async function syncPreviewSettingsFromStaging(): Promise<{ synced: number; skipp
       }
     }
 
+    // An all-empty source points at a misconfigured staging, so leave the marker unset and retry.
+    // A single empty collection is a normal state and must not make later deploys re-copy.
+    if (totalSynced === 0) {
+      const allSourcesEmpty = skippedCollections.length === COLLECTIONS_TO_SYNC.length;
+      const reason = allSourcesEmpty
+        ? `source was empty for ${skippedCollections.join(', ')}`
+        : 'no documents were copied';
+      console.log(`  - Sync marker not set: ${reason}`);
+      return {
+        synced: 0,
+        skipped: allSourcesEmpty
+          ? 'source empty for all collections; will retry next deploy'
+          : 'no documents copied; will retry next deploy',
+      };
+    }
+
     // Mark sync as complete so subsequent deploys skip this step
     await targetDb
       .collection(SYNC_MARKER_COLLECTION)
-      .updateOne({ key: SYNC_MARKER_KEY }, { $set: { key: SYNC_MARKER_KEY, syncedAt: new Date() } }, { upsert: true });
+      .updateOne(
+        { key: SYNC_MARKER_KEY },
+        { $set: { key: SYNC_MARKER_KEY, stage, syncedAt: new Date() } },
+        { upsert: true }
+      );
+    if (strict) {
+      const marker = await targetDb.collection(SYNC_MARKER_COLLECTION).findOne({ key: SYNC_MARKER_KEY, stage });
+      if (marker?.stage !== stage) throw new Error('Sync marker was not persisted');
+    }
     console.log('  ✓ Sync marker set');
 
     console.log(`\n✓ Preview settings sync complete: ${totalSynced} total documents synced`);
@@ -260,14 +316,61 @@ async function syncPreviewSettingsFromStaging(): Promise<{ synced: number; skipp
     console.log('✓ MongoDB connections closed');
   }
 
-  return { synced: totalSynced };
+  return { synced: totalSynced, markerStage: stage, emptyCollections: skippedCollections };
 }
 
-export const handler: Handler<DataSyncerEvent, DataSyncerResponse> = async event => {
+async function strictSeed(event: DataSyncerEvent): Promise<StrictSeedResponse> {
+  const rawStage = process.env.SEED_STAGE_NAME ?? '';
+  const stage = /^pr[1-9][0-9]*$/.test(rawStage) ? rawStage : '';
+  const result = (status: StrictSeedResponse['status']): StrictSeedResponse => ({
+    schemaVersion: 1,
+    status,
+    stage,
+    copiedCount: 0,
+  });
+  try {
+    const uri = Resource.MONGODB_URI?.value;
+    const stagingUri = process.env.STAGING_MONGODB_URI;
+    if (
+      !stage ||
+      !uri ||
+      !stagingUri ||
+      event.syncPreviewSettings !== true ||
+      uri.replace('%STAGE%', stage) === stagingUri
+    ) {
+      return result('misconfigured');
+    }
+    const synced = await syncPreviewSettingsFromStaging(true);
+    if (synced.markerStage !== stage || (!synced.alreadySeeded && synced.synced <= 0)) return result('failed');
+    return {
+      schemaVersion: 1,
+      status: synced.alreadySeeded ? 'already_seeded' : 'seeded',
+      stage,
+      copiedCount: synced.synced,
+      marker: { key: SYNC_MARKER_KEY, stage },
+    };
+  } catch (error) {
+    // Driver messages can contain connection strings; log only safe diagnostic fields.
+    const errorType = error instanceof Error && /^Mongo[A-Za-z]+Error$/.test(error.name) ? error.name : 'Error';
+    const errorCode =
+      error instanceof Error && 'code' in error && typeof error.code === 'number' ? error.code : undefined;
+    const invariantFailures = [
+      'Sync marker stage does not match',
+      'Source copy was incomplete',
+      'Sync marker was not persisted',
+    ];
+    const reason = error instanceof Error && invariantFailures.includes(error.message) ? error.message : undefined;
+    console.error('Preview seed failed', { stage, errorType, errorCode, reason });
+    return result('failed');
+  }
+}
+
+export const handler: Handler<DataSyncerEvent, DataSyncerResponse | StrictSeedResponse> = async event => {
+  if (event.resultVersion === 1) return strictSeed(event);
   console.log('DataSyncer invoked with event:', event);
 
-  const isPreviewEnvironment = process.env.SEED_STAGE_NAME?.startsWith('pr') || false;
-  // syncPreviewSettings is passed from the invoke script, true only on initial PR deploy
+  const isPreviewEnvironment = PREVIEW_STAGE_PATTERN.test(process.env.SEED_STAGE_NAME ?? '');
+  // syncPreviewSettings is passed from the invoke script on preview deploys; the syncmarker makes repeat runs skip
   const shouldSyncPreviewSettings = event.syncPreviewSettings === true;
 
   console.log(
@@ -287,16 +390,17 @@ export const handler: Handler<DataSyncerEvent, DataSyncerResponse> = async event
       throw new Error('SEED_STAGE_NAME environment variable is not set - required for MONGODB_URI stage replacement');
     }
 
-    // Sync preview settings from staging (only on initial PR deploy when SYNC_PREVIEW_SETTINGS=true)
+    // Sync preview settings from staging on preview deploys; the syncmarker makes repeat runs skip
     if (shouldSyncPreviewSettings) {
       try {
-        const { synced, skipped } = await syncPreviewSettingsFromStaging();
+        const { synced, skipped, emptyCollections } = await syncPreviewSettingsFromStaging();
         previewSettingsSyncedCount = synced;
         const collectionsStr = COLLECTIONS_TO_SYNC.join(', ');
         messages.push(
           skipped
             ? `Skipped staging sync: ${skipped}`
-            : `Synced ${synced} documents from staging (collections: ${collectionsStr})`
+            : `Synced ${synced} documents from staging (collections: ${collectionsStr})` +
+                (emptyCollections?.length ? `; empty in source: ${emptyCollections.join(', ')}` : '')
         );
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : 'Unknown error';
@@ -305,7 +409,7 @@ export const handler: Handler<DataSyncerEvent, DataSyncerResponse> = async event
       }
     } else {
       console.log('⏭️  Skipping preview settings sync (SYNC_PREVIEW_SETTINGS not enabled)');
-      messages.push('Skipped preview settings sync (not initial PR deploy)');
+      messages.push('Skipped preview settings sync (SYNC_PREVIEW_SETTINGS not enabled)');
     }
 
     return {

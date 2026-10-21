@@ -21,11 +21,13 @@ describe('resolveVisibility', () => {
     expect(r1.ok).toBe(false);
     if (!r1.ok) expect(r1.code).toBe('invalid_override');
 
-    // organization tier cannot go down to 'private' or 'project'
-    expect(resolveVisibility('organization', 'private').ok).toBe(false);
+    // organization tier cannot go to 'project'
     expect(resolveVisibility('organization', 'project').ok).toBe(false);
+  });
 
-    // project tier cannot go down to 'private'
-    expect(resolveVisibility('project', 'private').ok).toBe(false);
+  it('allows Private at every tier, so an owner can always take a page back to owner-only', () => {
+    expect(resolveVisibility('user', 'private')).toEqual({ ok: true, visibility: 'private' });
+    expect(resolveVisibility('project', 'private')).toEqual({ ok: true, visibility: 'private' });
+    expect(resolveVisibility('organization', 'private')).toEqual({ ok: true, visibility: 'private' });
   });
 });

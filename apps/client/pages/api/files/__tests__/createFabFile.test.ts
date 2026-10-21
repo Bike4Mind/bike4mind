@@ -4,6 +4,7 @@ import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mi
 
 const h = vi.hoisted(() => ({
   fabFileCreate: vi.fn(),
+  signUrl: vi.fn(),
   userFindById: vi.fn(),
   findByDatalakeTag: vi.fn(),
   // The prefix-arm scope gate's candidate-lake lookup (assertDataLakeTagWriteScope's `newFile`
@@ -31,17 +32,20 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@server/utils/browserUploadUrl', () => ({ resolveBrowserUploadUrl: (_id: string, url: string) => url }));
-vi.mock('@server/utils/storage', () => ({
-  getFilesStorage: () => ({ upload: vi.fn(), getSignedUrl: vi.fn(async () => 'https://s3.test/put') }),
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
+  getFilesStorage: () => ({ upload: vi.fn(), getSignedUrl: h.signUrl }),
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  organizationRepository: { findById: async (id: string) => ({ id, currentStorageSize: 0 }) },
   adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
   // Scoped-override store the admission contract's lever (#1680) resolves through.
   scopedSettingsRepository: { findOverrides: h.findOverrides },
   dataLakeRepository: { findByDatalakeTag: h.findByDatalakeTag, find: h.lakeFind },
   dataLakeBatchRepository: { findById: h.batchFindById },
   dataLakeAccessGrantRepository: { listByLake: h.listByLake },
+  fabFileRepository: { update: vi.fn() },
+  userRepository: {},
   FabFile: { create: h.fabFileCreate },
   User: { findById: h.userFindById },
   withTransaction: (fn: () => Promise<unknown>) => fn(),
@@ -60,7 +64,7 @@ vi.mock('@server/dataLakes/toAccessContext', () => ({
   })),
 }));
 
-// Only the settings read is stubbed; checkStorageLimitForFile, resolveSupportedMimeType, etc.
+// Only the settings read is stubbed; checkStorageLimitForOwner, resolveSupportedMimeType, etc.
 // are real gates on this path.
 vi.mock('@bike4mind/utils', async importOriginal => {
   const actual = await importOriginal<Record<string, unknown>>();
@@ -373,5 +377,48 @@ describe('POST /api/files/createFabFile - lake write authorization beyond the cr
 describe('POST /api/files/createFabFile - scope gate', () => {
   it('requires files:write at the baseApi route gate', () => {
     expect(h.baseApiOptions).toEqual({ requiredScopes: ['files:write'] });
+  });
+});
+
+describe('POST /api/files/createFabFile - signing boundaries', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.findByDatalakeTag.mockResolvedValue(null);
+    h.lakeFind.mockResolvedValue([]);
+    h.userFindById.mockResolvedValue({ id: 'u1', storageLimit: 1000, currentStorageSize: 0 });
+    h.fabFileCreate.mockImplementation(async data => ({ id: 'f1', ...data, moderationStatus: 'clean' }));
+    h.signUrl.mockImplementation(
+      async (_path, mode, options) => `https://${options?.audience === 'browser' ? 'public' : 'private'}.test/${mode}`
+    );
+  });
+
+  it('persists a private GET URL for inline content and returns a separate browser GET', async () => {
+    const { res, json } = makeRes();
+    await run(body({ content: 'owned text' }), res);
+    expect(h.fabFileCreate.mock.calls[0][0].fileUrl).toBe('https://private.test/get');
+    expect(json.mock.calls[0][0].fileUrl).toBe('https://public.test/get');
+    expect(h.signUrl.mock.calls[0][1]).toBe('get');
+  });
+
+  it.each(['tmp', 'temp', 'x/backups', 'text-edit-backups'])(
+    'ignores a caller-chosen %s prefix, so the object stays under a tracked key',
+    async prefix => {
+      const { res } = makeRes();
+      await run(body({ prefix }), res);
+      const persisted = h.fabFileCreate.mock.calls[0][0] as { filePath: string; prefix?: string };
+      expect(persisted.prefix).toBeUndefined();
+      expect(persisted.filePath).toMatch(/^[0-9a-f-]{36}\.txt$/);
+    }
+  );
+
+  it('keeps URL-less uploads on private PUT signing without a browser GET', async () => {
+    const { res, json } = makeRes();
+    await run(body(), res);
+    expect(json.mock.calls[0][0].presignedUrl).toBe('https://private.test/put');
+    expect(json.mock.calls[0][0].fileUrl).toBeUndefined();
+    expect(h.signUrl).toHaveBeenCalledTimes(1);
+    expect(h.signUrl.mock.calls[0][1]).toBe('put');
+    // Bound to the declared fileSize, so S3 refuses a PUT of any other length.
+    expect(h.signUrl.mock.calls[0][2]).toMatchObject({ ContentLength: 10 });
   });
 });

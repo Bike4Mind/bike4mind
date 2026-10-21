@@ -4,11 +4,13 @@
  */
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import type {
+  QaDiffTest,
   QaFacets,
   QaFlakyRow,
   QaMediaView,
   QaOverview,
   QaRunDetail,
+  QaRunDiff,
   QaRunPage,
   QaRunSummary,
   QaSeriesPoint,
@@ -19,11 +21,13 @@ import type {
 import { api } from '@client/app/contexts/ApiContext';
 
 export type {
+  QaDiffTest,
   QaFacets,
   QaFlakyRow,
   QaMediaView,
   QaOverview,
   QaRunDetail,
+  QaRunDiff,
   QaRunPage,
   QaRunSummary,
   QaSeriesPoint,

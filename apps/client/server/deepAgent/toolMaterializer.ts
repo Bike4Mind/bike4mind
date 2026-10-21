@@ -13,20 +13,23 @@ import {
   fabFileChunkRepository,
   fabFileRepository,
   fallbackLakeSettingsRepository,
-  imageModerationIncidentRepository,
   lakeAccessEventRepository,
   organizationRepository,
   projectRepository,
+  questRepository,
   scopedSettingsRepository,
+  sessionRepository,
   userRepository,
 } from '@bike4mind/database';
 import { getAvailableModels, type ApiKeyTable, type ICompletionBackend } from '@bike4mind/llm-adapters';
 import type { RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import type { IUserDocument } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
-import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
+import { lakeWriteToolDb } from '@server/dataLakes/lakeWriteToolDb';
+import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import type { ToolMaterializer } from '@bike4mind/agents';
-import { buildSystemApiKeyTable } from './resolveBackend';
+import { buildSystemApiKeyTable } from '@bike4mind/server-utils/deepAgent/resolveBackend';
+import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
 
 /**
  * Builds the owner-scoped b4m toolbelt for a deep agent's act step.
@@ -80,6 +83,8 @@ export function createDeepAgentToolMaterializer(config: DeepAgentToolMaterialize
       ),
     ]);
 
+    // No organizationId: a charter carries only its owner, so lake tools here stay personal. Inferring an
+    // org from a linked agent would let a background mission write into an org the owner never chose.
     const toolDeps: ToolBuilderDeps = {
       userId: ownerUserId,
       user: owner,
@@ -98,10 +103,15 @@ export function createDeepAgentToolMaterializer(config: DeepAgentToolMaterialize
         // Audit trail for images blocked by the image_generation/edit_image tools'
         // moderation gate. The gate itself is unconditional (constructed
         // inline in the tool) - this only wires the incident record, not the block.
-        imageModerationIncidents: imageModerationIncidentRepository,
+        imageModerationIncidents,
+        // Owner lookup for edit_image's generated-image keys (resolveOwnedGeneratedImageUrl). Narrow on
+        // purpose: the whole repo would also enable incrementImageCount, which this host never wired.
+        quests: questRepository,
+        sessions: { findAllByIds: sessionRepository.findAllByIds.bind(sessionRepository) },
         organizations: organizationRepository,
         lakeAccessEvents: lakeAccessEventRepository,
         scopedSettings: scopedSettingsRepository,
+        ...lakeWriteToolDb,
       },
       storage: getFilesStorage(),
       imageGenerateStorage: getGeneratedImageStorage(),
@@ -110,6 +120,8 @@ export function createDeepAgentToolMaterializer(config: DeepAgentToolMaterialize
       model: config.model,
       precomputed: { adminSettingsEnforceCredits: false, models },
       apiKeyTable: apiKeyTable as ApiKeyTable,
+      // Deep agents wake on their own schedule; no request authenticated the turn.
+      authOrigin: 'internal',
     };
 
     // No-op callbacks: deep agents are headless (no websocket/quest doc to

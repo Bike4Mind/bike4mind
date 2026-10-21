@@ -1,4 +1,6 @@
 import { ToolContext, ToolDefinition } from '../../base/types';
+import { INDEXED_TOOL_CITATION_RULE, citationNumbersById } from '../../citationNumbering';
+import { hasLakeArms } from '../../../../dataLakeService/narrowLakeAccessToSession';
 import {
   citationTagDescription,
   CitableSource,
@@ -18,7 +20,12 @@ import {
 import { filterRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
 import type { Logger } from '@bike4mind/observability';
-import { resolveSessionLakeAccess } from '../../base/resolveSessionLakeAccess';
+import {
+  LIBRARY_OFF_NO_LAKE_MESSAGE,
+  admittedAttachmentIds,
+  resolveSessionLakeAccess,
+  sessionExcludesLibrary,
+} from '../../base/resolveSessionLakeAccess';
 import {
   lakeMembershipsFrom,
   warnIfManyLakeMemberships,
@@ -103,6 +110,10 @@ function semanticConflictPassages(results: SemanticChunkResult[], maxChunkChars:
   return results.map(r => ({ fabFileId: r.fileId, text: servedPassageText(r, maxChunkChars).text }));
 }
 
+/** A result heading's label: the turn's shared `[N]` when it has one, else its local position. */
+const citationLabel = (citationNumber: number | undefined, index: number): string =>
+  citationNumber === undefined ? `${index + 1}.` : `[${citationNumber}]`;
+
 /**
  * Format semantic passages WITH their content so the model can answer without retrieving.
  *
@@ -141,7 +152,9 @@ function formatSemanticResults(
   scan?: SemanticSearchScanAccounting,
   skipNotice?: SkipNotice | null,
   logger?: Logger,
-  bounding?: { budgetBound: boolean; droppedCount: number }
+  bounding?: { budgetBound: boolean; droppedCount: number },
+  /** fileId -> the turn's shared [N] (emitSemanticCitables); absent when the turn is not numbered. */
+  citationNumbers?: ReadonlyMap<string, number>
 ): string {
   let clippedCount = 0;
   let longestChars = 0;
@@ -164,7 +177,7 @@ function formatSemanticResults(
     // parenthetical rather than folded into it - the leading tokens of this shape are what
     // defangRetrievedContent matches on. Never from `createdAt` (#3047).
     return (
-      `${i + 1}. **${toContentLabel(prettyFileName(r.fileName))}** (ID: ${r.fileId}, relevance ${r.score.toFixed(2)})${documentDateClause(r.documentDate)}\n` +
+      `${citationLabel(citationNumbers?.get(r.fileId), i)} **${toContentLabel(prettyFileName(r.fileName))}** (ID: ${r.fileId}, relevance ${r.score.toFixed(2)})${documentDateClause(r.documentDate)}\n` +
       text
     );
   });
@@ -215,6 +228,7 @@ function formatSemanticResults(
     budgetNote +
     `Found ${results.length} relevant passage(s) in the knowledge base \u2014 the content is included below, so answer directly and only call retrieve_knowledge_content if you need MORE detail from a specific file:\n\n` +
     `${GROUNDED_NO_INVENTION_RULE}\n\n` +
+    (citationNumbers?.size ? `${INDEXED_TOOL_CITATION_RULE}\n\n` : '') +
     conflictNote +
     renderRetrievedContentBlock(blocks)
   );
@@ -440,17 +454,17 @@ async function emitSemanticCitables(
    * concept (agent-scoped), which leaves the field off so the chip is not mislabelled as library.
    */
   originLakes?: ResolvedLakeAccess[]
-): Promise<void> {
+): Promise<Map<string, number> | undefined> {
   // Citables - dedup to one chip per file (multiple chunks can match the same article).
   // `ranked` is score-descending, so the chunk that survives the dedup is the file's BEST hit,
   // and that is the passage chunkId/fullContext anchor the reader is deep-linked to.
   const seenFile = new Set<string>();
-  const citables: CitableSource[] = [];
+  const unnumberedCitables: CitableSource[] = [];
   for (const r of ranked) {
     if (seenFile.has(r.fileId)) continue;
     seenFile.add(r.fileId);
     const conflictsWith = conflictsByFileId.get(r.fileId);
-    citables.push({
+    unnumberedCitables.push({
       id: r.fileId,
       type: 'document',
       title: r.fileName,
@@ -481,6 +495,8 @@ async function emitSemanticCitables(
       },
     });
   }
+  const numberedCitables = context.numberCitables?.(unnumberedCitables);
+  const citables = numberedCitables ?? unnumberedCitables;
   const names = citables.slice(0, 3).map(c => prettyFileName(c.title));
   const more = citables.length > 3 ? ` +${citables.length - 3} more` : '';
   // Appended to the one found-status rather than a second update, which would read as a bug.
@@ -519,6 +535,7 @@ async function emitSemanticCitables(
     } as any,
     `📄 Found ${citables.length} relevant doc(s) in ${corpusLabel}: ${names.join(', ')}${more}${partial}`
   );
+  return numberedCitables ? citationNumbersById(numberedCitables) : undefined;
 }
 
 /**
@@ -656,11 +673,15 @@ async function trySemanticKbSearch(
     // `includeShared: true` alongside these, so emptying them leaves the caller's own and shared
     // files as the corpus - which is exactly the intent, and keeps their whole library rankable.
     const { dataLakeTags, dataLakeTagPrefixes, lakes, lakeViewComplete } = await resolveSessionLakeAccess(context);
+    // Library off: only lake arms and the chat's own attachments may match. With neither, the
+    // keyword arm reports the empty corpus (an ownership query with zero arms would throw on
+    // restrictToDataLake).
+    const excludesLibrary = await sessionExcludesLibrary(context);
+    const admitFileIds = admittedAttachmentIds(context, excludesLibrary);
     // No accessible data lake - keyword search owns the user's own files. EXCEPT when the lakes
-    // were suppressed deliberately: there the caller does have a corpus worth ranking (their own
-    // files), and falling through to the metadata-only keyword arm would lose content search over
-    // it entirely. Left intact for the genuinely lake-less caller so their behaviour is unchanged.
-    if (dataLakeTags.length === 0 && !context.suppressLakeArms) return NO_SEMANTIC_RESULT;
+    // were suppressed deliberately, or library-off admits attachments: there the caller has a corpus
+    // worth ranking, and the metadata-only keyword arm would lose content search over it.
+    if (dataLakeTags.length === 0 && !context.suppressLakeArms && !admitFileIds.length) return NO_SEMANTIC_RESULT;
 
     const ceiling = resolvePassageCeiling(bounds.rawMaxResults, bounds.defaultResults, budgets.kbResultTokenBudget);
     // Widen the candidate pool when either adaptive knob is on: minScore is re-applied CLIENT-side
@@ -671,6 +692,13 @@ async function trySemanticKbSearch(
     const topK = Math.max(ceiling, adaptive ? KB_SEARCH_MAX_RESULTS : 0, KB_SEARCH_CANDIDATE_FLOOR);
 
     const lakeMemberships = lakeMembershipsFrom(lakes);
+    if (
+      excludesLibrary &&
+      !hasLakeArms({ dataLakeTags, dataLakeTagPrefixes, lakeMemberships }) &&
+      !admitFileIds.length
+    ) {
+      return NO_SEMANTIC_RESULT;
+    }
     warnIfManyLakeMemberships(lakeMemberships, context.logger, 'search_knowledge_base:semantic');
     const search = await semanticDataLakeSearch(
       {
@@ -688,6 +716,8 @@ async function trySemanticKbSearch(
         // Without this the arm below returns empty for a suppressed session and the turn silently
         // falls to metadata-only keyword search - see ownFilesOnly.
         ownFilesOnly: context.suppressLakeArms === true,
+        restrictToDataLake: excludesLibrary,
+        admitFileIds,
         budgets,
         vectorSearchEnabled,
         // Per-lake supersession collapse - `lakes` is only ever an attribution source here, never a
@@ -771,7 +801,7 @@ async function trySemanticKbSearch(
     // One pass over the served passages, feeding the chips below and the model's note further down,
     // so the reader is marked with exactly the conflicts the model is warned about (#3041).
     const conflict = buildRetrievalConflictSignal(semanticConflictPassages(ranked, budgets.maxChunkChars));
-    await emitSemanticCitables(
+    const citationNumbers = await emitSemanticCitables(
       context,
       ranked,
       'the data lake',
@@ -806,15 +836,17 @@ async function trySemanticKbSearch(
           // pass above returns its input untouched when the cap is off, so it is not a ceiling
           // bound of its own.
           droppedCount: Math.min(search.results.length, ceiling) - ranked.length,
-        }
+        },
+        citationNumbers
       ),
       skipNotice,
       datalakeTags: datalakeTagsFrom(ranked.flatMap(r => r.fileTags)),
       fileHits: ranked.map(r => ({ id: r.fileId, fileName: r.fileName })),
-      // semanticDataLakeSearch's file search is a MIXED corpus (includeShared: true, no
-      // restrictToDataLake - collectScopedFiles ORs the caller's own/shared files in alongside
-      // the lake arms), same as the keyword arm below - a hit with no recoverable tag may be the
-      // caller's own private file, so this must NOT fall back to the full scope.
+      // semanticDataLakeSearch's file search can be a MIXED corpus (includeShared: true, and unless
+      // the library is off collectScopedFiles ORs the caller's own/shared files in alongside the
+      // lake arms; even off, attached files are admitted), same as the keyword arm below - a hit
+      // with no recoverable tag may be the caller's own private file, so this must NOT fall back to
+      // the full scope.
       lakeIds: attributeAccessedLakeIds(
         ranked.map(r => r.fileTags),
         lakes,
@@ -927,7 +959,7 @@ async function tryScopedSemanticKbSearch(
     const ranked = bound.kept;
     // Same single pass as the owner-scoped arm above; see its comment.
     const conflict = buildRetrievalConflictSignal(semanticConflictPassages(ranked, budgets.maxChunkChars));
-    await emitSemanticCitables(
+    const citationNumbers = await emitSemanticCitables(
       context,
       ranked,
       "this agent's knowledge base",
@@ -956,7 +988,8 @@ async function tryScopedSemanticKbSearch(
           // pass above returns its input untouched when the cap is off, so it is not a ceiling
           // bound of its own.
           droppedCount: Math.min(search.results.length, ceiling) - ranked.length,
-        }
+        },
+        citationNumbers
       ),
       skipNotice,
       datalakeTags: [],
@@ -1050,7 +1083,7 @@ async function resolveKbBudgets(context: ToolContext): Promise<ResolvedSearchBud
  * validates params, so whatever the model emits arrives here as-is and must be made safe at the
  * handler (the shape knowledgeBaseRetrieve, bashExecute and wolfram_alpha already use). The CLI's
  * tool_search takes the other route for the same problem - see ToolSearchParamsSchema in
- * packages/cli/src/tools/toolSearchTool.ts, which safeParses and REJECTS out-of-range rather than
+ * b4m-core/agents/src/toolSearch/toolSearchTool.ts, which safeParses and REJECTS out-of-range rather than
  * clamping; that stays out of the chat path, where a rejected search costs the turn. Both ends are clamped
  * because every out-of-range value fails SILENTLY otherwise: 0 serves no passages while telling
  * the model nothing, a negative slices off the best-ranked results, and a non-numeric poisons
@@ -1117,7 +1150,11 @@ interface KnowledgeBaseSearchParams {
  * at all - which is worse than the delimited case, not better. No untrusted block wraps this: it
  * returns no document text, and the block would say "this is data" about our own listing.
  */
-function formatSearchResults(files: IFabFileDocument[]): string {
+function formatSearchResults(
+  files: IFabFileDocument[],
+  /** fileId -> the turn's shared [N]; absent when the turn is not numbered. */
+  citationNumbers?: ReadonlyMap<string, number>
+): string {
   if (files.length === 0) {
     return 'No documents found matching your search query in your knowledge base.';
   }
@@ -1132,7 +1169,7 @@ function formatSearchResults(files: IFabFileDocument[]): string {
     const pipeline = stall ? `\n   Pipeline: ${stall}` : '';
 
     return (
-      `${index + 1}. **${toContentLabel(file.fileName)}** (ID: ${file.id})\n` +
+      `${citationLabel(citationNumbers?.get(file.id), index)} **${toContentLabel(file.fileName)}** (ID: ${file.id})\n` +
       `   Type: ${fileType} | MIME: ${file.mimeType}\n` +
       `   Tags: ${tags}${pipeline}${notes}`
     );
@@ -1141,6 +1178,7 @@ function formatSearchResults(files: IFabFileDocument[]): string {
   return (
     `Found ${files.length} document(s) in your knowledge base:\n\n` +
     formattedFiles.join('\n\n') +
+    (citationNumbers?.size ? `\n\n${INDEXED_TOOL_CITATION_RULE}` : '') +
     '\n\n*Use retrieve_knowledge_content with a file ID or tags to read the actual document content.*'
   );
 }
@@ -1397,6 +1435,25 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             // Same degraded-read rule as the semantic arm's origin lakes.
             keywordArmOriginLakes = lakeViewComplete === false ? undefined : lakes;
             const lakeMemberships = lakeMembershipsFrom(lakes);
+            const excludesLibrary = await sessionExcludesLibrary(context);
+            const admitFileIds = admittedAttachmentIds(context, excludesLibrary);
+            if (
+              excludesLibrary &&
+              !hasLakeArms({ dataLakeTags, dataLakeTagPrefixes, lakeMemberships }) &&
+              !admitFileIds.length
+            ) {
+              await context.statusUpdate({
+                promptMeta: {
+                  retrieval: {
+                    attempted: true,
+                    outcome: 'no_lakes',
+                    surfaces: ['knowledgeBaseSearch'],
+                    dataLakeTags: [],
+                  },
+                },
+              } as any);
+              return LIBRARY_OFF_NO_LAKE_MESSAGE;
+            }
             warnIfManyLakeMemberships(lakeMemberships, context.logger, 'search_knowledge_base:keyword-fallback');
             searchResults = await context.db.fabfiles.search(
               context.userId,
@@ -1427,6 +1484,8 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
                 dataLakeTags,
                 dataLakeTagPrefixes, // Static-registry (open) prefixes — match shared KB files
                 lakeMemberships, // Dynamic-lake arms, each anchored to that lake's creator
+                restrictToDataLake: excludesLibrary,
+                admitFileIds,
                 excludeContent: true, // Search only needs metadata — content fetched via retrieve tool
                 // Retrieval exclusion (opt-in) - best-effort DB pre-filter; authoritative pass below. No-op when unset.
                 ...(context.retrievalFilter ?? {}),
@@ -1508,6 +1567,7 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
           // sum-of-completions volume is the documented shape. A keyword pass that THREW never
           // reaches here; the outer catch writes 'failed' with no volume.
           const keywordArmNoHitsInjected = { chunks: 0, chars: 0 };
+          let keywordCitationNumbers: Map<string, number> | undefined;
 
           // Emit citable source chips so search results appear as clickable citations.
           // No metadata.chunkId/fullContext here, deliberately: this is the KEYWORD arm, ranking
@@ -1515,7 +1575,7 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
           // chunk was scored, so there is no cited passage to deep-link to - a chunk anchor here
           // could only be a guess, and the reader lands on the whole document, which is honest.
           if (rankedResults.length > 0) {
-            const citables: CitableSource[] = rankedResults.map((file: IFabFileDocument, index: number) => {
+            const unnumberedCitables: CitableSource[] = rankedResults.map((file: IFabFileDocument, index: number) => {
               const fileTagNames = file.tags?.map(t => t.name) || [];
               return {
                 id: file.id,
@@ -1544,6 +1604,9 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
                 },
               };
             });
+            const numberedCitables = context.numberCitables?.(unnumberedCitables);
+            const citables = numberedCitables ?? unnumberedCitables;
+            if (numberedCitables) keywordCitationNumbers = citationNumbersById(numberedCitables);
 
             // Surface what we FOUND in the live status (not just "searching") so the user
             // watches the agent work the data lake. Clean up the raw "[Category] 01 Name.md"
@@ -1651,7 +1714,7 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
           }
 
           return (
-            formatSearchResults(rankedResults) +
+            formatSearchResults(rankedResults, keywordCitationNumbers) +
             formatSkipNotice(semantic.skipNotice) +
             attachmentInlineNotice(context, rankedResults)
           );

@@ -39,7 +39,7 @@ describe('Admin Email Management - Integration Tests', () => {
         users: {
           findById: vi.fn().mockResolvedValue(mockUser),
           findByIdWithPassword: vi.fn().mockResolvedValue(mockUser),
-          findByEmail: vi.fn().mockResolvedValue(null),
+          existsOtherUserWithEmail: vi.fn().mockResolvedValue(false),
           findByEmailVerificationToken: vi.fn(),
           findByPendingEmailToken: vi.fn(),
           update: vi.fn().mockImplementation(user => {

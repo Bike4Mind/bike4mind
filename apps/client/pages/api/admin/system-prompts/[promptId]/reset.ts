@@ -1,6 +1,6 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { systemPromptRepository } from '@bike4mind/database';
 import { getDefaultSystemPrompts } from '@server/utils/systemPrompts/defaults';
 

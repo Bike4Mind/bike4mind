@@ -1,14 +1,19 @@
 import { describe, it, expect } from 'vitest';
 import { revokeUserSessions, adminRevokeUserSessions } from './revokeSessions';
 import { UnauthorizedError, NotFoundError } from '@bike4mind/utils';
-import { createMockUserRepository, createMockAuthSessionRepository } from '../__tests__/utils/testUtils';
+import {
+  createMockUserRepository,
+  createMockAuthSessionRepository,
+  createMockRealtimeConnectionRepository,
+} from '../__tests__/utils/testUtils';
 
 const makeDb = () => {
   const users = createMockUserRepository();
   users.incrementTokenVersion.mockResolvedValue(1);
   const authSessions = createMockAuthSessionRepository();
   authSessions.revokeAllByUserId.mockResolvedValue(0);
-  return { users, authSessions };
+  const realtimeConnections = createMockRealtimeConnectionRepository();
+  return { users, authSessions, realtimeConnections };
 };
 
 describe('revokeUserSessions', () => {
@@ -24,6 +29,12 @@ describe('revokeUserSessions', () => {
     const db = makeDb();
     await revokeUserSessions('user-1', { db });
     expect(db.authSessions.revokeAllByUserId).toHaveBeenCalledWith('user-1');
+  });
+
+  it("ends the user's session-authenticated realtime connections", async () => {
+    const db = makeDb();
+    await revokeUserSessions('user-1', { db });
+    expect(db.realtimeConnections.endConnections).toHaveBeenCalledWith({ userId: 'user-1', sessionsOnly: true });
   });
 });
 

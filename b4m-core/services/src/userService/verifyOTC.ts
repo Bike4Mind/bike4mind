@@ -1,14 +1,10 @@
 import bcrypt from 'bcryptjs';
 
 /**
- * OTC verification is token-based: the hashed code travels inside the signed
- * pending token issued by sendOTC, so verification is a pure comparison with no
- * database lookup.
- */
-
-/**
- * Verifies a 6-digit OTC against the hash carried in the signed pending token.
- * Pure function - no DB lookup.
+ * Verifies an OTC against the code hash the caller read from the server-side pending record
+ * (PendingOtcTokenRepository.validateAndRotateNonce). Pure function - no DB lookup.
+ * Deliberately no length check: a 6-digit code issued before codes grew to 8 digits must still
+ * verify while its record is live.
  */
 export const verifyPendingOTC = async (code: string, otcHash: string): Promise<boolean> => {
   // Guard null/undefined/non-string input: bcrypt.compare throws on non-string

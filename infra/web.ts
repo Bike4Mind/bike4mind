@@ -9,7 +9,13 @@ import {
   uploadCompleteFunction,
   notebookImportFunction,
 } from './buckets';
-import { DEFAULT_LAMBDA_ENVIRONMENT, PRODUCTION_STAGES } from './constants';
+import {
+  DEFAULT_LAMBDA_ENVIRONMENT,
+  isPreviewStage,
+  PRODUCTION_STAGES,
+  TEST_DECISION_PROVIDER_ENVIRONMENT,
+  TEST_GENERATION_PROVIDER_ENVIRONMENT,
+} from './constants';
 import { attackSimulationFunction, modelDiscoveryFunction } from './cron';
 // web -> agentExecutor -> websocket is acyclic: websocket.ts deliberately does
 // not import agentExecutor (the agent_execute route is declared the other way
@@ -31,7 +37,7 @@ import {
   generationCallbackQueue,
   imageEditQueue,
   imageGenerationQueue,
-  videoGenerationQueue,
+  generationJobQueue,
   researchEngineQueue,
   agentProactiveMessageQueue,
   slackExportQueue,
@@ -66,7 +72,7 @@ import {
   generationCallbackQueueDLQ,
   imageGenerationDLQ,
   imageEditDLQ,
-  videoGenerationDLQ,
+  generationJobDLQ,
   researchEngineQueueDLQ,
   whatsNewGenerationQueueDLQ,
   whatsNewHighlightsQueueDLQ,
@@ -95,9 +101,12 @@ import {
   optihashiRunCompletionQueueDLQ,
   bobRunQueue,
   bobRunQueueDLQ,
+  libreoncologyAudioRenderQueue,
+  libreoncologyAudioRenderQueueDLQ,
 } from './queues';
 import { imageProcessor } from './functions';
 import { chatCompletion } from './chatCompletion';
+import { searxngUrl } from './searxng';
 import {
   router,
   routerDistributionId,
@@ -122,9 +131,9 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
     'generation-callback': generationCallbackQueueDLQ.url,
     'image-generation': imageGenerationDLQ.url,
     'image-edit': imageEditDLQ.url,
-    'video-generation': videoGenerationDLQ.url,
+    'generation-job': generationJobDLQ.url,
     'research-engine': researchEngineQueueDLQ.url,
-    'whats-new-generation': whatsNewGenerationQueueDLQ.url,
+    'release-notes': whatsNewGenerationQueueDLQ.url,
     'whats-new-highlights': whatsNewHighlightsQueueDLQ.url,
     'notebook-curation': notebookCurationQueueDLQ.url,
     'agent-proactive-message': agentProactiveMessageQueueDLQ.url,
@@ -146,6 +155,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
     'agent-continuation': agentContinuationQueueDLQ.url,
     'optihashi-run-completion': optihashiRunCompletionQueueDLQ.url,
     'bob-run': bobRunQueueDLQ.url,
+    'libreoncology-audio-render': libreoncologyAudioRenderQueueDLQ.url,
     'data-lake-cleanup': dataLakeCleanupQueueDLQ.url,
     'data-lake-taxonomy': dataLakeTaxonomyQueueDLQ.url,
     'data-lake-research': dataLakeResearchQueueDLQ.url,
@@ -184,7 +194,7 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     generationCallbackQueue: generationCallbackQueue.url,
     imageGenerationQueue: imageGenerationQueue.url,
     imageEditQueue: imageEditQueue.url,
-    videoGenerationQueue: videoGenerationQueue.url,
+    generationJobQueue: generationJobQueue.url,
     researchEngineQueue: researchEngineQueue.url,
     agentProactiveMessageQueue: agentProactiveMessageQueue.url,
     slackExportQueue: slackExportQueue.url,
@@ -207,6 +217,7 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     agentContinuationQueue: agentContinuationQueue.url,
     optihashiRunCompletionQueue: optihashiRunCompletionQueue.url,
     bobRunQueue: bobRunQueue.url,
+    libreoncologyAudioRenderQueue: libreoncologyAudioRenderQueue.url,
     dataLakeCleanupQueue: dataLakeCleanupQueue.url,
     dataLakeTaxonomyQueue: dataLakeTaxonomyQueue.url,
     dataLakeResearchQueue: dataLakeResearchQueue.url,
@@ -223,7 +234,10 @@ export const web = new sst.aws.Nextjs(
   'frontend',
   {
     path: 'apps/client',
-    openNextVersion: '3.9.16',
+    // Coupled to the `next` version in apps/client/package.json. next >=16.3.8 keys the response
+    // cache by a scoped route-cache key; OpenNext <4.1.7 seeds and looks up the bare pathname, so
+    // every prerendered route misses and runs its handler in the Lambda (e.g. /serwist/sw.js 500s).
+    openNextVersion: '4.1.8',
 
     vpc: lambdaVpc,
     router: router ? { instance: router } : undefined,
@@ -419,8 +433,16 @@ export const web = new sst.aws.Nextjs(
     ],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
-      NEXT_PUBLIC_WEBSOCKET_URL: websocketApi.url,
+      B4M_DEPLOYED_REVISION: process.env.B4M_DEPLOYED_REVISION || '',
+      B4M_BUILD_FINGERPRINT: process.env.B4M_BUILD_FINGERPRINT || '',
+      ...TEST_GENERATION_PROVIDER_ENVIRONMENT,
+      ...TEST_DECISION_PROVIDER_ENVIRONMENT,
       NEXT_PUBLIC_SERVER_DOMAIN: process.env.SERVER_DOMAIN || '',
+      // Optional https URL of another deployment's GET /api/v1/whats-new, served ahead of local notes.
+      WHATS_NEW_FEED_URL: process.env.WHATS_NEW_FEED_URL || '',
+      // Internal SearXNG (infra/searxng.ts), only where deployed. Inline web_search in this function
+      // needs it as the backup to SerpAPI, same as chatCompletion/agentExecutor/queues.
+      ...(searxngUrl ? { SEARXNG_BASE_URL: searxngUrl } : {}),
       // Locks the server function URL to the router (apps/client/proxy.ts 403s requests without the
       // matching header). Not under `sst dev`: Next runs locally there and nothing comes via CloudFront.
       // DISABLE_ORIGIN_VERIFY='true' ships the router stamp without the gate: use it on a stage's first
@@ -441,12 +463,17 @@ export const web = new sst.aws.Nextjs(
       // greppable from infra; see docs/architecture/api-key-scope-rollout.md.
       API_KEY_SCOPE_STAGING: process.env.API_KEY_SCOPE_STAGING || '',
       // Grant-enforcement lever for the federated AI-token exchange (apps/client/pages/api/oauth/
-      // ai-token.ts). Defaults to 'true' on production and dev stages; empty (grace mode) elsewhere.
-      // The env var is checked first so an explicit value (e.g. 'false') acts as a kill switch even
-      // on production -- the handler enforces only on the exact string 'true'. Mirroring
+      // ai-token.ts). Defaults to 'true' on production, dev and preview stages; empty (grace mode)
+      // elsewhere. The env var is checked first so an explicit value (e.g. 'false') acts as a kill
+      // switch even on production -- the handler enforces only on the exact string 'true'. Mirroring
       // API_KEY_SCOPE_STAGING: greppable from infra and flippable per stage without a code change.
       OAUTH_AI_TOKEN_ENFORCE_GRANT:
-        process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT || (PRODUCTION_STAGES.includes($app.stage) ? 'true' : ''),
+        process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT ||
+        (PRODUCTION_STAGES.includes($app.stage) || isPreviewStage ? 'true' : ''),
+      // 'true' refuses the self-asserted 'identities' subject path (apps/client/server/auth/
+      // verifyFederatedIdToken.ts). Off on every stage, production included: set it per stage only
+      // once every live federated client uses subjectSource='sub'.
+      OAUTH_AI_TOKEN_REQUIRE_SUB: process.env.OAUTH_AI_TOKEN_REQUIRE_SUB || '',
       APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),
       // Direct SSE completions endpoint advertised to the CLI via /api/settings/serverConfig.
       // Local `sst dev` has no CloudFront router mapping /api/ai/v1/completions to the

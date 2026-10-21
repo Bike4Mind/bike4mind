@@ -1,5 +1,5 @@
 import { LinearProgress } from '@mui/joy';
-import { useNavigate } from '@tanstack/react-router';
+import { useRouter } from '@tanstack/react-router';
 import { useEffect, useRef } from 'react';
 import { toast } from 'sonner';
 import { useAuthorizeLakeGitHubConnect } from '@client/app/hooks/data/githubLake';
@@ -8,6 +8,7 @@ import {
   clearGitHubLakeConnectHandoff,
   readGitHubLakeConnectHandoff,
 } from '@client/app/utils/githubLakeConnectHandoff';
+import { applyRedirect } from '@client/app/utils/authRedirect';
 import { getServerErrorField } from '@client/app/utils/error';
 import { getGitHubLakeCallbackBootSearch } from '@client/app/utils/githubLakeCallbackSearch';
 import { resolveGitHubLakeCallbackStep, type GitHubLakeCallbackSearch } from '@client/app/utils/githubLakeCallbackStep';
@@ -19,9 +20,10 @@ import { resolveGitHubLakeCallbackStep, type GitHubLakeCallbackSearch } from '@c
  * reopens the picker or reports why the flow could not continue. Renders no UI of its own.
  */
 const GitHubLakeCallbackPage = () => {
-  const navigate = useNavigate();
+  const router = useRouter();
   const openManager = useDataLakeWizardStore(s => s.openManager);
   const openGitHubRepoPicker = useDataLakeWizardStore(s => s.openGitHubRepoPicker);
+  const setGitHubConnectFailure = useDataLakeWizardStore(s => s.setGitHubConnectFailure);
   const authorize = useAuthorizeLakeGitHubConnect();
   // GitHub's `code` is single-use, so a second run (StrictMode, a re-render) must never re-post it.
   const handled = useRef(false);
@@ -45,20 +47,31 @@ const GitHubLakeCallbackPage = () => {
 
     const land = (dataLakeId: string | undefined, openPicker: boolean) => {
       clearGitHubLakeConnectHandoff();
-      navigate({ to: '/' });
+      // replace: Back must not return to this single-use callback URL.
+      applyRedirect(router.history, handoff?.returnPath, '/', true);
       if (!dataLakeId) return;
       openManager('mine', dataLakeId);
       if (openPicker) openGitHubRepoPicker(dataLakeId);
     };
 
+    // With a lake to land on, the reason goes on that lake's finish-connect banner next to a Try again;
+    // without one there is nowhere to show it but a toast.
+    const landFailed = (dataLakeId: string | undefined, message: string) => {
+      if (dataLakeId) setGitHubConnectFailure({ lakeId: dataLakeId, message });
+      else toast.error(message);
+      land(dataLakeId, false);
+    };
+
     switch (step.kind) {
       case 'cancelled':
-        toast.error('GitHub connection cancelled.');
-        land(handoff?.dataLakeId, false);
+        landFailed(handoff?.dataLakeId, 'GitHub connection cancelled.');
         return;
       case 'failed':
-        toast.error(step.message);
-        land(handoff?.dataLakeId, false);
+        landFailed(handoff?.dataLakeId, step.message);
+        return;
+      case 'repaired':
+        toast.info('GitHub access updated. Use Re-sync on the lake to resume syncing.');
+        land(undefined, false);
         return;
       case 'resume':
         if (step.notice) toast.info(step.notice);
@@ -71,15 +84,12 @@ const GitHubLakeCallbackPage = () => {
             onSuccess: ({ dataLakeId }) => land(dataLakeId, true),
             // The server's reason is the actionable part: an expired/mismatched state, a lake that
             // can no longer take a connection.
-            onError: (e: unknown) => {
-              toast.error(getServerErrorField(e) || 'Could not connect GitHub.');
-              land(step.dataLakeId, false);
-            },
+            onError: (e: unknown) => landFailed(step.dataLakeId, getServerErrorField(e) || 'Could not connect GitHub.'),
           }
         );
         return;
     }
-  }, [navigate, openManager, openGitHubRepoPicker, authorize]);
+  }, [router, openManager, openGitHubRepoPicker, setGitHubConnectFailure, authorize]);
 
   return <LinearProgress data-testid="github-lake-callback-progress" />;
 };

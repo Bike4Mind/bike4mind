@@ -17,7 +17,7 @@ import { type Page } from '@playwright/test';
  * necessary.
  */
 
-/** Mirrors REFRESH_COOKIE_NAME / COOKIE_PATH in apps/client/server/auth/refreshCookie.ts.
+/** Mirrors REFRESH_COOKIE_NAME / COOKIE_PATH in packages/server-utils/src/auth/refreshCookie.ts.
  *  Hardcoded so the e2e suite doesn't import from the app - keep in sync. */
 const REFRESH_COOKIE_NAME = 'b4m_rt';
 const REFRESH_COOKIE_PATH = '/api';

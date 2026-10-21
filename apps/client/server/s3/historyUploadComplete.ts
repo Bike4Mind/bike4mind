@@ -186,11 +186,12 @@ export const dispatch = withContext(async (event, context, logger) => {
         currentStep: 'Downloading and extracting file...',
       });
 
-      await importHistory(userId, source, `s3://${bucket}/${key}`, importJob.id);
+      const { processedItems, totalItems } = await importHistory(userId, source, `s3://${bucket}/${key}`, importJob.id);
 
       // If successfully processed, mark complete and delete the S3 file
       await markImportComplete(importJob.id, userId, {
-        processedItems: importJob.totalItems,
+        processedItems,
+        totalItems,
         skippedItems: 0,
       });
 

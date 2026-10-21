@@ -11,6 +11,7 @@ vi.mock('@bike4mind/database', () => ({
 
 const { linkNodeArtifacts } = await import('./linkNodeArtifacts');
 
+const OWNER = 'user-1';
 const logger = { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() } as never;
 
 const node = (over: Partial<IQuestNodeDocument> & { id: string }): IQuestNodeDocument =>
@@ -56,14 +57,21 @@ describe('linkNodeArtifacts', () => {
   });
 
   it('does not query when no node has a run', async () => {
-    await linkNodeArtifacts([node({ id: 'n1', execution: undefined })], runs([]), logger);
+    await linkNodeArtifacts([node({ id: 'n1', execution: undefined })], runs([]), OWNER, logger);
     expect(findByQuestIds).not.toHaveBeenCalled();
+  });
+
+  // sourceQuestId is caller-supplied on the create endpoint, so the join must be
+  // scoped to the graph owner or another user's artifact lands on this node.
+  it('scopes the lookup to the graph owner', async () => {
+    await linkNodeArtifacts([node({ id: 'n1' })], runs([['exec-1', 'quest-1']]), OWNER, logger);
+    expect(findByQuestIds).toHaveBeenCalledWith(['quest-1'], OWNER);
   });
 
   it('attaches a run artifact to its node and returns it for display', async () => {
     findByQuestIds.mockResolvedValue([artifact('art-1', 'quest-1')]);
 
-    const result = await linkNodeArtifacts([node({ id: 'n1' })], runs([['exec-1', 'quest-1']]), logger);
+    const result = await linkNodeArtifacts([node({ id: 'n1' })], runs([['exec-1', 'quest-1']]), OWNER, logger);
 
     expect(linkArtifacts).toHaveBeenCalledWith('n1', ['art-1']);
     expect(result.get('n1')).toEqual([{ id: 'art-1', type: 'react', title: 'art-1' }]);
@@ -81,11 +89,12 @@ describe('linkNodeArtifacts', () => {
         ['exec-1', 'quest-1'],
         ['exec-2', 'quest-1'],
       ]),
+      OWNER,
       logger
     );
 
     expect(findByQuestIds).toHaveBeenCalledTimes(1);
-    expect(findByQuestIds).toHaveBeenCalledWith(['quest-1']);
+    expect(findByQuestIds).toHaveBeenCalledWith(['quest-1'], OWNER);
   });
 
   it('writes nothing when the node already carries the artifact', async () => {
@@ -94,6 +103,7 @@ describe('linkNodeArtifacts', () => {
     const result = await linkNodeArtifacts(
       [node({ id: 'n1', artifactIds: ['art-1'] })],
       runs([['exec-1', 'quest-1']]),
+      OWNER,
       logger
     );
 
@@ -104,7 +114,7 @@ describe('linkNodeArtifacts', () => {
   it('adds only the artifacts the node is missing', async () => {
     findByQuestIds.mockResolvedValue([artifact('art-1', 'quest-1'), artifact('art-2', 'quest-1')]);
 
-    await linkNodeArtifacts([node({ id: 'n1', artifactIds: ['art-1'] })], runs([['exec-1', 'quest-1']]), logger);
+    await linkNodeArtifacts([node({ id: 'n1', artifactIds: ['art-1'] })], runs([['exec-1', 'quest-1']]), OWNER, logger);
 
     expect(linkArtifacts).toHaveBeenCalledWith('n1', ['art-2']);
   });
@@ -113,7 +123,7 @@ describe('linkNodeArtifacts', () => {
   it('returns empty and does not throw when the lookup fails', async () => {
     findByQuestIds.mockRejectedValue(new Error('mongo down'));
 
-    const result = await linkNodeArtifacts([node({ id: 'n1' })], runs([['exec-1', 'quest-1']]), logger);
+    const result = await linkNodeArtifacts([node({ id: 'n1' })], runs([['exec-1', 'quest-1']]), OWNER, logger);
 
     expect(result.size).toBe(0);
     expect(logger.warn).toHaveBeenCalled();
@@ -123,14 +133,14 @@ describe('linkNodeArtifacts', () => {
     findByQuestIds.mockResolvedValue([artifact('art-1', 'quest-1')]);
     linkArtifacts.mockRejectedValue(new Error('write failed'));
 
-    const result = await linkNodeArtifacts([node({ id: 'n1' })], runs([['exec-1', 'quest-1']]), logger);
+    const result = await linkNodeArtifacts([node({ id: 'n1' })], runs([['exec-1', 'quest-1']]), OWNER, logger);
 
     expect(result.get('n1')).toHaveLength(1);
   });
 
   // The run reached a terminal state before persistRunAsQuest wrote anything.
   it('is a no-op when the run has no quest id yet', async () => {
-    await linkNodeArtifacts([node({ id: 'n1' })], runs([['exec-1', null]]), logger);
+    await linkNodeArtifacts([node({ id: 'n1' })], runs([['exec-1', null]]), OWNER, logger);
     expect(findByQuestIds).not.toHaveBeenCalled();
   });
 });

@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { Permission } from '@bike4mind/common';
 import { toggleTags } from './toggleTags';
 import { createShareableFake } from '../__tests__/utils/shareableFake';
+import { withStorageOwnerFakes } from '../__tests__/utils/storageOwnerTransferFakes';
 
 describe('toggleTags authorization', () => {
   const OWNER = 'user-owner';
@@ -28,7 +29,7 @@ describe('toggleTags authorization', () => {
       pushTagsByFabFileId,
       pullTagsByFabFileId,
       adapters: {
-        db: {
+        db: withStorageOwnerFakes({
           fabFiles: {
             shareable: createShareableFake([file as never]),
             findById: vi.fn().mockResolvedValue(file),
@@ -45,7 +46,7 @@ describe('toggleTags authorization', () => {
             find: vi.fn().mockResolvedValue([]),
           },
           users: { findById: vi.fn().mockResolvedValue({ id: actorId, isAdmin: false }) },
-        },
+        }),
       },
     };
   };
@@ -119,7 +120,7 @@ describe('toggleTags - joining a lake with someone else"s file', () => {
       pushTagsByFabFileId,
       pushTagReturningPriorState,
       adapters: {
-        db: {
+        db: withStorageOwnerFakes({
           fabFiles: {
             shareable: createShareableFake([file as never]),
             findById: vi.fn().mockResolvedValue(file),
@@ -136,7 +137,7 @@ describe('toggleTags - joining a lake with someone else"s file', () => {
             find: vi.fn().mockResolvedValue([]),
           },
           users: { findById: vi.fn().mockResolvedValue({ id: actorId, isAdmin: false }) },
-        },
+        }),
       },
     };
   };

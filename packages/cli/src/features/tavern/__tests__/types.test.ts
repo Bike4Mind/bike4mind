@@ -10,7 +10,7 @@ describe('Quest Workflow Schemas', () => {
   describe('QuestPlanResponseSchema', () => {
     it('parses a valid quest plan response', () => {
       const input = {
-        _id: '507f1f77bcf86cd799439011',
+        id: '507f1f77bcf86cd799439011',
         notebookId: '507f1f77bcf86cd799439012',
         goal: 'Build the thing',
         state: 'active',

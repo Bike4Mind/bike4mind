@@ -64,23 +64,12 @@ describe('resolveToolAvailability - search & scrape providers', () => {
   });
 });
 
-describe('resolveToolAvailability - music_generation and audio_generation ElevenLabs/OpenAI gate', () => {
-  it('music_generation is available when an ElevenLabs key resolves', async () => {
-    getEffectiveApiKey.mockImplementation(async (_userId: string, sel: { type: ApiKeyType }) =>
-      sel.type === ApiKeyType.elevenlabs ? 'el-key' : undefined
-    );
+describe('resolveToolAvailability - audio_generation ElevenLabs/OpenAI gate', () => {
+  // A music model can run on a Gemini key, an ElevenLabs key or no key at all (test model), so the tool
+  // builder gates music_generation on its job config instead (sharedToolBuilder).
+  it('leaves music_generation ungated', async () => {
     const availability = await resolveToolAvailability('user-1', { db });
-    expect(availability.music_generation).toBe(true);
-  });
-
-  it('music_generation is hidden when no ElevenLabs key is configured', async () => {
-    const availability = await resolveToolAvailability('user-1', { db });
-    expect(availability.music_generation).toBe(false);
-  });
-
-  it('music_generation is hidden for an anonymous (no-user) request', async () => {
-    const availability = await resolveToolAvailability(undefined, { db });
-    expect(availability.music_generation).toBe(false);
+    expect(availability).not.toHaveProperty('music_generation');
   });
 
   it('audio_generation is available with only an OpenAI key (no ElevenLabs)', async () => {
@@ -89,7 +78,6 @@ describe('resolveToolAvailability - music_generation and audio_generation Eleven
     );
     const availability = await resolveToolAvailability('user-1', { db });
     expect(availability.audio_generation).toBe(true);
-    expect(availability.music_generation).toBe(false);
   });
 
   it('audio_generation is hidden with neither an OpenAI nor an ElevenLabs key', async () => {
@@ -395,5 +383,51 @@ describe('isToolOfferable (enforcement-only wrapper)', () => {
     // available for one can genuinely be unavailable for the other.
     expect(isToolOfferable('edit_image', { edit_image: false, image_generation: true })).toBe(false);
     expect(isToolOfferable('edit_image', { edit_image: true, image_generation: false })).toBe(true);
+  });
+});
+
+describe('resolveToolAvailability - decide', () => {
+  afterEach(() => {
+    delete process.env.ENABLE_TEST_DECISION_PROVIDER;
+    delete process.env.SYSTEMONE_BASE_URL;
+  });
+
+  it('is unavailable when no decision provider key resolves', async () => {
+    getEffectiveLLMApiKeys.mockResolvedValue({});
+    expect((await resolveToolAvailability('user-1', { db })).decide).toBe(false);
+  });
+
+  it('is available with an OpenAI key', async () => {
+    getEffectiveLLMApiKeys.mockResolvedValue({ openai: 'sk-openai' });
+    expect((await resolveToolAvailability('user-1', { db })).decide).toBe(true);
+  });
+
+  it('is available with a TypeSafe key', async () => {
+    getEffectiveLLMApiKeys.mockResolvedValue({ typesafe: 'ts-key' });
+    expect((await resolveToolAvailability('user-1', { db })).decide).toBe(true);
+  });
+
+  it('treats an expired or placeholder key as absent, as the runner does', async () => {
+    getEffectiveLLMApiKeys.mockResolvedValue({ openai: 'expired', typesafe: 'your-api-key' });
+    expect((await resolveToolAvailability('user-1', { db })).decide).toBe(false);
+  });
+
+  it('is available on a deployment that opted into the free test provider', async () => {
+    process.env.ENABLE_TEST_DECISION_PROVIDER = 'true';
+    getEffectiveLLMApiKeys.mockResolvedValue({});
+    expect((await resolveToolAvailability('user-1', { db })).decide).toBe(true);
+  });
+
+  // The gate and the runner must answer the same question: a provider with a usable key but no
+  // registered model (a malformed SYSTEMONE_BASE_URL drops both Jev models) would only 503.
+  it('is unavailable when the provider is key-present but registers no model', async () => {
+    process.env.SYSTEMONE_BASE_URL = 'not-a-url';
+    getEffectiveLLMApiKeys.mockResolvedValue({ typesafe: 'ts-key' });
+    expect((await resolveToolAvailability('user-1', { db })).decide).toBe(false);
+  });
+
+  it('is filtered out of the built list when unavailable', () => {
+    expect(isToolOfferable('decide', { decide: false })).toBe(false);
+    expect(isToolOfferable('decide', { decide: true })).toBe(true);
   });
 });

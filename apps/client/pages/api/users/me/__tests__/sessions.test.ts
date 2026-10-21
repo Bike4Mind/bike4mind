@@ -33,7 +33,10 @@ vi.mock('@server/middlewares/baseApi', () => {
 
 vi.mock('@bike4mind/database', () => {
   mockRefs.findBySid = vi.fn();
-  return { authSessionRepository: { findBySid: mockRefs.findBySid } };
+  return {
+    authSessionRepository: { findBySid: mockRefs.findBySid },
+    realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
+  };
 });
 vi.mock('@bike4mind/services', () => {
   mockRefs.listUserSessions = vi.fn();
@@ -62,6 +65,7 @@ const sessionRow = (over: Record<string, unknown>) => ({
   createdAt: NOW,
   expiresAt: NOW,
   impersonatedBy: null,
+  clientId: 'INTERNAL-OAUTH-CLIENT',
   ...over,
 });
 
@@ -98,7 +102,9 @@ describe('GET /api/users/me/sessions', () => {
     const serialized = JSON.stringify(items);
     expect(serialized).not.toContain('SECRET-HASH-MUST-NOT-LEAK');
     expect(serialized).not.toContain('PREV-HASH');
+    expect(serialized).not.toContain('INTERNAL-OAUTH-CLIENT');
     expect(items[0]).not.toHaveProperty('refreshTokenHash');
+    expect(items[0]).not.toHaveProperty('clientId');
   });
 });
 

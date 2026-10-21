@@ -3,6 +3,7 @@ import {
   IFabFileRepository,
   IAdminSettingsRepository,
   IUserRepository,
+  IOrganizationRepository,
   IDataLakeRepository,
   SupportedFabFileMimeTypes,
 } from '@bike4mind/common';
@@ -32,7 +33,6 @@ function getEmailAddressText(from: EmailAddress | EmailAddress[] | undefined): s
  * @param emailId - Email document ID for reference
  * @param isNewsletter - Flag to force fabFile creation for newsletters
  * @param adapters - Storage and database adapters
- * @param organizationId - Optional organization ID for fabFile ownership
  * @returns Object with bodyMarkdown and optional bodyFabFileId
  */
 export async function processEmailBody(
@@ -46,11 +46,11 @@ export async function processEmailBody(
       fabFiles: IFabFileRepository;
       adminSettings: IAdminSettingsRepository;
       users: IUserRepository;
+      organizations: Pick<IOrganizationRepository, 'findById'>;
       // 'find' is forwarded straight to createFabFile, for its fallback tagger's prefix-overlap check.
       dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'find'>;
     };
-  },
-  organizationId?: string
+  }
 ): Promise<ProcessedEmailBody> {
   const bodyText = parsedEmail.text || '';
   const bodyHtml = parsedEmail.html || '';
@@ -86,7 +86,6 @@ export async function processEmailBody(
         `Date: ${parsedEmail.date?.toISOString() || 'Unknown'}`,
         `Message-ID: ${parsedEmail.messageId || 'Unknown'}`,
       ].join('\n'),
-      organizationId,
     };
 
     const newFabFile = await createFabFile(userId, fabFileData, {
@@ -96,6 +95,7 @@ export async function processEmailBody(
         },
         adminSettings: adapters.db.adminSettings,
         users: adapters.db.users,
+        organizations: adapters.db.organizations,
         dataLakes: adapters.db.dataLakes,
       },
       storage: {

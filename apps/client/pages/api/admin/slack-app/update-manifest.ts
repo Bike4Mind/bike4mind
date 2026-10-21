@@ -1,6 +1,6 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, BadRequestError } from '@server/utils/errors';
+import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import { slackDevWorkspaceRepository } from '@bike4mind/database/infra';
 import { mergeManifest, extractBaseUrl } from '@bike4mind/slack';
@@ -9,7 +9,7 @@ import { isSlackUserValidationError } from '@server/integrations/slack/slackExpo
 /**
  * POST /api/admin/slack-app/update-manifest
  * Exports the live manifest, merges our controlled fields, and pushes it back.
- * Only overwrites scopes, events, commands, app_home, interactivity;
+ * Only overwrites scopes, events, commands, app_home, interactivity, workflow-step functions;
  * user-customizable fields (name, description, color) are preserved.
  * Admin-only endpoint.
  */

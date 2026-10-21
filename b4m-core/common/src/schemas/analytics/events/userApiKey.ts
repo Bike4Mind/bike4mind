@@ -64,6 +64,8 @@ export interface IUserApiKeyRotatedEvent extends IBaseEvent {
   metadata: {
     keyId: string;
     name: string;
+    /** Set only when an org admin rotated someone else's key (re-own). */
+    previousOwnerUserId?: string;
   };
 }
 

@@ -26,21 +26,24 @@ export function buildInsufficientCreditsMessage(params: {
 }
 
 /**
- * Message shown when a member is blocked by their organization's per-member
+ * Message shown when a member is blocked by their organization's monthly per-member
  * credit cap (distinct from the org pool running dry: the pool may be full, but
  * this member has spent their individual allotment). Paired with
  * `InsufficientCreditsError`'s `code: 'insufficient_credits'`; the remedy is the
  * org administrator, since a member cannot raise their own cap.
  */
 export function buildMemberCreditCapMessage(params: {
-  /** Credits this member has already spent against the org pool. */
+  /** Credits this member has spent against the org pool this period. */
   used: number;
-  /** The member's configured cap. */
+  /** The member's effective monthly cap. */
   cap: number;
+  /** When the member's usage resets (start of the next UTC month). */
+  resetsAt: Date;
   /** Organization name, when known. */
   organizationName?: string;
 }): string {
-  const { used, cap, organizationName } = params;
+  const { used, cap, resetsAt, organizationName } = params;
   const orgLabel = organizationName ? `for "${organizationName}"` : 'for your organization';
-  return `You've reached your per-member credit limit ${orgLabel} (${used} of ${cap} credits used). Contact your organization administrator to raise your limit.`;
+  const resetLabel = resetsAt.toLocaleDateString('en-US', { month: 'long', day: 'numeric', timeZone: 'UTC' });
+  return `You've reached your monthly per-member credit limit ${orgLabel} (${used} of ${cap} credits used this month). It resets on ${resetLabel}. Contact your organization administrator to raise your limit.`;
 }

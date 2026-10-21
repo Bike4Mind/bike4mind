@@ -47,15 +47,15 @@ vi.mock('@bike4mind/observability', () => ({
   },
 }));
 vi.mock('sst', () => ({ Resource: { App: { stage: 'test' }, researchEngineQueue: { url: 'queue://research' } } }));
-vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://unused/%STAGE%' } }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: mocks.send }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://unused/%STAGE%' } }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: mocks.send }));
 vi.mock('@server/queueHandlers/utils', () => ({
   dispatchWithLogger:
     (handler: (event: SQSEvent, context: Context, logger: unknown) => Promise<void>) =>
     (event: SQSEvent, context: Context) =>
       handler(event, context, mocks.logger),
 }));
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: vi.fn() }));
 vi.mock('@bike4mind/services/llm/tools/implementation/webfetch', () => ({ createFirecrawlApp: vi.fn() }));
 vi.mock('@bike4mind/auth/apiKeyService', () => ({ getFirecrawlConfig: vi.fn() }));
 vi.mock('@bike4mind/services/llm/tools/implementation/webfetch/scrapeWithRetry', () => ({ scrapeWithRetry: vi.fn() }));
@@ -66,7 +66,7 @@ vi.mock('@client/services/operationsModelService', () => ({
 
 import { handler } from '@workers/cron/scheduler';
 import { registerTaskScheduler } from './taskScheduler';
-import { dispatch } from '@server/queueHandlers/researchEngineQueue';
+import { dispatch } from '@workers/queueHandlers/researchEngineQueue';
 
 const context = { awsRequestId: 'test-request', functionName: 'test-scheduler', functionVersion: '1' } as Context;
 const user = { id: 'user-1' };

@@ -4,12 +4,13 @@
  * B4M OAuth 2.0 Authorization endpoint (browser-facing).
  *
  * Flow:
- * 1. External product (VibesWire, VibesTrader...) redirects user here with PKCE params.
+ * 1. An external app (see docs-site/docs/developers/building-on-b4m.md) redirects the user here with PKCE params.
  * 2. If the user is already logged in -> generate auth code -> redirect back to the product.
  *    - First-party clients (and relying-party clients with a remembered consent) redirect
  *      silently. A relying-party client with no covering grant gets an Allow/Deny consent screen
  *      first; only Allow mints the code.
  * 3. If the user is NOT logged in -> send to /login with this URL as `redirectTo`.
+ *    - `screen_hint=signup` sends them to /register instead, with the same `redirectTo`.
  *    - Email/password login reads `redirectTo` from the URL and returns here.
  *    - Social/SSO login leaves the SPA, so MultiStepLogin appends `redirectTo`
  *      to the provider URL; it round-trips through the IdP state/RelayState
@@ -51,6 +52,7 @@ const OAuthAuthorizePage = () => {
     code_challenge_method,
     nonce,
     prompt,
+    screen_hint,
   } = search;
 
   // Basic param validation
@@ -130,14 +132,14 @@ const OAuthAuthorizePage = () => {
 
     if (!accessToken) {
       const currentUrl = window.location.pathname + window.location.search;
-      navigate({ to: '/login', search: { redirectTo: currentUrl } });
+      navigate({ to: screen_hint === 'signup' ? '/register' : '/login', search: { redirectTo: currentUrl } });
       return;
     }
 
     if (status !== 'idle' || didRun.current) return;
     didRun.current = true;
     requestCode();
-  }, [accessToken, status, paramsValid]);
+  }, [accessToken, status, paramsValid, screen_hint]);
 
   if (!paramsValid) {
     return (

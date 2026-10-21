@@ -27,6 +27,7 @@ import {
   type GetEffectiveLLMApiKeysAdapters,
 } from '../apiKeyService';
 import { resolveWebSearchProvider } from './tools/implementation/websearch';
+import { getDecisionProviderRegistry, hasCallableDecisionModel } from './decisionProviders';
 
 /**
  * Presence-only availability for tools that need an external API key/config.
@@ -116,9 +117,9 @@ const GATED_TOOLS: readonly B4MLLMTools[] = [
   'fmp_financial_data',
   'image_generation',
   'edit_image',
-  'music_generation',
   'audio_generation',
   'search_knowledge_base',
+  'decide',
 ];
 
 /**
@@ -180,8 +181,8 @@ export async function resolveToolAvailability(
       userId
         ? Promise.all(imageProviders.map(type => getEffectiveApiKey(userId, { type }, dbAdapters)))
         : Promise.resolve<(string | undefined)[]>([]),
-      // music_generation resolves its ElevenLabs key via the same getEffectiveApiKey
-      // path (user key -> admin demo key), so availability must mirror it.
+      // audio_generation sound effects resolve their ElevenLabs key via the same
+      // getEffectiveApiKey path (user key -> admin demo key), so availability must mirror it.
       userId
         ? getEffectiveApiKey(userId, { type: ApiKeyType.elevenlabs }, dbAdapters)
         : Promise.resolve<string | undefined>(undefined),
@@ -251,8 +252,6 @@ export async function resolveToolAvailability(
       image_generation: maybeFailOpen(hasImageKey || isLocalImageBackendAvailable(), taint.imageKeys),
       // No xAI, no local-backend path - see hasEditImageKey's comment above.
       edit_image: maybeFailOpen(hasEditImageKey, taint.imageKeys),
-      // Background-music generation needs an ElevenLabs key (user or admin demo key).
-      music_generation: maybeFailOpen(usable(elevenLabsKey), taint.elevenLabsKey),
       // audio_generation: speech works with OpenAI OR ElevenLabs; sound effects need
       // ElevenLabs. Available when either provider key resolves.
       audio_generation: maybeFailOpen(
@@ -274,6 +273,10 @@ export async function resolveToolAvailability(
         hasEmbeddingKey || isLocalEmbedderAvailable() || hasKeylessCloudEmbedder(),
         taint.llmKeys
       ),
+      // The registry-plus-keys rule the runner and GET /api/v1/decision-models apply, so a model this
+      // gate offers is one the runner can actually reach - including the case where a provider has a
+      // usable key but registers no model for this deployment.
+      decide: maybeFailOpen(hasCallableDecisionModel(getDecisionProviderRegistry().models(), llmKeys), taint.llmKeys),
     };
   } catch (err) {
     // Last-resort safety net for anything outside the per-lookup Promise.allSettled above (this

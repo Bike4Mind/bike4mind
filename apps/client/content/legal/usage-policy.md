@@ -2,7 +2,7 @@
 title: Bike4Mind Usage Policy
 type: usage-policy
 version: 1.0.0
-effectiveDate: TBD
+effectiveDate: 2026-10-10
 status: In force as drafted — outside-counsel review deferred to ~1,000 users/stars (see README)
 mirrors:
   anthropic: https://www.anthropic.com/legal/aup
@@ -59,4 +59,4 @@ We may throttle, suspend, or terminate accounts that violate this policy, with o
 
 ## 6. Reporting
 
-Report suspected abuse or policy violations to **abuse@bike4mind.com** _(confirm address before launch)_.
+Report suspected abuse or policy violations to **legal@bike4mind.com**.

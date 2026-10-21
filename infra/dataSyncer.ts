@@ -30,9 +30,6 @@ export const dataSyncer = new sst.aws.Function('DataSyncer', {
   memory: '512 MB',
   vpc: lambdaVpc,
   link: [secrets.MONGODB_URI],
-  logging: {
-    retention: '3 days',
-  },
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
     SEED_STAGE_NAME: process.env.SEED_STAGE_NAME || $app.stage,

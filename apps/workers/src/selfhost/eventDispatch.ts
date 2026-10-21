@@ -5,6 +5,7 @@ import { handler as sessionAutoNamingHandler } from '@workers/events/sessionAuto
 import { handler as sessionSummarizationHandler } from '@workers/events/sessionSummarization';
 import { handler as sessionContextSummarizationHandler } from '@workers/events/sessionContextSummarization';
 import { handler as sessionTaggingHandler } from '@workers/events/sessionTagging';
+import { handler as notebookCurationHandler } from '@workers/events/notebookCuration';
 
 /**
  * Self-host event routing.
@@ -26,6 +27,7 @@ const HANDLERS: Record<string, EventHandler> = {
   'session.summarize': sessionSummarizationHandler,
   'session.context_summarize': sessionContextSummarizationHandler,
   'session.tag': sessionTaggingHandler,
+  'notebook.curation.start': notebookCurationHandler,
 };
 
 export async function dispatchSelfHostEvent(

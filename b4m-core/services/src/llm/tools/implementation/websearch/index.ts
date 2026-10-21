@@ -1,6 +1,7 @@
 import { Logger } from '@bike4mind/observability';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import { ToolDefinition, ToolContext } from '../../base/types';
+import { INDEXED_TOOL_CITATION_RULE, citationNumbersById } from '../../citationNumbering';
 import { GetEffectiveApiKeyAdapters } from '../../../../apiKeyService';
 import {
   CitableSource,
@@ -10,7 +11,6 @@ import {
   type WebSearchPlace,
 } from '@bike4mind/common';
 import {
-  resolveWebSearchProvider,
   resolveWebSearchProviders,
   searchCacheGet,
   searchCacheSet,
@@ -139,16 +139,24 @@ function describePlace(place: WebSearchPlace): string {
     .join(' - ');
 }
 
-export function formatPlaceResults(places: WebSearchPlace[], anchor?: WebSearchPlace): string {
+export function formatPlaceResults(
+  places: WebSearchPlace[],
+  anchor?: WebSearchPlace,
+  citationNumbers?: ReadonlyMap<string, number>
+): string {
+  const numberOf = (place: WebSearchPlace) => citationNumbers?.get(`place:${place.id}`);
   return [
     'Places found for this search (each has a map location; refer to it by its id):',
     '',
-    ...places.map((place, index) => `${index + 1}. ${describePlace(place)}\n   id: ${stripNewlines(place.id)}`),
+    ...places.map((place, index) => {
+      const n = numberOf(place);
+      return `${n !== undefined ? `[${n}]` : `${index + 1}.`} ${describePlace(place)}\n   id: ${stripNewlines(place.id)}`;
+    }),
     ...(anchor
       ? [
           '',
           'Anchor location (the place the user named):',
-          `${describePlace(anchor)}\n   id: ${stripNewlines(anchor.id)}`,
+          `${numberOf(anchor) !== undefined ? `[${numberOf(anchor)}] ` : ''}${describePlace(anchor)}\n   id: ${stripNewlines(anchor.id)}`,
         ]
       : []),
   ].join('\n');
@@ -231,16 +239,25 @@ class EmptySearchAnswer extends Error {}
 
 const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
+function logHedgedProviderFailure(provider: WebSearchProvider, error: unknown): void {
+  if (error instanceof EmptySearchAnswer) return;
+  Logger.globalInstance.error('WebSearch Tool: provider failed while the other answered empty', {
+    provider: provider.name,
+    error: errorMessage(error),
+  });
+}
+
 /**
  * Organic search as a hedged request: the lead starts at once, and the backup starts alongside it
  * once the lead has been silent for WEB_SEARCH_HEDGE_DELAY_MS, or as soon as the lead fails. The
  * first non-empty answer wins; the loser runs on to its own timeout and is ignored. An empty lead
  * answer also starts the backup, since a throttled SearXNG answers 200 with no results. With no
  * backup the lead keeps its own failure mode (SearXNG fail-soft, SerpAPI throws). Returns the
- * provider that answered so the image/place calls go to a live provider. When both come back empty
- * it returns the empty answer; when both fail it throws, so the backend records the call as failed.
+ * provider that answered so follow-up calls (images, places) go to a live provider. With a backup,
+ * results are empty when neither provider has any (both empty, or one empty and the other failed),
+ * and it throws only when both failed.
  */
-async function searchWithHedge(
+export async function searchWithHedge(
   lead: WebSearchProvider,
   backup: WebSearchProvider | null,
   query: string,
@@ -288,8 +305,16 @@ async function searchWithHedge(
     return await Promise.any([nonEmpty(fromLead, lead), nonEmpty(fromBackup, backup)]);
   } catch (error) {
     const [leadError, backupError] = error instanceof AggregateError ? error.errors : [error, error];
-    if (leadError instanceof EmptySearchAnswer) return { results: [], servedBy: lead };
-    if (backupError instanceof EmptySearchAnswer) return { results: [], servedBy: backup };
+    // One provider answered empty and the other failed: the caller sees "no results", not a throw,
+    // so this is the only error-level record of the failure (transient attempt failures log at warn).
+    if (leadError instanceof EmptySearchAnswer) {
+      logHedgedProviderFailure(backup, backupError);
+      return { results: [], servedBy: lead };
+    }
+    if (backupError instanceof EmptySearchAnswer) {
+      logHedgedProviderFailure(lead, leadError);
+      return { results: [], servedBy: backup };
+    }
     throw new Error(
       `Web search failed on both providers. ${lead.name}: ${errorMessage(leadError)}; ` +
         `${backup.name}: ${errorMessage(backupError)}`
@@ -301,15 +326,15 @@ export async function performWebSearch(
   adapters: GetEffectiveApiKeyAdapters,
   params: WebSearchParams,
   imageUrlSigningSecret = '',
-  resolvedProvider?: Promise<WebSearchProvider | null>,
-  resolvedBackup?: Promise<WebSearchProvider | null>
+  resolvedProviders?: Promise<[WebSearchProvider | null, WebSearchProvider | null]>,
+  numberCitables?: ToolContext['numberCitables']
 ): Promise<WebSearchResult> {
   Logger.globalInstance.log('🔍 WebSearch Tool: Starting search for query:', params.query);
 
   // Surface a clear "not configured" message instead of silently returning
   // "No results found", which reads to the model (and user) as if the web
   // genuinely had nothing - the exact confusion this tool's gating fixes.
-  const provider = await (resolvedProvider ?? resolveWebSearchProvider(adapters));
+  const [provider, backup] = await (resolvedProviders ?? resolveWebSearchProviders(adapters));
   if (!provider) {
     Logger.globalInstance.error('❌ WebSearch Tool: No web-search provider configured. Skipping search.');
     return { formattedResults: WEB_SEARCH_NOT_CONFIGURED_MSG, citables: [] };
@@ -327,7 +352,6 @@ export async function performWebSearch(
       Logger.globalInstance.log('WebSearch Tool: cache hit', { query: params.query });
       results = cached;
     } else {
-      const backup = (await resolvedBackup) ?? null;
       ({ results, servedBy } = await searchWithHedge(provider, backup, params.query, numResults, searchOptions));
       if (results.length > 0) searchCacheSet(params.query, numResults, results, isPlaceSearch);
     }
@@ -363,7 +387,7 @@ export async function performWebSearch(
 
     const withImages = shouldIncludeImages(results, wantsImages, imageResults);
 
-    const citables: CitableSource[] = results.map((result, index) => ({
+    const unnumberedCitables: CitableSource[] = results.map((result, index) => ({
       id: result.url, // Use URL as unique identifier
       type: 'web_url' as const,
       title: result.title,
@@ -383,9 +407,14 @@ export async function performWebSearch(
     }));
     if (withPlaces) {
       for (const place of anchor ? [anchor, ...places] : places) {
-        citables.push(placeCitable(place, imageUrlSigningSecret, canSignImages));
+        unnumberedCitables.push(placeCitable(place, imageUrlSigningSecret, canSignImages));
       }
     }
+    // Organic results come first in the citables, so their stamps line up with `results` by index.
+    const numberedCitables = numberCitables?.(unnumberedCitables);
+    const citables = numberedCitables ?? unnumberedCitables;
+    const resultLabel = (index: number): string =>
+      numberedCitables ? `[${numberedCitables[index].metadata?.citationIndex}]` : `${index + 1}.`;
 
     const formattedResults = results
       .map((result, index) => {
@@ -397,7 +426,7 @@ export async function performWebSearch(
         // already closes for the image pool's fields - here it would let a snippet forge a fake
         // numbered entry or a fake "Images:" line in this line-structured output.
         return (
-          `${index + 1}. **${stripNewlines(result.title)}**\n${stripNewlines(result.snippet)}\n` +
+          `${resultLabel(index)} **${stripNewlines(result.title)}**\n${stripNewlines(result.snippet)}\n` +
           imageLine +
           `Source: [${safeHostname(result.url)}](${result.url})\n`
         );
@@ -411,9 +440,12 @@ export async function performWebSearch(
     // return zero organic hits but a real image cluster (the dedicated image search runs
     // independently of the organic search), and that image cluster - plus the cards prompt telling
     // the model how to use it - must not be thrown away just because there's no prose to go with it.
-    const placeSection = withPlaces ? `\n${formatPlaceResults(places, anchor)}\n` : '';
+    const placeSection = withPlaces
+      ? `\n${formatPlaceResults(places, anchor, numberedCitables ? citationNumbersById(numberedCitables) : undefined)}\n`
+      : '';
     const baseText = formattedResults
-      ? `Here's what I found from searching the web:\n\n${formattedResults}`
+      ? `Here's what I found from searching the web:\n\n${formattedResults}` +
+        (numberedCitables ? `\n${INDEXED_TOOL_CITATION_RULE}\n` : '')
       : imageSection || placeSection
         ? "Here's what I found from searching the web:\n"
         : 'No results found from web search.';
@@ -446,15 +478,14 @@ export const webSearchTool: ToolDefinition = {
           throw error;
         });
         const startedAt = Date.now();
-        const [lead, backup] = await providersPromise;
         // A failure throws on purpose: the backend hands the error text to the model as the tool
         // result AND records the call as failed, which is what the answer diagnosis reads.
         const { formattedResults, citables } = await performWebSearch(
           { db: context.db },
           params,
           config?.imageUrlSigningSecret,
-          Promise.resolve(lead),
-          Promise.resolve(backup)
+          providersPromise,
+          context.numberCitables
         );
         context.logger.log('🔍 WebSearch Tool: search timing', {
           callNumber,

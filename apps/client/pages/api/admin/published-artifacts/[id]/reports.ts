@@ -1,5 +1,5 @@
 import { Request } from 'express';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { PublishedArtifactReport } from '@bike4mind/database';

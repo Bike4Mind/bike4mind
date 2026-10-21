@@ -8,8 +8,8 @@ const handler = baseApi({ auth: true }).get(async (req, res) => {
   // is optional, so a legacy row without one must not widen the FabFile lookup into another
   // tenant's files. Rows written before research dedup became owner-scoped can point at an org
   // peer's FabFile, and the bare userId filter drops those -- correct under this repo's ownership
-  // model, and NOT to be "fixed" by widening the count below into a cross-tenant lookup. Making
-  // this access-aware (owner/shared/group union, matching buildOwnershipConditions) is a follow-up.
+  // model, and NOT to be "fixed" by widening the count below into a cross-tenant lookup or by
+  // turning this listing into an owner/shared/group union.
   const userId = req.user.id;
   const researchData = await researchDataRepository.find({ userId });
 

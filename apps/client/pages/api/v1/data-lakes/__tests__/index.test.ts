@@ -51,7 +51,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/featureFlag', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
   requireFeatureEnabled:
     () => (_req: unknown, res: { status: (n: number) => { json: (b: unknown) => void } }, next: () => void) =>
       mockFeatureEnabled.value
@@ -145,6 +145,13 @@ describe('GET /api/v1/data-lakes', () => {
     expect(body.next_cursor).toBeNull();
     expect(JSON.stringify(body)).not.toContain('editor only');
     expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('returns each lake tag, the value a session lakeScope takes', async () => {
+    const body = (await run())._getJSONData();
+    expect(body.data.map((lake: { datalake_tag: string }) => lake.datalake_tag)).toEqual(
+      [...DB_IDS].sort().map(id => `datalake:${id}`)
+    );
   });
 
   it('pages by id with an opaque cursor until next_cursor is null', async () => {

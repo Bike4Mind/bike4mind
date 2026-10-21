@@ -44,7 +44,7 @@ test.describe('Authentication', () => {
     await basePage.clearAllStorage();
     await loginPage.goto();
     await loginPage.fillEmail(user.email);
-    await loginPage.fillOtc('000000');
+    await loginPage.fillOtc('00000000');
     await loginPage.submitAndExpectFailure();
 
     await loginPage.expectErrorToast('Invalid code');

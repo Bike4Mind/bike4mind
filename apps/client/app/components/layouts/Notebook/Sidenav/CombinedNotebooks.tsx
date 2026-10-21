@@ -533,6 +533,7 @@ const CombinedNotebooks = () => {
                 }}
               >
                 <IconButton
+                  aria-label={t('a11y.advanced_search', 'Advanced search and actions')}
                   data-testid="advanced-search-btn"
                   variant="outlined"
                   color="neutral"
@@ -553,6 +554,7 @@ const CombinedNotebooks = () => {
             <Box ref={filtersAnchorRef} sx={{ position: 'relative' }}>
               <Tooltip title={t('filter.title', 'Filters')} placement="bottom">
                 <IconButton
+                  aria-label={t('filter.title', 'Filters')}
                   data-testid="sidenav-filters-btn"
                   variant="outlined"
                   color="neutral"
@@ -635,7 +637,7 @@ const CombinedNotebooks = () => {
                 className="notebook-sidenav-favorites-title"
                 level="body-xs"
                 sx={{
-                  color: 'neutral.softDisabledColor',
+                  color: 'text.tertiary',
                   marginBottom: '0.1em',
                   display: 'flex',
                   alignItems: 'center',
@@ -703,7 +705,7 @@ const CombinedNotebooks = () => {
               <Typography
                 className="notebook-sidenav-section-title"
                 level="body-xs"
-                sx={{ color: 'neutral.softDisabledColor', marginBottom: '0.1em' }}
+                sx={{ color: 'text.tertiary', marginBottom: '0.1em' }}
               >
                 {t('projects.projects', 'Projects')}
               </Typography>

@@ -12,10 +12,10 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 // buildDefaultWakeDeps for the same reason.
 import { createReActRunAct, noopRunAct, runWakeCycle, type WakeDeps } from '@bike4mind/agents';
 import { enrollDeepAgent } from '@server/deepAgent/enroll';
-import { MongoDeepAgentStore } from '@server/deepAgent/store';
+import { MongoDeepAgentStore } from '@bike4mind/server-utils/deepAgent/store';
 import { LlmWakeSteps } from '@server/deepAgent/llmSteps';
 import { createDeepAgentToolMaterializer } from '@server/deepAgent/toolMaterializer';
-import { DEFAULT_WAKE_MODEL_ID, resolveDeepAgentBackend } from '@server/deepAgent/resolveBackend';
+import { DEFAULT_WAKE_MODEL_ID, resolveDeepAgentBackend } from '@bike4mind/server-utils/deepAgent/resolveBackend';
 import { loadLinkedAgentContext } from '@server/deepAgent/missions';
 import { bridgeWakeToSession } from '@server/deepAgent/missionSessionBridge';
 

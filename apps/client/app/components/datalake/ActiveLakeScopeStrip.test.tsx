@@ -192,4 +192,64 @@ describe('ActiveLakeScopeStrip', () => {
       );
     }
   });
+
+  it('offers remove only while another lake would remain, so a remove never widens to all lakes', () => {
+    render(
+      <Wrapper>
+        <ActiveLakeScopeStrip lakes={[lake('a', 'Research Corpus')]} onClear={vi.fn()} onRemove={vi.fn()} />
+      </Wrapper>
+    );
+    expect(screen.getByTestId('datalake-active-scope-chip-a')).toHaveTextContent('Research Corpus');
+    expect(screen.queryByTestId('datalake-active-scope-remove-a')).not.toBeInTheDocument();
+  });
+
+  it('names the all-lakes scope without a Clear, since there is nothing narrower to clear', () => {
+    render(
+      <Wrapper>
+        <ActiveLakeScopeStrip lakes={[]} allLakes onClear={vi.fn()} />
+      </Wrapper>
+    );
+    expect(screen.getByTestId('datalake-active-scope-all')).toHaveTextContent('All data lakes');
+    expect(screen.queryByTestId('datalake-active-scope-none')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-active-scope-clear-btn')).not.toBeInTheDocument();
+  });
+
+  it('shows My files as a pressed toggle that reports clicks and refuses them while saving', () => {
+    const onToggle = vi.fn();
+    const { rerender } = render(
+      <Wrapper>
+        <ActiveLakeScopeStrip
+          lakes={[lake('a', 'A')]}
+          onClear={vi.fn()}
+          library={{ included: false, pending: false, onToggle }}
+        />
+      </Wrapper>
+    );
+    const chip = screen.getByTestId('datalake-active-scope-myfiles-chip');
+    expect(chip).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(chip);
+    expect(onToggle).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <Wrapper>
+        <ActiveLakeScopeStrip
+          lakes={[lake('a', 'A')]}
+          onClear={vi.fn()}
+          library={{ included: true, pending: true, onToggle }}
+        />
+      </Wrapper>
+    );
+    expect(screen.getByTestId('datalake-active-scope-myfiles-chip')).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByTestId('datalake-active-scope-myfiles-chip'));
+    expect(onToggle).toHaveBeenCalledTimes(1);
+  });
+
+  it('omits My files when there is no session to write it to', () => {
+    render(
+      <Wrapper>
+        <ActiveLakeScopeStrip lakes={[lake('a', 'A')]} onClear={vi.fn()} />
+      </Wrapper>
+    );
+    expect(screen.queryByTestId('datalake-active-scope-myfiles-chip')).not.toBeInTheDocument();
+  });
 });

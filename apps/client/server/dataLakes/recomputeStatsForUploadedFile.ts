@@ -13,7 +13,7 @@ type UploadedFile = { batchId?: string | null; tags?: ({ name?: string | null } 
  * count taken too early can park an empty lake in Discover permanently, with nothing to undo it.
  *
  * Call from every site that marks a FabFile 'complete': the hosted S3 event
- * (`server/s3/objectCreated.ts`), the self-host MinIO webhook
+ * (`apps/workers/src/s3/objectCreated.ts`), the self-host MinIO webhook
  * (`pages/api/internal/s3/object-created.ts`) and the self-host upload proxy
  * (`pages/api/files/[id]/upload.ts`). The last two both fire for one object on self-host - the
  * second recompute is an idempotent no-op, exactly like their duplicate status write.

@@ -285,6 +285,7 @@ describe('/api/admin/model-discovery', () => {
         // when the runner cut it.
         detailTotals: {},
         unmatchedIds: ['a', 'b', 'c'],
+        frozenProfileIds: [],
         droppedRecords: [{ source: 'litellm', modelId: 'ghost-1', reason: 'unknown backend' }],
       },
     });
@@ -307,6 +308,24 @@ describe('/api/admin/model-discovery', () => {
     expect(listed.lastRun.mode).toBe('report');
     expect(listed.runs[0].mode).toBe('report');
     expect(listed.mode).toBe('write');
+  });
+
+  it('defaults frozenProfileIds to an empty list for a run document that predates the field', async () => {
+    runById.mockResolvedValue({ ...DETAILED_RUN, frozenProfileIds: undefined });
+
+    const { run, res } = call({ method: 'GET', query: { runId: 'run-1' } });
+    await run();
+
+    expect(res._getJSONData().run.frozenProfileIds).toEqual([]);
+  });
+
+  it('passes frozenProfileIds through on the run detail', async () => {
+    runById.mockResolvedValue({ ...DETAILED_RUN, frozenProfileIds: ['us.anthropic.claude-x-v1:0'] });
+
+    const { run, res } = call({ method: 'GET', query: { runId: 'run-1' } });
+    await run();
+
+    expect(res._getJSONData().run.frozenProfileIds).toEqual(['us.anthropic.claude-x-v1:0']);
   });
 
   it('passes the truncation totals through so a section can say it shows the first 200 of N', async () => {

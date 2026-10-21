@@ -1,3 +1,4 @@
+import { isFabFileTypeFilter } from '@bike4mind/common';
 import { ISearchFabFilesParams } from '@client/app/hooks/data/fabFiles';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import { Search } from '@mui/icons-material';
@@ -5,6 +6,7 @@ import { Box, Input, Option, Select } from '@mui/joy';
 import { debounce } from 'lodash';
 import { FC, useState } from 'react';
 import { FILE_TYPE_OPTIONS } from './constants';
+import GeneratedFilterToggle, { withGeneratedFilter } from './GeneratedFilterToggle';
 
 interface FileBrowserFilterProps {
   value?: ISearchFabFilesParams;
@@ -28,9 +30,13 @@ const FileBrowserFilter: FC<FileBrowserFilterProps> = ({ value, onChange }) => {
       ...value,
       filters: {
         ...(value?.filters || {}),
-        type: val === 'all' ? undefined : (val as any),
+        type: isFabFileTypeFilter(val) ? val : undefined,
       },
     });
+  };
+
+  const handleGeneratedChange = (generated: boolean) => {
+    onChange?.(withGeneratedFilter(value, generated));
   };
 
   return (
@@ -54,6 +60,8 @@ const FileBrowserFilter: FC<FileBrowserFilterProps> = ({ value, onChange }) => {
         sx={theme => ({
           flexGrow: 1,
           width: '70%',
+          // Floor for the search box; globals.css sets `min-width: 0` on everything.
+          minWidth: '160px',
           minHeight: '32px',
           boxShadow: 'none',
           fontSize: '14px',
@@ -88,6 +96,8 @@ const FileBrowserFilter: FC<FileBrowserFilterProps> = ({ value, onChange }) => {
         indicator={<KeyboardArrowDownIcon sx={{ fontSize: 10 }} />}
         sx={{
           width: '150px',
+          // The search input absorbs a narrow row; shrinking this instead cuts the selected type to its arrow.
+          flexShrink: 0,
           height: '32px',
           minHeight: '32px',
           paddingTop: 0,
@@ -113,6 +123,7 @@ const FileBrowserFilter: FC<FileBrowserFilterProps> = ({ value, onChange }) => {
           </Option>
         ))}
       </Select>
+      <GeneratedFilterToggle active={value?.filters?.generated === true} onChange={handleGeneratedChange} />
     </Box>
   );
 };

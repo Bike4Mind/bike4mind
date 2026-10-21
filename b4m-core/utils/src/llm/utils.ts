@@ -13,6 +13,7 @@ import {
   IFabFileRepository,
   IMessage,
   isAudioMimeType,
+  isMediaOnlyMimeType,
   isGeminiModelId,
   isImageAttachment,
   isImageServeable,
@@ -53,7 +54,10 @@ const MAX_FILE_SIZE = 6000;
 const MAX_RECENT_GENERATED_IMAGES = 6;
 /** Chars of the originating prompt kept per generated image, for context without bloat. */
 const RECENT_IMAGE_PROMPT_PREVIEW_CHARS = 120;
-/** quest.images also holds non-image generated artifacts (e.g. .xlsx); only these extensions are editable. */
+/**
+ * quest.images also holds non-image generated artifacts (e.g. .xlsx); only these extensions are editable.
+ * Keep in sync with GENERATED_IMAGE_KEY_RE (@bike4mind/common), what edit_image actually accepts.
+ */
 const EDITABLE_IMAGE_KEY_RE = /\.(jpe?g|png|webp|gif)$/i;
 const PREVIEW_CHUNK = 700;
 const CHARS_PER_TOKEN = 3.5;
@@ -166,9 +170,12 @@ const CONTENT_TRUNCATION_NOTICE =
  * the content message itself means it lives or dies with what it is asserting, so it can never claim
  * content is present when `declareUndeliveredAttachments` has already dropped or replaced it.
  */
-export const ATTACHMENT_DELIVERED_NOTICE =
-  '[The content below is included in this request and you can read it. Do not tell the user you are ' +
-  'unable to access or open it.]\n\n';
+export const ATTACHMENT_DELIVERED_NOTICE = '[Attached file content included in this request:]\n\n';
+
+export const ATTACHMENT_END_DELIMITER = '\n\n--- End of attached file content ---\n\n';
+
+const withoutAttachmentEnd = (text: string): string =>
+  text.endsWith(ATTACHMENT_END_DELIMITER) ? text.slice(0, -ATTACHMENT_END_DELIMITER.length) : text;
 
 /**
  * Below this many tokens of a file, a slice is not worth sending. A few dozen characters of a CSV does
@@ -546,6 +553,38 @@ export async function generateSafeEmbedding(
 }
 
 /**
+ * Quests between one history-window start and the next once a session outgrows its limit. A window
+ * that slid by one quest per turn changed the head of the conversation on every request, so the
+ * provider's prompt cache (prefix-based) never matched past the system prompt. Stepping the start
+ * keeps the prefix byte-identical for STEP turns at a time.
+ */
+export const HISTORY_WINDOW_STEP = 10;
+
+/**
+ * The step a window may actually use. Capped at half the limit: at limit 10 and step 10 the window
+ * would collapse to a single quest right after each step, which is no history at all for a
+ * small-context model.
+ */
+export function historyWindowStep(limit: number, step: number = HISTORY_WINDOW_STEP): number {
+  return Math.min(step, Math.max(1, Math.floor(limit / 2)));
+}
+
+/**
+ * Index (0-based, oldest first) of the first prior quest in the history window, given the number of
+ * quests before the current turn and the window `limit`. The window is quests [start, priorQuestCount):
+ * never longer than `limit`, and `start` only moves every `step` quests.
+ */
+export function resolveHistoryWindowStart(
+  priorQuestCount: number,
+  limit: number,
+  step: number = HISTORY_WINDOW_STEP
+): number {
+  if (priorQuestCount <= limit) return 0;
+  const effectiveStep = historyWindowStep(limit, step);
+  return Math.ceil((priorQuestCount - limit) / effectiveStep) * effectiveStep;
+}
+
+/**
  * Return the previous messages from the database, and the total number of previous messages.
  *
  * `historyCount` is a window in quests: null means the default page size, 0 or below means no
@@ -563,7 +602,9 @@ export async function fetchAndProcessPreviousMessages(
     includeReplyChoices = false,
   }: {
     db: {
-      quests: Pick<IChatHistoryItemRepository, 'getMostRecentChatHistory'>;
+      // countBySessionId is optional so a caller with a minimal repository keeps the newest-N window.
+      quests: Pick<IChatHistoryItemRepository, 'getMostRecentChatHistory'> &
+        Partial<Pick<IChatHistoryItemRepository, 'countBySessionId'>>;
     };
     /**
      * When set, keep only the newest turns whose estimated size fits this many
@@ -611,7 +652,10 @@ export async function fetchAndProcessPreviousMessages(
       fetchTime?: number;
       itemCount?: number;
       oldestIncludedQuestId?: string | null;
-      /** Older turns dropped from the verbatim window by verbatimTokenBudget (0 when none). */
+      /**
+       * Older turns verbatimTokenBudget leaves out of the window (0 when none). Reported before the
+       * cache-grid snap, so the snap cannot hide token pressure from summarization.
+       */
       excludedOlderQuestCount?: number;
       /** Recently generated images (bare storage keys + originating prompt), newest first. */
       recentGeneratedImages?: { key: string; prompt: string }[];
@@ -650,6 +694,10 @@ export async function fetchAndProcessPreviousMessages(
     } items)`
   );
 
+  // limit + 1 back means the session holds at least `limit` prior quests, the only case where the
+  // window can need aligning (see below). Read before the pop; shorter sessions skip the count query.
+  const mayExceedWindow = chatHistoryItems.length > limit;
+
   // Reverse the chat history items and remove the last item (the current prompt)
   chatHistoryItems.reverse();
 
@@ -659,11 +707,48 @@ export async function fetchAndProcessPreviousMessages(
     chatHistoryItems.pop();
   }
 
+  // Past `limit` quests the newest-N window would drop the oldest quest every turn, changing the head
+  // of the prompt each time and defeating the provider's prefix cache. Align its start to a step
+  // boundary instead (see resolveHistoryWindowStart). The aligned window is never longer than `limit`,
+  // so it lies inside the quests already fetched and costs no second fetch.
+  //
+  // A caller who asked for unlimited history wants every turn, so alignment is skipped for it - the
+  // fetch page would otherwise cap that choice at a fraction of itself. The token-budget trim below
+  // uses the same anchor, so it is skipped for unlimited history too.
+  let windowStartIndex: number | null = null;
+  if (!isUnlimitedHistory(historyCount) && (mayExceedWindow || verbatimTokenBudget) && db.quests.countBySessionId) {
+    // The count only improves cache locality; a transient failure must not fail the whole turn.
+    // Without it the window keeps the pre-alignment newest-N shape.
+    let questCount: number | null = null;
+    try {
+      questCount = await db.quests.countBySessionId(session.id);
+    } catch (error) {
+      Logger.globalInstance.warn('History quest count failed; keeping the unaligned window', {
+        sessionId: session.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    if (questCount !== null) {
+      // The count includes the current turn's quest. Floored at what was fetched in case a concurrent
+      // write made the two reads disagree.
+      const priorQuestCount = Math.max(questCount - 1, chatHistoryItems.length);
+      const windowStart = resolveHistoryWindowStart(priorQuestCount, limit);
+      windowStartIndex = priorQuestCount - chatHistoryItems.length;
+      const dropCount = Math.min(Math.max(windowStart - windowStartIndex, 0), chatHistoryItems.length - 1);
+      if (dropCount > 0) {
+        chatHistoryItems.splice(0, dropCount);
+        windowStartIndex += dropCount;
+      }
+    }
+  }
+
   // Filter out messages already covered by contextSummary.
   // MongoDB ObjectIds are time-ordered; string comparison gives correct temporal ordering.
   if (session.contextSummaryUpToQuestId) {
     const boundary = session.contextSummaryUpToQuestId;
     const filtered = chatHistoryItems.filter(item => item.id > boundary);
+    if (windowStartIndex !== null) windowStartIndex += chatHistoryItems.length - filtered.length;
     chatHistoryItems.splice(0, chatHistoryItems.length, ...filtered);
   }
 
@@ -687,7 +772,25 @@ export async function fetchAndProcessPreviousMessages(
       }
     }
     if (keepFromIndex > 0) {
-      excludedOlderQuestCount = keepFromIndex;
+      // Snap the window start to the same step grid the count window uses. The budget is sized from
+      // this turn's message and tool list, so it moves every turn; left unaligned, this trim slides
+      // the window start one quest per turn and busts the cache in exactly the long sessions the
+      // alignment above exists for. Prefer the next grid point at or above the trim, so the window
+      // never holds more than the budget estimated; fall back to the one below only when stepping up
+      // would drop the newest turn (the end of the window is fixed at the newest quest). When the
+      // point below drops nothing either, keep the raw trim: the summarizer folds only quests older
+      // than oldestIncludedQuestId, so a window left whole would re-fire summarization every turn
+      // without compacting anything.
+      const rawTrim = keepFromIndex;
+      if (windowStartIndex !== null) {
+        const step = historyWindowStep(limit);
+        const absoluteStart = windowStartIndex + rawTrim;
+        const snappedUp = Math.ceil(absoluteStart / step) * step - windowStartIndex;
+        const snappedDown = Math.floor(absoluteStart / step) * step - windowStartIndex;
+        keepFromIndex = snappedUp <= chatHistoryItems.length - 1 ? snappedUp : snappedDown > 0 ? snappedDown : rawTrim;
+      }
+      // Never report less than the pre-snap trim: a 0 here reads downstream as "no token pressure".
+      excludedOlderQuestCount = Math.max(rawTrim, keepFromIndex);
       chatHistoryItems.splice(0, keepFromIndex);
     }
   }
@@ -783,7 +886,7 @@ export async function fetchAndProcessPreviousMessages(
     return acc;
   }, new Array<IMessage>());
 
-  // Surface recently generated images so a follow-up turn can edit them
+  // Surface recently generated images so a follow-up turn can edit or animate them
   // ("make it cartoonish"). Generated images persist as bare storage keys in
   // quest.images with no fabFile record, so the model otherwise has no handle on
   // them. Newest first, capped, and filtered to actual image files (quest.images
@@ -1325,6 +1428,7 @@ async function cosineSearch(
 export type FabFileNoticeBand =
   | 'unresolved'
   | 'audio'
+  | 'video'
   | 'image_not_serveable'
   | 'image_too_large'
   | 'vision_unsupported'
@@ -1524,20 +1628,20 @@ export async function processFabFilesServer(
     // false explicitly on the two text paths that can partially deliver.
     let fullyDelivered = false;
     try {
-      // Audio (generated TTS / sound effects) is never LLM input: no model
-      // accepts audio, and the non-image branch below would otherwise try to
-      // read the bytes as text. This is the authoritative attachment guard -
-      // every chat/agent path funnels through here, so a file that slips past
-      // the attach UI still can't reach the model.
-      if (isAudioMimeType(file.mimeType)) {
+      // Generated audio and video are never LLM input: no model accepts them as attachments, and the
+      // non-image branch below would otherwise try to read the bytes as text. This is the authoritative
+      // attachment guard - every chat/agent path funnels through here, so a file that slips past the
+      // attach UI still can't reach the model.
+      if (isMediaOnlyMimeType(file.mimeType)) {
+        const mediaKind = isAudioMimeType(file.mimeType) ? 'audio' : 'video';
         logger.warn(
-          `[processFabFilesServer] Skipping audio file ${file.fileName} — audio is not attachable to an LLM.`
+          `[processFabFilesServer] Skipping ${mediaKind} file ${file.fileName} - ${mediaKind} is not attachable to an LLM.`
         );
         fileNotices.push({
           fabFileId: file.id,
           fileName: file.fileName,
-          band: 'audio',
-          message: `"${noticeFileName(file.fileName)}" is an audio file and was not sent: no model accepts audio as input.`,
+          band: mediaKind,
+          message: `"${noticeFileName(file.fileName)}" is ${mediaKind === 'audio' ? 'an audio' : 'a video'} file and was not sent: no model accepts ${mediaKind} as input.`,
           delivered: false,
         });
         return;
@@ -1889,7 +1993,7 @@ export async function processFabFilesServer(
             else if (anyChunkCut) notice = CONTENT_TRUNCATION_NOTICE;
 
             const body = `Data for ${noticeFileName(file.fileName)}:\n${FILENAME_DIGIT_NOTICE}\n${truncatedResults.map(r => `For context: ${r.content}`).join('\n')}`;
-            userMessages.push({ role: 'user', content: body + notice });
+            userMessages.push({ role: 'user', content: body + notice + ATTACHMENT_END_DELIMITER });
 
             if (notice) {
               logger.warn(
@@ -2022,7 +2126,6 @@ export async function processFabFilesServer(
                 delivered: false,
               });
             } else {
-              logger.updateMetadata({ filePath: file.filePath });
               throw e;
             }
           }
@@ -2031,9 +2134,28 @@ export async function processFabFilesServer(
       if (delivered) deliveredFileIds.add(file.id);
       if (fullyDelivered) fullyDeliveredFileIds.add(file.id);
     } catch (error) {
-      logger.updateMetadata({ fileId: file.id });
-      logger.error(`🕐 [processFabFilesServer] Error processing file ${file.fileName}: ${error}`);
-      throw error;
+      // Per-line metadata, not updateMetadata: that mutates the run's shared logger, so every later
+      // line - for every other file, and the rest of the run - was stamped with this file's ids.
+      logger.error(`🕐 [processFabFilesServer] Error processing file ${file.fileName}:`, error, {
+        fileId: file.id,
+        filePath: file.filePath,
+      });
+      // Content already reached the prompt (a later step such as the metadata update threw), so
+      // reporting read_failed would contradict what the model received.
+      if (delivered) {
+        deliveredFileIds.add(file.id);
+        if (fullyDelivered) fullyDeliveredFileIds.add(file.id);
+        return;
+      }
+      // Contain the failure to this file. Rethrowing rejected the whole Promise.all, so one
+      // unreadable attachment dropped every sibling that had read fine along with it.
+      fileNotices.push({
+        fabFileId: file.id,
+        fileName: file.fileName,
+        band: 'read_failed',
+        message: `"${noticeFileName(file.fileName)}" could not be read and was not sent: an unexpected error occurred while extracting its content.`,
+        delivered: false,
+      });
     }
   };
 
@@ -2093,12 +2215,11 @@ export async function processFabFilesServer(
       contextFiles.forEach((file, index) => {
         combinedContent += `--- File ${index + 1}: ${noticeFileName(file.fileName)} ---\n${file.content}\n\n`;
       });
-      combinedContent += `--- End of attached files ---`;
     }
 
     userMessages.push({
       role: 'user',
-      content: combinedContent,
+      content: combinedContent + ATTACHMENT_END_DELIMITER,
     });
   }
 
@@ -2223,9 +2344,9 @@ const truncateMessageContent = (message: IMessage, tokenLimit: number): IMessage
 
 // Process messages, keeping complete ones over truncation to avoid mid-content cuts that cause
 // hallucinations. Never returns more than `tokenBudget` worth of messages, except in the truncation
-// fallback at the bottom: that stays under 90% of the budget, plus the truncation notice when one is
-// passed - which on a very small budget can put the total over it. The caller's final safety pass
-// absorbs that.
+// fallback at the bottom: that stays under 90% of the budget, plus the truncation notice and the
+// attachment end boundary when a notice is passed - which on a very small budget can put the total
+// over it. The caller's final safety pass absorbs that.
 const processMessages = (
   messages: IMessage[],
   tokenBudget: number,
@@ -2338,17 +2459,18 @@ const processMessages = (
     if (tokensPerMessage >= 1) {
       const truncatedMessages = messages.map(message => {
         // Held out of the slice so the cut cannot leave a fragment of it behind, then put back after.
-        const upstream =
-          truncationNotice && typeof message.content === 'string' ? upstreamNoticeIn(message.content) : null;
-        const source = upstream
-          ? { ...message, content: (message.content as string).slice(0, -upstream.length) }
-          : message;
+        const text = typeof message.content === 'string' ? message.content : null;
+        const boundary = truncationNotice && text?.endsWith(ATTACHMENT_END_DELIMITER) ? ATTACHMENT_END_DELIMITER : '';
+        const body = boundary && text !== null ? withoutAttachmentEnd(text) : text;
+        const upstream = truncationNotice && body !== null ? upstreamNoticeIn(body) : null;
+        const source =
+          body !== null ? { ...message, content: upstream ? body.slice(0, -upstream.length) : body } : message;
         const truncated = truncateMessageContent(source, tokensPerMessage);
         // Every message reaching this branch gets shortened - it only runs when none of them fit,
         // and the per-message share is at most the budget each one already exceeded. The type check
         // is the real guard: array content truncates by whole blocks and takes no text notice.
         if (!truncationNotice || typeof truncated.content !== 'string') return truncated;
-        return { ...truncated, content: truncated.content + (upstream ?? truncationNotice) };
+        return { ...truncated, content: truncated.content + (upstream ?? truncationNotice) + boundary };
       });
       return {
         messages: truncatedMessages,
@@ -2857,7 +2979,7 @@ export async function buildAndSortMessages(
   // and URL content each get their own message and so are judged separately. Real per-file accounting
   // needs block-level bookkeeping through extraction and is tracked separately.
   const fileTokens = (message: IMessage): number => {
-    const text = messageContentText(message);
+    const text = withoutAttachmentEnd(messageContentText(message));
     // No notice is the file's own content, and either kind pushes a sliver over the threshold - the
     // excerpt notice weighs ~101 estimate tokens by itself, half the usability floor. Ours is matched
     // by identity so a file whose text happens to end with that sentence cannot spoof a cut; an
@@ -2981,7 +3103,10 @@ export async function buildAndSortMessages(
     message !== undeliveredNote &&
     isAttachment(message) &&
     !(cutContentMessages.has(message) && fileTokens(message) < MIN_USEFUL_ATTACHED_CONTENT_TOKENS)
-      ? { ...message, content: ATTACHMENT_DELIVERED_NOTICE + message.content }
+      ? {
+          ...message,
+          content: ATTACHMENT_DELIVERED_NOTICE + withoutAttachmentEnd(message.content) + ATTACHMENT_END_DELIMITER,
+        }
       : message;
 
   const assemble = (content: IMessage[], history: IMessage[]): IMessage[] => {

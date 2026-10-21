@@ -1,7 +1,18 @@
 import bcrypt from 'bcryptjs';
-import { IUserDocument, IUserPreferences, IUserRepository } from '@bike4mind/common';
+import {
+  ConflictError,
+  IUserDocument,
+  IUserPreferences,
+  IUserRepository,
+  USERNAME_RULES_MESSAGE,
+  usernameSchema,
+} from '@bike4mind/common';
 import { BadRequestError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
+import { isDuplicateKeyErrorOn } from './duplicateKeyError';
+
+export const USERNAME_TAKEN_MESSAGE = 'That username is taken.';
+export const EMAIL_IN_USE_MESSAGE = 'That email address is already in use.';
 
 export const updateUserSchema = z.object({
   name: z.string().optional(),
@@ -57,6 +68,7 @@ export const updateUserSchema = z.object({
       language: z.string().optional(),
       favoriteTags: z.array(z.string()).optional(),
       favoriteModelIds: z.array(z.string()).optional(),
+      hiddenSurfaces: z.array(z.string().max(64)).max(32).optional(),
       fileBrowserViewMode: z.enum(['home', 'list', 'grid', 'tags']).optional(),
       optiSessionId: z.string().nullable().optional(),
       lastUsedTextModel: z.string().nullable().optional(),
@@ -84,7 +96,6 @@ export const updateUserSchema = z.object({
       // listed here.
       agentModeDefault: z.enum(['off', 'auto', 'on']).optional(),
       showFunTools: z.boolean().optional(),
-      saveGeneratedAudio: z.boolean().optional(),
       showSplashCards: z.boolean().optional(),
     })
     .nullable()
@@ -160,6 +171,49 @@ function mergePreferences(
   };
 }
 
+/**
+ * Validate a requested username change and normalize it in place on `params`. An absent or
+ * unchanged username is left alone, so a legacy username that predates the rules never blocks
+ * an unrelated profile save. Throws 400 on a rule violation and 409 when another account holds
+ * the name case-insensitively.
+ */
+export async function validateUsernameChange(
+  user: Pick<IUserDocument, 'id' | 'username'>,
+  params: { username?: string },
+  users: Pick<IUserRepository, 'existsOtherUserWithUsername'>
+): Promise<void> {
+  if (params.username === undefined || params.username === user.username) return;
+
+  const parsed = usernameSchema.safeParse(params.username);
+  if (!parsed.success) {
+    throw new BadRequestError(USERNAME_RULES_MESSAGE);
+  }
+  params.username = parsed.data;
+  if (parsed.data === user.username) return;
+
+  if (await users.existsOtherUserWithUsername(parsed.data, user.id)) {
+    throw new ConflictError(USERNAME_TAKEN_MESSAGE);
+  }
+}
+
+/** Run a user write, reporting a lost race on the username or email unique index as the same 409. */
+export async function writeUserUpdate(
+  users: Pick<IUserRepository, 'update'>,
+  write: Partial<IUserDocument> & { id: string }
+): Promise<void> {
+  try {
+    await users.update(write);
+  } catch (error) {
+    if (isDuplicateKeyErrorOn(error, 'username')) {
+      throw new ConflictError(USERNAME_TAKEN_MESSAGE);
+    }
+    if (isDuplicateKeyErrorOn(error, 'email')) {
+      throw new ConflictError(EMAIL_IN_USE_MESSAGE);
+    }
+    throw error;
+  }
+}
+
 export async function updateUser(userId: string, parameters: UpdateUserParameters, { db }: UpdateUserAdapters) {
   const params = secureParameters(parameters, updateUserSchema);
   const userPassword = await db.users.findByIdWithPassword(userId);
@@ -168,11 +222,13 @@ export async function updateUser(userId: string, parameters: UpdateUserParameter
     throw new Error('User not found');
   }
 
+  await validateUsernameChange(userPassword, params, db.users);
+
   const updatedUser = applyBaseUserUpdates(userPassword, params);
 
   // Persist ONLY the fields this request changed. Writing the whole built document
   // (a spread of the read snapshot) is what let a routine profile save revert a
   // concurrent credit deduction, tokenVersion bump or admin tag/ban change.
-  await db.users.update(toUserUpdatePartial(updatedUser, params));
+  await writeUserUpdate(db.users, toUserUpdatePartial(updatedUser, params));
   return updatedUser;
 }

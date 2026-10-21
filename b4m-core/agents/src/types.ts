@@ -1,4 +1,4 @@
-import type { IMessage } from '@bike4mind/common';
+import type { IMessage, TurnUsage } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { RepeatedCallGuardOptions } from './repeatedCallGuard';
@@ -27,8 +27,7 @@ export interface AgentStep {
     /** Name of the tool being used (for action steps) */
     toolName?: string;
     /** Input provided to the tool (for action steps) */
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    toolInput?: any;
+    toolInput?: unknown;
     /** Timestamp when this step occurred */
     timestamp: number;
     /**
@@ -49,6 +48,8 @@ export interface AgentStep {
     confidence?: number;
     /** How the confidence score was determined */
     confidenceSource?: 'deterministic' | 'llm_self_report' | 'heuristic' | 'default';
+    /** Set on an observation whose tool call threw or could not run (not inferred from result text) */
+    toolFailed?: boolean;
   };
 }
 
@@ -74,6 +75,8 @@ export interface AgentResult {
     totalCacheReadTokens?: number;
     /** Total tokens written to prompt cache (initial cache creation) */
     totalCacheWriteTokens?: number;
+    /** The same usage per provider request; price with getTurnsCost (long-context tiers are per request). */
+    turnUsage?: TurnUsage[];
     /** Number of iterations performed */
     iterations: number;
     /** Number of tool calls made */
@@ -246,6 +249,11 @@ export interface AgentRunOptions {
    */
   previousMessages?: IMessage[];
   signal?: AbortSignal;
+  /**
+   * Request live `text_delta` output for this run. Defaults to whether anything listens to
+   * `text_delta`; pass false for a run with no live view so the backend keeps full retry.
+   */
+  streamText?: boolean;
   /** Enable parallel execution of read-only tools for performance improvement */
   parallelExecution?: boolean;
   /** Custom function to determine if a tool is read-only (defaults to built-in check) */
@@ -286,8 +294,11 @@ export interface AgentRunOptions {
    * propagates as before. Not provided: behavior is unchanged (the error
    * always propagates). Kept as an injected callback so the agent stays
    * infra-free - hosts (e.g. the CLI) own the actual compaction strategy.
+   * `protectedCount` is the length of the run's protected prefix (system +
+   * previousMessages + current query, after transcript repair); messages
+   * below it must be kept as they are.
    */
-  onContextLimit?: (messages: IMessage[]) => Promise<IMessage[] | null>;
+  onContextLimit?: (messages: IMessage[], protectedCount: number) => Promise<IMessage[] | null>;
   /**
    * Host-supplied provider for a compact live-workflow-state reminder (open
    * todos, unresolved blockers, recent decisions). Called before every LLM
@@ -301,7 +312,23 @@ export interface AgentRunOptions {
    * dedup. Not provided: behavior is unchanged.
    */
   workflowReminder?: () => string | null;
+  /**
+   * Host-supplied drain for asynchronous feedback produced off the critical
+   * path while tools ran (e.g. post-edit type/lint diagnostics). Called at the
+   * two decision points where the model can still act on it:
+   * - `'turn'`: after an iteration's tool calls, folded into the
+   *   "Based on the tool results above..." nudge (so it adds no extra
+   *   iteration boundary for history trimming).
+   * - `'final'`: when the model answers without tool calls and iterations
+   *   remain. A non-empty return turns that answer into a thought and runs one
+   *   more iteration with the feedback as the next user message.
+   * The host owns the wait budget per phase and must return promptly; return
+   * null/'' when there is nothing to report. Not provided: behavior is unchanged.
+   */
+  drainFeedback?: (phase: FeedbackDrainPhase) => Promise<string | null>;
 }
+
+export type FeedbackDrainPhase = 'turn' | 'final';
 
 /**
  * Options for `runIteration()` only. `toolGate` lives here rather than on
@@ -346,6 +373,8 @@ export interface AgentCheckpoint {
   totalOutputTokens: number;
   totalCacheReadTokens: number;
   totalCacheWriteTokens: number;
+  /** Per-request breakdown of the totals; absent on checkpoints saved before it was tracked. */
+  turnUsage?: TurnUsage[];
   /** Cumulative credit usage */
   totalCredits: number;
   /** Total tool calls executed */

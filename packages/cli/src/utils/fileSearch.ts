@@ -1,9 +1,10 @@
-import * as fs from 'node:fs';
+import type { Dirent, Stats } from 'node:fs';
+import { promises as fsp } from 'node:fs';
 import * as path from 'node:path';
 import { AsyncFzf, type FzfResultItem } from 'fzf';
-import { fdir } from 'fdir';
 import ignore from 'ignore';
 import { isPathWithin } from './pathWithin.js';
+import { logger } from './Logger.js';
 
 export interface FileSearchResult {
   path: string; // Relative path from cwd
@@ -16,128 +17,128 @@ export interface FileSearchResult {
  * a dangling link, or one pointing somewhere unreadable, must not take down a whole
  * directory listing.
  */
-function statOrNull(targetPath: string): fs.Stats | null {
+async function statOrNull(targetPath: string): Promise<Stats | null> {
   try {
-    return fs.statSync(targetPath);
+    return await fsp.stat(targetPath);
   } catch {
     return null;
   }
 }
 
 /**
- * Load gitignore rules from project root
+ * Never listed, whatever .gitignore says: VCS internals ('.git' without a slash,
+ * since it is a file inside a worktree or submodule), installed dependencies, and
+ * nested worktrees (each one a full copy of the repo, so crawling them multiplies
+ * the walk and floods @ results with duplicates).
  */
-function loadIgnoreRules(projectRoot: string): ReturnType<typeof ignore> {
-  const ig = ignore();
+const ALWAYS_IGNORED = ignore().add(['.git', 'node_modules/', '.claude/worktrees/']);
 
-  // Always ignore .git
-  ig.add('.git/');
+const MAX_CRAWL_DEPTH = 10;
+const MAX_CRAWL_ENTRIES = 20000;
+// Directories read concurrently. Batches are consumed in order, so the result
+// does not depend on which readdir finishes first.
+const READDIR_BATCH_SIZE = 32;
 
-  // Try to load .gitignore
-  const gitignorePath = path.join(projectRoot, '.gitignore');
-  if (fs.existsSync(gitignorePath)) {
-    try {
-      const gitignoreContent = fs.readFileSync(gitignorePath, 'utf-8');
-      ig.add(gitignoreContent);
-    } catch {
-      // Ignore errors reading .gitignore
-    }
+type Ignore = ReturnType<typeof ignore>;
+
+/** Gitignore rules from one directory; `base` is that directory's '/'-terminated relative path. */
+type IgnoreScope = { base: string; rules: Ignore };
+type PendingDirectory = { relativePath: string; scopes: IgnoreScope[] };
+type ListedEntry = { relativePath: string; directory?: PendingDirectory };
+
+function isIgnored(scopes: IgnoreScope[], relativePath: string): boolean {
+  return scopes.some(({ base, rules }) => rules.ignores(relativePath.slice(base.length)));
+}
+
+async function readGitignore(absoluteDir: string): Promise<Ignore | null> {
+  try {
+    return ignore().add(await fsp.readFile(path.join(absoluteDir, '.gitignore'), 'utf-8'));
+  } catch {
+    return null; // unreadable: treat the directory as having no rules of its own
   }
-
-  return ig;
 }
 
 /**
- * Crawl directory and collect files/directories
- * @param projectRoot - The project root directory
- * @param maxDepth - Maximum depth to traverse
- * @param maxFiles - Maximum number of files to collect
- * @param ig - Ignore instance with gitignore rules
- * @returns Array of relative paths
+ * Lists one directory in name order, dropping ignored entries. A directory's own
+ * .gitignore applies to everything beneath it, as in git.
  */
-function crawlDirectory(
+async function listDirectory(projectRoot: string, directory: PendingDirectory): Promise<ListedEntry[]> {
+  const absoluteDir = path.join(projectRoot, directory.relativePath);
+  let dirents: Dirent[];
+  try {
+    dirents = await fsp.readdir(absoluteDir, { withFileTypes: true });
+  } catch {
+    return []; // vanished or unreadable mid-crawl: skip it rather than fail the listing
+  }
+
+  const hasGitignore = dirents.some(dirent => dirent.name === '.gitignore' && dirent.isFile());
+  const rules = hasGitignore ? await readGitignore(absoluteDir) : null;
+  const scopes = rules ? [...directory.scopes, { base: directory.relativePath, rules }] : directory.scopes;
+
+  const entries: ListedEntry[] = [];
+  for (const dirent of dirents.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
+    // Symlinks are listed but never followed, which also rules out cycles.
+    const isDirectory = dirent.isDirectory();
+    const relativePath = `${directory.relativePath}${dirent.name}${isDirectory ? '/' : ''}`;
+    if (isIgnored(scopes, relativePath)) {
+      continue;
+    }
+    entries.push(isDirectory ? { relativePath, directory: { relativePath, scopes } } : { relativePath });
+  }
+  return entries;
+}
+
+/**
+ * Crawl the project breadth-first and collect files and directories
+ * (directories end in '/').
+ *
+ * Ignored entries are dropped while walking and never count towards maxEntries.
+ * The walk stops as soon as the cap is reached, and because it goes level by
+ * level in name order, a capped listing is always the same shallowest entries.
+ *
+ * @returns Paths relative to projectRoot, '/'-separated
+ */
+export async function crawlDirectory(
   projectRoot: string,
-  maxDepth: number = 10,
-  maxFiles: number = 20000,
-  ig: ReturnType<typeof ignore>
-): string[] {
-  let fileCount = 0;
+  { maxDepth = MAX_CRAWL_DEPTH, maxEntries = MAX_CRAWL_ENTRIES }: { maxDepth?: number; maxEntries?: number } = {}
+): Promise<string[]> {
+  const collected: string[] = [];
+  let level: PendingDirectory[] = [{ relativePath: '', scopes: [{ base: '', rules: ALWAYS_IGNORED }] }];
 
-  const crawler = new fdir()
-    .withRelativePaths()
-    .withDirs()
-    .withPathSeparator('/')
-    .exclude((dirPath: string) => {
-      // Convert absolute path to relative with trailing slash
-      const relativePath = path.posix.relative(projectRoot, dirPath);
-
-      // Skip root directory check (empty or ".")
-      if (!relativePath || relativePath === '.') {
-        return false;
+  for (let depth = 0; depth <= maxDepth && level.length > 0; depth++) {
+    const nextLevel: PendingDirectory[] = [];
+    for (let start = 0; start < level.length; start += READDIR_BATCH_SIZE) {
+      const batch = level.slice(start, start + READDIR_BATCH_SIZE);
+      const listings = await Promise.all(batch.map(directory => listDirectory(projectRoot, directory)));
+      for (const entry of listings.flat()) {
+        if (collected.length >= maxEntries) {
+          return collected;
+        }
+        collected.push(entry.relativePath);
+        if (entry.directory) {
+          nextLevel.push(entry.directory);
+        }
       }
-
-      const pathWithSlash = `${relativePath}/`;
-      return ig.ignores(pathWithSlash);
-    })
-    .filter(() => {
-      if (fileCount >= maxFiles) {
-        return false;
-      }
-      fileCount++;
-      return true;
-    });
-
-  if (maxDepth !== undefined) {
-    crawler.withMaxDepth(maxDepth);
-  }
-
-  const paths = crawler.crawl(projectRoot).sync() as string[];
-
-  // Filter out ignored files (directories are already filtered during crawl)
-  return paths.filter(p => {
-    // Skip empty or "." paths
-    if (!p || p === '.') {
-      return true;
     }
-    return !ig.ignores(p);
-  });
+    level = nextLevel;
+  }
+  return collected;
 }
 
 /**
- * Walk a directory recursively and collect files/directories with metadata
- * @param basePath - The base directory to walk (defaults to cwd)
- * @param maxDepth - Maximum depth to traverse (default: 10)
- * @returns Array of FileSearchResult
+ * Stat a crawled entry for its type and size. An entry that vanished since the
+ * crawl is still returned, as a file without a size.
  */
-export function walkDirectory(basePath: string = process.cwd(), maxDepth: number = 10): FileSearchResult[] {
-  const normalizedBase = path.resolve(basePath);
-  const ig = loadIgnoreRules(normalizedBase);
-
-  const paths = crawlDirectory(normalizedBase, maxDepth, 20000, ig);
-
-  const results: FileSearchResult[] = [];
-
-  for (const relativePath of paths) {
-    const fullPath = path.join(normalizedBase, relativePath);
-
-    try {
-      const stats = fs.statSync(fullPath);
-
-      results.push({
-        path: relativePath,
-        isDirectory: stats.isDirectory(),
-        size: stats.isFile() ? stats.size : undefined,
-      });
-    } catch {
-      // Skip files we can't stat
-      results.push({
-        path: relativePath,
-        isDirectory: false,
-      });
-    }
+async function describeEntry(projectRoot: string, relativePath: string): Promise<FileSearchResult> {
+  const stats = await statOrNull(path.join(projectRoot, relativePath));
+  if (!stats) {
+    return { path: relativePath, isDirectory: false };
   }
-
-  return results;
+  return {
+    path: relativePath,
+    isDirectory: stats.isDirectory(),
+    size: stats.isFile() ? stats.size : undefined,
+  };
 }
 
 /**
@@ -151,110 +152,133 @@ export function formatFileSize(bytes: number): string {
 }
 
 // Cache for file search results
-let cachedFiles: string[] | null = null;
-let cacheTimestamp: number = 0;
+type FileCache = { root: string; files: string[]; timestamp: number };
+let fileCache: FileCache | null = null;
+// One crawl at a time: concurrent callers (the startup warm-up, the first @
+// keystrokes) share it instead of each walking the tree.
+let inFlightCrawl: { root: string; promise: Promise<string[]> } | null = null;
 const CACHE_TTL_MS = 30000; // 30 seconds cache
 
-/**
- * Get cached file list or refresh if stale
- */
-function getCachedFiles(projectRoot: string = process.cwd()): string[] {
-  const now = Date.now();
-  if (!cachedFiles || now - cacheTimestamp > CACHE_TTL_MS) {
-    const normalizedBase = path.resolve(projectRoot);
-    const ig = loadIgnoreRules(normalizedBase);
-    cachedFiles = crawlDirectory(normalizedBase, 10, 20000, ig);
-    cacheTimestamp = now;
+function startCrawl(root: string): Promise<string[]> {
+  if (inFlightCrawl?.root === root) {
+    return inFlightCrawl.promise;
   }
-  return cachedFiles;
+  const crawl: { root: string; promise: Promise<string[]> } = {
+    root,
+    promise: crawlDirectory(root)
+      .then(files => {
+        // A crawl superseded by invalidateFileCache() must not repopulate the cache.
+        if (inFlightCrawl === crawl) {
+          fileCache = { root, files, timestamp: Date.now() };
+        }
+        return files;
+      })
+      .finally(() => {
+        if (inFlightCrawl === crawl) {
+          inFlightCrawl = null;
+        }
+      }),
+  };
+  inFlightCrawl = crawl;
+  return crawl.promise;
+}
+
+function logCrawlFailure(error: unknown): void {
+  logger.debug(`[fileSearch] Crawling the project failed: ${error instanceof Error ? error.message : String(error)}`);
+}
+
+/**
+ * Get the project listing. An expired listing is served while a refresh runs
+ * in the background, so only the very first search (or one right after
+ * invalidateFileCache) waits for a crawl.
+ */
+async function getCachedFiles(projectRoot: string = process.cwd()): Promise<string[]> {
+  const root = path.resolve(projectRoot);
+  const cached = fileCache?.root === root ? fileCache : null;
+  if (!cached) {
+    return startCrawl(root);
+  }
+  if (Date.now() - cached.timestamp > CACHE_TTL_MS) {
+    startCrawl(root).catch(logCrawlFailure);
+  }
+  return cached.files;
 }
 
 /**
  * Invalidate the file cache (call when files may have changed)
  */
 export function invalidateFileCache(): void {
-  cachedFiles = null;
-  cacheTimestamp = 0;
+  fileCache = null;
+  inFlightCrawl = null;
 }
 
 /**
  * Warm up the file cache in the background
- * Call this early (e.g., when InputPrompt mounts) to prevent lag on first @ usage
+ * Call this early (e.g., at startup) to prevent lag on first @ usage
  */
 export function warmFileCache(): void {
-  // Asynchronously populate cache if not already cached
-  if (!cachedFiles || Date.now() - cacheTimestamp > CACHE_TTL_MS) {
-    // Use setImmediate to not block the current event loop
-    setImmediate(() => {
-      getCachedFiles();
-    });
-  }
+  getCachedFiles().catch(logCrawlFailure);
 }
+
+// What the @ dropdown can show for an absolute-path listing.
+const MAX_ABSOLUTE_LISTING_RESULTS = 15;
 
 /**
  * List files in an absolute directory path with optional filtering
  * @param absolutePath - Absolute directory path
  * @param filterQuery - Optional query to filter results (case-insensitive prefix/contains match)
- * @returns Array of files/directories in that path (max 15)
+ * @returns Array of files/directories in that path (max MAX_ABSOLUTE_LISTING_RESULTS)
  */
-function listAbsoluteDirectory(absolutePath: string, filterQuery?: string): FileSearchResult[] {
+async function listAbsoluteDirectory(absolutePath: string, filterQuery?: string): Promise<FileSearchResult[]> {
   try {
-    // Normalize the path
     const normalizedPath = path.normalize(absolutePath);
 
-    // Check if path exists
-    if (!fs.existsSync(normalizedPath)) {
-      return [];
-    }
-
-    // Check if it's a directory
-    const stats = fs.statSync(normalizedPath);
+    // A missing path throws here and falls through to the empty result below.
+    const stats = await fsp.stat(normalizedPath);
     if (!stats.isDirectory()) {
       return [];
     }
 
-    // Read directory contents
-    const entries = fs.readdirSync(normalizedPath, { withFileTypes: true });
+    const entries = await fsp.readdir(normalizedPath, { withFileTypes: true });
 
-    // Filter entries if query is provided
     let filteredEntries = entries;
     if (filterQuery && filterQuery.length > 0) {
       const lowerQuery = filterQuery.toLowerCase();
       filteredEntries = entries.filter(entry => entry.name.toLowerCase().includes(lowerQuery));
     }
 
-    // Convert to FileSearchResult format (max 15 items)
-    return filteredEntries.slice(0, 15).map(entry => {
-      const fullPath = path.join(normalizedPath, entry.name);
-      // A Dirent describes the entry, not the link target, so a symlink answers false to
-      // BOTH isDirectory() and isFile(). Left unresolved, a symlinked directory listed as
-      // a file and stopped offering path completion past it - which is the normal layout
-      // under a dotfile manager. stat() follows the link; a broken one throws and keeps
-      // the Dirent's answer, so it still lists rather than disappearing.
-      const target = entry.isSymbolicLink() ? statOrNull(fullPath) : null;
-      const isDirectory = target ? target.isDirectory() : entry.isDirectory();
-      const isFile = target ? target.isFile() : entry.isFile();
-
-      const result: FileSearchResult = {
-        path: fullPath,
-        isDirectory,
-      };
-
-      // Add file size if it's a file. Reuses the stat already taken for a symlink so a
-      // resolved link costs one syscall, not two.
-      if (isFile) {
-        const fileStats = target ?? statOrNull(fullPath);
-        if (fileStats) {
-          result.size = fileStats.size;
-        }
-      }
-
-      return result;
-    });
+    // Only the entries that are returned get stat'ed, concurrently.
+    return await Promise.all(
+      filteredEntries.slice(0, MAX_ABSOLUTE_LISTING_RESULTS).map(entry => describeListedEntry(normalizedPath, entry))
+    );
   } catch {
     // If any error occurs (permission denied, etc.), return empty
     return [];
   }
+}
+
+async function describeListedEntry(directory: string, entry: Dirent): Promise<FileSearchResult> {
+  const fullPath = path.join(directory, entry.name);
+  // A Dirent describes the entry, not the link target, so a symlink answers false to
+  // BOTH isDirectory() and isFile(). Left unresolved, a symlinked directory listed as
+  // a file and stopped offering path completion past it - which is the normal layout
+  // under a dotfile manager. stat() follows the link; a broken one throws and keeps
+  // the Dirent's answer, so it still lists rather than disappearing.
+  const target = entry.isSymbolicLink() ? await statOrNull(fullPath) : null;
+  const isDirectory = target ? target.isDirectory() : entry.isDirectory();
+  const isFile = target ? target.isFile() : entry.isFile();
+
+  const result: FileSearchResult = { path: fullPath, isDirectory };
+
+  // Reuses the stat already taken for a symlink so a resolved link costs one syscall, not two.
+  if (isFile) {
+    const fileStats = target ?? (await statOrNull(fullPath));
+    if (fileStats) {
+      result.size = fileStats.size;
+    }
+  }
+
+  return result;
 }
 
 /**
@@ -270,9 +294,9 @@ export async function searchFiles(query: string, maxResults: number = 20): Promi
   if (path.isAbsolute(query)) {
     // First, check if the path itself is a directory
     try {
-      const stats = fs.statSync(query);
+      const stats = await fsp.stat(query);
       if (stats.isDirectory()) {
-        return listAbsoluteDirectory(query);
+        return await listAbsoluteDirectory(query);
       }
     } catch {
       // Path doesn't exist or can't be accessed
@@ -290,27 +314,16 @@ export async function searchFiles(query: string, maxResults: number = 20): Promi
       filterQuery = path.basename(query);
     }
 
-    return listAbsoluteDirectory(dirToList, filterQuery);
+    return await listAbsoluteDirectory(dirToList, filterQuery);
   }
 
-  const files = getCachedFiles(projectRoot);
+  const files = await getCachedFiles(projectRoot);
 
   // If query is empty, return root level items only
   if (!query || query.trim() === '') {
-    const rootFiles = files.filter(f => !f.includes('/')).slice(0, maxResults);
-    return rootFiles.map(p => {
-      const fullPath = path.join(projectRoot, p);
-      try {
-        const stats = fs.statSync(fullPath);
-        return {
-          path: p,
-          isDirectory: stats.isDirectory(),
-          size: stats.isFile() ? stats.size : undefined,
-        };
-      } catch {
-        return { path: p, isDirectory: false };
-      }
-    });
+    // Root-level entries: no '/' except a directory's trailing one.
+    const rootFiles = files.filter(f => !f.slice(0, -1).includes('/')).slice(0, maxResults);
+    return Promise.all(rootFiles.map(p => describeEntry(projectRoot, p)));
   }
 
   // Use fzf for fuzzy matching
@@ -318,20 +331,9 @@ export async function searchFiles(query: string, maxResults: number = 20): Promi
   const results = await fzf.find(query);
 
   // Take top results and add metadata
-  return results.slice(0, maxResults).map((result: FzfResultItem<string>) => {
-    const p = result.item;
-    const fullPath = path.join(projectRoot, p);
-    try {
-      const stats = fs.statSync(fullPath);
-      return {
-        path: p,
-        isDirectory: stats.isDirectory(),
-        size: stats.isFile() ? stats.size : undefined,
-      };
-    } catch {
-      return { path: p, isDirectory: false };
-    }
-  });
+  return Promise.all(
+    results.slice(0, maxResults).map((result: FzfResultItem<string>) => describeEntry(projectRoot, result.item))
+  );
 }
 
 /**
@@ -339,7 +341,7 @@ export async function searchFiles(query: string, maxResults: number = 20): Promi
  * @param filePath - The path to validate
  * @returns true if the path is within cwd, false otherwise
  */
-export function isPathWithinCwd(filePath: string): boolean {
+export async function isPathWithinCwd(filePath: string): Promise<boolean> {
   const cwd = path.resolve(process.cwd());
   const absolutePath = path.resolve(cwd, filePath);
 
@@ -348,7 +350,7 @@ export function isPathWithinCwd(filePath: string): boolean {
   let resolvedPath = absolutePath;
 
   try {
-    const realCwd = fs.realpathSync.native(cwd);
+    const realCwd = await fsp.realpath(cwd);
     // Only use the resolved path if it's valid (guards against mocked fs returning undefined)
     if (realCwd) {
       resolvedCwd = realCwd;
@@ -358,7 +360,7 @@ export function isPathWithinCwd(filePath: string): boolean {
   }
 
   try {
-    const realPath = fs.realpathSync.native(absolutePath);
+    const realPath = await fsp.realpath(absolutePath);
     // Only use the resolved path if it's valid (guards against mocked fs returning undefined)
     if (realPath) {
       resolvedPath = realPath;

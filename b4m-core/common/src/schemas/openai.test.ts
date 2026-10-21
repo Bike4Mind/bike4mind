@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { ImageModels } from '../models';
-import { OpenAIImageGenerationInput, LEGACY_IMAGE_MODEL_MAP, toNonWebpOutputFormat } from './openai';
+import {
+  ChatCompletionCreateInputSchema,
+  OpenAIImageGenerationInput,
+  LEGACY_IMAGE_MODEL_MAP,
+  toNonWebpOutputFormat,
+} from './openai';
 
 describe('OpenAIImageGenerationInput legacy model remapping', () => {
   it('remaps removed flux-dev to flux-pro-1.1 instead of throwing (regression: #8853)', () => {
@@ -100,5 +105,23 @@ describe('toNonWebpOutputFormat', () => {
     expect(toNonWebpOutputFormat('jpeg')).toBe('jpeg');
     expect(toNonWebpOutputFormat(null)).toBeNull();
     expect(toNonWebpOutputFormat(undefined)).toBeUndefined();
+  });
+});
+
+describe('ChatCompletionCreateInputSchema thinking budget', () => {
+  it('rejects a legacy thinking budget past MAX_THINKING_BUDGET_TOKENS', () => {
+    const parsed = ChatCompletionCreateInputSchema.safeParse({
+      model: 'claude',
+      thinking: { enabled: true, budget_tokens: 10_000_000 },
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it('accepts a budget within the bound', () => {
+    const parsed = ChatCompletionCreateInputSchema.safeParse({
+      model: 'claude',
+      thinking: { enabled: true, budget_tokens: 32_000 },
+    });
+    expect(parsed.success).toBe(true);
   });
 });

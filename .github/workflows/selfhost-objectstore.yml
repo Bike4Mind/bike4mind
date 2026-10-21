@@ -1,0 +1,47 @@
+name: selfhost-objectstore
+
+on:
+  pull_request:
+    paths:
+      - 'selfhost/minio/**'
+      - 'compose.selfhost.yaml'
+      - '.env.selfhost.example'
+      - 'scripts/smoke_selfhost_objectstore.py'
+      - '.github/workflows/selfhost-objectstore.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'selfhost/minio/**'
+      - 'compose.selfhost.yaml'
+      - '.env.selfhost.example'
+      - 'scripts/smoke_selfhost_objectstore.py'
+      - '.github/workflows/selfhost-objectstore.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v6
+      - name: Configure disposable storage credentials
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import secrets
+          text = Path('.env.selfhost.example').read_text()
+          text = text.replace('MINIO_ROOT_PASSWORD=minioadmin', 'MINIO_ROOT_PASSWORD=' + secrets.token_hex(24))
+          text = text.replace('INTERNAL_S3_WEBHOOK_SECRET=change-me-openssl-rand-hex-32', 'INTERNAL_S3_WEBHOOK_SECRET=' + secrets.token_hex(32))
+          Path('.env.selfhost').write_text(text)
+          PY
+      - name: Build pinned upstream source
+        run: docker compose -f compose.selfhost.yaml --env-file .env.selfhost build --no-cache minio createbuckets
+      - name: Verify storage and notifications
+        run: python3 scripts/smoke_selfhost_objectstore.py

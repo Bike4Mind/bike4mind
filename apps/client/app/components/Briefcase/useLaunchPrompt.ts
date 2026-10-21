@@ -5,13 +5,14 @@ import { useSessions } from '@client/app/contexts/SessionsContext';
 import { useChatInput } from '@client/app/hooks/useChatInput';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
 import { fetchPromptById } from '@client/app/hooks/data/briefcase';
-import {
-  buildPromptContext,
-  replacePromptVariables,
-  countUnresolvedPlaceholders,
-} from '@client/app/utils/briefcase/promptResolution';
 import { buildReferenceGuard } from '@client/app/utils/briefcase/referenceGuard';
-import { BriefcaseEvents, type IResolvedPromptDispatch } from '@bike4mind/common';
+import {
+  BriefcaseEvents,
+  buildPromptContext,
+  countUnresolvedPlaceholders,
+  replacePromptVariables,
+  type IResolvedPromptDispatch,
+} from '@bike4mind/common';
 
 function makeNonce(): string {
   const c = globalThis.crypto;

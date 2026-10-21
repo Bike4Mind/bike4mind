@@ -1,0 +1,281 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { createMocks } from 'node-mocks-http';
+
+const { mockAdminDeleteUser, mockRepoDelete, mockPurge, mockReadGrants, mockRecord, mockDeny, mockWithTransaction } =
+  vi.hoisted(() => ({
+    mockRecord: vi.fn(),
+    mockDeny: vi.fn(),
+    mockWithTransaction: vi.fn(),
+    mockAdminDeleteUser: vi.fn(),
+    mockRepoDelete: vi.fn(),
+    mockPurge: vi.fn(),
+    mockReadGrants: vi.fn(),
+  }));
+
+vi.mock('@server/middlewares/baseApi', () => ({
+  baseApi: () => ({
+    delete: (fn: (req: unknown, res: unknown) => unknown) => fn,
+  }),
+}));
+vi.mock('@server/middlewares/asyncHandler', () => ({
+  asyncHandler: (fn: (req: unknown, res: unknown) => unknown) => fn,
+}));
+vi.mock('@server/integrations/slack/slack', () => ({ postMessageToSlack: vi.fn() }));
+const { mockPublish } = vi.hoisted(() => ({ mockPublish: vi.fn() }));
+vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: mockPublish } } }));
+vi.mock('@bike4mind/services', () => ({
+  userService: { adminDeleteUser: (...a: unknown[]) => mockAdminDeleteUser(...a) },
+}));
+vi.mock('@bike4mind/database', () => ({
+  realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
+  userRepository: {
+    delete: (...a: unknown[]) => mockRepoDelete(...a),
+    findById: vi.fn().mockResolvedValue({ id: 'u1', name: 'Target' }),
+  },
+  adminSettingsRepository: {},
+  withTransaction: (fn: () => unknown) => mockWithTransaction(fn),
+}));
+vi.mock('@server/utils/adminAudit', async importOriginal => {
+  const actual = await importOriginal<typeof import('@server/utils/adminAudit')>();
+  return {
+    ...actual,
+    recordAdminActionFromRequest: (...a: unknown[]) => mockRecord(...a),
+    denySelfAdminAction: (...a: unknown[]) => mockDeny(...a),
+  };
+});
+vi.mock('@server/services/purgeDeletedUserData', () => ({
+  purgeDeletedUserData: (...a: unknown[]) => mockPurge(...a),
+  readUserIntegrationGrants: (...a: unknown[]) => mockReadGrants(...a),
+}));
+
+import { USER_SECRET_FIELDS, ForbiddenError } from '@bike4mind/common';
+import handler from '../delete';
+
+type DeleteAdapters = { db: { users: { delete: (id: string) => Promise<unknown> } } };
+
+async function run(options: { user?: { id: string; isAdmin: boolean }; body?: unknown; id?: string } = {}) {
+  const { req, res } = createMocks({
+    method: 'DELETE',
+    query: { id: options.id ?? 'u1' },
+    body: 'body' in options ? options.body : { reason: 'Confirmed duplicate account' },
+  });
+  const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  Object.assign(req, { user: options.user ?? { id: 'admin1', isAdmin: true }, logger });
+  const call = (handler as unknown as (req: unknown, res: unknown) => Promise<unknown>)(req, res);
+  return { res, call };
+}
+
+beforeEach(() => {
+  mockAdminDeleteUser.mockReset();
+  mockRepoDelete.mockReset().mockResolvedValue({ deletedCount: 1 });
+  mockPurge.mockReset().mockResolvedValue(undefined);
+  mockReadGrants.mockReset().mockResolvedValue(null);
+  mockRecord.mockReset().mockResolvedValue(null);
+  mockWithTransaction.mockReset().mockImplementation((fn: () => unknown) => fn());
+  mockDeny.mockReset().mockImplementation(async () => {
+    throw new ForbiddenError('Admins cannot perform this action on their own account.');
+  });
+});
+
+describe('DELETE /api/users/[id]/delete', () => {
+  it('purges the user data after the delete commits', async () => {
+    mockAdminDeleteUser.mockImplementation(async (_admin: string, _p: unknown, { db }: DeleteAdapters) => {
+      await db.users.delete('u1');
+      return { id: 'u1' };
+    });
+
+    const { res, call } = await run();
+    await call;
+
+    expect(mockRepoDelete).toHaveBeenCalledWith('u1');
+    expect(mockPurge).toHaveBeenCalledWith('u1', expect.objectContaining({ deletedBy: 'admin1' }));
+    expect(res._getJSONData()).toMatchObject({ id: 'u1' });
+  });
+
+  it('escapes names and email in the admin notification body', async () => {
+    mockAdminDeleteUser.mockImplementation(
+      async (
+        _admin: string,
+        _p: unknown,
+        { mailer }: { mailer: { sendDeleteUserEmail: (to: string[], u: unknown, a: unknown) => Promise<void> } }
+      ) => {
+        await mailer.sendDeleteUserEmail(
+          ['ops@example.com'],
+          { name: '<b>U</b>', email: 'u&x@example.com' },
+          { name: '<i>A</i>' }
+        );
+        return { id: 'u1' };
+      }
+    );
+
+    const { call } = await run();
+    await call;
+
+    const body: string = mockPublish.mock.calls[0][0].body;
+    expect(body).not.toContain('<b>');
+    expect(body).not.toContain('<i>');
+    expect(body).toContain('&lt;b&gt;U&lt;/b&gt;');
+    expect(body).toContain('u&amp;x@example.com');
+    expect(body).toContain('&lt;i&gt;A&lt;/i&gt;');
+  });
+
+  it('still purges when a notification throws after the delete committed', async () => {
+    mockAdminDeleteUser.mockImplementation(async (_admin: string, _p: unknown, { db }: DeleteAdapters) => {
+      await db.users.delete('u1');
+      throw new Error('mailer down');
+    });
+
+    const { call } = await run();
+
+    await expect(call).rejects.toThrow('mailer down');
+    expect(mockPurge).toHaveBeenCalledWith('u1', expect.objectContaining({ deletedBy: 'admin1' }));
+  });
+
+  it('does not purge when the delete never ran (unauthorized or not found)', async () => {
+    mockAdminDeleteUser.mockRejectedValue(new Error('You are not authorized to delete users'));
+
+    const { call } = await run();
+
+    await expect(call).rejects.toThrow('not authorized');
+    expect(mockRepoDelete).not.toHaveBeenCalled();
+    expect(mockPurge).not.toHaveBeenCalled();
+  });
+
+  it('reads the integration grants before the delete and hands them to the purge', async () => {
+    const grants = { googleDrive: { refreshToken: 'enc-refresh' }, atlassianConnect: { accessToken: 'enc-access' } };
+    mockReadGrants.mockImplementation(async () => {
+      expect(mockRepoDelete).not.toHaveBeenCalled();
+      return grants;
+    });
+    mockAdminDeleteUser.mockImplementation(async (_admin: string, _p: unknown, { db }: DeleteAdapters) => {
+      await db.users.delete('u1');
+      return { id: 'u1' };
+    });
+
+    const { call } = await run();
+    await call;
+
+    expect(mockReadGrants).toHaveBeenCalledWith('u1');
+    expect(mockPurge).toHaveBeenCalledWith('u1', expect.objectContaining({ integrationGrants: grants }));
+  });
+
+  it('does not delete when the grants cannot be read, so the revoke is never lost', async () => {
+    mockReadGrants.mockRejectedValue(new Error('mongo down'));
+    mockAdminDeleteUser.mockImplementation(async (_admin: string, _p: unknown, { db }: DeleteAdapters) => {
+      await db.users.delete('u1');
+      return { id: 'u1' };
+    });
+
+    const { call } = await run();
+
+    await expect(call).rejects.toThrow('mongo down');
+    expect(mockRepoDelete).not.toHaveBeenCalled();
+    expect(mockPurge).not.toHaveBeenCalled();
+  });
+
+  it('returns the serialized user shape with none of the USER_SECRET_FIELDS', async () => {
+    const secrets = Object.fromEntries(USER_SECRET_FIELDS.map(f => [f, 'x']));
+    mockAdminDeleteUser.mockResolvedValue({ id: 'u1', name: 'N', email: 'n@example.com', ...secrets });
+
+    const { res, call } = await run();
+    await call;
+
+    const body = res._getJSONData();
+    expect(body).toMatchObject({ id: 'u1', name: 'N' });
+    expect(body).not.toHaveProperty('email');
+    for (const f of USER_SECRET_FIELDS) expect(body).not.toHaveProperty(f);
+  });
+
+  describe('audit trail', () => {
+    it('rejects a non-admin with 401 before any write', async () => {
+      const { call } = await run({ user: { id: 'user1', isAdmin: false } });
+
+      await expect(call).rejects.toThrow('not authorized');
+      expect(mockAdminDeleteUser).not.toHaveBeenCalled();
+      expect(mockRecord).not.toHaveBeenCalled();
+    });
+
+    it('denies deleting your own account with a 403 and a user.deletion.denied entry', async () => {
+      const { call } = await run({ id: 'admin1' });
+
+      await expect(call).rejects.toBeInstanceOf(ForbiddenError);
+      expect(mockDeny).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ action: 'user.deletion.denied', attempted: 'user.deleted' })
+      );
+      expect(mockAdminDeleteUser).not.toHaveBeenCalled();
+    });
+
+    it('denies an impersonating admin deleting the account they impersonate from', async () => {
+      const { call } = await run({ user: { id: 'B', isAdmin: true, impersonatedBy: 'A' } as never, id: 'A' });
+
+      await expect(call).rejects.toBeInstanceOf(ForbiddenError);
+      expect(mockDeny).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ action: 'user.deletion.denied', attempted: 'user.deleted' })
+      );
+      expect(mockAdminDeleteUser).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['missing', {}],
+      ['too short', { reason: ' abc ' }],
+      ['too long', { reason: 'x'.repeat(501) }],
+    ])('answers 400 and deletes nothing when the reason is %s', async (_label, body) => {
+      const { call } = await run({ body });
+
+      await expect(call).rejects.toMatchObject({ statusCode: 400 });
+      expect(mockAdminDeleteUser).not.toHaveBeenCalled();
+      expect(mockRepoDelete).not.toHaveBeenCalled();
+      expect(mockRecord).not.toHaveBeenCalled();
+    });
+
+    it('runs the delete inside withTransaction and records user.deleted with the reason', async () => {
+      const order: string[] = [];
+      mockWithTransaction.mockImplementation(async (fn: () => unknown) => {
+        order.push('tx:start');
+        const result = await fn();
+        order.push('tx:end');
+        return result;
+      });
+      mockRepoDelete.mockImplementation(async () => {
+        order.push('delete');
+        return { deletedCount: 1 };
+      });
+      mockRecord.mockImplementation(async () => {
+        order.push('record');
+        return null;
+      });
+      mockAdminDeleteUser.mockImplementation(async (_admin: string, _p: unknown, { db }: DeleteAdapters) => {
+        await db.users.delete('u1');
+        return { id: 'u1' };
+      });
+
+      const { call } = await run({ body: { reason: '  Confirmed duplicate account  ' } });
+      await call;
+
+      expect(order).toEqual(['tx:start', 'delete', 'record', 'tx:end']);
+      expect(mockRecord).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          action: 'user.deleted',
+          target: expect.objectContaining({ kind: 'user', id: 'u1' }),
+          reason: 'Confirmed duplicate account',
+        })
+      );
+    });
+
+    it('does not purge when the audit write aborts the delete transaction', async () => {
+      mockRecord.mockRejectedValue(new Error('audit down'));
+      mockAdminDeleteUser.mockImplementation(async (_admin: string, _p: unknown, { db }: DeleteAdapters) => {
+        await db.users.delete('u1');
+        return { id: 'u1' };
+      });
+
+      const { call } = await run();
+
+      await expect(call).rejects.toThrow('audit down');
+      expect(mockPurge).not.toHaveBeenCalled();
+    });
+  });
+});

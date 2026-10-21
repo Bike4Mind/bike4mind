@@ -1,4 +1,4 @@
-import { withEventContext } from '@server/utils/eventContext';
+import { withEventContext } from '@workers/utils/eventContext';
 import { TelemetryEvents } from '@server/utils/eventBus';
 import {
   AnomalyAlertService,
@@ -29,7 +29,7 @@ import {
   getSeverityEmoji,
   formatPrimaryAnomaly,
 } from '@server/services/telemetryFingerprint';
-import { checkFingerprintDedup, type IssueForDedup } from '@server/services/issueDedup';
+import { checkFingerprintDedup, type IssueForDedup } from '@bike4mind/server-utils/services/issueDedup';
 import {
   computeHistoricalBaselines,
   generateRuleBasedAnalysis,

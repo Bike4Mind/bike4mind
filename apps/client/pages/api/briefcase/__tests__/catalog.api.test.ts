@@ -29,7 +29,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
-vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => null }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => null }));
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: () => null }));
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => null }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: (...a: unknown[]) => mockLogEvent(...a) }));
@@ -88,6 +88,20 @@ describe('POST /api/briefcase/catalog', () => {
     expect(caller).toMatchObject({ id: 'real-user', entitlements: ['vip'], isApiKey: false });
     // The body's userId must NOT leak into the caller.
     expect(JSON.stringify(caller)).not.toContain('attacker');
+  });
+
+  it('never lets a self-assignable source: tag act as an entitlement', async () => {
+    const { promise } = run(
+      { queries: [{ key: 'mine', personal: true }] },
+      {
+        id: 'u1',
+        tags: ['vip', 'source:acme'],
+        isAdmin: false,
+      }
+    );
+    await promise;
+    const [, caller] = mockGetCatalog.mock.calls[0];
+    expect(caller.entitlements).toEqual(['vip']);
   });
 
   it('audit-logs personal reads with counts only (no content)', async () => {

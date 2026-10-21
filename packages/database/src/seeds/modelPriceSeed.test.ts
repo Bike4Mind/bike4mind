@@ -1,4 +1,4 @@
-import { DISCOVERY_PRICE_NOTE_PREFIX } from '@bike4mind/common';
+import { ADAPTER_LITERAL_PRICE_SOURCE, DISCOVERY_PRICE_NOTE_PREFIX } from '@bike4mind/common';
 import { adapterPriceTiers } from '@bike4mind/llm-adapters';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { collectStaticTextModels, generateModelPriceSeed } from './generateModelPriceSeed';
@@ -224,6 +224,45 @@ describe('seedModelPrices (round-trip)', () => {
     const history = await modelPriceRepository.historyForModel(target.modelId);
     expect(history).toHaveLength(2);
     expect(history[0].note).toBe(SEED_NOTE);
+  });
+
+  describe('a row discovery recorded from an adapter literal', () => {
+    const literalNote = (at: string) => `${DISCOVERY_PRICE_NOTE_PREFIX}${ADAPTER_LITERAL_PRICE_SOURCE}@${at}`;
+
+    it('is superseded by a newer seed with different pricing, like any automation row', async () => {
+      const target = seed.entries[0];
+      await modelPriceRepository.append({
+        modelId: target.modelId,
+        unit: 'per_token',
+        pricing: { '1000': { input: 99e-6, output: 99e-6 } },
+        effectiveFrom: new Date('2020-01-01T00:00:00Z'),
+        note: literalNote('2020-01-01T00:00:00.000Z'),
+        repricedBy: 'model-discovery',
+      });
+
+      await seedModelPrices(modelPriceRepository);
+
+      const history = await modelPriceRepository.historyForModel(target.modelId);
+      expect(history).toHaveLength(2);
+      expect(history[0].note).toBe(SEED_NOTE);
+    });
+
+    it('is left alone once it is at or after the seed version, which discovery keeps current itself', async () => {
+      const target = seed.entries[0];
+      const effectiveFrom = new Date(new Date(seed.generatedAt).getTime() + 1000);
+      await modelPriceRepository.append({
+        modelId: target.modelId,
+        unit: 'per_token',
+        pricing: { '1000': { input: 99e-6, output: 99e-6 } },
+        effectiveFrom,
+        note: literalNote(effectiveFrom.toISOString()),
+        repricedBy: 'model-discovery',
+      });
+
+      await seedModelPrices(modelPriceRepository);
+
+      expect(await modelPriceRepository.historyForModel(target.modelId)).toHaveLength(1);
+    });
   });
 
   it('leaves a discovery row at or after the seed version alone (discovery is sticky against itself)', async () => {

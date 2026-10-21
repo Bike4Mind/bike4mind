@@ -1,17 +1,29 @@
-import { IFabFileRepository, IProjectRepository, type DataLakeMembershipScope } from '@bike4mind/common';
+import {
+  FAB_FILE_TYPE_FILTERS,
+  IFabFileRepository,
+  IProjectRepository,
+  type DataLakeMembershipScope,
+} from '@bike4mind/common';
 import { z } from 'zod';
 import { generateSignedUrl, GetFabFileAdapter } from './get';
 
+// `GET /api/files` has no contract, so this schema's request quirks (all-or-nothing nested
+// objects, coerced booleans, the 20-value `[]` limit) are mirrored in the "List Files" section of
+// apps/client/app/components/admin/content/apiReferenceContent.ts - keep both in sync and drop
+// that section once a files contract lands.
 const searchFabFilesSchema = z.object({
   search: z.string().optional(),
   filters: z
     .object({
       tags: z.array(z.string()).optional(),
-      type: z
-        .enum(['text', 'pdf', 'url', 'image', 'excel', 'word', 'json', 'csv', 'markdown', 'code', 'audio'])
-        .optional(),
+      type: z.enum(FAB_FILE_TYPE_FILTERS).optional(),
       shared: z.coerce.boolean().optional(), // Indicates if the user is searching for shared files
       curated: z.coerce.boolean().optional(), // Indicates if the user is searching for curated notebook files
+      // Strict, unlike the two above: z.coerce.boolean() reads the query string 'false' as true.
+      generated: z.union([z.boolean(), z.enum(['true', 'false']).transform(value => value === 'true')]).optional(),
+      // Owner-only: the route drops the shared/data-lake scope for it (apps/client/pages/api/files/search.ts),
+      // so the query takes its owner-only branch. Strict for the same reason as `generated`.
+      owned: z.union([z.boolean(), z.enum(['true', 'false']).transform(value => value === 'true')]).optional(),
       projectId: z.string().optional(),
       ids: z.array(z.string()).optional(),
     })
@@ -84,7 +96,7 @@ export const search = async (
   serverOptions?: SearchFabFilesServerOptions
 ) => {
   const { search = '', filters, pagination, order, options } = searchFabFilesSchema.parse(params);
-  const { tags = [], type, shared, curated } = filters || {};
+  const { tags = [], type, shared, curated, generated } = filters || {};
   const { page = 1, limit = DEFAULT_PAGE_LIMIT } = pagination || {};
   const { by = 'fileName', direction = 'asc' } = order || {};
   // Anything a client sent under a scope key was dropped by the parse above (the schema no longer
@@ -108,7 +120,7 @@ export const search = async (
   const fabFiles = await db.fabFiles.search(
     userId,
     search,
-    { tags, type, shared, curated, restrictToFileIds },
+    { tags, type, shared, curated, generated, restrictToFileIds },
     { page, limit },
     {
       by,

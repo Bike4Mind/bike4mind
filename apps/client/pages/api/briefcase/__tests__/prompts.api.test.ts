@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-const { mockFindByIdForCaller, mockUpdateOwned, mockSoftDeleteOwned, mockCanSee } = vi.hoisted(() => ({
+const { mockFindByIdForCaller, mockUpdateOwned, mockSoftDeleteOwned, mockCanRead } = vi.hoisted(() => ({
   mockFindByIdForCaller: vi.fn(),
   mockUpdateOwned: vi.fn(),
   mockSoftDeleteOwned: vi.fn(),
-  mockCanSee: vi.fn(),
+  mockCanRead: vi.fn(),
 }));
 
 // baseApi mock: callable chain routed by req.method; .use() no-op; last fn per verb is the handler.
@@ -25,7 +25,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
-vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => null }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => null }));
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: () => null }));
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => null }));
 vi.mock('@bike4mind/database', () => ({
@@ -36,7 +36,7 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 vi.mock('@bike4mind/services', () => ({
-  briefcaseService: { canSeeSystemPrompt: (...a: unknown[]) => mockCanSee(...a) },
+  briefcaseService: { canReadPrompt: (...a: unknown[]) => mockCanRead(...a) },
 }));
 
 import handler from '../prompts/[id]';
@@ -57,7 +57,7 @@ beforeEach(() => {
   mockFindByIdForCaller.mockReset();
   mockUpdateOwned.mockReset();
   mockSoftDeleteOwned.mockReset();
-  mockCanSee.mockReset().mockReturnValue(true);
+  mockCanRead.mockReset().mockReturnValue(true);
 });
 
 describe('GET /api/briefcase/prompts/[id]', () => {
@@ -75,28 +75,37 @@ describe('GET /api/briefcase/prompts/[id]', () => {
     expect(res._getStatusCode()).toBe(404);
   });
 
-  it('returns a visible system prompt (200)', async () => {
-    mockFindByIdForCaller.mockResolvedValue({ id: VALID_ID, userId: null, name: 'Sys', visibilityScopes: [] });
-    mockCanSee.mockReturnValue(true);
-    const { res, promise } = run('GET');
+  it('returns a prompt the caller can read (200), gated with the session caller', async () => {
+    const sys = { id: VALID_ID, userId: null, name: 'Sys', visibilityScopes: [] };
+    mockFindByIdForCaller.mockResolvedValue(sys);
+    const { res, promise } = run('GET', { user: { id: 'u1', tags: ['vip'], isAdmin: true } });
     await promise;
     expect(res._getStatusCode()).toBe(200);
+    expect(mockFindByIdForCaller).toHaveBeenCalledWith(VALID_ID, 'u1');
+    expect(mockCanRead).toHaveBeenCalledWith(sys, { id: 'u1', entitlements: ['vip'], isAdmin: true, isApiKey: false });
   });
 
-  it('HIDES an entitlement-scoped system prompt from a non-entitled caller (404, no by-id bypass)', async () => {
-    mockFindByIdForCaller.mockResolvedValue({ id: VALID_ID, userId: null, name: 'VIP', visibilityScopes: ['vip'] });
-    mockCanSee.mockReturnValue(false); // caller not entitled
-    const { res, promise } = run('GET', { user: { id: 'u1', tags: [], isAdmin: false } });
+  it('returns 404 with the not-found body when the read gate refuses (no existence oracle)', async () => {
+    mockFindByIdForCaller.mockResolvedValue({ id: VALID_ID, userId: 'u1', name: 'Mine', promptText: 'secret' });
+    mockCanRead.mockReturnValue(false);
+    const { res, promise } = run('GET');
     await promise;
     expect(res._getStatusCode()).toBe(404);
+    expect(res._getJSONData()).toEqual({ error: 'Prompt not found' });
   });
 
-  it('returns the caller’s own personal prompt without a visibility check', async () => {
+  it('marks an API-key caller as such for the read gate (no admin bypass via a key)', async () => {
     mockFindByIdForCaller.mockResolvedValue({ id: VALID_ID, userId: 'u1', name: 'Mine' });
-    const { res, promise } = run('GET');
+    const { res, promise } = run('GET', {
+      user: { id: 'u1', tags: [], isAdmin: true },
+      apiKeyInfo: { scopes: [] },
+    });
     await promise;
+    expect(mockCanRead).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ isApiKey: true, isAdmin: true })
+    );
     expect(res._getStatusCode()).toBe(200);
-    expect(mockCanSee).not.toHaveBeenCalled(); // personal prompts skip the system gate
   });
 });
 

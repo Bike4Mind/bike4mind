@@ -74,7 +74,6 @@ const ORG = {
   id: 'org1',
   name: 'Acme',
   userId: 'owner1',
-  managerId: null,
   personal: false,
   adminUserIds: [],
   seats: 5,
@@ -257,10 +256,10 @@ describe('organization detail page - a tab click writes ?tab= back', () => {
     expect(selectedTabName()).toBe('Members');
   });
 
-  it('writes ?tab=settings when the header Organization Settings button is clicked', () => {
+  it('writes ?tab=settings when the header Team Settings button is clicked', () => {
     renderThroughLoad();
 
-    fireEvent.click(screen.getByRole('button', { name: /Organization Settings/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Team Settings/ }));
 
     expect(navigateSpy).toHaveBeenCalledWith(navigationTo(OrganizationTabs.Settings));
   });
@@ -273,7 +272,7 @@ describe('organization detail page - a tab click writes ?tab= back', () => {
     user.current = { id: 'admin9', isAdmin: true };
 
     renderThroughLoad();
-    fireEvent.click(screen.getByRole('button', { name: /Organization Settings/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Team Settings/ }));
 
     expect(navigateSpy).not.toHaveBeenCalled();
   });

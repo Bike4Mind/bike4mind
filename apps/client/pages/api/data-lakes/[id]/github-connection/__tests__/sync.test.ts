@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { BadRequestError, ConflictError, InternalServerError, NotFoundError } from '@server/utils/errors';
+import {
+  BadRequestError,
+  ConflictError,
+  InternalServerError,
+  NotFoundError,
+} from '@bike4mind/server-utils/utils/errors';
 
 const h = vi.hoisted(() => ({
   verifyOrgAccess: vi.fn(),
@@ -20,11 +25,11 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/featureFlag', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
   requireFeatureEnabled: (flag: string) => h.requireFeatureEnabled(flag),
 }));
 vi.mock('@server/utils/orgAccess', () => ({ verifyOrgAccess: h.verifyOrgAccess }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('@bike4mind/database', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/database')>();
   return {
@@ -82,11 +87,50 @@ describe('POST /api/data-lakes/[id]/github-connection/sync', () => {
     expect(h.connFindByDataLakeIdAny).not.toHaveBeenCalled();
   });
 
-  it('404s a missing or personal lake', async () => {
+  it('404s a missing lake', async () => {
     h.dlFindById.mockResolvedValue(null);
     await expect(run(makeReq(), makeRes().res)).rejects.toBeInstanceOf(NotFoundError);
-    h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: undefined, status: 'active' });
-    await expect(run(makeReq(), makeRes().res)).rejects.toBeInstanceOf(NotFoundError);
+  });
+
+  describe('personal (org-less) lake', () => {
+    const PERSONAL_LAKE = { id: 'lake1', organizationId: undefined, createdByUserId: 'u1', status: 'active' };
+    const PERSONAL_CONN = { id: 'conn1', connectedBy: 'u1', enabled: true, status: 'connected' };
+
+    beforeEach(() => {
+      h.dlFindById.mockResolvedValue(PERSONAL_LAKE);
+      h.connFindByDataLakeIdAny.mockResolvedValue(PERSONAL_CONN);
+    });
+
+    it('lets the creator re-sync without an org check', async () => {
+      const { res, status, json } = makeRes();
+      await run(makeReq(), res);
+      expect(h.verifyOrgAccess).not.toHaveBeenCalled();
+      expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.test/githubLakeIngestQueue', {
+        connectionId: 'conn1',
+        manual: true,
+      });
+      expect(status).toHaveBeenCalledWith(202);
+      expect(json).toHaveBeenCalledWith({ connectionId: 'conn1', status: 'queued' });
+    });
+
+    it('404s a non-creator, even a platform admin, before looking up the connection', async () => {
+      const req = { ...(makeReq() as object), user: { id: 'u2', isAdmin: true } } as never;
+      await expect(run(req, makeRes().res)).rejects.toBeInstanceOf(NotFoundError);
+      expect(h.connFindByDataLakeIdAny).not.toHaveBeenCalled();
+      expect(h.sendToQueue).not.toHaveBeenCalled();
+    });
+
+    it('404s a connection owned by another user', async () => {
+      h.connFindByDataLakeIdAny.mockResolvedValue({ ...PERSONAL_CONN, connectedBy: 'u2' });
+      await expect(run(makeReq(), makeRes().res)).rejects.toBeInstanceOf(NotFoundError);
+      expect(h.sendToQueue).not.toHaveBeenCalled();
+    });
+
+    it('404s an org-owned connection on a personal lake', async () => {
+      h.connFindByDataLakeIdAny.mockResolvedValue({ ...PERSONAL_CONN, organizationId: 'orgA' });
+      await expect(run(makeReq(), makeRes().res)).rejects.toBeInstanceOf(NotFoundError);
+      expect(h.sendToQueue).not.toHaveBeenCalled();
+    });
   });
 
   it('404s when the lake has no GitHub connection, or one from another org', async () => {

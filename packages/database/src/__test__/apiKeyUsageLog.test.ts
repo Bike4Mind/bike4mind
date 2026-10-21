@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
+import { CreditHolderType } from '@bike4mind/common';
 import { connectTestDB, disconnectTestDB } from './utils';
 import { ApiKeyUsageLog, apiKeyUsageLogRepository } from '../models/auth/ApiKeyUsageLogModel';
 
@@ -134,6 +135,41 @@ describe('ApiKeyUsageLogRepository.platformEndpointUsage', () => {
     expect(oneHour.byEndpoint).toHaveLength(0);
     const threeHours = await apiKeyUsageLogRepository.platformEndpointUsage({ hours: 3 });
     expect(threeHours.byEndpoint).toHaveLength(1);
+  });
+
+  describe('source and ownerType filters', () => {
+    beforeEach(async () => {
+      await log({ endpoint: '/api/cli-user', source: 'cli', ownerType: CreditHolderType.User });
+      await log({ endpoint: '/api/api-user', source: 'api', ownerType: CreditHolderType.User });
+      await log({ endpoint: '/api/api-org', source: 'api', ownerType: CreditHolderType.Organization });
+      await log({ endpoint: '/api/legacy' }); // pre-stamp row: neither field
+    });
+
+    const endpointsFor = async (filters: Parameters<typeof apiKeyUsageLogRepository.platformEndpointUsage>[0]) =>
+      (await apiKeyUsageLogRepository.platformEndpointUsage(filters)).byEndpoint.map(b => b.endpoint).sort();
+
+    it('spans every row, stamped or not, when neither filter is set', async () => {
+      expect(await endpointsFor({})).toEqual(['/api/api-org', '/api/api-user', '/api/cli-user', '/api/legacy']);
+    });
+
+    it('narrows to the requested source', async () => {
+      expect(await endpointsFor({ source: 'cli' })).toEqual(['/api/cli-user']);
+      expect(await endpointsFor({ source: 'api' })).toEqual(['/api/api-org', '/api/api-user']);
+    });
+
+    it('narrows to the requested owner type', async () => {
+      expect(await endpointsFor({ ownerType: CreditHolderType.Organization })).toEqual(['/api/api-org']);
+      expect(await endpointsFor({ ownerType: CreditHolderType.User })).toEqual(['/api/api-user', '/api/cli-user']);
+    });
+
+    it('combines both filters and applies them to overTime too', async () => {
+      const result = await apiKeyUsageLogRepository.platformEndpointUsage({
+        source: 'api',
+        ownerType: CreditHolderType.User,
+      });
+      expect(result.byEndpoint.map(b => b.endpoint)).toEqual(['/api/api-user']);
+      expect(result.overTime.reduce((sum, d) => sum + d.requests, 0)).toBe(1);
+    });
   });
 });
 

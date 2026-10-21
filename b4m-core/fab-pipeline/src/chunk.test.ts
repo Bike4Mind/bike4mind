@@ -453,6 +453,65 @@ describe('SmartChunker', () => {
     });
   });
 
+  // A large CSV once tokenized for tens of seconds without a macrotask in between, and the database
+  // connection dropped under it. A callback queued before chunking must run before chunking ends.
+  describe('event loop during a long chunk', () => {
+    const csv = Buffer.from(
+      Array.from({ length: 400 }, (_, i) => `${i},name-${i},city-${i % 17},state-${i % 5}`).join('\n')
+    );
+
+    const ranBeforeChunkingFinished = async () => {
+      await (chunker as any).countTokens('warm up the encoder');
+      let ran = false;
+      setImmediate(() => {
+        ran = true;
+      });
+      await chunker.chunkFile(csv, 'text/csv');
+      return ran;
+    };
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('yields to queued callbacks once chunking has run past the interval', async () => {
+      let now = 0;
+      vi.spyOn(Date, 'now').mockImplementation(() => (now += 1_000));
+      chunker = createChunker();
+
+      expect(await ranBeforeChunkingFinished()).toBe(true);
+    });
+
+    it('does not yield while chunking stays inside the interval', async () => {
+      vi.spyOn(Date, 'now').mockReturnValue(0);
+      chunker = createChunker();
+
+      expect(await ranBeforeChunkingFinished()).toBe(false);
+    });
+
+    it('yields during the oversized-segment split, where encodeTokens runs on a whole segment', async () => {
+      // splitOversizedSegment is the only caller of encodeTokens, so this is the only yield on that
+      // path. The warm-up sets lastYieldAt, then the stepping clock carries the next call past the
+      // interval, so the queued callback only runs because encodeTokens yields.
+      let now = 0;
+      vi.spyOn(Date, 'now').mockImplementation(() => (now += 1_000));
+      const limited = createChunker(50);
+      try {
+        await (limited as any).countTokens('warm up the encoder');
+
+        let ran = false;
+        setImmediate(() => {
+          ran = true;
+        });
+        await (limited as any).splitOversizedSegment('a'.repeat(10_000));
+
+        expect(ran).toBe(true);
+      } finally {
+        limited.freeEncoder();
+      }
+    });
+  });
+
   describe('chunkFile with audio', () => {
     it('returns no chunks for audio (never vectorized)', async () => {
       const content = Buffer.from('fake-audio-bytes');

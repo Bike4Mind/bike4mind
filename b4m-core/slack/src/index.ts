@@ -111,7 +111,12 @@ export { processMarkdownForSlack } from './utils/slackMarkdown';
 export type { SlackFormattedResult } from './utils/slackMarkdown';
 
 // ─── Confirmation ────────────────────────────────────────────────────────────
-export { buildAttachmentDownloadButtons, buildConfirmationButtons, formatPreviewFromParams } from './confirmation';
+export {
+  buildAttachmentDownloadButtons,
+  buildConfirmationButtons,
+  formatPreviewFromParams,
+  parseConfirmationButtonValue,
+} from './confirmation';
 export { buildImageModelPicker, getImageModelDisplayName, IMAGE_GEN_MODEL_ACTION_ID } from './confirmation';
 export type {
   AttachmentDownloadInfo,

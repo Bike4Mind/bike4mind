@@ -23,20 +23,23 @@ import { UsageBySourceCard } from './UsageBySourceCard';
 interface OverviewTabProps {
   metrics: EventMetric[];
   chartData: ChartData;
+  showUsageBySource?: boolean;
 }
 
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884D8', '#82CA9D', '#FFC658', '#FF6B6B'];
 
-export const OverviewTab: React.FC<OverviewTabProps> = ({ metrics, chartData }) => {
+export const OverviewTab: React.FC<OverviewTabProps> = ({ metrics, chartData, showUsageBySource = true }) => {
   return (
     <Box>
       <Grid container spacing={2}>
         {/* Usage by Source: web vs cli vs agent vs api at a glance. Its own
             admin endpoint, so it loads regardless of the filter state driving
             the rest of this tab. */}
-        <Grid xs={12}>
-          <UsageBySourceCard />
-        </Grid>
+        {showUsageBySource && (
+          <Grid xs={12}>
+            <UsageBySourceCard />
+          </Grid>
+        )}
 
         {/* Time Series Chart */}
         <Grid xs={12}>

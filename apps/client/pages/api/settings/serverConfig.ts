@@ -1,15 +1,15 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { apiKeyService } from '@bike4mind/services';
 import {
   resolveToolAvailability,
   isLocalImageBackendAvailable,
   isLocalEmbedderAvailable,
   type ToolAvailability,
-} from '@bike4mind/services/llm';
+} from '@bike4mind/services/llm/toolAvailability';
 import { getSettingsByNames } from '@bike4mind/utils';
-import { resolveEffectiveEmbeddingModel } from '@server/embeddings/effectiveEmbeddingModel';
+import { resolveEffectiveEmbeddingModel } from '@bike4mind/server-utils/embeddings/effectiveEmbeddingModel';
 import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
 import { Resource } from 'sst';
 

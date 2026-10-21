@@ -15,7 +15,7 @@ import { createMocks } from 'node-mocks-http';
  * as every other route test in this directory - see rate-limit.test.ts's
  * `meterAsKeyManagement` check). This file asserts baseApi received that option;
  * it does not exercise a live 403 from apiKeyAuth (that belongs to
- * apiKeyAuth's/generate-video.integration.test.ts's own coverage).
+ * server/middlewares/apiKeyAuth.test.ts, '403s a key that holds none of the required scopes').
  */
 
 const mockRefs = vi.hoisted(() => ({
@@ -54,7 +54,7 @@ const logEventSafe = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe }));
 
 import { ApiKeyScope } from '@bike4mind/common';
-import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import '@pages/api/user-api-keys/[id]/callback-secret';
 
 function post(id: string | undefined) {

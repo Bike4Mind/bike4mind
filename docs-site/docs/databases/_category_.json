@@ -1,0 +1,10 @@
+{
+  "label": "Databases",
+  "position": 9,
+  "link": {
+    "type": "generated-index",
+    "title": "Database Documentation",
+    "description": "Documentation for database setup, configuration, and deployment including MongoDB Atlas and AWS DocumentDB",
+    "slug": "/databases"
+  }
+}

@@ -67,6 +67,7 @@ describe('GET /api/users/[id]/userInvites - inbox recipient filtering', () => {
     const body = res._getJSONData();
     expect(body.data[0].recipients.pending).toEqual(['me@x.com']);
     expect(body.pagination.total).toBe(1);
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
     expect(JSON.stringify(body)).not.toContain('other@x.com');
   });
 });
@@ -96,5 +97,15 @@ describe('GET /api/users/[id]/userInvites - cache key identity', () => {
     await mockRefs.getHandler!(req, res);
 
     expect(mockRefs.cacheKeyArgs?.[0]).toBe('me');
+  });
+});
+
+describe('GET /api/users/[id]/userInvites - cache headers', () => {
+  it('marks a rejected request private, no-store too', async () => {
+    const { req, res } = createMocks({ method: 'GET', query: { id: 'someone-else' } });
+    (req as any).user = { id: 'me', email: 'me@x.com', isAdmin: false };
+    await expect(mockRefs.getHandler!(req, res)).rejects.toThrow('Unauthorized');
+
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
   });
 });

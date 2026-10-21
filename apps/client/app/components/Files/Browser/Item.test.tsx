@@ -1,6 +1,6 @@
-import { describe, it, expect, vi } from 'vitest';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
 import type { ReactNode } from 'react';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -14,7 +14,12 @@ import { FileBrowserInstanceProvider, FileBrowserInstanceValue } from './instanc
 // gating rather than the full file-actions menu, tags, and sharing chrome -
 // mock out the pieces that pull in unrelated context requirements
 // (react-i18next, confirmation dialogs, etc).
-vi.mock('./ItemActions', () => ({ default: () => null }));
+vi.mock('./ItemActions', () => ({ default: () => <div data-testid="file-browser-item-actions" /> }));
+const viewer = vi.hoisted(() => ({ setSelectedFabFileId: vi.fn(), setViewOnly: vi.fn(), setOpen: vi.fn() }));
+vi.mock('@client/app/components/Knowledge/KnowledgeModal', () => ({
+  useKnowledgeModal: (selector: (state: typeof viewer) => unknown) => selector(viewer),
+}));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({ currentUser: null }),
 }));
@@ -168,5 +173,87 @@ describe('FileBrowserItem added-indicator', () => {
   it.each(['list', 'grid'] as const)('%s hides the Added badge when the file is not added', viewType => {
     renderWithInstance(viewType, new Set(['some-other-id']));
     expect(screen.queryByTestId('file-browser-item-added-badge')).toBeNull();
+  });
+});
+
+// Audio plays inline through the shared MediaPlayer in both views, loading nothing until played so a long list stays
+// cheap. Video plays inline only in a grid card: a list row is one line tall, so it shows a poster-frame thumbnail that
+// opens the viewer. Download stays in the row's actions menu.
+describe('FileBrowserItem inline media', () => {
+  const audioFile = makeFile({ fileName: 'song.mp3', mimeType: 'audio/mpeg', fileUrl: 'https://example.com/song.mp3' });
+  const videoFile = makeFile({ fileName: 'clip.mp4', mimeType: 'video/mp4', fileUrl: 'https://example.com/clip.mp4' });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it.each(['list', 'grid'] as const)('%s plays an audio file without preloading it', viewType => {
+    renderWithProviders(<FileBrowserItem file={audioFile} viewType={viewType} />);
+    expect(screen.getByTestId('media-player-audio').getAttribute('preload')).toBe('none');
+    expect(screen.queryByTestId('media-player-download-btn')).toBeNull();
+  });
+
+  it('grid plays a video file with its poster frame', () => {
+    renderWithProviders(<FileBrowserItem file={videoFile} viewType="grid" />);
+    expect(screen.getByTestId('media-player-video').getAttribute('preload')).toBe('metadata');
+  });
+
+  it('list shows a video as a full row with a thumbnail instead of an inline player', () => {
+    renderWithProviders(<FileBrowserItem file={videoFile} viewType="list" />);
+    expect(screen.queryByTestId('media-player-video')).toBeNull();
+    expect(screen.getByTestId('file-browser-item-name').textContent).toBe('clip.mp4');
+    expect(screen.getByTestId('file-browser-item-actions')).toBeInTheDocument();
+    const thumbnail = screen.getByTestId('file-browser-item-video-thumbnail');
+    expect(thumbnail.querySelector('video')?.getAttribute('preload')).toBe('metadata');
+  });
+
+  it('list opens the viewer from the video thumbnail without toggling the row selection', () => {
+    const setSelectedIds = vi.fn();
+    renderWithProviders(
+      <FileBrowserInstanceProvider
+        value={{
+          selectedIds: new Set<string>(),
+          setSelectedIds,
+          open: true,
+          setOpen: vi.fn(),
+          fileToShare: null,
+          setFileToShare: vi.fn(),
+          config: {},
+        }}
+      >
+        <FileBrowserItem file={videoFile} viewType="list" />
+      </FileBrowserInstanceProvider>
+    );
+    fireEvent.click(screen.getByTestId('file-browser-item-video-thumbnail'));
+    expect(viewer.setSelectedFabFileId).toHaveBeenCalledWith(videoFile.id);
+    expect(viewer.setViewOnly).toHaveBeenCalledWith(false);
+    expect(viewer.setOpen).toHaveBeenCalledWith(true);
+    expect(setSelectedIds).not.toHaveBeenCalled();
+  });
+
+  it('list falls back to the video icon, still opening the viewer, when the thumbnail fails to load', () => {
+    renderWithProviders(<FileBrowserItem file={videoFile} viewType="list" />);
+    const thumbnail = screen.getByTestId('file-browser-item-video-thumbnail');
+    fireEvent.error(thumbnail.querySelector('video') as HTMLVideoElement);
+    expect(thumbnail.querySelector('video')).toBeNull();
+    expect(thumbnail.querySelector('[data-testid="VideocamIcon"]')).toBeTruthy();
+    fireEvent.click(thumbnail);
+    expect(viewer.setOpen).toHaveBeenCalledWith(true);
+  });
+
+  it('list never hands an expired URL to the thumbnail', () => {
+    const expired = { ...videoFile, fileUrlExpireAt: new Date(Date.now() - 1000) } as IFabFileDocument;
+    renderWithProviders(<FileBrowserItem file={expired} viewType="list" />);
+    expect(screen.getByTestId('file-browser-item-video-thumbnail').querySelector('video')).toBeNull();
+  });
+
+  it('renders no player for a media file with no URL', () => {
+    renderWithProviders(<FileBrowserItem file={makeFile({ mimeType: 'video/mp4' })} viewType="list" />);
+    expect(screen.queryByTestId('media-player-video')).toBeNull();
+  });
+
+  it('gives a video file its own icon', () => {
+    const { container } = render(<TestWrapper>{getFileIcon(makeFile({ mimeType: 'video/mp4' }), 48)}</TestWrapper>);
+    expect(container.querySelector('[data-testid="VideocamIcon"]')).toBeTruthy();
   });
 });

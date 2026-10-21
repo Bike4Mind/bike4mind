@@ -54,8 +54,12 @@ vi.mock('@server/utils/chatCompletionDefaults', () => ({
   getSharedTokenizer: () => ({}),
 }));
 
+const mockRecordVoiceActivity = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
+  sessionRepository: {
+    recordVoiceActivity: (...args: unknown[]) => mockRecordVoiceActivity(...args),
+  },
   questRepository: {
     findAllBySessionIdAndGreaterThanOrEqualToTimestamp: (...args: unknown[]) => mockFindDuplicateQuests(...args),
     markStopped: vi.fn().mockResolvedValue(undefined),
@@ -98,6 +102,7 @@ vi.mock('@bike4mind/voice', () => ({
 }));
 
 import handler from '../completions';
+import { VOICE_SESSION_TOKEN_TTL_SECONDS } from '@bike4mind/server-utils/voice/voiceSessionLimits';
 
 // Minimal SSE-response double: only setHeader/write/end/on are ever touched by the
 // success path this test drives.
@@ -124,21 +129,29 @@ function makeReq() {
   };
 }
 
-describe('POST /api/voice/v2/llm-proxy/chat/completions - deniedTools', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockVerifyVoiceSessionToken.mockReturnValue({
-      userId: 'user-1',
-      sessionId: 'session-1',
-      organizationId: undefined,
-      reasoningModelId: 'test-model',
-    });
-    mockFindDuplicateQuests.mockResolvedValue([]);
-    mockUserFindById.mockResolvedValue({ id: 'user-1' });
-    mockGetSettingsMap.mockResolvedValue({});
-    mockInvoke.mockResolvedValue({ id: 'quest-1', replies: [], reply: '' });
-    mockProcess.mockResolvedValue(undefined);
+// A hold opened a minute ago: inside the window its token may be served for.
+const recentHold = () => new Date(Date.now() - 60_000).toISOString();
+
+function primeSuccessfulTurn() {
+  vi.clearAllMocks();
+  mockVerifyVoiceSessionToken.mockReturnValue({
+    userId: 'user-1',
+    sessionId: 'session-1',
+    organizationId: undefined,
+    reasoningModelId: 'test-model',
+    authOrigin: 'session',
+    voiceHoldStartedAt: recentHold(),
   });
+  mockFindDuplicateQuests.mockResolvedValue([]);
+  mockRecordVoiceActivity.mockResolvedValue(true);
+  mockUserFindById.mockResolvedValue({ id: 'user-1' });
+  mockGetSettingsMap.mockResolvedValue({});
+  mockInvoke.mockResolvedValue({ id: 'quest-1', replies: [], reply: '' });
+  mockProcess.mockResolvedValue(undefined);
+}
+
+describe('POST /api/voice/v2/llm-proxy/chat/completions - deniedTools', () => {
+  beforeEach(primeSuccessfulTurn);
 
   it('denies the data-lake tools on both the invoke and process bodies', async () => {
     const req = makeReq();
@@ -161,5 +174,146 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - deniedTools', () => {
       // Narrow on purpose: skipAutoOffers would also drop the knowledge and MCP offers voice uses.
       expect(call.body.skipAutoOffers).toBeUndefined();
     }
+  });
+});
+
+describe('POST /api/voice/v2/llm-proxy/chat/completions - turn auth', () => {
+  beforeEach(primeSuccessfulTurn);
+
+  type InvokeArg = { authOrigin?: string; apiKeyId?: string };
+  type ProcessArg = { body: { authOrigin?: string; apiKeyId?: string } };
+
+  // A session-only tool reads ToolContext.authOrigin, which process() takes from its body; invoke()
+  // carries it (and the key id) for the quest record.
+  it('forwards the key that minted the token to invoke() and the process() body', async () => {
+    mockVerifyVoiceSessionToken.mockReturnValue({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      organizationId: '',
+      reasoningModelId: 'test-model',
+      authOrigin: 'apiKey',
+      apiKeyId: 'key-1',
+      voiceHoldStartedAt: recentHold(),
+    });
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect(mockInvoke.mock.calls[0][0] as InvokeArg).toEqual(
+      expect.objectContaining({ authOrigin: 'apiKey', apiKeyId: 'key-1' })
+    );
+    expect((mockProcess.mock.calls[0][0] as ProcessArg).body).toEqual(
+      expect.objectContaining({ authOrigin: 'apiKey', apiKeyId: 'key-1' })
+    );
+  });
+
+  it('forwards a session origin and no key id for a token minted by a signed-in session', async () => {
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect((mockInvoke.mock.calls[0][0] as InvokeArg).authOrigin).toBe('session');
+    expect((mockInvoke.mock.calls[0][0] as InvokeArg).apiKeyId).toBeUndefined();
+    expect((mockProcess.mock.calls[0][0] as ProcessArg).body.authOrigin).toBe('session');
+    expect((mockProcess.mock.calls[0][0] as ProcessArg).body.apiKeyId).toBeUndefined();
+  });
+});
+
+describe('POST /api/voice/v2/llm-proxy/chat/completions - voice activity', () => {
+  beforeEach(primeSuccessfulTurn);
+
+  it("marks the token's session connected and alive on every verified turn", async () => {
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect(mockRecordVoiceActivity).toHaveBeenCalledWith('session-1', expect.any(Date), expect.any(Date));
+  });
+
+  it('marks only the hold its token names', async () => {
+    const holdStartedAt = recentHold();
+    mockVerifyVoiceSessionToken.mockReturnValue({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      organizationId: '',
+      reasoningModelId: 'test-model',
+      voiceHoldStartedAt: holdStartedAt,
+    });
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect(mockRecordVoiceActivity).toHaveBeenCalledWith('session-1', expect.any(Date), new Date(holdStartedAt));
+  });
+
+  it('records nothing for a turn whose token does not verify', async () => {
+    mockVerifyVoiceSessionToken.mockImplementation(() => {
+      throw new Error('bad token');
+    });
+    const res = { ...makeRes(), status: () => ({ json: () => undefined }) };
+
+    await handler(makeReq() as never, res as never);
+
+    expect(mockRecordVoiceActivity).not.toHaveBeenCalled();
+  });
+
+  it('refuses a turn with 402 and no LLM call once the hold its token names is settled', async () => {
+    mockVerifyVoiceSessionToken.mockReturnValue({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      organizationId: '',
+      reasoningModelId: 'test-model',
+      voiceHoldStartedAt: recentHold(),
+    });
+    // POST /end claimed the hold, so the activity write matches nothing.
+    mockRecordVoiceActivity.mockResolvedValue(false);
+    const json = vi.fn();
+    const status = vi.fn(() => ({ json }));
+    const res = { ...makeRes(), status };
+
+    await handler(makeReq() as never, res as never);
+
+    expect(status).toHaveBeenCalledWith(402);
+    expect(json).toHaveBeenCalledWith(expect.objectContaining({ error: expect.any(String) }));
+    expect(mockInvoke).not.toHaveBeenCalled();
+    expect(mockProcess).not.toHaveBeenCalled();
+  });
+
+  function expect402(status: ReturnType<typeof vi.fn>) {
+    expect(status).toHaveBeenCalledWith(402);
+    expect(mockInvoke).not.toHaveBeenCalled();
+    expect(mockProcess).not.toHaveBeenCalled();
+  }
+
+  it('refuses a legacy token that names no hold', async () => {
+    mockVerifyVoiceSessionToken.mockReturnValue({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      organizationId: '',
+      reasoningModelId: 'test-model',
+    });
+    const status = vi.fn(() => ({ json: vi.fn() }));
+
+    await handler(makeReq() as never, { ...makeRes(), status } as never);
+
+    expect402(status);
+  });
+
+  it('refuses a turn when recording the activity fails, rather than serving it unbilled', async () => {
+    mockRecordVoiceActivity.mockRejectedValue(new Error('db blip'));
+    const status = vi.fn(() => ({ json: vi.fn() }));
+
+    await handler(makeReq() as never, { ...makeRes(), status } as never);
+
+    expect402(status);
+  });
+
+  it("refuses a turn past the hold's window even while the hold is still open", async () => {
+    mockVerifyVoiceSessionToken.mockReturnValue({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      organizationId: '',
+      reasoningModelId: 'test-model',
+      voiceHoldStartedAt: new Date(Date.now() - (VOICE_SESSION_TOKEN_TTL_SECONDS + 1) * 1000).toISOString(),
+    });
+    const status = vi.fn(() => ({ json: vi.fn() }));
+
+    await handler(makeReq() as never, { ...makeRes(), status } as never);
+
+    expect402(status);
   });
 });

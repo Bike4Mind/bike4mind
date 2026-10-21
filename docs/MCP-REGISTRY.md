@@ -4,9 +4,11 @@ The MCP server is `b4m mcp serve` (`packages/cli/src/mcp/`), shipped inside the
 `@bike4mind/cli` npm package. The registry hosts **metadata only**: the entry in
 `mcp-registry/server.json` points at the npm package, and clients install that.
 
-Namespace is `io.github.bike4mind/*`, authorized by GitHub auth as a member of the
+Namespace is `io.github.Bike4Mind/*`, authorized by GitHub auth as an Owner of the
 Bike4Mind org - no DNS record or keypair needed, unlike the sibling remote-server
-listings.
+listings. The registry matches the name case-sensitively against the org login
+(`Bike4Mind`), so keep that casing in `server.json` and in the CLI `mcpName`; a
+lowercase name is rejected with 403.
 
 ## Why the package must be installable first
 
@@ -122,15 +124,20 @@ package nobody can install.
 ```bash
 brew install mcp-publisher
 cd mcp-registry
-mcp-publisher login github        # any Bike4Mind org member
+# Classic PAT with only the read:org scope; the interactive device login lacks it
+# and silently grants just your personal namespace. Org Owner role required.
+mcp-publisher login github --token "$(pbpaste)"   # macOS; elsewhere --token "$GITHUB_PAT"
 mcp-publisher publish
-curl "https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.bike4mind/bike4mind"
+curl "https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.Bike4Mind/bike4mind"
 ```
 
 ## Keeping it in step
 
 - `mcpName` in `packages/cli/package.json` MUST equal `name` in
   `mcp-registry/server.json`, or the registry rejects the publish.
+- Renaming the entry means changing both together, then publishing only after a CLI
+  release carrying the new `mcpName` is on npm; the registry validates against the
+  published package, not this repo.
 - `server.json`'s `version` and `packages[0].version` MUST equal the package's
   version. No human owns this: `scripts/sync-mcp-registry-version.mjs` runs inside
   `changeset:version` and rewrites both from `packages/cli/package.json`. Never set

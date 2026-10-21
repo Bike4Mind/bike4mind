@@ -1,5 +1,10 @@
-import { encryptSecret, decryptSecret, isEncrypted, isValidEncryptionKey } from './secretEncryption';
-import { Config } from '@server/utils/config';
+import {
+  encryptSecret,
+  decryptSecret,
+  isEncrypted,
+  isValidEncryptionKey,
+} from '@bike4mind/server-utils/security/secretEncryption';
+import { Config } from '@bike4mind/server-utils/utils/config';
 
 function requireKey(): string {
   const key = Config.SECRET_ENCRYPTION_KEY;

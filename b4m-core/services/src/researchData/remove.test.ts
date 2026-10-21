@@ -1,14 +1,24 @@
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 import { NotFoundError } from '@bike4mind/utils';
 import { remove } from './remove';
-import { IResearchAgentRepository, IResearchDataRepository, IUserRepository } from '@bike4mind/common';
+import {
+  IResearchAgentRepository,
+  IOrganizationRepository,
+  IResearchDataRepository,
+  IUserRepository,
+  STORAGE_CHARGE_STAMP_CUTOFF,
+} from '@bike4mind/common';
 
 vi.mock('../fabFileService/delete', () => ({
   deleteFabFile: vi.fn(),
 }));
+vi.mock('../fabFileService/cleanUpDeletedFileReferences', () => ({
+  cleanUpDeletedFileReferences: vi.fn(),
+}));
 
 // Mock must be imported after vi.mock for type inference
 import { deleteFabFile } from '../fabFileService/delete';
+import { cleanUpDeletedFileReferences } from '../fabFileService/cleanUpDeletedFileReferences';
 
 describe('researchDataService - remove', () => {
   const mockUserId = 'user-123';
@@ -26,11 +36,15 @@ describe('researchDataService - remove', () => {
   let mockUserRepo: {
     incrementCurrentStorage: Mock;
   };
+  let mockOrganizationRepo: {
+    incrementCurrentStorage: Mock;
+  };
   let adapters: {
     db: {
       researchAgents: IResearchAgentRepository;
       researchDatas: IResearchDataRepository;
       users: IUserRepository;
+      organizations: IOrganizationRepository;
       fabFiles: {
         findByIdAndUserId: Mock;
         findById: Mock;
@@ -64,11 +78,15 @@ describe('researchDataService - remove', () => {
     mockUserRepo = {
       incrementCurrentStorage: vi.fn(),
     };
+    mockOrganizationRepo = {
+      incrementCurrentStorage: vi.fn(),
+    };
     adapters = {
       db: {
         researchAgents: mockResearchAgentRepo as unknown as IResearchAgentRepository,
         researchDatas: mockResearchDataRepo as unknown as IResearchDataRepository,
         users: mockUserRepo as unknown as IUserRepository,
+        organizations: mockOrganizationRepo as unknown as IOrganizationRepository,
         fabFiles: {
           findByIdAndUserId: vi.fn(),
           findById: vi.fn(),
@@ -91,7 +109,7 @@ describe('researchDataService - remove', () => {
     };
   });
 
-  it('refunds the uploading user for a file carrying an organizationId', async () => {
+  it('refunds the owning org, not the uploader, for an org-stamped file', async () => {
     // Arrange
     const params = { id: mockResearchDataId, researchAgentId: mockResearchAgentId };
     const mockResearchAgent = { id: mockResearchAgentId };
@@ -101,13 +119,14 @@ describe('researchDataService - remove', () => {
       userId: mockUserId,
       organizationId: 'org-123',
       fileSize: 1024,
+      storageChargedAt: new Date('2026-10-10T00:00:00Z'),
     };
 
     mockResearchAgentRepo.findByIdAndUserId.mockResolvedValueOnce(mockResearchAgent);
     mockResearchDataRepo.findByIdAndResearchAgentId.mockResolvedValueOnce(mockResearchData);
     mockResearchDataRepo.delete.mockResolvedValueOnce(undefined);
     (deleteFabFile as Mock).mockResolvedValueOnce({ action: 'deleted', fabFile: mockFabFile });
-    mockUserRepo.incrementCurrentStorage.mockResolvedValueOnce(undefined);
+    mockOrganizationRepo.incrementCurrentStorage.mockResolvedValueOnce(undefined);
 
     // Act
     await remove(mockUserId, params, adapters);
@@ -120,7 +139,8 @@ describe('researchDataService - remove', () => {
     );
     expect(mockResearchDataRepo.delete).toHaveBeenCalledWith(mockResearchDataId);
     expect(deleteFabFile).toHaveBeenCalledWith(mockUserId, { id: mockFabFileId }, adapters);
-    expect(mockUserRepo.incrementCurrentStorage).toHaveBeenCalledWith(mockUserId, -1024);
+    expect(mockOrganizationRepo.incrementCurrentStorage).toHaveBeenCalledWith('org-123', -1024);
+    expect(mockUserRepo.incrementCurrentStorage).not.toHaveBeenCalled();
   });
 
   it('should throw NotFoundError when research agent is not found', async () => {
@@ -174,6 +194,7 @@ describe('researchDataService - remove', () => {
       userId: mockUserId,
       organizationId: null,
       fileSize: 2048,
+      storageChargedAt: new Date('2026-10-10T00:00:00Z'),
     };
 
     mockResearchAgentRepo.findByIdAndUserId.mockResolvedValueOnce(mockResearchAgent);
@@ -189,6 +210,71 @@ describe('researchDataService - remove', () => {
     expect(mockResearchDataRepo.delete).toHaveBeenCalledWith(mockResearchDataId);
     expect(deleteFabFile).toHaveBeenCalledWith(mockUserId, { id: mockFabFileId }, adapters);
     expect(mockUserRepo.incrementCurrentStorage).toHaveBeenCalledWith(mockUserId, -2048);
+  });
+
+  it('does not refund a file that was never charged', async () => {
+    const params = { id: mockResearchDataId, researchAgentId: mockResearchAgentId };
+    const mockFabFile = { id: mockFabFileId, userId: mockUserId, fileSize: 2048, status: 'pending' };
+
+    mockResearchAgentRepo.findByIdAndUserId.mockResolvedValueOnce({ id: mockResearchAgentId });
+    mockResearchDataRepo.findByIdAndResearchAgentId.mockResolvedValueOnce({
+      id: mockResearchDataId,
+      fabFileId: mockFabFileId,
+    });
+    mockResearchDataRepo.delete.mockResolvedValueOnce(undefined);
+    (deleteFabFile as Mock).mockResolvedValueOnce({ action: 'deleted', fabFile: mockFabFile });
+
+    await remove(mockUserId, params, adapters);
+
+    expect(mockUserRepo.incrementCurrentStorage).not.toHaveBeenCalled();
+  });
+
+  // A `complete` row from before the stamping release was charged by the upload event; a stamp-only
+  // rule would silently drop these refunds.
+  it('refunds a legacy pre-stamp complete row in full', async () => {
+    const params = { id: mockResearchDataId, researchAgentId: mockResearchAgentId };
+    const legacy = {
+      id: mockFabFileId,
+      userId: mockUserId,
+      fileSize: 2048,
+      status: 'complete',
+      createdAt: new Date(STORAGE_CHARGE_STAMP_CUTOFF.getTime() - 1000),
+    };
+
+    mockResearchAgentRepo.findByIdAndUserId.mockResolvedValueOnce({ id: mockResearchAgentId });
+    mockResearchDataRepo.findByIdAndResearchAgentId.mockResolvedValueOnce({
+      id: mockResearchDataId,
+      fabFileId: mockFabFileId,
+    });
+    mockResearchDataRepo.delete.mockResolvedValueOnce(undefined);
+    (deleteFabFile as Mock).mockResolvedValueOnce({ action: 'deleted', fabFile: legacy });
+
+    await remove(mockUserId, params, adapters);
+
+    expect(mockUserRepo.incrementCurrentStorage).toHaveBeenCalledWith(mockUserId, -2048);
+  });
+
+  it('does not refund a post-stamp complete row that was never charged', async () => {
+    const params = { id: mockResearchDataId, researchAgentId: mockResearchAgentId };
+    const uncharged = {
+      id: mockFabFileId,
+      userId: mockUserId,
+      fileSize: 2048,
+      status: 'complete',
+      createdAt: new Date(STORAGE_CHARGE_STAMP_CUTOFF.getTime() + 1000),
+    };
+
+    mockResearchAgentRepo.findByIdAndUserId.mockResolvedValueOnce({ id: mockResearchAgentId });
+    mockResearchDataRepo.findByIdAndResearchAgentId.mockResolvedValueOnce({
+      id: mockResearchDataId,
+      fabFileId: mockFabFileId,
+    });
+    mockResearchDataRepo.delete.mockResolvedValueOnce(undefined);
+    (deleteFabFile as Mock).mockResolvedValueOnce({ action: 'deleted', fabFile: uncharged });
+
+    await remove(mockUserId, params, adapters);
+
+    expect(mockUserRepo.incrementCurrentStorage).not.toHaveBeenCalled();
   });
 
   it('should remove research data even when fabFile is not found', async () => {
@@ -241,6 +327,7 @@ describe('researchDataService - remove', () => {
       userId: mockUserId,
       organizationId: undefined,
       fileSize: 512,
+      storageChargedAt: new Date('2026-10-10T00:00:00Z'),
     };
 
     mockResearchAgentRepo.findByIdAndUserId.mockResolvedValueOnce(mockResearchAgent);
@@ -266,13 +353,14 @@ describe('researchDataService - remove', () => {
       userId: mockUserId,
       organizationId: 'org-123',
       fileSize: 1024,
+      storageChargedAt: new Date('2026-10-10T00:00:00Z'),
     };
 
     mockResearchAgentRepo.findByIdAndUserId.mockResolvedValueOnce(mockResearchAgent);
     mockResearchDataRepo.findByIdAndResearchAgentId.mockResolvedValueOnce(mockResearchData);
     mockResearchDataRepo.delete.mockResolvedValueOnce(undefined);
     (deleteFabFile as Mock).mockResolvedValueOnce({ action: 'deleted', fabFile: mockFabFile });
-    mockUserRepo.incrementCurrentStorage.mockRejectedValueOnce(new Error('Storage update failed'));
+    mockOrganizationRepo.incrementCurrentStorage.mockRejectedValueOnce(new Error('Storage update failed'));
 
     // Act & Assert
     const promise = remove(mockUserId, params, adapters);
@@ -293,6 +381,7 @@ describe('researchDataService - remove', () => {
       userId: mockUserId,
       organizationId: null,
       fileSize: 1024,
+      storageChargedAt: new Date('2026-10-10T00:00:00Z'),
     };
 
     mockResearchAgentRepo.findByIdAndUserId.mockResolvedValueOnce(mockResearchAgent);
@@ -307,5 +396,25 @@ describe('researchDataService - remove', () => {
 
     // Verify that research data deletion still occurred
     expect(mockResearchDataRepo.delete).toHaveBeenCalledWith(mockResearchDataId);
+  });
+
+  it('unlinks the references the delete left behind, once the file is gone', async () => {
+    const params = { id: mockResearchDataId, researchAgentId: mockResearchAgentId };
+    const references = { fileIds: [mockFabFileId], systemFileUserIds: [mockUserId], projectUserIds: [mockUserId] };
+
+    mockResearchAgentRepo.findByIdAndUserId.mockResolvedValueOnce({ id: mockResearchAgentId });
+    mockResearchDataRepo.findByIdAndResearchAgentId.mockResolvedValueOnce({
+      id: mockResearchDataId,
+      fabFileId: mockFabFileId,
+    });
+    mockResearchDataRepo.delete.mockResolvedValueOnce(undefined);
+    (deleteFabFile as Mock).mockResolvedValueOnce({ action: 'deleted', fabFile: null, references });
+
+    await remove(mockUserId, params, adapters);
+
+    expect(cleanUpDeletedFileReferences).toHaveBeenCalledWith(references, {
+      users: adapters.db.users,
+      projects: undefined,
+    });
   });
 });

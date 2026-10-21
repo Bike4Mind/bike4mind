@@ -10,17 +10,18 @@ import {
   IAgentRepository,
   IEmbedBranding,
   isAgentOwnedByEmbedKey,
+  IUserApiKeyDocument,
   IUserApiKeyRepository,
 } from '@bike4mind/common';
 import { secureParameters, BadRequestError, ForbiddenError } from '@bike4mind/utils';
 import { encryptAtRest } from '@bike4mind/utils/security';
 import { randomBytes } from 'crypto';
-import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { KEY_PREFIX_LENGTH } from './constants';
 import { API_KEY_RATE_LIMIT_DEFAULTS, apiKeyRateLimitSchema } from './rateLimit';
 import { assertNoScopeEscalation } from './assertNoScopeEscalation';
 import { generateCallbackSigningSecret } from './callbackSigningSecret';
+import { computeKeyDigest } from './keyDigest';
 
 // Sanity ceiling for a per-embed-key spend cap, in whole credits - a guard against
 // fat-finger/overflow values, not a product limit. Shared with the spend-cap update
@@ -28,6 +29,12 @@ import { generateCallbackSigningSecret } from './callbackSigningSecret';
 export const EMBED_SPEND_CAP_MAX_CREDITS = 100_000_000;
 
 export { API_KEY_USER_CAP_ERROR_CODE } from '@bike4mind/common';
+
+export const MAX_ACTIVE_KEYS_PER_USER = 10;
+/** Live federated-exchange keys per user, i.e. distinct relying-party apps in use at once. */
+export const MAX_ACTIVE_EXCHANGE_KEYS_PER_USER = 25;
+/** Longest lifetime of a federated-exchange key, measured from mint time. */
+export const MAX_EXCHANGE_KEY_TTL_MS = 15 * 60 * 1000;
 
 const createUserApiKeySchema = z.object({
   name: z.string().min(1).max(100),
@@ -74,7 +81,20 @@ const createUserApiKeySchema = z.object({
   preauthorizedLakeIds: z.array(z.string().min(1)).max(25).optional(),
 });
 
-export type CreateUserApiKeyParameters = z.infer<typeof createUserApiKeySchema>;
+type MintUserApiKeyParameters = z.infer<typeof createUserApiKeySchema>;
+
+/** Parameters for the shared mint path; 'oauth-exchange' keys only come from createExchangeUserApiKey. */
+export type CreateUserApiKeyParameters = Omit<MintUserApiKeyParameters, 'metadata'> & {
+  metadata: Omit<MintUserApiKeyParameters['metadata'], 'createdFrom'> & {
+    createdFrom: Exclude<MintUserApiKeyParameters['metadata']['createdFrom'], 'oauth-exchange'>;
+  };
+};
+
+/** Parameters for the federated AI-token exchange mint; createdFrom is fixed by the entry point. */
+export type CreateExchangeUserApiKeyParameters = Omit<MintUserApiKeyParameters, 'metadata' | 'expiresAt'> & {
+  expiresAt: Date;
+  metadata: { clientIP?: string; userAgent?: string; oauthClientId: string };
+};
 
 interface CreateUserApiKeyAdapters {
   db: {
@@ -135,18 +155,42 @@ export interface CreateUserApiKeyResult {
 /**
  * Generate a secure API key with the format: b4m_live_[32_random_chars]
  */
-function generateApiKey(): { key: string; keyPrefix: string; keyHash: string } {
+function generateApiKey(): { key: string; keyPrefix: string; keyDigest: string } {
   const randomPart = randomBytes(16).toString('hex'); // 32 chars
   const key = `b4m_live_${randomPart}`;
   const keyPrefix = key.substring(0, KEY_PREFIX_LENGTH);
-  const keyHash = bcrypt.hashSync(key, 12);
+  const keyDigest = computeKeyDigest(key);
 
-  return { key, keyPrefix, keyHash };
+  return { key, keyPrefix, keyDigest };
 }
 
+/** Mints a key through the shared path (dashboard, API, CLI, bridge, admin); never the exchange pool. */
 export const createUserApiKey = async (
   userId: string,
   parameters: CreateUserApiKeyParameters,
+  adapters: CreateUserApiKeyAdapters
+): Promise<CreateUserApiKeyResult> => {
+  if ((parameters.metadata?.createdFrom as string) === 'oauth-exchange') {
+    throw new BadRequestError('oauth-exchange keys are minted only by the AI-token exchange');
+  }
+  return mintUserApiKey(userId, parameters, adapters);
+};
+
+/** Mints a short-lived key into the federated-exchange pool, tagged to one relying party. */
+export const createExchangeUserApiKey = async (
+  userId: string,
+  parameters: CreateExchangeUserApiKeyParameters,
+  adapters: CreateUserApiKeyAdapters
+): Promise<CreateUserApiKeyResult> =>
+  mintUserApiKey(
+    userId,
+    { ...parameters, metadata: { ...parameters.metadata, createdFrom: 'oauth-exchange' } },
+    adapters
+  );
+
+const mintUserApiKey = async (
+  userId: string,
+  parameters: MintUserApiKeyParameters,
   adapters: CreateUserApiKeyAdapters
 ): Promise<CreateUserApiKeyResult> => {
   const { db, systemUserId } = adapters;
@@ -245,28 +289,36 @@ export const createUserApiKey = async (
     }
   }
 
-  // Per-user cap: max 10 active keys. Skip only for the shared system user -
-  // keyed on userId === systemUserId (NOT on scope) to prevent rogue-admin bypass.
-  const MAX_ACTIVE_KEYS_PER_USER = 10;
-  const isSystemUser = systemUserId && userId === systemUserId;
-  if (!isSystemUser) {
-    const activeCount = await db.userApiKeys.countActiveByUserId(userId);
-    if (activeCount >= MAX_ACTIVE_KEYS_PER_USER) {
-      throw new BadRequestError(`Maximum ${MAX_ACTIVE_KEYS_PER_USER} active API keys allowed per user`, {
-        errorCode: API_KEY_USER_CAP_ERROR_CODE,
-      });
-    }
+  // Exchange keys sit outside the standard cap only because they are short-lived and
+  // tagged to one relying party (pages/api/oauth/ai-token.ts keeps one per (user, client)).
+  // Refuse one that is neither, so the separate pool can't mint an unbounded long-lived key.
+  const isExchangeKey = params.metadata.createdFrom === 'oauth-exchange';
+  if (isExchangeKey && (!params.expiresAt || !params.metadata.oauthClientId)) {
+    throw new BadRequestError('An oauth-exchange key requires expiresAt and metadata.oauthClientId');
+  }
+  if (isExchangeKey && params.expiresAt && params.expiresAt.getTime() - Date.now() > MAX_EXCHANGE_KEY_TTL_MS) {
+    throw new BadRequestError(
+      `An oauth-exchange key may not expire more than ${MAX_EXCHANGE_KEY_TTL_MS / 60_000} minutes from now`
+    );
   }
 
-  const { key, keyPrefix, keyHash } = generateApiKey();
+  // Per-user caps, one per ApiKeyCapPool: 10 standard keys, and a separate ceiling on
+  // concurrently authorized federated apps so they never crowd out the user's own keys.
+  // Skip only for the shared system user - keyed on userId === systemUserId (NOT on
+  // scope) to prevent rogue-admin bypass.
+  const isSystemUser = systemUserId && userId === systemUserId;
+  const pool = isExchangeKey ? 'oauth-exchange' : 'standard';
+  const cap = isExchangeKey ? MAX_ACTIVE_EXCHANGE_KEYS_PER_USER : MAX_ACTIVE_KEYS_PER_USER;
+
+  const { key, keyPrefix, keyDigest } = generateApiKey();
   const callbackSigningSecret = generateCallbackSigningSecret();
 
   const rateLimit = params.rateLimit || API_KEY_RATE_LIMIT_DEFAULTS;
 
-  const apiKeyDocument = await db.userApiKeys.create({
+  const docToCreate = {
     userId,
     name: params.name,
-    keyHash,
+    keyDigest,
     keyPrefix,
     callbackSigningSecret: encryptAtRest(callbackSigningSecret),
     callbackSigningSecretCreatedAt: new Date(),
@@ -283,14 +335,29 @@ export const createUserApiKey = async (
     metadata: params.metadata,
     productId: params.productId,
     productName: params.productName,
-    billingOwnerType: params.billingOwnerType ?? CreditHolderType.User,
+    // cast: Agent is rejected above; only User/Organization reach here
+    billingOwnerType: (params.billingOwnerType ?? CreditHolderType.User) as ApiKeyBillingOwnerType,
     organizationId: params.organizationId,
     agentId: params.agentId,
     allowedOrigins: params.allowedOrigins,
     branding: params.branding,
     spendCap: params.spendCap,
     preauthorizedLakeIds: params.preauthorizedLakeIds,
-  });
+  };
+
+  let apiKeyDocument: IUserApiKeyDocument;
+  if (isSystemUser) {
+    apiKeyDocument = await db.userApiKeys.create(docToCreate);
+  } else {
+    const result = await db.userApiKeys.createIfUnderCap(docToCreate, cap, pool);
+    if (result === 'at_cap') {
+      const message = isExchangeKey
+        ? `Maximum ${MAX_ACTIVE_EXCHANGE_KEYS_PER_USER} concurrently authorized federated apps allowed per user`
+        : `Maximum ${MAX_ACTIVE_KEYS_PER_USER} active API keys allowed per user`;
+      throw new BadRequestError(message, { errorCode: API_KEY_USER_CAP_ERROR_CODE });
+    }
+    apiKeyDocument = result;
+  }
 
   return {
     id: apiKeyDocument.id,

@@ -2,7 +2,7 @@
 /**
  * One-time backfill: stamp `embeddingModel` onto FabFileChunks that predate the write-path
  * change which stamps it going forward (see `stampChunkEmbeddingModel`,
- * apps/client/server/queueHandlers/fabFileVectorize.ts). The Atlas `$vectorSearch` cutover
+ * apps/workers/src/queueHandlers/fabFileVectorize.ts). The Atlas `$vectorSearch` cutover
  * needs every vectorized chunk labelled with the model it was embedded under - an unlabeled
  * chunk is invisible to a model-scoped query and permanently falls back to the brute-force scan.
  *

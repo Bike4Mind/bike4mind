@@ -6,6 +6,7 @@ import {
   createMockFabFileRepository,
   createMockSessionAgentConfigRepository,
   createMockUserRepository,
+  createMockOrganizationRepository,
 } from '../__tests__/utils/testUtils';
 import {
   IFabFileRepository,
@@ -13,6 +14,7 @@ import {
   ISessionRepository,
   ISessionAgentConfigRepository,
   IUserRepository,
+  STORAGE_CHARGE_STAMP_CUTOFF,
 } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
 
@@ -45,6 +47,7 @@ describe('sessionService - delete', () => {
     // The cascade now also reaches session.knowledgeIds, since a grant this session minted can sit
     // on a file uploaded somewhere else entirely.
     (mockFabFileRepo.findAllByIds as Mock).mockResolvedValue([]);
+    (mockFabFileRepo.findToolGeneratedBySessionId as Mock).mockResolvedValue([]);
     adapters = {
       db: {
         sessions: mockSessionRepo,
@@ -87,7 +90,13 @@ describe('sessionService - delete', () => {
 
   it('deletes a file the session owner actually owns', async () => {
     const session = { id: sessionId, userId: ownerId, deletedAt: null };
-    const ownedFile = { id: 'file-owned', userId: ownerId, fileSize: 100, users: [] };
+    const ownedFile = {
+      id: 'file-owned',
+      userId: ownerId,
+      fileSize: 100,
+      storageChargedAt: new Date('2026-10-10T00:00:00Z'),
+      users: [],
+    };
 
     (mockSessionRepo.findByIdAndUserId as Mock).mockResolvedValue(session);
     (mockFabFileRepo.find as Mock).mockResolvedValue([ownedFile]);
@@ -99,13 +108,56 @@ describe('sessionService - delete', () => {
     expect(mockFabFileRepo.updateGuarded).not.toHaveBeenCalled();
   });
 
+  it("keeps the files an in-chat tool generated, revoking only this session's grants on them", async () => {
+    const session = { id: sessionId, userId: ownerId, deletedAt: null };
+    const generated = {
+      id: 'file-generated',
+      userId: ownerId,
+      fileSize: 10,
+      users: [
+        { userId: 'third-party', permissions: ['read'], sessionId },
+        { userId: 'third-party', permissions: ['read'] },
+      ],
+    };
+
+    (mockSessionRepo.findByIdAndUserId as Mock).mockResolvedValue(session);
+    (mockFabFileRepo.find as Mock).mockResolvedValue([]);
+    (mockFabFileRepo.findToolGeneratedBySessionId as Mock).mockResolvedValue([generated]);
+    (mockSessionRepo.findRecentlyUpdatedByUserId as Mock).mockResolvedValue(null);
+
+    await deleteSession(ownerId, { id: sessionId }, adapters);
+
+    expect(mockFabFileRepo.findToolGeneratedBySessionId).toHaveBeenCalledWith(sessionId);
+    expect(mockFabFileRepo.deleteManyInIds).toHaveBeenCalledWith([]);
+    expect(mockUserRepo.incrementCurrentStorage).not.toHaveBeenCalled();
+    expect(mockFabFileRepo.updateGuarded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'file-generated',
+        users: [{ userId: 'third-party', permissions: ['read'] }],
+      }),
+      { includeDeleted: true }
+    );
+  });
+
   // Otherwise the owner's storage stays counted for files that no longer exist until an admin
   // recalculates it.
   it('debits the owner storage for each owned file deleted', async () => {
     const session = { id: sessionId, userId: ownerId, deletedAt: null };
     const ownedFiles = [
-      { id: 'file-owned-1', userId: ownerId, fileSize: 100, users: [] },
-      { id: 'file-owned-2', userId: ownerId, fileSize: 50, users: [] },
+      {
+        id: 'file-owned-1',
+        userId: ownerId,
+        fileSize: 100,
+        storageChargedAt: new Date('2026-10-10T00:00:00Z'),
+        users: [],
+      },
+      {
+        id: 'file-owned-2',
+        userId: ownerId,
+        fileSize: 50,
+        storageChargedAt: new Date('2026-10-10T00:00:00Z'),
+        users: [],
+      },
     ];
 
     (mockSessionRepo.findByIdAndUserId as Mock).mockResolvedValue(session);
@@ -116,6 +168,84 @@ describe('sessionService - delete', () => {
 
     expect(mockUserRepo.incrementCurrentStorage).toHaveBeenCalledTimes(1);
     expect(mockUserRepo.incrementCurrentStorage).toHaveBeenCalledWith(ownerId, -150);
+  });
+
+  it('debits an org-owned file to the organization and the rest to the user', async () => {
+    const mockOrgRepo = createMockOrganizationRepository();
+    const session = { id: sessionId, userId: ownerId, deletedAt: null };
+    const charged = new Date('2026-10-10T00:00:00Z');
+    const ownedFiles = [
+      { id: 'file-personal', userId: ownerId, fileSize: 100, storageChargedAt: charged, users: [] },
+      { id: 'file-org', userId: ownerId, organizationId: 'org1', fileSize: 40, storageChargedAt: charged, users: [] },
+    ];
+
+    (mockSessionRepo.findByIdAndUserId as Mock).mockResolvedValue(session);
+    (mockFabFileRepo.find as Mock).mockResolvedValue(ownedFiles);
+    (mockSessionRepo.findRecentlyUpdatedByUserId as Mock).mockResolvedValue(null);
+
+    await deleteSession(ownerId, { id: sessionId }, { db: { ...adapters.db, organizations: mockOrgRepo } } as any); // any: partial adapter bag
+
+    expect(mockOrgRepo.incrementCurrentStorage).toHaveBeenCalledTimes(1);
+    expect(mockOrgRepo.incrementCurrentStorage).toHaveBeenCalledWith('org1', -40);
+    expect(mockUserRepo.incrementCurrentStorage).toHaveBeenCalledTimes(1);
+    expect(mockUserRepo.incrementCurrentStorage).toHaveBeenCalledWith(ownerId, -100);
+  });
+
+  it('does not debit storage for owned files that were never charged', async () => {
+    const session = { id: sessionId, userId: ownerId, deletedAt: null };
+    const pending = { id: 'file-pending', userId: ownerId, fileSize: 100, status: 'pending', users: [] };
+
+    (mockSessionRepo.findByIdAndUserId as Mock).mockResolvedValue(session);
+    (mockFabFileRepo.find as Mock).mockResolvedValue([pending]);
+    (mockSessionRepo.findRecentlyUpdatedByUserId as Mock).mockResolvedValue(null);
+
+    await deleteSession(ownerId, { id: sessionId }, adapters);
+
+    expect(mockFabFileRepo.deleteManyInIds).toHaveBeenCalledWith(['file-pending']);
+    expect(mockUserRepo.incrementCurrentStorage).not.toHaveBeenCalled();
+  });
+
+  // A `complete` row from before the stamping release was charged by the upload event; a stamp-only
+  // rule would silently drop these refunds.
+  it('debits storage for a legacy pre-stamp complete row', async () => {
+    const session = { id: sessionId, userId: ownerId, deletedAt: null };
+    const legacy = {
+      id: 'file-legacy',
+      userId: ownerId,
+      fileSize: 100,
+      status: 'complete',
+      createdAt: new Date(STORAGE_CHARGE_STAMP_CUTOFF.getTime() - 1000),
+      users: [],
+    };
+
+    (mockSessionRepo.findByIdAndUserId as Mock).mockResolvedValue(session);
+    (mockFabFileRepo.find as Mock).mockResolvedValue([legacy]);
+    (mockSessionRepo.findRecentlyUpdatedByUserId as Mock).mockResolvedValue(null);
+
+    await deleteSession(ownerId, { id: sessionId }, adapters);
+
+    expect(mockUserRepo.incrementCurrentStorage).toHaveBeenCalledWith(ownerId, -100);
+  });
+
+  it('does not debit storage for a post-stamp complete row that was never charged', async () => {
+    const session = { id: sessionId, userId: ownerId, deletedAt: null };
+    const uncharged = {
+      id: 'file-uncharged',
+      userId: ownerId,
+      fileSize: 100,
+      status: 'complete',
+      createdAt: new Date(STORAGE_CHARGE_STAMP_CUTOFF.getTime() + 1000),
+      users: [],
+    };
+
+    (mockSessionRepo.findByIdAndUserId as Mock).mockResolvedValue(session);
+    (mockFabFileRepo.find as Mock).mockResolvedValue([uncharged]);
+    (mockSessionRepo.findRecentlyUpdatedByUserId as Mock).mockResolvedValue(null);
+
+    await deleteSession(ownerId, { id: sessionId }, adapters);
+
+    expect(mockFabFileRepo.deleteManyInIds).toHaveBeenCalledWith(['file-uncharged']);
+    expect(mockUserRepo.incrementCurrentStorage).not.toHaveBeenCalled();
   });
 
   it('does not debit storage when the session has no owned files', async () => {
@@ -134,7 +264,13 @@ describe('sessionService - delete', () => {
   // files - the admin recalculate-storage endpoint is the backstop for the drift.
   it('still completes the delete when the storage debit fails', async () => {
     const session = { id: sessionId, userId: ownerId, deletedAt: null };
-    const ownedFile = { id: 'file-owned', userId: ownerId, fileSize: 100, users: [] };
+    const ownedFile = {
+      id: 'file-owned',
+      userId: ownerId,
+      fileSize: 100,
+      storageChargedAt: new Date('2026-10-10T00:00:00Z'),
+      users: [],
+    };
     const logger = { warn: vi.fn() };
 
     (mockSessionRepo.findByIdAndUserId as Mock).mockResolvedValue(session);
@@ -209,7 +345,8 @@ describe('sessionService - delete', () => {
           { userId: ownerId, permissions: ['read'], projectId: 'project-a' },
           { userId: 'third-party', permissions: ['read'] },
         ],
-      })
+      }),
+      { includeDeleted: true }
     );
   });
 
@@ -233,7 +370,8 @@ describe('sessionService - delete', () => {
     await deleteSession(ownerId, { id: sessionId }, adapters);
 
     expect(mockFabFileRepo.updateGuarded).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'file-shared-in', users: [carolsDirectShare] })
+      expect.objectContaining({ id: 'file-shared-in', users: [carolsDirectShare] }),
+      { includeDeleted: true }
     );
   });
 
@@ -277,7 +415,8 @@ describe('sessionService - delete', () => {
     await deleteSession(ownerId, { id: sessionId }, adapters);
 
     expect(mockFabFileRepo.updateGuarded).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'file-elsewhere', users: [] })
+      expect.objectContaining({ id: 'file-elsewhere', users: [] }),
+      { includeDeleted: true }
     );
   });
 
@@ -323,7 +462,8 @@ describe('sessionService - delete', () => {
     expect(mockFabFileRepo.deleteManyInIds).toHaveBeenCalledWith([]);
     // ...only the grant this session minted on it is dropped.
     expect(mockFabFileRepo.updateGuarded).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'file-shared-in', users: [] })
+      expect.objectContaining({ id: 'file-shared-in', users: [] }),
+      { includeDeleted: true }
     );
   });
 });

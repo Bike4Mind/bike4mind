@@ -61,13 +61,16 @@
 # By default the chatcompletion service (/api/ai/v1/completions and
 # /api/ai/v1/ws-completions) is NOT reachable from the internet - only the web
 # app is. If you want the CLI or a third-party API client to reach your stack
-# from outside, uncomment the block below AND set CHAT_COMPLETION_PUBLIC_URL to
-# https://<your-domain> in .env.selfhost. It routes just those two paths to the
-# chatcompletion container (which listens on :8080); Caddy handles the WebSocket
-# upgrade on ws-completions automatically.
+# from outside, paste the block below INSIDE the {$B4M_DOMAIN} site block above,
+# before the catch-all "handle { reverse_proxy app:3000 }", and change
+# CHAT_COMPLETION_PUBLIC_URL to https://<your-domain> in .env.selfhost. It routes
+# just those two paths to the chatcompletion container (which listens on :8080);
+# Caddy handles the WebSocket upgrade on ws-completions automatically. As with
+# /ws, it must be a "handle" block: a bare "reverse_proxy @completions" loses to
+# the catch-all handle and the paths 404 from the app. Recreate caddy and app
+# afterwards (up -d --force-recreate caddy app): neither re-reads its config live.
 #
-# {$B4M_DOMAIN} {
 # 	@completions path /api/ai/v1/completions /api/ai/v1/ws-completions
-# 	reverse_proxy @completions chatcompletion:8080
-# 	... (keep the /ws and app routes above as well; merge into one site block) ...
-# }
+# 	handle @completions {
+# 		reverse_proxy chatcompletion:8080
+# 	}

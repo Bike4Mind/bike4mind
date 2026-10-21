@@ -244,6 +244,80 @@ describe('DeepSeekBackend reasoning capture', () => {
     expect(info.cacheReadInputTokens).toBe(140);
     expect(info.inputTokens).toBe(260);
     expect(info.outputTokens).toBe(50);
+    // Each request is tiered on its own prompt, so the per-request split survives too.
+    expect(info.turnUsage).toEqual([
+      { inputTokens: 60, cacheReadInputTokens: 40, outputTokens: 20 },
+      { inputTokens: 200, cacheReadInputTokens: 100, outputTokens: 30 },
+    ]);
+  });
+
+  it('carries every turn onto the terminal emit of a turn that ends after a flagged tool', async () => {
+    // The end-of-turn emit is the only one this round makes, so it alone carries the last request.
+    const { backend, create } = backendReturning([]);
+    create.mockResolvedValueOnce({
+      choices: [
+        {
+          index: 0,
+          message: {
+            content: '',
+            tool_calls: [{ id: 't1', type: 'function', function: { name: 'search', arguments: '{}' } }],
+          },
+          finish_reason: 'tool_calls',
+        },
+      ],
+      usage: { prompt_tokens: 100, completion_tokens: 20, prompt_cache_hit_tokens: 40 },
+    });
+    create.mockResolvedValue({
+      choices: [
+        {
+          index: 0,
+          message: {
+            content: 'answer',
+            tool_calls: [{ id: 't2', type: 'function', function: { name: 'suggest', arguments: '{}' } }],
+          },
+          finish_reason: 'tool_calls',
+        },
+      ],
+      usage: { prompt_tokens: 300, completion_tokens: 30, prompt_cache_hit_tokens: 100 },
+    });
+    const tools = [
+      ...searchTool(vi.fn().mockResolvedValue('tool output')),
+      {
+        toolSchema: { name: 'suggest', description: 'suggest', parameters: { type: 'object' } },
+        toolFn: vi.fn().mockResolvedValue('shown'),
+        endsTurnAfterText: true,
+      },
+    ];
+
+    const info = (await runTurn(backend, ChatModels.DEEPSEEK_FLASH, { tools })).at(-1)!.info;
+
+    expect(info.stopReason).toBe('tool_use');
+    expect(info.turnUsage).toEqual([
+      { inputTokens: 60, cacheReadInputTokens: 40, outputTokens: 20 },
+      { inputTokens: 200, cacheReadInputTokens: 100, outputTokens: 30 },
+    ]);
+  });
+
+  it('reports the request on the executeTools:false emit', async () => {
+    const { backend } = backendReturning(
+      [
+        {
+          index: 0,
+          message: {
+            content: '',
+            tool_calls: [{ id: 't1', type: 'function', function: { name: 'search', arguments: '{}' } }],
+          },
+          finish_reason: 'tool_calls',
+        },
+      ],
+      { prompt_tokens: 100, completion_tokens: 20, prompt_cache_hit_tokens: 40 } as never
+    );
+
+    const info = (
+      await runTurn(backend, ChatModels.DEEPSEEK_FLASH, { tools: searchTool(vi.fn()), executeTools: false })
+    ).at(-1)!.info;
+
+    expect(info.turnUsage).toEqual([{ inputTokens: 60, cacheReadInputTokens: 40, outputTokens: 20 }]);
   });
 
   it('does not fire the empty guard for a turn that legitimately only called a tool', async () => {
@@ -303,6 +377,42 @@ async function runStream(backend: DeepSeekBackend, model: string, options = {}) 
 }
 
 describe('DeepSeekBackend streaming reasoning', () => {
+  it('reports each streamed tool round-trip as its own turn, summing to the aggregates', async () => {
+    const toolFn = vi.fn().mockResolvedValue('tool output');
+    const { backend } = streamingBackend([
+      [
+        {
+          choices: [
+            {
+              index: 0,
+              delta: {
+                tool_calls: [{ index: 0, id: 't1', type: 'function', function: { name: 'search', arguments: '{}' } }],
+              },
+              finish_reason: 'tool_calls',
+            },
+          ],
+          usage: { prompt_tokens: 100, completion_tokens: 20, prompt_cache_hit_tokens: 40 },
+        },
+      ],
+      [
+        {
+          choices: [{ index: 0, delta: { content: 'final' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 300, completion_tokens: 30, prompt_cache_hit_tokens: 100 },
+        },
+      ],
+    ]);
+
+    const info = (await runStream(backend, ChatModels.DEEPSEEK_FLASH, { tools: searchTool(toolFn) })).at(-1)!.info;
+
+    expect(info.turnUsage).toEqual([
+      { inputTokens: 60, cacheReadInputTokens: 40, outputTokens: 20 },
+      { inputTokens: 200, cacheReadInputTokens: 100, outputTokens: 30 },
+    ]);
+    expect(info.inputTokens).toBe(260);
+    expect(info.cacheReadInputTokens).toBe(140);
+    expect(info.outputTokens).toBe(50);
+  });
+
   it('asks for usage on the stream, without which a turn settles at zero', async () => {
     const { backend, create } = streamingBackend([
       [

@@ -15,8 +15,8 @@ import type { Context } from 'aws-lambda';
 import { connectDB } from '@bike4mind/database';
 import { modelDiscoveryService } from '@bike4mind/services';
 import { Logger } from '@bike4mind/observability';
-import { Config } from '@server/utils/config';
-import { emitDiscoveryMetrics, emitDiscoveryRunFailure } from '@server/modelDiscovery/metrics';
+import { Config } from '@bike4mind/server-utils/utils/config';
+import { emitDiscoveryMetrics, emitDiscoveryRunFailure } from '@workers/modelDiscovery/metrics';
 import { runScheduledDiscovery } from '@server/modelDiscovery/scheduledRun';
 import { Resource } from 'sst';
 

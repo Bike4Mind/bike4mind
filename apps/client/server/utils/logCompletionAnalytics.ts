@@ -3,12 +3,15 @@ import {
   UserApiKeyEvents,
   AiEvents,
   getTextModelCost,
+  getTurnsCost,
+  type TurnUsage,
   ChatModels,
   IApiKeyRepository,
   IAdminSettingsRepository,
   type CompletionSource,
+  usdToCreditsExpected,
 } from '@bike4mind/common';
-import { usdToCredits, getSettingsByNames } from '@bike4mind/utils';
+import { getSettingsByNames } from '@bike4mind/utils';
 import { getAvailableModels, ApiKeyTable } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { apiKeyService } from '@bike4mind/services';
@@ -39,6 +42,13 @@ interface SuccessAnalyticsParams extends BaseAnalyticsParams {
   type: 'success';
   finalInputTokens: number;
   finalOutputTokens: number;
+  /** Cache tokens from the completion frames (disjoint from finalInputTokens), for the totals fallback. */
+  finalCacheReadTokens?: number;
+  finalCacheWriteTokens?: number;
+  /** Per-request usage from the completion frames, when the adapter reports it (see getTurnsCost). */
+  finalTurnUsage?: TurnUsage[];
+  /** Credits executeCompletion settled for this completion (its final chunk's creditsUsed); preferred over re-pricing. */
+  finalCreditsUsed?: number;
   hasToolCalls: boolean;
   error?: never;
 }
@@ -48,6 +58,10 @@ interface FailureAnalyticsParams extends BaseAnalyticsParams {
   error: unknown;
   finalInputTokens?: never;
   finalOutputTokens?: never;
+  finalCacheReadTokens?: never;
+  finalCacheWriteTokens?: never;
+  finalTurnUsage?: never;
+  finalCreditsUsed?: never;
   hasToolCalls?: never;
   modelInfo?: never;
 }
@@ -69,7 +83,16 @@ export async function logCompletionAnalytics(params: LogCompletionAnalyticsParam
   const authMethod = apiKeyInfo ? ('api_key' as const) : ('jwt' as const);
 
   if (type === 'success') {
-    const { finalInputTokens, finalOutputTokens, hasToolCalls, db } = params;
+    const {
+      finalInputTokens,
+      finalOutputTokens,
+      finalCacheReadTokens,
+      finalCacheWriteTokens,
+      finalTurnUsage,
+      finalCreditsUsed,
+      hasToolCalls,
+      db,
+    } = params;
 
     let creditsUsed = 0;
     try {
@@ -83,9 +106,22 @@ export async function logCompletionAnalytics(params: LogCompletionAnalyticsParam
       const resolvedModelId = resolveOpenAiBareModelAlias(body.model);
       const modelInfo = models.find(m => m.id === (resolvedModelId as ChatModels));
 
-      if (modelInfo && finalInputTokens > 0 && finalOutputTokens > 0) {
-        const costInUsd = getTextModelCost(modelInfo, finalInputTokens, finalOutputTokens);
-        creditsUsed = usdToCredits(costInUsd); // markup applied here
+      if (finalCreditsUsed !== undefined) {
+        // The settled figure, even when the adapter reported no output tokens.
+        creditsUsed = finalCreditsUsed;
+      } else if (modelInfo && finalInputTokens > 0 && finalOutputTokens > 0) {
+        const costInUsd = finalTurnUsage?.length
+          ? getTurnsCost(modelInfo, finalTurnUsage)
+          : getTextModelCost(
+              modelInfo,
+              finalInputTokens,
+              finalOutputTokens,
+              finalCacheReadTokens ?? 0,
+              finalCacheWriteTokens ?? 0,
+              finalInputTokens + (finalCacheReadTokens ?? 0) + (finalCacheWriteTokens ?? 0)
+            );
+        // Settlement is stochastic, so the fallback is its expectation, not a round-up.
+        creditsUsed = usdToCreditsExpected(costInUsd);
       } else if (!modelInfo) {
         // Model not found - log warning but don't fail analytics
         logger.error('[COMPLETION_ANALYTICS] Model not found for credits calculation:', { model: body.model });

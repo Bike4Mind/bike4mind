@@ -1,6 +1,6 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { isE2EEnabled } from '@server/utils/config';
+import { isE2EEnabled } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
 import {
   User,
@@ -30,6 +30,11 @@ import {
   LakeMembershipDecisionModel,
   DataLakeCorpusActionModel,
   DataLakeOwnershipOfferModel,
+  PublishedArtifact,
+  PublishedArtifactReport,
+  PublishedArtifactViewAuditModel,
+  Annotation,
+  Skill,
 } from '@bike4mind/database';
 import mongoose from 'mongoose';
 import {
@@ -121,6 +126,15 @@ const handler = baseApi({ auth: false }).delete(
       .toArray();
     const lakeIdStrings = ownedLakes.map(l => l._id.toString());
 
+    // Published artifacts the swept users own (`ownerId` is a String), soft-deleted included: their
+    // children are keyed by publicId, so they are collected first and the artifacts last, the same
+    // parent-after-children order as the lakes below.
+    const ownedPublicIds = (
+      await PublishedArtifact.collection
+        .find({ ownerId: { $in: userIdStrings } }, { projection: { publicId: 1 } })
+        .toArray()
+    ).map(a => String(a.publicId));
+
     // Helper to delete and track count per collection
     const counts: Record<string, number> = {};
     async function deleteFrom(label: string, promise: Promise<{ deletedCount: number }>) {
@@ -173,6 +187,31 @@ const handler = baseApi({ auth: false }).delete(
     ]);
     await deleteFrom('dataLakes', DataLakeModel.collection.deleteMany({ createdByUserId: { $in: userIdStrings } }));
 
+    await Promise.all([
+      deleteFrom(
+        'annotations',
+        Annotation.collection.deleteMany({
+          $or: [{ publicId: { $in: ownedPublicIds } }, { authorId: { $in: userIdStrings } }],
+        })
+      ),
+      deleteFrom(
+        'publishedArtifactReports',
+        PublishedArtifactReport.collection.deleteMany({
+          $or: [{ publicId: { $in: ownedPublicIds } }, { reporterId: { $in: userIdStrings } }],
+        })
+      ),
+      deleteFrom(
+        'publishedArtifactViewAudits',
+        PublishedArtifactViewAuditModel.collection.deleteMany({
+          $or: [{ publicId: { $in: ownedPublicIds } }, { viewerId: { $in: userIdStrings } }],
+        })
+      ),
+    ]);
+    await deleteFrom(
+      'publishedArtifacts',
+      PublishedArtifact.collection.deleteMany({ ownerId: { $in: userIdStrings } })
+    );
+
     // Hard-delete across collections using the native driver to bypass the soft-delete plugin.
     // The native driver does NOT cast, so each filter must carry the value type the field stores:
     // every user reference below is a String EXCEPT Tool.userId (ObjectId) and User._id, which are
@@ -203,6 +242,8 @@ const handler = baseApi({ auth: false }).delete(
       deleteFrom('apiKeys', ApiKey.collection.deleteMany({ userId: { $in: userIdStrings } })),
       deleteFrom('artifacts', Artifact.collection.deleteMany({ userId: { $in: userIdStrings } })),
       deleteFrom('tools', Tool.collection.deleteMany({ userId: { $in: userIds } })),
+      // A swept user's global-read skill is visible to every user on the stage, so it must not outlive them.
+      deleteFrom('skills', Skill.collection.deleteMany({ userId: { $in: userIdStrings } })),
       deleteFrom(
         'registrationInvites',
         RegistrationInvite.collection.deleteMany({
@@ -277,6 +318,7 @@ const handler = baseApi({ auth: false }).delete(
         artifacts: counts.artifacts || 0,
         registrationInvites: counts.registrationInvites || 0,
         dataLakes: counts.dataLakes || 0,
+        publishedArtifacts: counts.publishedArtifacts || 0,
         totalDeleted,
         byCollection: counts,
       },

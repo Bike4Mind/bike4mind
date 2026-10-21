@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { IMessageDataToClient } from '@bike4mind/common';
-import { submittedTagPrefix } from '@bike4mind/common';
+import { FirstRunEvents, submittedTagPrefix } from '@bike4mind/common';
+import { useLogEvent } from '@client/app/hooks/data/analytics';
 import { api } from '@client/app/contexts/ApiContext';
 import { useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -23,6 +24,31 @@ import { useUser } from '@client/app/contexts/UserContext';
 
 // Re-exported for DataLakeWizardModal's pre-flight check, which imports it from this path.
 export { OFFLINE_MESSAGE };
+
+// These observations belong to the browser upload, not the disposable wizard session.
+// Done resets the wizard while ingestion continues; separate batches may finish out of order.
+type PendingFileReadiness = {
+  startedAt: number;
+  uploadedFiles?: number;
+  readyAt?: number;
+};
+const pendingFileReadiness = new Map<string, PendingFileReadiness>();
+const READINESS_RETENTION_MS = 24 * 60 * 60 * 1000;
+
+type LogFirstRunEvent = ReturnType<typeof useLogEvent>['mutate'];
+
+function logFileReadiness(batchId: string, logEvent: LogFirstRunEvent): void {
+  const pending = pendingFileReadiness.get(batchId);
+  if (!pending?.uploadedFiles || pending.readyAt === undefined) return;
+  pendingFileReadiness.delete(batchId);
+  logEvent({
+    type: FirstRunEvents.FILE_READY_MS,
+    metadata: {
+      milliseconds: Math.max(0, pending.readyAt - pending.startedAt),
+      files: pending.uploadedFiles,
+    },
+  });
+}
 
 // ── Hashing & Deduplication ──────────────────────────────────────────────────
 
@@ -128,6 +154,7 @@ export function useCheckDuplicates() {
  * 5. Updates progress in store
  */
 export function useBatchUpload() {
+  const { mutate: logEvent } = useLogEvent();
   const updateUploadProgress = useDataLakeWizardStore(s => s.updateUploadProgress);
   const setStep = useDataLakeWizardStore(s => s.setStep);
   const setRecoverableLake = useDataLakeWizardStore(s => s.setRecoverableLake);
@@ -146,21 +173,39 @@ export function useBatchUpload() {
         throw new Error(OFFLINE_MESSAGE);
       }
 
-      return runBatchUpload({
-        updateUploadProgress,
-        setStep,
-        setRecoverableLake,
-        onBatchCreated: () => {
-          queryClient.invalidateQueries({ queryKey: dataLakeKeys.activeBatches });
-        },
-        onUploadComplete: () => {
-          queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
-          // First lake unlocks the 'datalakes' gear; first file unlocks 'files'.
-          // Show their rewards without waiting out the gears/status staleTime.
-          invalidateGearsStatusWhileLocked(queryClient, ['datalakes', 'files']);
-        },
-        refreshUser: () => useUser.getState().refreshUser(),
-      });
+      const startedAt = Date.now();
+      for (const [batchId, pending] of pendingFileReadiness) {
+        if (startedAt - pending.startedAt > READINESS_RETENTION_MS) pendingFileReadiness.delete(batchId);
+      }
+      let createdBatchId: string | undefined;
+      try {
+        const result = await runBatchUpload({
+          updateUploadProgress,
+          setStep,
+          setRecoverableLake,
+          onBatchCreated: batchId => {
+            createdBatchId = batchId;
+            pendingFileReadiness.set(batchId, { startedAt });
+            queryClient.invalidateQueries({ queryKey: dataLakeKeys.activeBatches });
+          },
+          onUploadComplete: () => {
+            queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+            // First lake unlocks the 'datalakes' gear; first file unlocks 'files'.
+            // Show their rewards without waiting out the gears/status staleTime.
+            invalidateGearsStatusWhileLocked(queryClient, ['datalakes', 'files']);
+          },
+          refreshUser: () => useUser.getState().refreshUser(),
+        });
+        if (result.batchId) {
+          const pending = pendingFileReadiness.get(result.batchId);
+          if (pending) pending.uploadedFiles = result.uploadedCount;
+          logFileReadiness(result.batchId, logEvent);
+        }
+        return result;
+      } catch (error: unknown) {
+        if (createdBatchId) pendingFileReadiness.delete(createdBatchId);
+        throw error;
+      }
     },
     onSuccess: result => {
       if (result.failedCount === 0) {
@@ -242,12 +287,11 @@ export function useCreateLakeFromDrive() {
       // Same reuse rule as the upload path: this path archives its own lake on a failed connect
       // (below), and an archived lake keeps its prefix claim - so a retry on the same prefix has
       // to restore that lake rather than create a second one the claim would refuse.
-      const { id: dataLakeId, status: lakeStatus } = await resolveCreateModeLake(
-        config,
-        tagPrefix,
-        recoverableLake,
-        setRecoverableLake
-      );
+      const {
+        id: dataLakeId,
+        status: lakeStatus,
+        slug,
+      } = await resolveCreateModeLake(config, tagPrefix, recoverableLake, setRecoverableLake);
 
       setStep('upload');
       updateUploadProgress({
@@ -279,7 +323,7 @@ export function useCreateLakeFromDrive() {
         // Only once the archive took: a lake left live in some other state must not be restored
         // by the next retry. Mirrors the upload path's rollback.
         setRecoverableLake(
-          driveRollback === 'archived' ? { id: dataLakeId, tagPrefix, organizationId: activeOrgId() } : null
+          driveRollback === 'archived' ? { id: dataLakeId, tagPrefix, slug, organizationId: activeOrgId() } : null
         );
         updateUploadProgress({ driveRollback });
         throw err;
@@ -390,12 +434,22 @@ export function useBatchProgressListener() {
  * (#1666, #3234)
  */
 export function useDataLakeBatchCompletionSync() {
+  const { mutate: logEvent } = useLogEvent();
   const { subscribeToAction } = useWebsocket();
   const queryClient = useQueryClient();
 
   useEffect(() => {
     const unsubscribe = subscribeToAction('data_lake_batch_progress', async (message: IMessageDataToClient) => {
       if (message.action !== 'data_lake_batch_progress') return;
+      const pending = pendingFileReadiness.get(message.batchId);
+      if (pending) {
+        if (message.status === 'failed' || message.status === 'cancelled') {
+          pendingFileReadiness.delete(message.batchId);
+        } else if (message.status === 'completed' || message.status === 'completed_with_errors') {
+          pending.readyAt ??= Date.now();
+          logFileReadiness(message.batchId, logEvent);
+        }
+      }
       if (message.status !== 'completed' && message.status !== 'completed_with_errors') return;
 
       // The message carries no lake id, so refresh every mounted health badge; only the active
@@ -417,5 +471,5 @@ export function useDataLakeBatchCompletionSync() {
     });
 
     return unsubscribe;
-  }, [subscribeToAction, queryClient]);
+  }, [subscribeToAction, queryClient, logEvent]);
 }

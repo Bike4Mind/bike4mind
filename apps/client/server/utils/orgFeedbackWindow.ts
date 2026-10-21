@@ -3,7 +3,7 @@
 
 import { dayjs, FEEDBACK_ROLLUP_MAX_WINDOW_DAYS } from '@bike4mind/common';
 import { assertDateInRange, dateParam } from '@server/utils/dateParam';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 
 // Same length as the personal rollup's FEEDBACK_ROLLUP_DEFAULT_WINDOW_DAYS

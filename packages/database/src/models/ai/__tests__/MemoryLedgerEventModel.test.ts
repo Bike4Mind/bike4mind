@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { LAKE_MEMORY_FINDING_SOURCE_PREFIX } from '@bike4mind/common';
 import { setupMongoTest } from '../../../__test__/utils';
 import MemoryLedgerEventModel, { memoryLedgerRepository, type IMemoryLedgerEvent } from '../MemoryLedgerEventModel';
@@ -461,6 +461,135 @@ describe('MemoryLedgerRepository', () => {
 
       const ids = await memoryLedgerRepository.distinctSurvivingPrincipalIds('lake');
       expect(ids).toEqual(['lake:multi-event']);
+    });
+  });
+
+  describe('rewriteEmbedding', () => {
+    const vec = { cipher: 'vc', iv: 'vi', tag: 'vt', model: 'current' };
+
+    it('rewrites only the embedding fields, leaving the chain-bound fields alone', async () => {
+      await memoryLedgerRepository.tryInsert(sealedEvent({ hash: 'h0', commitment: 'c0', salt: 's0' }));
+
+      expect(await memoryLedgerRepository.rewriteEmbedding('user', 'u1', 'u1', 'h0', vec)).toBe(1);
+
+      const doc = await MemoryLedgerEventModel.findOne({ hash: 'h0' }).lean();
+      expect(doc).toMatchObject({ embeddingCipher: 'vc', embeddingModel: 'current', commitment: 'c0', seq: 0 });
+    });
+
+    it('never writes a vector onto a shredded event', async () => {
+      await memoryLedgerRepository.tryInsert(sealedEvent({ hash: 'h0', sources: ['doc-1'] }));
+      await memoryLedgerRepository.markSourceShredded('user', 'u1', 'u1', 'doc-1');
+
+      expect(await memoryLedgerRepository.rewriteEmbedding('user', 'u1', 'u1', 'h0', vec)).toBe(0);
+      const doc = await MemoryLedgerEventModel.findOne({ hash: 'h0' }).lean();
+      expect(doc?.embeddingCipher).toBeUndefined();
+    });
+  });
+
+  describe('listPrincipalsNeedingVectors', () => {
+    const CURRENT = 'space-v2';
+    const VECTORLESS_INDEX = 'memory_ledger_vectorless_candidates';
+    const STALE_INDEX = 'memory_ledger_stale_vector_candidates';
+    const at = (kind: IMemoryLedgerEvent['principalKind'], id: string, owner: string, seq = 0) =>
+      sealedEvent({ principalKind: kind, principalId: id, ownerUserId: owner, seq, hash: `${kind}:${id}:${seq}` });
+
+    it('finds vectorless and stale-stamped chains of every kind, distinct and sorted', async () => {
+      await memoryLedgerRepository.tryInsert(at('user', 'u1', 'u1'));
+      await memoryLedgerRepository.tryInsert(at('user', 'u1', 'u1', 1));
+      await memoryLedgerRepository.tryInsert(at('lake', 'lake:a', 'owner1'));
+      await memoryLedgerRepository.tryInsert({
+        ...at('agent', 'ag1', 'u9'),
+        fact: undefined,
+        factCipher: 'c',
+        factIv: 'i',
+        factTag: 't',
+        embeddingCipher: 'old',
+        embeddingModel: 'ada-002',
+      });
+
+      expect(await memoryLedgerRepository.listPrincipalsNeedingVectors(CURRENT, { limit: 10 })).toEqual([
+        { principalKind: 'agent', principalId: 'ag1', ownerUserId: 'u9' },
+        { principalKind: 'lake', principalId: 'lake:a', ownerUserId: 'owner1' },
+        { principalKind: 'user', principalId: 'u1', ownerUserId: 'u1' },
+      ]);
+    });
+
+    it('skips shredded, retract, factless and already-current events', async () => {
+      await memoryLedgerRepository.tryInsert({ ...at('user', 'shred', 'shred'), shredded: true });
+      await memoryLedgerRepository.tryInsert({ ...at('user', 'retract', 'retract'), kind: 'retract' });
+      await memoryLedgerRepository.tryInsert({ ...at('user', 'nofact', 'nofact'), fact: '' });
+      await memoryLedgerRepository.tryInsert({
+        ...at('user', 'done', 'done'),
+        embeddingCipher: 'v',
+        embeddingModel: CURRENT,
+      });
+
+      expect(await memoryLedgerRepository.listPrincipalsNeedingVectors(CURRENT, { limit: 10 })).toEqual([]);
+    });
+
+    it('finds a current-stamped event whose vector ciphertext is missing', async () => {
+      await memoryLedgerRepository.tryInsert({ ...at('agent', 'stamp-only', 'owner'), embeddingModel: CURRENT });
+
+      expect(await memoryLedgerRepository.listPrincipalsNeedingVectors(CURRENT, { limit: 10 })).toEqual([
+        { principalKind: 'agent', principalId: 'stamp-only', ownerUserId: 'owner' },
+      ]);
+    });
+
+    it('pages by keyset cursor across a kind boundary and honours limit', async () => {
+      await memoryLedgerRepository.tryInsert(at('lake', 'lake:a', 'o1'));
+      await memoryLedgerRepository.tryInsert(at('lake', 'lake:b', 'o1'));
+      await memoryLedgerRepository.tryInsert(at('user', 'u1', 'u1'));
+
+      const first = await memoryLedgerRepository.listPrincipalsNeedingVectors(CURRENT, { limit: 2 });
+      expect(first.map(p => p.principalId)).toEqual(['lake:a', 'lake:b']);
+
+      const rest = await memoryLedgerRepository.listPrincipalsNeedingVectors(CURRENT, { after: first[1], limit: 2 });
+      expect(rest.map(p => p.principalId)).toEqual(['u1']);
+    });
+
+    it('uses the partial repair indexes for initial and resumed pages', async () => {
+      const fullWidthCipher = 'v'.repeat(2_732);
+      await MemoryLedgerEventModel.collection.insertMany(
+        Array.from({ length: 2_000 }, (_, i) => ({
+          ...at('user', `done-${i}`, 'owner'),
+          embeddingCipher: fullWidthCipher,
+          embeddingIv: 'current-vector-iv',
+          embeddingModel: CURRENT,
+        }))
+      );
+      await memoryLedgerRepository.tryInsert(at('lake', 'needs-vector', 'owner'));
+      await memoryLedgerRepository.tryInsert({
+        ...at('user', 'stale-vector', 'owner'),
+        embeddingCipher: fullWidthCipher,
+        embeddingIv: 'stale-vector-iv',
+        embeddingModel: 'space-v1',
+      });
+
+      const declared = new Map(MemoryLedgerEventModel.schema.indexes().map(index => [index[1]?.name, index]));
+      expect(declared.get(VECTORLESS_INDEX)).toEqual([
+        { embeddingIv: 1, principalKind: 1, principalId: 1, ownerUserId: 1 },
+        { name: VECTORLESS_INDEX, partialFilterExpression: { kind: { $in: ['assert', 'affirm'] } }, background: true },
+      ]);
+      expect(declared.get(STALE_INDEX)).toEqual([
+        { embeddingModel: 1, principalKind: 1, principalId: 1, ownerUserId: 1 },
+        { name: STALE_INDEX, partialFilterExpression: { kind: { $in: ['assert', 'affirm'] } }, background: true },
+      ]);
+
+      for (const after of [undefined, { principalKind: 'lake', principalId: 'needs-vector', ownerUserId: 'owner' }]) {
+        const aggregate = vi.spyOn(MemoryLedgerEventModel, 'aggregate');
+        await memoryLedgerRepository.listPrincipalsNeedingVectors(CURRENT, { after, limit: 25 });
+        expect(aggregate).toHaveBeenCalledTimes(2);
+
+        for (const [pipeline, indexName] of aggregate.mock.calls.map(
+          ([pipeline], index) => [pipeline, index === 0 ? VECTORLESS_INDEX : STALE_INDEX] as const
+        )) {
+          const plan = await MemoryLedgerEventModel.collection.aggregate(pipeline).explain('queryPlanner');
+          const winning = JSON.stringify(plan);
+          expect(winning).toContain(`\"indexName\":\"${indexName}\"`);
+          expect(winning).not.toContain('COLLSCAN');
+        }
+        aggregate.mockRestore();
+      }
     });
   });
 });

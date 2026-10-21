@@ -1,4 +1,4 @@
-import { ModelBackend } from '@bike4mind/common';
+import { ModelBackend, stripBedrockRegionPrefix } from '@bike4mind/common';
 import type { AdapterFamily, ModelDispatchProfile, ModelRecord } from '@bike4mind/common';
 
 /**
@@ -13,9 +13,6 @@ const PROVIDER_NATIVE_PROFILE: ModelDispatchProfile = { maxTokensParam: 'max_tok
 
 /** Anthropic's Messages API: max_tokens, tools in the provider's own field. */
 const ANTHROPIC_MESSAGES_PROFILE: ModelDispatchProfile = { maxTokensParam: 'max_tokens', toolTransport: 'native' };
-
-/** Cross-region inference prefixes; the vendor segment follows them. */
-const BEDROCK_REGION_PREFIX = /^(us|eu|apac|global)\./;
 
 /**
  * The sec 5.4 prefix map. Jurassic and Titan are deliberately absent: both are
@@ -74,7 +71,7 @@ export type ResolvedDispatch = Pick<ModelRecord, 'adapterFamily' | 'dispatchProf
  */
 export function resolveDispatchForRecord(record: Pick<ModelRecord, 'id' | 'backend'>): ResolvedDispatch | null {
   if (record.backend === ModelBackend.Bedrock) {
-    const withoutRegion = record.id.replace(BEDROCK_REGION_PREFIX, '');
+    const withoutRegion = stripBedrockRegionPrefix(record.id);
     const dot = withoutRegion.indexOf('.');
     // Same guard as inferVendor (b4m-core/common/src/modelCatalog.ts): an id with
     // no vendor segment names no family, and slicing on -1 would invent one.

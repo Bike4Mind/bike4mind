@@ -53,13 +53,13 @@ interface UpdateFallbackLakeSettingsAdapters {
  * hasn't wired `fallbackLakeSettings` into their own read path.
  */
 export const updateFallbackLakeSettings = async (
-  lakeIdOrSlug: string,
+  lakeId: string,
   ctx: AccessContext,
   parameters: UpdateFallbackLakeSettingsParams,
   { db, logger }: UpdateFallbackLakeSettingsAdapters
 ): Promise<IDataLakeDocument> => {
   const params = secureParameters(parameters, UpdateFallbackLakeSettingsRequestInput);
-  const lake = await assertFallbackLakeSettingsWriteAccess(lakeIdOrSlug, ctx, { db, logger });
+  const lake = await assertFallbackLakeSettingsWriteAccess(lakeId, ctx, { db, logger });
 
   // The audit's BEFORE side is read here, from the overlay row itself - deliberately NOT taken from
   // `lake`. `resolveFallbackLake` merges only the fields that are safe to expose on a synthetic

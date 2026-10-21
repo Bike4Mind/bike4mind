@@ -28,6 +28,7 @@ export type {
   AgentStepType,
   ConfidenceGateDecision,
   ConversationMessage,
+  FeedbackDrainPhase,
   GatedToolCall,
   IterationResult,
   RunIterationOptions,
@@ -82,6 +83,17 @@ export type {
   PipelineTaskStatus,
   PipelineExecutionResult,
 } from './dag';
+
+// Deferred tool search: registry, tool_search meta-tool, system-prompt directory
+export { DeferredToolRegistry, createToolSearchTool, buildDeferredToolDirectory } from './toolSearch';
+export type {
+  DeferredToolRegistryOptions,
+  ToolListAccessor,
+  ToolLoadStrategyName,
+  ToolReferenceBlock,
+  ToolSearchLogger,
+  ToolSearchToolOptions,
+} from './toolSearch';
 
 // Tool name formatting for human-readable display
 export { humanizeToolName, toGerund } from './toolFormat';

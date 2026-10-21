@@ -5,7 +5,7 @@ import {
   organizationRepository,
   userRepository,
 } from '@bike4mind/database';
-import { lakeConfigAuditDb } from './lakeConfigAuditDb';
+import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 
 /**
  * The `db` half of every lake ownership-offer service's adapters, in one place so the three routes

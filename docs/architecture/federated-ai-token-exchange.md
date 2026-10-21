@@ -2,12 +2,15 @@
 
 `POST /api/oauth/ai-token` lets a registered OAuth client trade an ID token for its
 logged-in user against a short-lived, revocable API key scoped to that user.
-The default scope is `ai:generate`. The app then calls `/api/ai/v1/completions` with the key as `X-API-Key`, so
+The default scope is `ai:generate`. The app then calls `/api/ai/v1/completions` with the key as `Authorization: Bearer <key>` (`X-API-Key` is accepted as legacy), so
 completions bill the user's own B4M credits ("user-pays") with no manual key paste.
 
 Only a client whose registration carries a `federatedIdp` trust config may use the
 exchange. Everything else about the endpoint (consent gate, per-client rate limit,
 reuse-or-replace of the prior key, mint audit entry) is common to every client.
+
+For the integrator-facing walkthrough (sign-in, registration, billing, worked example), see
+[Building an app on Bike4Mind](../../docs-site/docs/developers/building-on-b4m.md).
 
 ## Requesting scopes
 
@@ -33,11 +36,13 @@ requested scopes differ, and returns the minted scopes in the response's `scope`
 
 ## Grant enforcement and rollout
 
-The SST `production` and `dev` stages enforce grants automatically. Other stages
-use grace mode unless `OAUTH_AI_TOKEN_ENFORCE_GRANT=true`; in grace mode missing
-grants or scope gaps produce warnings rather than rejection. Setting
+The SST `production` and `dev` stages, and preview stages, enforce grants
+automatically. Other stages (e.g. self-host, local, personal stages) use grace mode unless
+`OAUTH_AI_TOKEN_ENFORCE_GRANT=true`; in grace mode missing grants or scope gaps
+produce warnings rather than rejection. Setting
 `OAUTH_AI_TOKEN_ENFORCE_GRANT=false` (or any value other than `true`) overrides
-the stage default and disables enforcement, including on `production` and `dev`.
+the stage default and disables enforcement, including on `production`, `dev`
+and previews.
 
 In enforcement mode, relying-party clients need a durable OAuth grant for the
 user/client pair, and the grant must cover every scope the exchange mints. An
@@ -54,6 +59,10 @@ For `access_denied` due to missing grants or AI consent, send the user through t
 OAuth authorization flow requesting the needed scope. Refreshing or re-exchanging
 an ID token does not create a grant. A grant lookup failure returns 503 in
 enforcement mode; retry after the underlying service recovers.
+
+The self-asserted `'identities'` subject source (see below) stays accepted on every
+stage, `production` and `dev` included, unless `OAUTH_AI_TOKEN_REQUIRE_SUB=true` is
+set for that stage. Set it only once every live federated client uses `'sub'`.
 
 ## The two issuer shapes
 
@@ -97,8 +106,7 @@ on it would break if the alias ever moved.
 
 ## Registering a client
 
-`packages/scripts/src/seed-oauth-client.ts` registers a client and prints its
-`client_id` / `client_secret`. For a B4M-issued client:
+Admins register clients from the admin console (Security > OAuth Clients), which takes the same trust config in its "Federated trust" section. Both it and `packages/scripts/src/seed-oauth-client.ts` go through `createOAuthClient` (`packages/database/src/models/auth/oauthClientAdmin.ts`), so the rules below apply to both. The script prints the `client_id` / `client_secret`; it is the fallback where no admin user exists. For a B4M-issued client:
 
 ```bash
 MONGODB_URI=<uri> \
@@ -106,16 +114,17 @@ CLIENT_NAME=<name> \
 REDIRECT_URIS="https://..." \
 FEDERATED_SUBJECT_SOURCE=sub \
 FEDERATED_ISSUER="https://<b4m-app-url>" \
-FEDERATED_AUDIENCE="<the client_id the script prints>" \
 FEDERATED_JWKS_URI="https://<b4m-app-url>/api/oauth/jwks" \
-  npx tsx packages/scripts/src/seed-oauth-client.ts
+  pnpm --filter @bike4mind/scripts exec tsx src/seed-oauth-client.ts
 ```
 
-`FEDERATED_AUDIENCE` is the `client_id` B4M mints for the app, so this is a two-pass
-registration: seed without the federated env vars to obtain the id, then update the
-document with the trust config. For an external Cognito pool, omit
-`FEDERATED_SUBJECT_SOURCE` (defaults to `'identities'`), set `FEDERATED_PROVIDER_NAME`
-instead, and leave `FEDERATED_JWKS_URI` unset.
+This is a single pass: with `FEDERATED_SUBJECT_SOURCE=sub`, `FEDERATED_AUDIENCE` defaults
+to the `client_id` the script generates. Register the trust config in the same run; adding
+`federatedIdp` to an existing client by hand leaves `allowedScopes` without `ai:generate` /
+`me:read`, and the exchange then returns 403 `invalid_scope`. For an external Cognito pool, omit
+`FEDERATED_SUBJECT_SOURCE` (defaults to `'identities'`), and set
+`FEDERATED_PROVIDER_NAME`, `FEDERATED_AUDIENCE` (the Cognito app client id) and the pool's
+`FEDERATED_ISSUER` instead; leave `FEDERATED_JWKS_URI` unset.
 
 ## Failure modes
 

@@ -1,6 +1,6 @@
 import type { TFunction } from 'i18next';
 import type { IChatHistoryItemDocument } from '@bike4mind/common';
-import { getSendBlockedLabel, type SendBlockedReason } from './sendBlockedReason';
+import { getBlockedSendToastLabel, type SendBlockedReason } from './sendBlockedReason';
 
 interface SendPromptViaComposerParams {
   prompt?: string;
@@ -12,6 +12,7 @@ interface SendPromptViaComposerParams {
     prompt?: string,
     options?: { onRefused?: () => void }
   ) => Promise<IChatHistoryItemDocument | undefined>;
+  onBlocked?: (reason: SendBlockedReason) => void;
 }
 
 /**
@@ -34,9 +35,12 @@ export async function sendPromptViaComposer({
   toastInfo,
   t,
   handleSendClick,
+  onBlocked,
 }: SendPromptViaComposerParams): Promise<boolean> {
   if (sendBlockedReason) {
-    if (shouldToastBlockedSend(sendBlockedReason)) toastInfo(getSendBlockedLabel(sendBlockedReason, t));
+    // Reported on every refusal, independent of the toast gate; the caller rate-limits its own logging.
+    onBlocked?.(sendBlockedReason);
+    if (shouldToastBlockedSend(sendBlockedReason)) toastInfo(getBlockedSendToastLabel(sendBlockedReason, t));
     return false;
   }
   let sent = true;

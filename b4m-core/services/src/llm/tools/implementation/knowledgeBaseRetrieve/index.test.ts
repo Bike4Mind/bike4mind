@@ -20,6 +20,7 @@ vi.mock('../../../../dataLakeService/getDynamicDataLakeTags', async () => {
 
 import { knowledgeBaseRetrieveTool } from './index';
 import type { ToolContext } from '../../base/types';
+import { LIBRARY_OFF_NO_LAKE_MESSAGE } from '../../base/resolveSessionLakeAccess';
 import type { CitableSource } from '@bike4mind/common';
 import { GROUNDED_NO_INVENTION_RULE } from '../../../prompts';
 
@@ -1456,7 +1457,11 @@ describe('retrieve_knowledge_content narrows lake access to the session lake', (
   it('attributes the audit against OWNER-WIDE lakes, not the narrowed set', async () => {
     getDynamicDataLakeAccessMock.mockResolvedValue(twoLakes);
     const record = vi.fn();
-    const ctx = makeContext({ retrievalFilter: undefined, sessionRetrievalTags: ['datalake:mine'] } as never);
+    const ctx = makeContext({
+      retrievalFilter: undefined,
+      sessionRetrievalTags: ['datalake:mine'],
+      sessionIncludeLibraryFiles: true,
+    } as never);
     // The audit block is gated on this repository being present - without it the assertion below
     // would pass vacuously by never entering the branch at all.
     (ctx.db as Record<string, unknown>).lakeAccessEvents = { record };
@@ -1758,5 +1763,200 @@ describe('retrieve_knowledge_content chip source origin', () => {
     const citables = emittedCitables(ctx);
     expect(citables).toHaveLength(1);
     expect(citables[0].metadata).not.toHaveProperty('sourceOrigin');
+  });
+});
+
+describe('retrieve_knowledge_content with the library off', () => {
+  const lakeAccess = {
+    dataLakeTags: ['datalake:acme'],
+    dataLakeTagPrefixes: [],
+    scopedTagPrefixes: [],
+    lakes: [],
+  };
+  const offContext = (overrides: Partial<ToolContext> = {}) =>
+    makeContext({ sessionIncludeLibraryFiles: false, ...overrides });
+
+  it('does not open an owned personal file by id', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue(lakeAccess);
+    const ctx = offContext();
+    (ctx.db.fabfiles!.findById as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ fileName: 'Notes.pdf', userId: 'u1', tags: [] })
+    );
+
+    const out = await runById(ctx);
+    expect(out).not.toContain('Retrieved content from');
+    expect(ctx.db.fabfiles!.findByIdAndUserId).not.toHaveBeenCalled();
+  });
+
+  it('still opens an owned file the user attached', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue(lakeAccess);
+    const ctx = offContext({ attachedFileIds: [FILE_ID] });
+    (ctx.db.fabfiles!.findById as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ fileName: 'Notes.pdf', userId: 'u1', tags: [] })
+    );
+
+    expect(await runById(ctx)).toContain('Retrieved content from');
+  });
+
+  it('still opens an owned file that is a member of the session lake', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue(lakeAccess);
+    const ctx = offContext();
+    (ctx.db.fabfiles!.findById as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ fileName: 'Notes.pdf', userId: 'u1', tags: [{ name: 'datalake:acme' }] })
+    );
+
+    expect(await runById(ctx)).toContain('Retrieved content from');
+  });
+
+  // A child agent carries no attachedFileIds; that must only matter where the library is excluded.
+  it('opens an owned file with no attachedFileIds in an unscoped chat', async () => {
+    const ctx = makeContext({ attachedFileIds: undefined, sessionRetrievalTags: [] });
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ fileName: 'Notes.pdf' })
+    );
+
+    expect(await runById(ctx)).toContain('Retrieved content from');
+  });
+
+  it('does not open an unattached owned file in a legacy lake chat with the flag unset', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue(lakeAccess);
+    const ctx = makeContext({ sessionRetrievalTags: ['datalake:acme'] });
+    (ctx.db.fabfiles!.findById as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ fileName: 'Notes.pdf', userId: 'u1', tags: [] })
+    );
+
+    expect(await runById(ctx)).not.toContain('Retrieved content from');
+  });
+
+  it('opens an owned personal file through the fast path when the library is on', async () => {
+    const ctx = makeContext({ sessionIncludeLibraryFiles: true });
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ fileName: 'Notes.pdf' })
+    );
+
+    expect(await runById(ctx)).toContain('Retrieved content from');
+  });
+
+  it('restricts the query path to the lake arms', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue(lakeAccess);
+    const ctx = offContext();
+    (ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mockResolvedValue({ data: [], total: 0 });
+    await knowledgeBaseRetrieveTool.implementation(ctx, undefined).toolFn({ query: 'notes' });
+
+    expect((ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mock.calls[0][5]).toMatchObject({
+      restrictToDataLake: true,
+    });
+  });
+
+  it('reports the empty corpus on the query path when no lake is reachable', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({ ...lakeAccess, dataLakeTags: [] });
+    const ctx = offContext();
+    const out = await knowledgeBaseRetrieveTool.implementation(ctx, undefined).toolFn({ query: 'notes' });
+
+    expect(out).toBe(LIBRARY_OFF_NO_LAKE_MESSAGE);
+    expect(ctx.db.fabfiles!.search).not.toHaveBeenCalled();
+  });
+
+  it('reports the empty corpus when every attached id is malformed and no lake is reachable', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({ ...lakeAccess, dataLakeTags: [] });
+    const ctx = offContext({ attachedFileIds: ['not-an-id'] });
+    const out = await knowledgeBaseRetrieveTool.implementation(ctx, undefined).toolFn({ query: 'notes' });
+
+    expect(out).toBe(LIBRARY_OFF_NO_LAKE_MESSAGE);
+    expect(ctx.db.fabfiles!.search).not.toHaveBeenCalled();
+  });
+
+  it('admits attached files on the query path, matching search_knowledge_base', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue(lakeAccess);
+    const ctx = offContext({ attachedFileIds: [FILE_ID, 'not-an-id'] });
+    (ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mockResolvedValue({ data: [], total: 0 });
+    await knowledgeBaseRetrieveTool.implementation(ctx, undefined).toolFn({ query: 'notes' });
+
+    expect((ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mock.calls[0][5]).toMatchObject({
+      restrictToDataLake: true,
+      admitFileIds: [FILE_ID],
+    });
+  });
+
+  it('searches attached files on the query path when no lake is reachable', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({ ...lakeAccess, dataLakeTags: [] });
+    const ctx = offContext({ attachedFileIds: [FILE_ID] });
+    (ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mockResolvedValue({ data: [], total: 0 });
+    const out = await knowledgeBaseRetrieveTool.implementation(ctx, undefined).toolFn({ query: 'notes' });
+
+    expect(out).not.toBe(LIBRARY_OFF_NO_LAKE_MESSAGE);
+    expect((ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mock.calls[0][5]).toMatchObject({
+      admitFileIds: [FILE_ID],
+    });
+  });
+
+  it('admits no attached files on the query path when the library is on', async () => {
+    const ctx = makeContext({ sessionIncludeLibraryFiles: true, attachedFileIds: [FILE_ID] });
+    (ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mockResolvedValue({ data: [], total: 0 });
+    await knowledgeBaseRetrieveTool.implementation(ctx, undefined).toolFn({ query: 'notes' });
+
+    expect((ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mock.calls[0][5]).toMatchObject({
+      restrictToDataLake: false,
+      admitFileIds: [],
+    });
+  });
+});
+
+describe('retrieve_knowledge_content turn-wide citation numbering', () => {
+  const INDEXED_RULE = 'Cite each of these sources ONLY by the bracketed number';
+
+  async function runTwoFiles(numberCitables?: ToolContext['numberCitables']) {
+    const chunkRepo = {
+      findTextsByFabFileId: vi.fn(async (id: string, opts?: { afterChunkId?: string }) =>
+        opts?.afterChunkId ? [] : [{ id: `${id}-c1`, text: `body of ${id}` }]
+      ),
+      countByFabFileId: vi.fn(async () => 1),
+    };
+    const ctx = makeContext({
+      retrievalFilter: undefined,
+      numberCitables,
+      db: {
+        fabfiles: { findByIdAndUserId: vi.fn(), findById: vi.fn(), search: vi.fn() },
+        fabfilechunks: chunkRepo,
+      } as never,
+    });
+    (ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mockResolvedValue({
+      data: ['file-a', 'file-b'].map(id => makeFile({ id, fileName: `${id}.pdf` })),
+    });
+    const out = (await knowledgeBaseRetrieveTool.implementation(ctx, undefined).toolFn({ query: 'notes' })) as string;
+    const shipped = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls.find(
+      ([payload]) => payload?.promptMeta?.citables
+    );
+    return { out, citables: (shipped?.[0].promptMeta.citables ?? []) as CitableSource[] };
+  }
+
+  const stampFromThree: NonNullable<ToolContext['numberCitables']> = citables =>
+    citables.map((citable, position) => ({
+      ...citable,
+      metadata: { ...citable.metadata, citationIndex: position + 3 },
+    }));
+
+  it('labels each section with its turn number, ships numbered chips and adds the citation rule', async () => {
+    const { out, citables } = await runTwoFiles(stampFromThree);
+
+    expect(out).toContain('### [3] file-a.pdf (ID: file-a)');
+    expect(out).toContain('### [4] file-b.pdf (ID: file-b)');
+    expect(out).toContain(INDEXED_RULE);
+    expect(out.indexOf(GROUNDED_NO_INVENTION_RULE)).toBeLessThan(out.indexOf(INDEXED_RULE));
+    expect(citables.map(c => c.metadata?.citationIndex)).toEqual([3, 4]);
+  });
+
+  it.each([
+    ['numberCitables returns undefined', vi.fn(() => undefined)],
+    ['numberCitables is absent', undefined],
+  ])('leaves output unnumbered when %s', async (_label, numberCitables) => {
+    const { out, citables } = await runTwoFiles(numberCitables);
+
+    expect(out).not.toContain('[3]');
+    expect(out).not.toContain(INDEXED_RULE);
+    expect(out).toContain('### file-a.pdf (ID: file-a)');
+    expect(out).toContain('### file-b.pdf (ID: file-b)');
+    expect(citables).toHaveLength(2);
+    for (const citable of citables) expect(citable.metadata?.citationIndex).toBeUndefined();
   });
 });

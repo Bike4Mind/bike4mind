@@ -17,6 +17,7 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { ErrorResponse } from '@client/app/utils/error';
 import { updateAllQueryData } from '@client/app/utils/react-query';
 import { revokeSharingOnServer } from '@client/app/utils/sharingApi';
+import { isStepUpCancelled } from '@client/app/utils/stepUpInterceptor';
 import {
   fetchUsers,
   IGetUsersParams,
@@ -145,6 +146,7 @@ export function useUpdateUser(options: { onSuccess?: () => void; onSettled?: () 
       }
     },
     onError(error: unknown) {
+      if (isStepUpCancelled(error)) return;
       let errorMessage = 'Failed to update Profile.';
 
       if (isAxiosError(error) && error.response) {
@@ -175,8 +177,8 @@ export function useGetUserActivityCounters(userId?: string | null) {
 export function useDeleteUser() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ id }: { id: string }) => {
-      const { data } = await api.delete(`/api/users/${id}/delete`);
+    mutationFn: async ({ id, reason }: { id: string; reason: string }) => {
+      const { data } = await api.delete(`/api/users/${id}/delete`, { data: { reason } });
       return data;
     },
     onSuccess: () => {
@@ -423,9 +425,10 @@ export function useLoginAsUser() {
   const { setCurrentUser } = useUser();
 
   return useMutation({
-    mutationFn: async ({ id, mfaToken }: { id: string; mfaToken: string }) => {
+    mutationFn: async ({ id, mfaToken, reason }: { id: string; mfaToken: string; reason: string }) => {
       const { data } = await api.post<{ user: IUserDocument; accessToken: string }>(`/api/users/${id}/loginAs`, {
         mfaToken,
+        reason,
       });
       return data;
     },

@@ -6,17 +6,50 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { toast } from 'sonner';
 import { LakeInfoPanel } from './LakeInfoPanel';
-import { DATA_LAKES } from '@bike4mind/common';
+import DriveConnectAction from '../steps/DriveConnectAction';
+import { DATA_LAKES, REBUILD_PENDING_STALE_MS } from '@bike4mind/common';
 import type { ManagerLake } from './shared';
+import type { LakeDriveConnection } from '@client/app/hooks/data/googleDrive';
 
-// LakeInfoPanel's Drive chip reaches this hook directly - stub it so the chip renders nothing
-// rather than needing a QueryClientProvider.
+const sourceCard = vi.hoisted(() => ({
+  renderDrive: false,
+  connection: null as LakeDriveConnection | null,
+  disconnect: vi.fn(),
+}));
+
+// Share the Drive response between the status chip and the real source panel without query providers.
 vi.mock('@client/app/hooks/data/googleDrive', () => ({
-  useLakeDriveConnection: () => ({ data: null, isError: false, isLoading: false }),
+  useLakeDriveConnection: () => ({ data: sourceCard.connection, isError: false, isLoading: false }),
+  useLakeDriveCanManage: () => ({ data: true }),
+  useDisconnectLakeDrive: () => ({ mutate: sourceCard.disconnect, isPending: false }),
 }));
 // The GitHub chip reads the flag cache and its own query; it has its own suite (LakeGitHubStatusChip.test.tsx).
 vi.mock('@client/app/components/datalake/LakeGitHubStatusChip', () => ({ default: () => null }));
-vi.mock('./FinishGitHubConnectBanner', () => ({ default: () => null }));
+// The sync-time line has its own suite (LakeSyncStatus.test.tsx).
+vi.mock('@client/app/components/datalake/LakeSyncStatus', () => ({
+  default: () => <span data-testid="lake-sync-status-stub" />,
+}));
+vi.mock('@client/app/components/datalake/LakeSkippedFilesChip', () => ({ default: () => null }));
+vi.mock('./FinishSourceConnectBanner', () => ({ default: () => null }));
+// Render the real Drive panel for selection-lifecycle coverage; other tests only need the mount gate.
+vi.mock('../steps/LakeSourceConnectActions', () => ({
+  default: ({ lake }: { lake: { id: string } }) =>
+    sourceCard.renderDrive ? (
+      <DriveConnectAction lake={lake} />
+    ) : (
+      <span data-testid="lake-source-connect-actions-stub" />
+    ),
+}));
+vi.mock('@client/app/hooks/data/useLakeDriveFolderConnect', () => ({
+  useLakeDriveFolderConnect: () => ({
+    openFolderPicker: vi.fn(),
+    resync: vi.fn(),
+    reconnect: vi.fn(),
+    isPicking: false,
+    isCheckingGrant: false,
+    isConnecting: false,
+  }),
+}));
 
 // "Start chat" pulls in SessionsContext/react-router/react-query transitively - irrelevant to this
 // suite (build/rebuild + state chips + purge), so stub it to a no-op, same as DataLakeManagerPanel's suite.
@@ -62,6 +95,7 @@ type RebuildStatusMock =
   | {
       underChunkedCount: number;
       failedCount: number;
+      rebuildingCount?: number;
       staleEmbeddingSpaceCount: number | null;
       // Optional here on purpose: the cases that omit it are the ones that must stay silent.
       embeddingSpaceResolved?: boolean | null;
@@ -145,6 +179,9 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  sourceCard.renderDrive = false;
+  sourceCard.connection = null;
+  sourceCard.disconnect.mockReset();
   useGetLakeMemoryHealth.mockReset();
   useGetLakeMemoryHealth.mockReturnValue({ data: undefined });
   useUnderChunkedCount.mockReset();
@@ -202,6 +239,76 @@ describe('LakeInfoPanel - header title', () => {
     expect(title).toHaveTextContent(name);
     const startChat = screen.getByTestId('datalake-startchat-btn-lake-1');
     expect(title.parentElement).not.toBe(startChat.parentElement);
+  });
+});
+
+describe('LakeInfoPanel - source card', () => {
+  it('keeps a disconnect confirmation on refresh but resets it when another lake is selected', async () => {
+    sourceCard.renderDrive = true;
+    sourceCard.connection = {
+      id: 'drive-1',
+      driveFolderId: 'folder-1',
+      folderName: 'Documents',
+      status: 'connected',
+      syncStale: false,
+      enabled: true,
+      lastError: null,
+      lastUsedAt: null,
+      connectedAt: null,
+      lastPolledAt: null,
+      syncSchedule: { mode: 'manual' },
+      fileCount: 3,
+      disconnecting: false,
+      disconnectStalled: false,
+    };
+    const lake = { ...baseLake, organizationId: 'org-1', canManage: true };
+    const user = userEvent.setup();
+    const { rerender } = renderPanel(lake);
+
+    await user.click(screen.getByTestId('drive-disconnect-btn'));
+    expect(sourceCard.disconnect).not.toHaveBeenCalled();
+    rerender(
+      <Wrapper>
+        <LakeInfoPanel lake={{ ...lake, name: 'Renamed lake' }} {...noopProps} />
+      </Wrapper>
+    );
+    expect(screen.getByTestId('drive-disconnect-confirm-btn')).toBeInTheDocument();
+
+    sourceCard.connection = { ...sourceCard.connection, id: 'drive-2', driveFolderId: 'folder-2' };
+    rerender(
+      <Wrapper>
+        <LakeInfoPanel lake={{ ...lake, id: 'lake-2' }} {...noopProps} />
+      </Wrapper>
+    );
+    expect(screen.queryByTestId('drive-disconnect-confirm-btn')).not.toBeInTheDocument();
+    expect(sourceCard.disconnect).not.toHaveBeenCalled();
+    await user.click(screen.getByTestId('drive-disconnect-btn'));
+    await user.click(screen.getByTestId('drive-disconnect-confirm-btn'));
+    expect(sourceCard.disconnect).toHaveBeenCalledWith('lake-2', expect.anything());
+  });
+
+  it('mounts the source card for the manager of an org lake', () => {
+    renderPanel({ ...baseLake, organizationId: 'org-1', canManage: true } as ManagerLake);
+    expect(screen.getByTestId('datalake-selected-lake-source')).toContainElement(
+      screen.getByTestId('lake-source-connect-actions-stub')
+    );
+  });
+
+  it('mounts the source card for the creator of a personal lake', () => {
+    renderPanel({ ...baseLake, organizationId: '', isCreator: true } as ManagerLake);
+    expect(screen.getByTestId('datalake-selected-lake-source')).toContainElement(
+      screen.getByTestId('lake-source-connect-actions-stub')
+    );
+  });
+
+  it('omits the source card for an org lake the caller cannot manage', () => {
+    renderPanel({ ...baseLake, organizationId: 'org-1', canManage: false } as ManagerLake);
+    expect(screen.queryByTestId('datalake-selected-lake-source')).not.toBeInTheDocument();
+  });
+
+  it('omits the source card for a personal lake the caller did not create', () => {
+    renderPanel({ ...baseLake, organizationId: '', isCreator: false } as ManagerLake);
+    expect(screen.queryByTestId('datalake-selected-lake-source')).not.toBeInTheDocument();
   });
 });
 
@@ -457,6 +564,51 @@ describe('LakeInfoPanel - re-embed for search', () => {
   });
 });
 
+// A reset file has no passages and no error until its rebuild commits or finally fails, so the
+// under-chunked and failed chips are both silent for it.
+describe('LakeInfoPanel - files mid-rebuild', () => {
+  const REBUILDING = 'datalake-manager-rebuilding-chip-lake-1';
+
+  it('shows how many files are mid-rebuild when nothing else is outstanding', () => {
+    useUnderChunkedCount.mockReturnValue({
+      data: { underChunkedCount: 0, failedCount: 0, rebuildingCount: 1, staleEmbeddingSpaceCount: 0 },
+    });
+    renderPanel();
+    expect(screen.getByTestId(REBUILDING)).toHaveTextContent('1 rebuilding');
+  });
+
+  it('names the stale window the rebuild door re-offers a stranded file after', async () => {
+    useUnderChunkedCount.mockReturnValue({
+      data: { underChunkedCount: 0, failedCount: 0, rebuildingCount: 1, staleEmbeddingSpaceCount: 0 },
+    });
+    const user = userEvent.setup();
+    renderPanel();
+    await user.hover(screen.getByTestId(REBUILDING));
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(
+      `within ${REBUILD_PENDING_STALE_MS / 3_600_000} hours`
+    );
+  });
+
+  it('stays hidden when the server does not report the count', () => {
+    useUnderChunkedCount.mockReturnValue({
+      data: { underChunkedCount: 0, failedCount: 0, staleEmbeddingSpaceCount: 0 },
+    });
+    renderPanel();
+    expect(screen.queryByTestId(REBUILDING)).not.toBeInTheDocument();
+  });
+
+  it('stays hidden for a caller who can neither rebuild nor manage the lake', () => {
+    // The same gate the sibling "to rebuild" and "failed" chips carry: the panel is reachable by a
+    // member who can do neither, and the count comes from the rebuild-status query, so without the
+    // gate they would see progress they cannot act on.
+    useUnderChunkedCount.mockReturnValue({
+      data: { underChunkedCount: 0, failedCount: 0, rebuildingCount: 3, staleEmbeddingSpaceCount: 0 },
+    });
+    renderPanel({ ...baseLake, canRebuild: false, canManage: false });
+    expect(screen.queryByTestId(REBUILDING)).not.toBeInTheDocument();
+  });
+});
+
 describe('LakeInfoPanel - unresolvable embedding space', () => {
   const CHIP = 'datalake-embedding-space-unknown-chip-lake-1';
 
@@ -565,6 +717,25 @@ describe('LakeInfoPanel - origin chip', () => {
     renderPanel({ ...baseLake, origin: 'connector-fed' } as ManagerLake);
 
     expect(screen.getByTestId('datalake-origin-chip-lake-1')).toHaveTextContent('Connector-fed');
+  });
+
+  it('hides the generated gh- prefix chip on a GitHub connector lake but keeps a typed prefix', () => {
+    renderPanel({ ...baseLake, origin: 'connector-fed', fileTagPrefix: 'gh-1a2b3c4d:' } as ManagerLake);
+    expect(screen.queryByTestId('datalake-manager-prefix-chip-lake-1')).not.toBeInTheDocument();
+    expect(screen.queryByText('gh-1a2b3c4d:')).not.toBeInTheDocument();
+  });
+
+  it('keeps the prefix chip on a curated lake whose prefix looks generated', () => {
+    renderPanel({ ...baseLake, origin: 'curated', fileTagPrefix: 'gh-1a2b3c4d:' } as ManagerLake);
+    expect(screen.getByTestId('datalake-manager-prefix-chip-lake-1')).toHaveTextContent('gh-1a2b3c4d:');
+  });
+
+  it('mounts the sync-time line only for a connector-fed lake', () => {
+    const { unmount } = renderPanel({ ...baseLake, origin: 'connector-fed' } as ManagerLake);
+    expect(screen.getByTestId('lake-sync-status-stub')).toBeInTheDocument();
+    unmount();
+    renderPanel({ ...baseLake, origin: 'curated' } as ManagerLake);
+    expect(screen.queryByTestId('lake-sync-status-stub')).not.toBeInTheDocument();
   });
 
   it('shows no origin chip for a curated lake', () => {

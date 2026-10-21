@@ -1,9 +1,16 @@
 import { ToolDefinition } from '../../base/types';
 import { isObjectIdShaped } from '../../base/objectId';
+import { hasLakeArms } from '../../../../dataLakeService/narrowLakeAccessToSession';
 import { citationTagDescription, CitableSource, IFabFileDocument } from '@bike4mind/common';
 import { filterRetrievalExcluded, isRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
-import { resolveOwnerLakeAccess, resolveSessionLakeAccess } from '../../base/resolveSessionLakeAccess';
+import {
+  LIBRARY_OFF_NO_LAKE_MESSAGE,
+  admittedAttachmentIds,
+  resolveOwnerLakeAccess,
+  resolveSessionLakeAccess,
+  sessionExcludesLibrary,
+} from '../../base/resolveSessionLakeAccess';
 import {
   lakeMembershipsFrom,
   warnIfManyLakeMemberships,
@@ -21,6 +28,7 @@ import {
 import { buildRetrievalConflictSignal, type RetrievalPassage } from '../../../../dataLakeService/retrievalConflictNote';
 import { prependRetrievedLakePrompts } from '../retrievedLakePrompts';
 import { GROUNDED_NO_INVENTION_RULE } from '../../../prompts';
+import { INDEXED_TOOL_CITATION_RULE } from '../../citationNumbering';
 import { attributeAccessedLakeIds, citableOriginFor } from '../../../../dataLakeService/attributeAccessedLakes';
 import { recordLakeAccessEvent } from '../../../../dataLakeService/recordLakeAccessEvent';
 
@@ -148,6 +156,10 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
           const dynamicAccess = () => (dynamicAccessPromise ??= resolveSessionLakeAccess(context, ownerAccess));
 
           let files: IFabFileDocument[] = [];
+          // Library off: only lake members, plus what the user attached, may be opened. The
+          // not-found wording stays identical so an id probe cannot tell "off" from "missing".
+          const excludesLibrary = await sessionExcludesLibrary(context, ownerAccess);
+          const attachedFileIds = new Set(context.attachedFileIds ?? []);
 
           // Path A: direct file_id lookup
           if (file_id) {
@@ -197,7 +209,11 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
               }
             } else {
               // Try owned file first (fast path)
-              const ownedFile = await context.db.fabfiles.findByIdAndUserId(file_id, context.userId);
+              // Library off: an owned file is still reachable when it is attached or in a session lake,
+              // so it takes the same lake-arm check as a shared one below instead of this fast path.
+              const ownedFile = excludesLibrary
+                ? null
+                : await context.db.fabfiles.findByIdAndUserId(file_id, context.userId);
               if (ownedFile) {
                 // An excluded owned file is treated as not-found (falls through to the message
                 // below), so a direct id probe leaks nothing - not even that the file exists.
@@ -232,7 +248,9 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
                       (g: { groupId: string; permissions: string[] }) =>
                         userGroups.includes(g.groupId) && g.permissions?.some(p => p === 'read' || p === 'write')
                     );
-                  if (hasMetaTagAccess || hasPrefixAccess || hasMembershipAccess || hasShareAccess || hasGroupAccess) {
+                  const hasLakeAccess = hasMetaTagAccess || hasPrefixAccess || hasMembershipAccess;
+                  const hasLibraryAccess = sharedFile.userId === context.userId || hasShareAccess || hasGroupAccess;
+                  if (hasLakeAccess || (hasLibraryAccess && (!excludesLibrary || attachedFileIds.has(file_id)))) {
                     files = [sharedFile];
                   }
                 }
@@ -278,6 +296,14 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
             } else {
               const { dataLakeTags, dataLakeTagPrefixes, lakes } = await dynamicAccess();
               const lakeMemberships = lakeMembershipsFrom(lakes);
+              const admitFileIds = admittedAttachmentIds(context, excludesLibrary);
+              if (
+                excludesLibrary &&
+                !hasLakeArms({ dataLakeTags, dataLakeTagPrefixes, lakeMemberships }) &&
+                !admitFileIds.length
+              ) {
+                return LIBRARY_OFF_NO_LAKE_MESSAGE;
+              }
               warnIfManyLakeMemberships(lakeMemberships, context.logger, 'retrieve_knowledge_content');
               searchResults = await context.db.fabfiles.search(
                 context.userId,
@@ -292,6 +318,8 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
                   dataLakeTags,
                   dataLakeTagPrefixes, // Static-registry (open) prefixes — match shared KB files
                   lakeMemberships, // Dynamic-lake arms, each anchored to that lake's creator
+                  restrictToDataLake: excludesLibrary,
+                  admitFileIds,
                   excludeContent: true, // Content fetched via chunks below, not the document field
                   // Retrieval exclusion (opt-in) - best-effort DB pre-filter; authoritative pass below. No-op when unset.
                   ...retrievalFilter,
@@ -583,7 +611,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
           // assembled, so computing it down there could never reach them.
           const conflict = buildRetrievalConflictSignal(conflictPassages);
 
-          const citables: CitableSource[] = retrievedFiles.map((file, index) => {
+          const unnumberedCitables: CitableSource[] = retrievedFiles.map((file, index) => {
             const conflictsWith = conflict.conflictsByFileId.get(file.id);
             const fileTagNames = file.tags?.map(t => t.name) || [];
             return {
@@ -613,6 +641,16 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
               },
             };
           });
+
+          const numberedCitables = context.numberCitables?.(unnumberedCitables);
+          const citables = numberedCitables ?? unnumberedCitables;
+          // sections, retrievedFiles and citables are pushed in the same iteration, so index i is
+          // one file across all three. The heading is ours at column 0 (forced retrieval's shape).
+          const labelledSections = numberedCitables
+            ? sections.map((section, i) =>
+                section.replace(/^### /, `### [${numberedCitables[i].metadata?.citationIndex}] `)
+              )
+            : sections;
 
           // citables mirrors retrievedFiles 1:1 and is therefore always non-empty here (the
           // retrievedFiles.length === 0 case returns above, before this point). retrieval is
@@ -646,7 +684,12 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
           // The conflict note below is last of our column-0 framing, nearest the content it
           // describes: the documents the caller named disagree, so say so rather than pick a side.
           const result =
-            header + '\n' + `${GROUNDED_NO_INVENTION_RULE}\n\n` + conflict.note + renderRetrievedContentBlock(sections);
+            header +
+            '\n' +
+            `${GROUNDED_NO_INVENTION_RULE}\n\n` +
+            (numberedCitables ? `${INDEXED_TOOL_CITATION_RULE}\n\n` : '') +
+            conflict.note +
+            renderRetrievedContentBlock(labelledSections);
 
           // Retrieval-scoped lake-prompt injection (#1108): prepend the operating instructions of
           // the trusted lakes this content came from. Skipped for the agent-scoped branch, which

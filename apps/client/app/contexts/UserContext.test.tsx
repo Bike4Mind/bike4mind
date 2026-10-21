@@ -136,7 +136,7 @@ describe('resolveIdentifyEffect — mfaPending gate + cross-tab guard + stale-ca
 });
 
 describe('shouldAdoptIdentifyToken - cached identify must never downgrade a live credential', () => {
-  it("adopts identify's token when this tab holds none (the mint case)", () => {
+  it("adopts identify's token when this tab holds none", () => {
     expect(shouldAdoptIdentifyToken(null)).toBe(true);
     expect(shouldAdoptIdentifyToken(undefined)).toBe(true);
     expect(shouldAdoptIdentifyToken('')).toBe(true);

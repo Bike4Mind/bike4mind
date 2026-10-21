@@ -41,6 +41,10 @@ const LOGIN_ERROR_MESSAGES = {
   auth_setup_failed: 'Sign-in couldn’t complete. Please try again.',
   missing_tokens: 'Sign-in couldn’t complete. Please try again.',
   server_configuration_error: 'A server configuration issue is preventing sign-in. Please contact your administrator.',
+  // Second factor abandoned after an SSO sign-in (auth/success.tsx)
+  mfa_required: 'Multi-factor authentication is required to sign in. Please sign in again and enter your code.',
+  mfa_setup_required:
+    'Your administrator requires multi-factor authentication. Please sign in again and complete the setup.',
 } satisfies Record<string, string>;
 
 /** Union of all known `/login?error=` codes. Thread this through emitters

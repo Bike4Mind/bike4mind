@@ -8,7 +8,10 @@ import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLog
 import { randomUUID } from 'crypto';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
-import { getAtlassianOAuthConfig, ATLASSIAN_OAUTH_SCOPES } from '@server/integrations/jira/atlassianConfig';
+import {
+  getAtlassianOAuthConfig,
+  ATLASSIAN_OAUTH_SCOPES,
+} from '@bike4mind/server-utils/integrations/jira/atlassianConfig';
 import { getNotionOAuthConfig, NOTION_OAUTH_AUTHORIZE_URL } from '@server/integrations/notion';
 import {
   getOAuthWorkspaceWithCredentials,
@@ -18,8 +21,8 @@ import {
 } from '@bike4mind/slack';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
-import { Config } from '@server/utils/config';
-import { recordTokenRotationInitiated, recordTokenRotationFailed } from '@server/utils/cloudwatch';
+import { Config } from '@bike4mind/server-utils/utils/config';
+import { recordTokenRotationInitiated, recordTokenRotationFailed } from '@bike4mind/server-utils/utils/cloudwatch';
 import { issueStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
 import type { Response } from 'express';
 

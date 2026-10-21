@@ -10,7 +10,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  * activation is recorded as `system`, or a key-driven one as the human it acted for.
  */
 const h = vi.hoisted(() => ({
-  assertLakeAccess: vi.fn(),
+  touchIfStable: vi.fn(),
+  assertLakeAccessById: vi.fn(),
   assertLakeWritable: vi.fn(),
   removeFileFromDataLake: vi.fn(),
   toAccessContext: vi.fn(),
@@ -30,13 +31,22 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 // The whole module is replaced, so every repo the route (or lakeConfigAuditDb) names must be
 // present - a missing export is an import-time failure, not a silent undefined.
 vi.mock('@bike4mind/database', () => ({
-  dataLakeRepository: {},
+  withTransaction: async (fn: () => unknown) => fn(),
+  dataLakeRepository: { touchIfStable: h.touchIfStable, findByDatalakeTags: vi.fn().mockResolvedValue([]) },
   dataLakeAccessGrantRepository: {},
-  fabFileRepository: {},
+  fabFileRepository: { setOwnerOrganizationIfUnchanged: vi.fn().mockResolvedValue(true) },
+  userRepository: {
+    findById: vi.fn().mockResolvedValue(null),
+    incrementCurrentStorage: vi.fn().mockResolvedValue(undefined),
+  },
+  organizationRepository: {
+    findById: vi.fn().mockResolvedValue(null),
+    incrementCurrentStorage: vi.fn().mockResolvedValue(undefined),
+  },
   lakeConfigChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
   lakeMembershipChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
   adminSettingsRepository: {
@@ -49,7 +59,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
-    assertLakeAccess: h.assertLakeAccess,
+    assertLakeAccessById: h.assertLakeAccessById,
     assertLakeWritable: h.assertLakeWritable,
     removeFileFromDataLake: h.removeFileFromDataLake,
     addFileToDataLake: vi.fn(),
@@ -79,7 +89,7 @@ describe('DELETE /api/data-lakes/[id]/files/[fabFileId] - audit attribution', ()
   beforeEach(() => {
     vi.clearAllMocks();
     h.toAccessContext.mockResolvedValue({ userId: 'owner', isAdmin: false, userTags: [] });
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', createdByUserId: 'owner' });
+    h.assertLakeAccessById.mockResolvedValue({ id: 'lake1', createdByUserId: 'owner' });
     h.removeFileFromDataLake.mockResolvedValue({ success: true, fileCount: 1, totalSizeBytes: 10 });
   });
 

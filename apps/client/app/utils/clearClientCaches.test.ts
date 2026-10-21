@@ -69,3 +69,13 @@ describe('clearClientCaches premium localStorage sweep', () => {
     expect(Object.keys(localStorage)).toEqual([]);
   });
 });
+
+describe('clearClientCaches identity-scoped stores', () => {
+  it('drops the persisted model pick so the next account starts from its own default', async () => {
+    localStorage.setItem('llm-settings', JSON.stringify({ state: { model: 'some-model' }, version: 6 }));
+
+    await clearClientCaches();
+
+    expect(localStorage.getItem('llm-settings')).toBeNull();
+  });
+});

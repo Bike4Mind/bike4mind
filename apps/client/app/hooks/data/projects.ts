@@ -10,7 +10,7 @@ import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 // Set true to use mock projects for UI testing
 const USE_MOCK_PROJECTS = false;
 
-export const useGetJoinedProjects = (userId: string) => {
+export const useGetJoinedProjects = (userId: string, options: { enabled?: boolean; staleTime?: number } = {}) => {
   return useQuery({
     queryKey: ['joined-projects', userId],
     queryFn: async () => {
@@ -33,11 +33,17 @@ export const useGetJoinedProjects = (userId: string) => {
         return [];
       }
     },
-    enabled: !!userId,
+    enabled: !!userId && (options.enabled ?? true),
+    staleTime: options.staleTime,
   });
 };
 
-export const useCreateProject = (callback?: { onSuccess?: () => void; onError?: (error: Error) => void }) => {
+export const useCreateProject = (callback?: {
+  onSuccess?: (project: IProjectDocument) => void;
+  onError?: (error: Error) => void;
+  /** Skip the success toast; the caller reports success itself (e.g. after a follow-up request). */
+  silentSuccess?: boolean;
+}) => {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (
@@ -46,13 +52,15 @@ export const useCreateProject = (callback?: { onSuccess?: () => void; onError?: 
       const response = await api.post<IProjectDocument>('/api/projects', project);
       return response.data;
     },
-    onSuccess: (project: IProjectDocument) => {
+    onSuccess: (project: IProjectDocument, variables) => {
       updateAllQueryData(queryClient, 'projects', 'write', project, {
         keysAllowedToCreate: [['projects', 'search']],
       });
+      // Same refresh the add-to-project hooks do: files created into a project change the own-files list.
+      if (variables.fileIds?.length) queryClient.invalidateQueries({ queryKey: fabFileKeys.own });
 
-      toast.success('Project created successfully');
-      callback?.onSuccess?.();
+      if (!callback?.silentSuccess) toast.success('Project created successfully');
+      callback?.onSuccess?.(project);
     },
     onError: error => {
       if (error instanceof AxiosError) {
@@ -115,7 +123,12 @@ export const useSearchProjects = (
   });
 };
 
-export const useAddSessionsToProject = (callbacks?: { onSuccess?: () => void; onError?: () => void }) => {
+export const useAddSessionsToProject = (callbacks?: {
+  onSuccess?: () => void;
+  onError?: () => void;
+  /** Skip both toasts; the caller reports the outcome itself. */
+  silent?: boolean;
+}) => {
   const queryClient = useQueryClient();
 
   return useMutation({
@@ -129,11 +142,11 @@ export const useAddSessionsToProject = (callbacks?: { onSuccess?: () => void; on
     onSuccess: (value: ISessionDocument[]) => {
       queryClient.invalidateQueries({ queryKey: ['projects', 'search'] });
       queryClient.invalidateQueries({ queryKey: fabFileKeys.own });
-      toast.success('Sessions added to project successfully');
+      if (!callbacks?.silent) toast.success('Sessions added to project successfully');
       callbacks?.onSuccess?.();
     },
     onError: () => {
-      toast.error('Failed to add sessions to project');
+      if (!callbacks?.silent) toast.error('Failed to add sessions to project');
       callbacks?.onError?.();
     },
   });

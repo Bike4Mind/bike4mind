@@ -10,7 +10,7 @@ import {
 } from '@bike4mind/hearth';
 import { settingsMap, type ICcAgentSource, type ICcAgentStatus } from '@bike4mind/common';
 import { getSettingByName } from '@bike4mind/utils';
-import { isSettingEnabled } from '@server/middlewares/featureFlag';
+import { isSettingEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { toPresenceProjection, toWireHearthEvent, wireActorIdentity } from '@server/utils/hearthWire';
 import { sendToClient } from '@server/websocket/utils';
 
@@ -185,6 +185,8 @@ export async function reportCcAgentPresence(input: CcAgentPresenceInput): Promis
       },
       machine: { schema: PRESENCE_PAYLOAD_SCHEMA_NAME, payload },
       refs: {},
+      // The bridge authenticates with a cc-bridge:connect API key.
+      origin: 'api-key',
     });
 
     // Roster projection through the SAME function the HTTP route uses, so the

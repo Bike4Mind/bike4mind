@@ -23,7 +23,11 @@ vi.mock('sst', () => {
 });
 
 import { processSession, processAllSessions, SpiderJobConfig, SpiderDependencies } from './spider';
-import { determineSessionOperations, hasOperationsToPerform, SpiderOperation } from '@server/utils/sessionOperations';
+import {
+  determineSessionOperations,
+  hasOperationsToPerform,
+  SpiderOperation,
+} from '@bike4mind/server-utils/utils/sessionOperations';
 import { ISessionDocument, TAG_RETRY_BACKOFF_MS } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import mongoose from 'mongoose';

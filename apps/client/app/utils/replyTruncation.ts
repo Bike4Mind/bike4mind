@@ -5,6 +5,7 @@
 // The stop-reason vocabulary is shared, not restated: it used to be hand-copied here with a
 // "must stay in sync" note, which is a drift hazard the CLI would have tripled.
 import { CLEAN_FINISH_REASONS, DEGENERATE_FINISH_REASON, EARLY_STOP_FINISH_REASONS } from '@bike4mind/common';
+import { hasCompleteOpeningTag } from './artifactParser';
 
 // Re-exported so existing importers of these names from this module keep working.
 export { CLEAN_FINISH_REASONS, DEGENERATE_FINISH_REASON, EARLY_STOP_FINISH_REASONS };
@@ -71,4 +72,24 @@ export function getReplyTruncationState({
   }
 
   return { isStreamingArtifact, isTruncatedArtifact, notice };
+}
+
+/**
+ * Contains a reply that completed mid-artifact (`isTruncatedArtifact`). Targets the LAST
+ * opening tag - that's the dangling one; any earlier artifacts are already closed and must
+ * be left intact. If that opening tag is complete (has its closing `>`), best-effort closes
+ * the artifact so the partial parses into a previewable/downloadable card (a truncation
+ * banner is rendered above it). If the opening tag itself was cut off mid-attribute, drops
+ * the partial from that tag onward so no raw HTML leaks into the bubble.
+ */
+export function repairTruncatedArtifact(content: string): string {
+  const artifactIndex = content.lastIndexOf('<artifact');
+  const tail = artifactIndex !== -1 ? content.substring(artifactIndex) : '';
+  if (hasCompleteOpeningTag(tail)) {
+    return `${content.trimEnd()}\n</artifact>`;
+  }
+  // Opening tag truncated mid-attribute - nothing renderable. Log the dropped
+  // length so mid-attribute truncations are observable if they occur in prod.
+  console.warn(`[Artifacts] Dropping truncated artifact with incomplete opening tag (${tail.length} chars)`);
+  return artifactIndex === -1 ? content : content.substring(0, artifactIndex).trim();
 }

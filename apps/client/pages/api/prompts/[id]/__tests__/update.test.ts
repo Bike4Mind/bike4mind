@@ -23,7 +23,7 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (fn: (req: unknown, res: unknown) => unknown) => fn,
 }));
 
-vi.mock('@server/utils/errors', () => ({
+vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   BadRequestError: class BadRequestError extends Error {},
   NotFoundError: class NotFoundError extends Error {},
 }));

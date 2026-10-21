@@ -12,11 +12,11 @@
  * Idempotent: dismissing an already-dismissed doc returns 200 with no-op.
  */
 
-import { isValidObjectId } from '@server/utils/objectId';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { z } from 'zod';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { sreErrorTrackingRepository, cacheRepository, DISMISSABLE_STATUSES } from '@bike4mind/database';
 import { SRE_DEFAULT_REPO_SLUG } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';

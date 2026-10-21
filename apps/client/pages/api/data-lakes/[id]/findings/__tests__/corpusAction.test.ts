@@ -4,6 +4,8 @@ const h = vi.hoisted(() => ({
   applyCorpusAction: vi.fn(),
   lakeConfigAuditPrincipal: vi.fn(() => undefined as unknown),
   toAccessContext: vi.fn(async () => ({ userId: 'curator-1', isAdmin: false })),
+  tx: [] as string[],
+  touchIfStable: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -29,7 +31,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/featureFlag', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
   requireFeatureEnabled: () => (_req: unknown, _res: unknown, next: () => unknown) => next(),
 }));
 vi.mock('@server/dataLakes/dataLakeScopes', () => ({ DATA_LAKE_WRITE_SCOPES: [] }));
@@ -41,13 +43,27 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeAccessGrantRepository: {},
   dataLakeCorpusActionRepository: {},
   dataLakeFindingRepository: {},
-  dataLakeRepository: {},
-  fabFileRepository: {},
+  dataLakeRepository: { touchIfStable: h.touchIfStable, findByDatalakeTags: vi.fn().mockResolvedValue([]) },
+  fabFileRepository: { setOwnerOrganizationIfUnchanged: vi.fn().mockResolvedValue(true) },
+  userRepository: {
+    findById: vi.fn().mockResolvedValue(null),
+    incrementCurrentStorage: vi.fn().mockResolvedValue(undefined),
+  },
+  organizationRepository: {
+    findById: vi.fn().mockResolvedValue(null),
+    incrementCurrentStorage: vi.fn().mockResolvedValue(undefined),
+  },
   lakeMembershipRemovalRepository: {},
   scopedSettingsRepository: {},
+  withTransaction: async (fn: () => Promise<unknown>) => {
+    h.tx.push('enter');
+    const out = await fn();
+    h.tx.push('exit');
+    return out;
+  },
 }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
-vi.mock('@server/dataLakes/lakeConfigAuditDb', () => ({ lakeConfigAuditDb: {} }));
+vi.mock('@bike4mind/server-utils/dataLakes/lakeConfigAuditDb', () => ({ lakeConfigAuditDb: {} }));
 vi.mock('@server/dataLakes/lakeConfigAuditPrincipal', () => ({
   lakeConfigAuditPrincipal: h.lakeConfigAuditPrincipal,
 }));
@@ -68,7 +84,9 @@ const invoke = (body: Record<string, unknown>) => {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  h.applyCorpusAction.mockResolvedValue({ action: 'merge', findingId: 'f1', targets: [], detail: {} });
+  h.tx.length = 0;
+  h.touchIfStable.mockImplementation(async () => (h.tx.push('touch'), true));
+  h.applyCorpusAction.mockResolvedValue({ lakeId: 'lake1', action: 'merge', findingId: 'f1', targets: [], detail: {} });
 });
 
 describe('POST /api/data-lakes/[id]/findings/[findingId]/corpus-action (#3046)', () => {
@@ -122,7 +140,13 @@ describe('POST /api/data-lakes/[id]/findings/[findingId]/corpus-action (#3046)',
   });
 
   it('accepts a retag that clears every tag, since the body is the complete desired set', async () => {
-    h.applyCorpusAction.mockResolvedValue({ action: 'retag', findingId: 'f1', targets: [], detail: {} });
+    h.applyCorpusAction.mockResolvedValue({
+      lakeId: 'lake1',
+      action: 'retag',
+      findingId: 'f1',
+      targets: [],
+      detail: {},
+    });
     const { done } = invoke({ action: 'retag', fabFileId: 'a', tags: [] });
     await done;
 
@@ -133,5 +157,44 @@ describe('POST /api/data-lakes/[id]/findings/[findingId]/corpus-action (#3046)',
       expect.objectContaining({ action: 'retag', tags: [] }),
       expect.anything()
     );
+  });
+});
+
+describe('corpus-action serialization against a concurrent revoke', () => {
+  const merge = { action: 'merge', keepFabFileId: 'a', retireFabFileIds: ['b'] };
+
+  it('runs the action inside the transaction and touches the lake last', async () => {
+    h.applyCorpusAction.mockImplementation(async () => {
+      h.tx.push('apply');
+      return { lakeId: 'lake1', action: 'merge', findingId: 'f1', targets: [], detail: {} };
+    });
+
+    await invoke(merge).done;
+
+    expect(h.tx).toEqual(['enter', 'apply', 'touch', 'exit']);
+    expect(h.touchIfStable).toHaveBeenCalledWith('lake1');
+  });
+
+  it('touches the lake the service gated, not the path id', async () => {
+    h.applyCorpusAction.mockResolvedValue({
+      lakeId: 'lake-from-service',
+      action: 'merge',
+      findingId: 'f1',
+      targets: [],
+      detail: {},
+    });
+
+    await invoke(merge).done;
+
+    expect(h.touchIfStable).toHaveBeenCalledTimes(1);
+    expect(h.touchIfStable).toHaveBeenCalledWith('lake-from-service');
+  });
+
+  it('does not touch the lake when the action is refused', async () => {
+    h.applyCorpusAction.mockRejectedValue(new Error("You do not have permission to change this data lake's corpus"));
+
+    await expect(invoke(merge).done).rejects.toThrow(/permission/);
+
+    expect(h.touchIfStable).not.toHaveBeenCalled();
   });
 });

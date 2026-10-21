@@ -60,37 +60,27 @@ export class FallbackLlmBackend implements ICompletionBackend {
     for (let i = 0; i < modelsToTry.length; i++) {
       const modelToTry = modelsToTry[i];
 
-      // Buffer the inner backend's deliveries and flush only once the attempt
-      // succeeds. A failed attempt's partial output (OllamaBackend fires the
-      // callback per-chunk, so it can stream text before throwing) is discarded
-      // and can never replay on top of the next model's output (the
-      // double-content bug). This also removes the need for a "callback already
-      // fired" guard and lets a stream-then-fail attempt fall back cleanly.
-      //
-      // Buffering is a no-op for SSE/WebSocket backends (they call the callback
-      // once at end-of-turn via accumulator.finalize); it only delays delivery
-      // for per-chunk OllamaBackend. No user-visible latency in either CLI mode:
-      // neither headless (handleHeadlessCommand) nor the interactive TUI
-      // (index.tsx) renders live token streams - both consume turn-level ReAct
-      // events and the final answer, emitted only once the turn ends.
-      const buffered: Array<{ text: (string | null | undefined)[]; completionInfo?: CompletionInfo }> = [];
-      const bufferingCallback = async (
+      // Deliveries pass straight through so streamed text reaches the UI live.
+      // The first delivery is the point of no return: the caller has already
+      // appended it, so a later failure surfaces instead of falling back (the
+      // next model's output would land on top of the partial one - the
+      // double-content bug). Failures before any output, like rate limits and
+      // auth errors, still fall back.
+      let delivered = false;
+      const trackingCallback = async (
         text: (string | null | undefined)[],
         completionInfo?: CompletionInfo
       ): Promise<void> => {
-        buffered.push({ text, completionInfo });
+        delivered = true;
+        await callback(text, completionInfo);
       };
 
       try {
-        await this.inner.complete(modelToTry, messages, options, bufferingCallback);
-        // Success - replay the buffered deliveries to the real callback in order.
-        for (const delivery of buffered) {
-          await callback(delivery.text, delivery.completionInfo);
-        }
+        await this.inner.complete(modelToTry, messages, options, trackingCallback);
         return;
       } catch (error) {
-        // Propagate abort immediately - no fallback
-        if (options.abortSignal?.aborted) {
+        // Abort, or output already delivered: propagate - no fallback
+        if (options.abortSignal?.aborted || delivered) {
           throw error;
         }
 

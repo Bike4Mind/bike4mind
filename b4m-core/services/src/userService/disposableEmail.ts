@@ -9,6 +9,7 @@
 //      drops the file, 500-ing registration on deploy (isDisposableEmail runs
 //      by default).
 import disposableDomains from 'disposable-email-domains' with { type: 'json' };
+import { IAdminSettingsRepository, settingsMap } from '@bike4mind/common';
 
 // ~4.5k entries from the maintained `disposable-email-domains` list.
 const DISPOSABLE_DOMAINS = new Set<string>(disposableDomains as string[]);
@@ -34,4 +35,19 @@ export const isDisposableEmail = (email: string): boolean => {
     domain = domain.slice(domain.indexOf('.') + 1);
   }
   return false;
+};
+
+/**
+ * The anti-sybil gate for credit-bearing signups: true when the email is disposable and the
+ * blockDisposableEmails setting (default ON) is enabled. Shared by registerUser and the OAuth
+ * signup grant in apps/client/server/utils/auth/verifyCallback.ts so the two cannot drift.
+ */
+export const shouldBlockDisposableEmail = async (
+  email: string,
+  { adminSettings }: { adminSettings: IAdminSettingsRepository }
+): Promise<boolean> => {
+  if (!isDisposableEmail(email)) return false;
+  const setting = await adminSettings.findBySettingName('blockDisposableEmails');
+  const parsed = settingsMap.blockDisposableEmails.schema.safeParse(setting?.settingValue);
+  return parsed.success ? parsed.data : true;
 };

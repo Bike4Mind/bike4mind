@@ -63,7 +63,7 @@ vi.mock('@bike4mind/services', () => ({
     ...sourceFactories,
   },
 }));
-vi.mock('@server/utils/cloudwatch', () => ({ emitMetrics }));
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetrics }));
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger;
 
@@ -75,7 +75,7 @@ const runResult = (overrides: Record<string, unknown> = {}) => ({
   skippedSources: [],
   diff: [],
   droppedRecords: [],
-  absence: { sighted: [], missed: [], frozenBackends: [] },
+  absence: { sighted: [], missed: [], frozenBackends: [], frozenProfileIds: [] },
   metrics: {
     ModelsDiscovered: 0,
     ModelsPromoted: 0,

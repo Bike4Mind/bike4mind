@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { BadRequestError } from '@bike4mind/common';
 
 // Captures what executeCompletion actually hands the backend, so these tests pin the
 // serverTools contract: opt-in server-side execution without disturbing the legacy
@@ -14,6 +15,7 @@ vi.mock('./creditService', async importOriginal => ({
 }));
 vi.mock('@bike4mind/llm-adapters', () => ({
   reasonsWithinOutputBudget: vi.fn(() => false),
+  isAdaptiveThinkingByDefault: vi.fn(() => false),
   // Honor-explicit-else-fallback is all these suites need; the model-aware sizing this
   // stands in for is covered against the real implementation in cliCompletions.maxTokens.test.ts.
   resolveOutputMaxTokens: vi.fn(
@@ -41,6 +43,7 @@ vi.mock('@bike4mind/common', async importOriginal => ({
   getTextModelCost: vi.fn(() => 0.001),
 }));
 
+import { getSettingsValue } from '@bike4mind/utils';
 import { executeCompletion } from './cliCompletions';
 
 function buildDb() {
@@ -164,14 +167,14 @@ describe('executeCompletion - serverTools opt-in', () => {
     const { db, users, organizations } = buildDb();
     const wireTool = { toolSchema: { name: 'client_tool', description: 'x', parameters: { type: 'object' } } };
 
-    await expect(
-      executeCompletion({
-        ...baseParams,
-        db,
-        serverTools: [makeServerTool('search_knowledge_base')],
-        options: { tools: [wireTool as any] },
-      })
-    ).rejects.toThrow(/mutually exclusive/);
+    const rejection = executeCompletion({
+      ...baseParams,
+      db,
+      serverTools: [makeServerTool('search_knowledge_base')],
+      options: { tools: [wireTool as any] },
+    });
+    await expect(rejection).rejects.toThrow(/mutually exclusive/);
+    await expect(rejection).rejects.toBeInstanceOf(BadRequestError);
 
     expect(users.incrementCredits).not.toHaveBeenCalled();
     expect(organizations.incrementCredits).not.toHaveBeenCalled();
@@ -281,6 +284,34 @@ describe('executeCompletion - serverTools opt-in', () => {
     void users;
   });
 
+  it('settles what streamed before a caller abort instead of refunding the whole hold', async () => {
+    const { db, usageEvents, users } = buildDb();
+    const userApiKeys = { incrementSpend: vi.fn().mockResolvedValue(undefined) };
+    const controller = new AbortController();
+    completeImpl = async onChunk => {
+      await onChunk(['partial answer'], { inputTokens: 200, outputTokens: 25 });
+      controller.abort();
+      throw Object.assign(new Error('The operation was aborted'), { name: 'AbortError' });
+    };
+
+    await expect(
+      executeCompletion({
+        ...baseParams,
+        db: { ...db, userApiKeys: userApiKeys as any },
+        apiKeyInfo: { keyId: 'key1' } as any,
+        abortSignal: controller.signal,
+        serverTools: [makeServerTool('search_knowledge_base')],
+      })
+    ).rejects.toThrow(/aborted/i);
+
+    const refunds = users.incrementCredits.mock.calls.filter(([, delta]: [string, number]) => delta > 0);
+    expect(refunds).toEqual([]);
+    expect(usageEvents.record).toHaveBeenCalledWith(
+      expect.objectContaining({ inputTokens: 200, outputTokens: 25, creditsCharged: 10, status: 'error' })
+    );
+    expect(userApiKeys.incrementSpend).toHaveBeenCalledWith('key1', 10);
+  });
+
   it('does NOT record an aborted event when no tokens were consumed', async () => {
     const { db, usageEvents } = buildDb();
     completeImpl = async () => {
@@ -298,5 +329,68 @@ describe('executeCompletion - serverTools opt-in', () => {
     ).rejects.toThrow(/aborted/i);
 
     expect(usageEvents.record).not.toHaveBeenCalled();
+  });
+
+  it('records a safety-classifier refusal as a refusal event with enforcement on, without alwaysRecordUsage or tokens', async () => {
+    const { db, usageEvents } = buildDb();
+    completeImpl = async () => {
+      throw new Error('Anthropic safety classifier refusal for test-model - falling back to an alternative model');
+    };
+
+    await expect(executeCompletion({ ...baseParams, db })).rejects.toThrow(/safety classifier refusal/);
+
+    expect(usageEvents.record).toHaveBeenCalledTimes(1);
+    expect(usageEvents.record).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'test-model', status: 'refusal', creditsCharged: 0 })
+    );
+  });
+
+  it('does not record a refusal event when enforcement is off and alwaysRecordUsage is not set', async () => {
+    const { db, usageEvents } = buildDb();
+    vi.mocked(getSettingsValue).mockReturnValue(false as never);
+    completeImpl = async () => {
+      throw new Error('Anthropic safety classifier refusal for test-model - falling back to an alternative model');
+    };
+
+    try {
+      await expect(executeCompletion({ ...baseParams, db })).rejects.toThrow(/safety classifier refusal/);
+    } finally {
+      vi.mocked(getSettingsValue).mockReturnValue(true as never);
+    }
+
+    expect(usageEvents.record).not.toHaveBeenCalled();
+  });
+
+  it('records a refusal event with enforcement off when alwaysRecordUsage is set', async () => {
+    const { db, usageEvents } = buildDb();
+    vi.mocked(getSettingsValue).mockReturnValue(false as never);
+    completeImpl = async () => {
+      throw new Error('Anthropic safety classifier refusal for test-model - falling back to an alternative model');
+    };
+
+    try {
+      await expect(executeCompletion({ ...baseParams, db, alwaysRecordUsage: true })).rejects.toThrow(
+        /safety classifier refusal/
+      );
+    } finally {
+      vi.mocked(getSettingsValue).mockReturnValue(true as never);
+    }
+
+    expect(usageEvents.record).toHaveBeenCalledTimes(1);
+    expect(usageEvents.record).toHaveBeenCalledWith(expect.objectContaining({ status: 'refusal' }));
+  });
+
+  it('records a settled stop_reason refusal as a refusal event', async () => {
+    const { db, usageEvents } = buildDb();
+    completeImpl = async onChunk => {
+      await onChunk(['I cannot help with that'], { inputTokens: 100, outputTokens: 5, stopReason: 'refusal' });
+    };
+
+    await executeCompletion({ ...baseParams, db });
+
+    expect(usageEvents.record).toHaveBeenCalledTimes(1);
+    expect(usageEvents.record).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'refusal', inputTokens: 100, outputTokens: 5 })
+    );
   });
 });

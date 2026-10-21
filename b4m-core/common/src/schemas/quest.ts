@@ -7,7 +7,7 @@ export const QuestIdParamSchema = z.object({
 
 export const GeneratedFileSchema = z.object({
   name: z.string(),
-  url: z.string(),
+  url: z.string().describe('Presigned download URL. Short-lived (about an hour): fetch it promptly, do not store it.'),
   isImage: z.boolean(),
   isAudio: z.boolean(),
   isVideo: z.boolean(),

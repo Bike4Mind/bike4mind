@@ -2,7 +2,20 @@ import { questRepository, sessionRepository } from '@bike4mind/database';
 import { sessionService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { canUpdateShareable, IChatHistoryItem, redactPromptMetaForViewer } from '@bike4mind/common';
+import {
+  canUpdateShareable,
+  chatMessageResponseSchema,
+  IChatHistoryItem,
+  redactPromptMetaForViewer,
+} from '@bike4mind/common';
+import { respond } from '@server/utils/respond';
+import { z } from 'zod';
+
+const updateChatMessageResponseSchema = z.object({
+  success: z.literal(true),
+  message: z.string(),
+  data: chatMessageResponseSchema,
+});
 
 const handler = baseApi()
   /**
@@ -36,7 +49,10 @@ const handler = baseApi()
       // A share grant authorizes reading the conversation, not re-reading whatever the
       // owner's tools touched on the owner's behalf - see redactPromptMetaForViewer.
       const isOwner = session.userId === userId;
-      return res.json({ ...message, promptMeta: redactPromptMetaForViewer(message.promptMeta, isOwner) });
+      return respond(res, chatMessageResponseSchema, {
+        ...message,
+        promptMeta: redactPromptMetaForViewer(message.promptMeta, isOwner),
+      });
     })
   )
   /**
@@ -66,7 +82,12 @@ const handler = baseApi()
   .put(
     asyncHandler<{}, any, any, { id?: string; messageId?: string }>(async (req, res) => {
       const { id: sessionId, messageId } = req.query;
-      const updates = req.body as { reply?: string; replies?: string[]; selectedChoiceIndex?: unknown };
+      const updates = req.body as {
+        reply?: string;
+        replies?: string[];
+        selectedChoiceIndex?: unknown;
+        pinned?: unknown;
+      };
       const userId = req.user?.id;
 
       const session = await sessionRepository.findById(sessionId!);
@@ -95,6 +116,10 @@ const handler = baseApi()
 
       if (Array.isArray(updates.replies) && updates.replies.every(item => typeof item === 'string')) {
         allowedUpdates.replies = updates.replies;
+      }
+
+      if (typeof updates.pinned === 'boolean') {
+        allowedUpdates.pinned = updates.pinned;
       }
 
       // Only the pick is writable, never the options, and only once: the options are what the server
@@ -141,7 +166,7 @@ const handler = baseApi()
       // (updatedMessage is already a plain object here - BaseRepository.update calls
       // .toJSON() internally before returning.)
       const isOwner = session.userId === userId;
-      return res.json({
+      return respond(res, updateChatMessageResponseSchema, {
         success: true,
         message: 'Message updated successfully',
         data: { ...updatedMessage, promptMeta: redactPromptMetaForViewer(updatedMessage.promptMeta, isOwner) },

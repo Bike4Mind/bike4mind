@@ -8,7 +8,7 @@
  * - Random IV per encryption
  * - Authentication tag prevents tampering
  *
- * This is the canonical implementation. apps/client/server/security/secretEncryption.ts
+ * This is the canonical implementation. packages/server-utils/src/security/secretEncryption.ts
  * re-exports from here so server routes and webhooks keep their existing import path, and
  * the database layer (which cannot import from apps/client) consumes it via @bike4mind/utils.
  *

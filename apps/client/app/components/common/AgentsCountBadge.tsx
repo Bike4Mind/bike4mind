@@ -5,10 +5,8 @@ interface AgentsCountBadgeProps {
   count: number;
   /** Custom color for the badge (default: green[800]) */
   color?: string;
-  /** Custom background color opacity (default: '1A' for 10% opacity) */
+  /** Custom background color opacity (default: '26' for 15% opacity) */
   backgroundOpacity?: string;
-  /** Custom border opacity (default: 'BF' for 75% opacity) */
-  borderOpacity?: string;
   /** Font size for the count text (default: '13px') */
   fontSize?: string;
   /** Font weight for the count text (default: '500') */
@@ -30,8 +28,7 @@ interface AgentsCountBadgeProps {
 const AgentsCountBadge = ({
   count,
   color = green[800],
-  backgroundOpacity = '1A',
-  borderOpacity = 'BF',
+  backgroundOpacity = '26',
   fontSize = '13px',
   fontWeight = '500',
   borderRadius = '2px',
@@ -44,7 +41,6 @@ const AgentsCountBadge = ({
       count={count}
       color={color}
       backgroundOpacity={backgroundOpacity}
-      borderOpacity={borderOpacity}
       fontSize={fontSize}
       fontWeight={fontWeight}
       borderRadius={borderRadius}

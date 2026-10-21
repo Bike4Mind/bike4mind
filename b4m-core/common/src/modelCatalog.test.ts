@@ -1,9 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import {
+  bedrockFoundationIdOf,
+  isBedrockRegionProfileId,
+  stripBedrockRegionPrefix,
   DEFAULT_MAX_OUTPUT_TOKENS,
   inferVendor,
   isPromptMetaModelType,
   isRenderableModelType,
+  isDedicatedApiModel,
   MODEL_INFO_TYPES,
   PROMPT_META_MODEL_TYPES,
   toModelInfo,
@@ -178,6 +182,34 @@ describe('inferVendor', () => {
   });
 });
 
+describe('bedrockFoundationIdOf', () => {
+  it('strips a cross-region inference-profile prefix', () => {
+    expect(bedrockFoundationIdOf('global.anthropic.claude-opus-4-8')).toBe('anthropic.claude-opus-4-8');
+    expect(bedrockFoundationIdOf('us.anthropic.claude-sonnet-4-6')).toBe('anthropic.claude-sonnet-4-6');
+    expect(bedrockFoundationIdOf('eu.anthropic.claude-haiku-4-5')).toBe('anthropic.claude-haiku-4-5');
+    expect(bedrockFoundationIdOf('apac.anthropic.claude-sonnet-4-6')).toBe('anthropic.claude-sonnet-4-6');
+  });
+
+  it('returns null for an id with no profile prefix', () => {
+    expect(bedrockFoundationIdOf('anthropic.claude-sonnet-4-6')).toBeNull();
+    expect(bedrockFoundationIdOf('deepseek.v3-v1:0')).toBeNull();
+  });
+});
+
+describe('isBedrockRegionProfileId / stripBedrockRegionPrefix', () => {
+  it.each(['us.', 'eu.', 'apac.', 'global.'])('recognises and strips the %s scope', scope => {
+    const id = `${scope}anthropic.claude-sonnet-4-6`;
+    expect(isBedrockRegionProfileId(id)).toBe(true);
+    expect(stripBedrockRegionPrefix(id)).toBe('anthropic.claude-sonnet-4-6');
+  });
+
+  it('leaves ids without a region scope untouched', () => {
+    expect(isBedrockRegionProfileId('anthropic.claude-sonnet-4-6')).toBe(false);
+    expect(isBedrockRegionProfileId('usa.anthropic.claude')).toBe(false);
+    expect(stripBedrockRegionPrefix('anthropic.claude-sonnet-4-6')).toBe('anthropic.claude-sonnet-4-6');
+  });
+});
+
 describe('isRenderableModelType', () => {
   it('accepts the types this build narrows on and rejects the rest', () => {
     expect(isRenderableModelType('text')).toBe(true);
@@ -215,4 +247,26 @@ describe('isPromptMetaModelType', () => {
   it('declares only types that are real ModelInfo types', () => {
     expect(PROMPT_META_MODEL_TYPES.every(type => isRenderableModelType(type))).toBe(true);
   });
+});
+
+describe('isDedicatedApiModel', () => {
+  it.each([
+    'deep-research-preview-04-2026',
+    'deep-research-max-preview-04-2026',
+    'gemini-2.5-computer-use-preview-10-2025',
+    'Deep-Research-Preview',
+    'models/deep-research-x',
+    'deep-research',
+    'o3-deep-research',
+    'computer-use-preview',
+  ])('matches %s', id => expect(isDedicatedApiModel(id)).toBe(true));
+
+  it.each([
+    'gemini-3.5-flash',
+    'gemini-2.5-pro',
+    'research-assistant-1',
+    'gemini-deepresearch',
+    'gemini-3-deep-researcher',
+    'gpt-5.5',
+  ])('does not match %s', id => expect(isDedicatedApiModel(id)).toBe(false));
 });

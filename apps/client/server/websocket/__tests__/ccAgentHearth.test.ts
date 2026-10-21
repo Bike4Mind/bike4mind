@@ -22,7 +22,7 @@ const {
   canAccessTavernMock,
   codeAgentEventRepositoryMock,
   connectionMock,
-  querySubscriptionMock,
+  realtimeConnectionRepositoryMock,
   userModelMock,
   userServiceMock,
   getSettingByNameMock,
@@ -50,8 +50,8 @@ const {
   resolveBridgeWsAuthMock: vi.fn(),
   canAccessTavernMock: vi.fn(),
   codeAgentEventRepositoryMock: { insert: vi.fn() },
-  connectionMock: { findOne: vi.fn(), deleteOne: vi.fn(), countDocuments: vi.fn() },
-  querySubscriptionMock: { updateMany: vi.fn() },
+  connectionMock: { findOneAndDelete: vi.fn(), countDocuments: vi.fn() },
+  realtimeConnectionRepositoryMock: { removeConnectionSubscribers: vi.fn() },
   userModelMock: { updateOne: vi.fn() },
   userServiceMock: { updateLogoutTime: vi.fn() },
 }));
@@ -70,7 +70,7 @@ vi.mock('@bike4mind/database', () => ({
   // Reached through the shared toPresenceProjection, which clamps with it.
   MAX_PRESENCE_FIELD_LENGTH: 200,
   Connection: connectionMock,
-  QuerySubscription: querySubscriptionMock,
+  realtimeConnectionRepository: realtimeConnectionRepositoryMock,
   User: userModelMock,
   userRepository: {},
 }));
@@ -146,6 +146,7 @@ function appendedEvent() {
       schema: string;
       payload: Record<string, unknown> & { activity?: { reason?: string }; slug?: string };
     };
+    origin?: string;
   };
 }
 
@@ -214,10 +215,9 @@ function applyMockDefaults() {
       })
   );
   hearthRepositoryMock.upsertPresence.mockResolvedValue({ _id: 'presence-1' });
-  connectionMock.findOne.mockResolvedValue({ connectionId: 'conn-1', userId: USER });
-  connectionMock.deleteOne.mockResolvedValue({ deletedCount: 1 });
+  connectionMock.findOneAndDelete.mockReturnValue({ lean: async () => ({ connectionId: 'conn-1', userId: USER }) });
   connectionMock.countDocuments.mockResolvedValue(1);
-  querySubscriptionMock.updateMany.mockResolvedValue({ modifiedCount: 0 });
+  realtimeConnectionRepositoryMock.removeConnectionSubscribers.mockResolvedValue(undefined);
   activeCodeAgentRepositoryMock.removeByConnectionId.mockResolvedValue([]);
 }
 
@@ -247,6 +247,7 @@ describe('cc_agent_register dual-write', () => {
     expect(appended.kind).toBe('presence');
     expect(appended.channelId).toBe('ch-default');
     expect(appended.actorId).toBe('actor-1');
+    expect(appended.origin).toBe('api-key');
     expect(hearthRepositoryMock.ensureChannelByName).toHaveBeenCalledWith(USER, 'agents');
     // The slug alone, and the shared presence schema: the hook covering this
     // same session composes the identical actor name and writes the identical

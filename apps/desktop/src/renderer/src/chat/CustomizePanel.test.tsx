@@ -1,0 +1,278 @@
+// @vitest-environment jsdom
+import { CssVarsProvider } from '@mui/joy/styles';
+import { act } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import type { SkillSummary } from '@shared/skills';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { CustomizeNavItem, CustomizeScreen } from './CustomizePanel';
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+// jsdom ships no matchMedia, and Joy's colour-scheme provider asks for one on mount.
+window.matchMedia ??= ((query: string) => ({
+  matches: false,
+  media: query,
+  onchange: null,
+  addListener: () => {},
+  removeListener: () => {},
+  addEventListener: () => {},
+  removeEventListener: () => {},
+  dispatchEvent: () => false,
+})) as typeof window.matchMedia;
+
+const market = vi.hoisted(() => ({
+  imports: vi.fn(async () => ({ imports: [] as unknown[] })),
+  openOnWeb: vi.fn(async () => true),
+  readLocalSkill: vi.fn(async () => ({
+    ok: true as const,
+    fields: { name: 'chrome-browser', description: 'Use the browser extension', body: 'Go.' },
+    dropped: [] as string[],
+    extraFiles: [] as string[],
+    extraFileCount: 0,
+  })),
+  pickUploadSource: vi.fn(async () => ({ ok: false as const, error: 'No SKILL.md in that folder.' })),
+}));
+
+(window as unknown as { b4m: unknown }).b4m = {
+  mcp: {
+    getServers: async () => ({ servers: [], secretsPersisted: true }),
+    onChanged: () => () => {},
+  },
+  skillMarket: market,
+};
+
+const skills = vi.hoisted(() => ({
+  state: {
+    skills: [
+      { name: 'my-review', description: 'Review my changes', source: 'project', filePath: '/repo/.claude/SKILL.md' },
+      {
+        name: 'chrome-browser',
+        description: 'Use the browser extension',
+        source: 'global',
+        filePath: '/home/.claude/skills/chrome-browser/SKILL.md',
+      },
+      {
+        name: 'legacy-command',
+        description: 'A global command',
+        source: 'global',
+        filePath: '/home/.claude/commands/legacy-command.md',
+      },
+      {
+        name: 'hyperframes',
+        description: 'Create videos',
+        source: 'global',
+        filePath: '/home/.claude/skills/hyperframes/SKILL.md',
+      },
+      {
+        name: 'brief-format',
+        description: 'Defines the brief format',
+        source: 'global',
+        filePath: '/home/.claude/skills/hyperframes/references/brief-format.md',
+      },
+    ] as SkillSummary[],
+    projectDirectory: '/repo',
+    untrustedProject: null as string | null,
+  },
+}));
+
+vi.mock('./useSkills', () => ({
+  useSkills: () => ({ ...skills.state, refresh: vi.fn(), trustProject: vi.fn() }),
+}));
+
+let root: Root;
+let container: HTMLDivElement;
+
+const renderNode = (node: React.ReactNode) => {
+  container = document.createElement('div');
+  document.body.append(container);
+  root = createRoot(container);
+  act(() => root.render(<CssVarsProvider>{node}</CssVarsProvider>));
+  return container;
+};
+
+const renderScreen = () => renderNode(<CustomizeScreen sessionId="session-1" onClose={() => {}} />);
+
+const byTestId = (id: string) => container.querySelector<HTMLElement>(`[data-testid="${id}"]`);
+const allByTestId = (id: string) => [...container.querySelectorAll<HTMLElement>(`[data-testid="${id}"]`)];
+const text = (node: Element | null | undefined) => node?.textContent?.replace(/\s+/g, ' ');
+
+const isVisible = (node: HTMLElement | null) => {
+  if (!node?.isConnected) return false;
+  for (let el: HTMLElement | null = node; el; el = el.parentElement) {
+    const { display, visibility, opacity } = getComputedStyle(el);
+    if (el.hidden || display === 'none' || visibility === 'hidden' || visibility === 'collapse' || opacity === '0') {
+      return false;
+    }
+  }
+  return true;
+};
+
+describe('the Customize screen', () => {
+  beforeEach(() => {
+    if (root) act(() => root.unmount());
+    document.body.replaceChildren();
+    skills.state.skills = [
+      { name: 'my-review', description: 'Review my changes', source: 'project', filePath: '/repo/.claude/SKILL.md' },
+      {
+        name: 'chrome-browser',
+        description: 'Use the browser extension',
+        source: 'global',
+        filePath: '/home/.claude/skills/chrome-browser/SKILL.md',
+      },
+      {
+        name: 'legacy-command',
+        description: 'A global command',
+        source: 'global',
+        filePath: '/home/.claude/commands/legacy-command.md',
+      },
+      {
+        name: 'hyperframes',
+        description: 'Create videos',
+        source: 'global',
+        filePath: '/home/.claude/skills/hyperframes/SKILL.md',
+      },
+      {
+        name: 'brief-format',
+        description: 'Defines the brief format',
+        source: 'global',
+        filePath: '/home/.claude/skills/hyperframes/references/brief-format.md',
+      },
+    ];
+  });
+
+  it('orders Skills before MCP and selects Skills by default', () => {
+    renderScreen();
+    const tabs = [...container.querySelectorAll<HTMLElement>('[role="tab"]')];
+    expect(tabs.map(tab => tab.textContent)).toEqual(['Skills', 'MCP']);
+    expect(tabs[0]?.getAttribute('aria-selected')).toBe('true');
+    expect(isVisible(byTestId('skills-settings'))).toBe(true);
+  });
+
+  it('groups global skills by their top-level ~/.claude/skills scope', () => {
+    renderScreen();
+    const groups = allByTestId('skill-group');
+    expect(text(byTestId('user-skill-scopes'))).toContain('Your skills');
+    expect(text(groups[0])).toContain('chrome-browser');
+    expect(text(groups[0])).toContain('/chrome-browser');
+    expect(text(groups[1])).toContain('hyperframes');
+    expect(text(groups[1])).toContain('/hyperframes');
+    expect(text(groups[1])).toContain('/brief-format');
+    expect(text(container)).not.toContain('Project skills');
+    expect(text(container)).not.toContain('/my-review');
+    expect(text(container)).not.toContain('/legacy-command');
+    expect(text(groups[2])).toContain('Bike4Mind skills');
+    expect(text(groups[2])).toContain('No Bike4Mind account skills loaded.');
+  });
+
+  it('shows an explicit empty state for either skill group', () => {
+    skills.state.skills = [
+      {
+        name: 'chrome-browser',
+        description: 'Use the browser extension',
+        source: 'global',
+        filePath: '/home/.claude/skills/chrome-browser/SKILL.md',
+      },
+    ];
+    renderScreen();
+    expect(text(container)).not.toContain('No skills found in ~/.claude/skills.');
+    expect(text(container)).toContain('No Bike4Mind account skills loaded.');
+  });
+
+  it('lists account skills under Bike4Mind skills with a Bike4Mind chip, and not under Your skills', () => {
+    skills.state.skills = [
+      ...skills.state.skills,
+      { name: 'web-summary', description: 'Summarise', source: 'account', filePath: 'b4m:/api/skills/a1' },
+    ];
+    renderScreen();
+    const account = allByTestId('skill-group').find(group => text(group)?.includes('Bike4Mind skills'));
+    expect(text(account)).toContain('/web-summary');
+    expect(text(account)).not.toContain('No Bike4Mind account skills loaded.');
+    expect(text(byTestId('user-skill-scopes'))).not.toContain('web-summary');
+
+    const row = allByTestId('customize-skill-row').find(candidate => text(candidate)?.includes('/web-summary'));
+    expect(text(row?.querySelector('[data-testid="customize-skill-chip"]'))).toBe('Bike4Mind');
+  });
+
+  it('marks a Skill Market import, offers its update, and opens the market and the web', async () => {
+    skills.state.skills = [
+      ...skills.state.skills,
+      { name: 'web-summary', description: 'Mine', source: 'account', filePath: 'b4m:/api/skills/a1' },
+      { name: 'market-pick', description: 'Theirs', source: 'account', imported: true, filePath: 'b4m:/api/skills/a2' },
+    ];
+    market.imports.mockResolvedValueOnce({
+      imports: [{ skillId: 'a2', name: 'market-pick', listingId: 'l1', updateAvailable: true }],
+    });
+    const onOpenSkillMarket = vi.fn();
+    renderNode(<CustomizeScreen sessionId="session-1" onClose={() => {}} onOpenSkillMarket={onOpenSkillMarket} />);
+    await act(async () => {});
+
+    const rows = allByTestId('customize-skill-row');
+    const mine = rows.find(row => text(row)?.includes('/web-summary'));
+    const theirs = rows.find(row => text(row)?.includes('/market-pick'));
+    expect(mine?.querySelector('[data-testid="customize-skill-imported-chip"]')).toBeNull();
+    expect(mine?.querySelector('[data-testid="customize-skill-update-btn"]')).toBeNull();
+    expect(text(theirs?.querySelector('[data-testid="customize-skill-imported-chip"]'))).toBe('Imported');
+
+    act(() => theirs?.querySelector<HTMLElement>('[data-testid="customize-skill-update-btn"]')?.click());
+    expect(onOpenSkillMarket).toHaveBeenLastCalledWith({ id: 'l1' });
+    act(() => byTestId('customize-skill-market-btn')?.click());
+    expect(onOpenSkillMarket).toHaveBeenLastCalledWith();
+    act(() => mine?.querySelector<HTMLElement>('[data-testid="customize-skill-web-btn"]')?.click());
+    expect(market.openOnWeb).toHaveBeenCalledWith({ kind: 'skill', id: 'a1' });
+  });
+
+  it('switches to MCP and preserves its inline controls', () => {
+    renderScreen();
+    act(() => byTestId('customize-mcp-tab')?.click());
+    expect(byTestId('customize-mcp-tab')?.getAttribute('aria-selected')).toBe('true');
+    expect(isVisible(byTestId('mcp-settings'))).toBe(true);
+    expect(isVisible(byTestId('mcp-settings-add-btn'))).toBe(true);
+    expect(byTestId('config-entry-btn')).toBeNull();
+  });
+
+  it('leaves app preferences, the server, and the updater to Settings', () => {
+    renderScreen();
+    expect(container.querySelector('[data-entry="appearance"]')).toBeNull();
+    expect(container.querySelector('[data-entry="prompt-suggestions"]')).toBeNull();
+    expect(byTestId('update-settings')).toBeNull();
+    expect(byTestId('environment-select-btn')).toBeNull();
+  });
+
+  it('keeps a way out of the screen', () => {
+    renderScreen();
+    expect(isVisible(byTestId('customize-close-btn'))).toBe(true);
+  });
+  it('offers Upload on local rows only, resolved by name in main, and opens the preview', async () => {
+    skills.state.skills = [
+      ...skills.state.skills,
+      { name: 'web-summary', description: 'Summarise', source: 'account', filePath: 'b4m:/api/skills/a1' },
+    ];
+    renderScreen();
+    const rows = allByTestId('customize-skill-row');
+    const account = rows.find(row => text(row)?.includes('/web-summary'));
+    expect(account?.querySelector('[data-testid="skill-row-upload-btn"]')).toBeNull();
+
+    const local = rows.find(row => text(row)?.includes('/chrome-browser'));
+    await act(async () => local?.querySelector<HTMLElement>('[data-testid="skill-row-upload-btn"]')?.click());
+    expect(market.readLocalSkill).toHaveBeenCalledWith({ sessionId: 'session-1', name: 'chrome-browser' });
+    expect(document.querySelector('[data-testid="skill-upload-dialog"]')).not.toBeNull();
+  });
+
+  it('shows a failed pick inline', async () => {
+    renderScreen();
+    await act(async () => byTestId('skill-upload-pick-btn')?.click());
+    expect(text(byTestId('skill-upload-pick-error'))).toContain('No SKILL.md in that folder.');
+  });
+});
+
+describe('the Customize nav row', () => {
+  it('opens the screen and keeps its stable hook', () => {
+    renderNode(<CustomizeNavItem onOpen={() => {}} />);
+    expect(isVisible(byTestId('chat-customize-btn'))).toBe(true);
+  });
+
+  it('shows no attention badge when nothing needs attention', () => {
+    renderNode(<CustomizeNavItem onOpen={() => {}} />);
+    expect(byTestId('customize-attention-chip')).toBeNull();
+  });
+});

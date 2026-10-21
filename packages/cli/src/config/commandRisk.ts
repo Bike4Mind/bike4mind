@@ -3,7 +3,7 @@ import { parse as shellParse } from 'shell-quote';
 /**
  * Parse-based shell command risk classification.
  *
- * Tool-name-based safety (see {@link ./toolSafety}) treats every `bash_execute`
+ * Descriptor-based tool policy (see tools/gateway/toolPolicy.ts) treats every `bash_execute`
  * call identically, so a destructive command hidden behind a wrapper
  * (`sh -c "rm -rf /"`, `sudo bash -c "..."`, `curl ... | sh`) is indistinguishable
  * from a benign `ls`. This module inspects the *command text* with a real shell
@@ -765,20 +765,24 @@ function leadingProgram(args: string[]): string {
 }
 
 /**
- * True if any `>`/`>>` redirection targets a raw block device. Covers the common
- * host shapes: SCSI/SATA (`sd[a-z]`), NVMe, Xen (`xvd[a-z]`, default on many EC2
- * AMIs), virtio (`vd[a-z]`), legacy IDE (`hd[a-z]`), device-mapper/LVM (`dm-N`,
- * `mapper/`), software RAID (`md N`), eMMC/SD (`mmcblkN`), loop, and macOS `diskN`.
+ * True if any write redirection (`>`, `>>`, `>|`, `&>`, `&>>`, `<>`) targets a raw block
+ * device. Covers the common host shapes: SCSI/SATA (`sd[a-z]`), NVMe, Xen (`xvd[a-z]`,
+ * default on many EC2 AMIs), virtio (`vd[a-z]`), legacy IDE (`hd[a-z]`), device-mapper/LVM
+ * (`dm-N`, `mapper/`), software RAID (`md N`), eMMC/SD (`mmcblkN`), loop, and macOS `diskN`.
  */
 const BLOCK_DEVICE_RE =
   /^\/dev\/(sd[a-z]|nvme\d+n\d+|xvd[a-z]|vd[a-z]|hd[a-z]|dm-\d+|md\d+|mmcblk\d+|loop\d+|disk\d+|mapper\/)/;
 
+// shell-quote >=1.11 emits `>|`, `&>`, `&>>` and `<>` as single ops; older releases
+// split them into `>`/`>>` plus a neighbour, which the plain `>`/`>>` match caught.
+const WRITE_REDIRECT_OPS = new Set(['>', '>>', '>|', '&>', '&>>', '<>']);
+
 function writesToBlockDevice(tokens: ShellToken[]): boolean {
   for (let i = 0; i < tokens.length; i += 1) {
     const token = tokens[i];
-    if (isOperator(token) && (token.op === '>' || token.op === '>>')) {
+    if (isOperator(token) && WRITE_REDIRECT_OPS.has(token.op)) {
       let targetIndex = i + 1;
-      // bash force-clobber `>|` tokenizes as `>` then `|`; step over the `|` to
+      // Before shell-quote 1.11, `>|` tokenized as `>` then `|`; step over the `|` to
       // reach the redirect target, which would otherwise be read as the operator.
       const following = tokens[targetIndex];
       if (isOperator(following) && following.op === '|') targetIndex += 1;

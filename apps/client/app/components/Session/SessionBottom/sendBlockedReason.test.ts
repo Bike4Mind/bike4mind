@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import type { TFunction } from 'i18next';
-import { createBlockedSendToastGate, getSendBlockedLabel, getSendBlockedReason } from './sendBlockedReason';
+import {
+  createBlockedSendToastGate,
+  getBlockedSendToastLabel,
+  getSendBlockedLabel,
+  getSendBlockedReason,
+} from './sendBlockedReason';
 
 const ready = {
   isGenerating: false,
@@ -9,6 +14,7 @@ const ready = {
   isModelsError: false,
   hasModels: true,
   isSocketOpen: true,
+  hasSocketEverOpened: true,
   hasActiveUploads: false,
 };
 
@@ -24,6 +30,7 @@ describe('getSendBlockedReason', () => {
     [{ hasModels: false }, 'noModels'],
     [{ hasModels: false, isModelsError: true }, 'modelsError'],
     [{ isSocketOpen: false }, 'reconnecting'],
+    [{ isSocketOpen: false, hasSocketEverOpened: false }, 'connecting'],
     [{ hasActiveUploads: true }, 'uploading'],
   ] as const)('blocks with %o -> %s', (override, reason) => {
     expect(getSendBlockedReason({ ...ready, ...override })).toBe(reason);
@@ -45,24 +52,56 @@ describe('getSendBlockedReason', () => {
 describe('getSendBlockedLabel', () => {
   const t = ((_key: string, fallback: string) => fallback) as unknown as TFunction;
 
+  it('labels a send before the first socket open as connecting, never reconnecting', () => {
+    expect(getSendBlockedReason({ ...ready, isSocketOpen: false, hasSocketEverOpened: false })).toBe('connecting');
+    expect(getSendBlockedLabel('connecting', t)).toBe('Connecting...');
+    expect(getBlockedSendToastLabel('connecting', t)).toBe('Connecting...');
+  });
+
   it('tells a failed model load apart from a missing permission', () => {
     expect(getSendBlockedLabel('modelsError', t)).toBe("Couldn't load AI models");
     expect(getSendBlockedLabel('noModels', t)).toBe('No models available');
   });
 });
 
+describe('getBlockedSendToastLabel', () => {
+  const t = ((_key: string, fallback: string) => fallback) as unknown as TFunction;
+
+  it('says a refused send is waiting on another message, not that it is sending', () => {
+    expect(getBlockedSendToastLabel('sending', t)).toBe('Another message is still sending');
+  });
+
+  it('matches the Send tooltip for every other reason', () => {
+    expect(getBlockedSendToastLabel('generating', t)).toBe(getSendBlockedLabel('generating', t));
+    expect(getBlockedSendToastLabel('reconnecting', t)).toBe(getSendBlockedLabel('reconnecting', t));
+  });
+});
+
 describe('createBlockedSendToastGate', () => {
   it('toasts reasons the UI does not already show, once per window', () => {
-    const shouldToast = createBlockedSendToastGate(3_000);
+    const shouldToast = createBlockedSendToastGate({ windowMs: 3_000 });
     expect(shouldToast('reconnecting', 1_000)).toBe(true);
     expect(shouldToast('reconnecting', 2_000)).toBe(false);
     expect(shouldToast('uploading', 2_000)).toBe(true);
     expect(shouldToast('reconnecting', 4_000)).toBe(true);
   });
 
+  it('toasts a send held for the first connect, so Enter is visibly refused rather than dropped', () => {
+    expect(createBlockedSendToastGate()('connecting', 0)).toBe(true);
+  });
+
   it('never toasts generating or sending', () => {
     const shouldToast = createBlockedSendToastGate();
     expect(shouldToast('generating', 0)).toBe(false);
     expect(shouldToast('sending', 0)).toBe(false);
+  });
+
+  it('with toastEveryReason, also toasts generating and sending, still once per window', () => {
+    const shouldToast = createBlockedSendToastGate({ windowMs: 3_000, toastEveryReason: true });
+    expect(shouldToast('generating', 1_000)).toBe(true);
+    expect(shouldToast('generating', 2_000)).toBe(false);
+    expect(shouldToast('sending', 2_000)).toBe(true);
+    expect(shouldToast('reconnecting', 2_000)).toBe(true);
+    expect(shouldToast('generating', 4_000)).toBe(true);
   });
 });

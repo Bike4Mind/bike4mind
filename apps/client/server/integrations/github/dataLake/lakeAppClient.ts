@@ -1,8 +1,8 @@
 import { Octokit } from '@octokit/rest';
 import { createAppAuth } from '@octokit/auth-app';
 import { parseRateLimitHeaders, resolveRetryAfterDelayMs } from '@bike4mind/common';
-import { Config } from '@server/utils/config';
-import type { GitHubTreeEntry } from './lakeFileFilter';
+import { Config } from '@bike4mind/server-utils/utils/config';
+import type { GitHubTreeEntry } from '@bike4mind/server-utils/integrations/github/dataLake/lakeFileFilter';
 
 /**
  * Thin client for the read-only data-lake GitHub App (see infra/secrets.ts GITHUB_LAKE_APP_*).
@@ -26,14 +26,14 @@ export type GitHubLakeRepository = { id: number; fullName: string; defaultBranch
 export type GitHubLakeInstallation = {
   id: number;
   accountLogin: string;
+  /** The account's numeric GitHub id - the `target_id` of a targeted install link. Null without an account. */
+  accountId: number | null;
   repositorySelection: 'all' | 'selected';
   permissions: Record<string, string | undefined>;
 };
 
 /** An installation as the user's own token sees it: GET /user/installations. */
 export type GitHubLakeUserInstallation = GitHubLakeInstallation & {
-  /** The account's numeric GitHub id - the `target_id` of a targeted install link. Null without an account. */
-  accountId: number | null;
   accountType: 'User' | 'Organization';
   settingsUrl: string;
 };
@@ -153,6 +153,7 @@ export async function getInstallation(
   return {
     id: data.id,
     accountLogin,
+    accountId: account?.id ?? null,
     repositorySelection: data.repository_selection,
     permissions: { ...data.permissions },
   };

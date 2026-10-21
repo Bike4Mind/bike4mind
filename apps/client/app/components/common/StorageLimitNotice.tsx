@@ -2,6 +2,7 @@ import { Alert, Button } from '@mui/joy';
 import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded';
 import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded';
 import { FC } from 'react';
+import prettyBytes from 'pretty-bytes';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useFileBrowser } from '@client/app/components/Files/fileBrowserStore';
 import {
@@ -14,12 +15,14 @@ import {
 interface StorageLimitNoticeProps {
   /** Total size of the files about to be uploaded. */
   uploadBytes: number;
+  /** Part of uploadBytes that is a picked Drive folder's known size, called out when it exceeds. */
+  driveFolderBytes?: number;
   /** Replaces the default of opening the file browser, e.g. when it is already open underneath. */
   onManageFiles?: () => void;
 }
 
 /** Renders nothing while the upload fits comfortably under the current user's storage limit. */
-const StorageLimitNotice: FC<StorageLimitNoticeProps> = ({ uploadBytes, onManageFiles }) => {
+const StorageLimitNotice: FC<StorageLimitNoticeProps> = ({ uploadBytes, driveFolderBytes = 0, onManageFiles }) => {
   const currentUser = useUser(s => s.currentUser);
   const setFileBrowserOpen = useFileBrowser(s => s.setOpen);
   const check = checkStorageForUpload(getStorageQuota(currentUser), uploadBytes);
@@ -46,6 +49,7 @@ const StorageLimitNotice: FC<StorageLimitNoticeProps> = ({ uploadBytes, onManage
       }
     >
       {exceeds ? storageExceededMessage(check) : storageNearLimitMessage(check)}
+      {exceeds && driveFolderBytes > 0 && ` The Drive folder holds at least ${prettyBytes(driveFolderBytes)}.`}
     </Alert>
   );
 };

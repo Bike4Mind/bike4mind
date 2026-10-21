@@ -9,8 +9,8 @@
  */
 
 import { Logger } from '@bike4mind/observability';
-import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
-import { sendToQueue } from '@server/utils/sqs';
+import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { adminSettingsRepository, sreErrorTrackingRepository, slackDevWorkspaceRepository } from '@bike4mind/database';
 import {
   SreAgentConfigSchema,

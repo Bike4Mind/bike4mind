@@ -5,10 +5,15 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { userService } from '@bike4mind/services';
 import { EmailEvents } from '@server/utils/eventBus';
-import { generateVerificationLink, getLogoUrl, buildEmailLogoImg } from '@server/utils/mailer/emailHelpers';
-import { ForbiddenError } from '@server/utils/errors';
+import {
+  generateVerificationLink,
+  getLogoUrl,
+  buildEmailLogoImg,
+  escapeHtml,
+} from '@bike4mind/server-utils/utils/mailer/emailHelpers';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
-import { logAuditEvent, EmailAuditEvents } from '@server/utils/auditLog';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 interface RequestQuery {
   userId: string;
@@ -84,7 +89,7 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
             <div class="content">
               ${buildEmailLogoImg(brand, logoUrl)}
               <h2>Verify Your Email Address</h2>
-              <p>Hello ${user.username},</p>
+              <p>Hello ${escapeHtml(user.username)},</p>
               <div class="admin-note">
                 <strong>Note:</strong> An administrator has resent your email verification link.
               </div>
@@ -109,17 +114,11 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
         );
 
         // Log admin action
-        await logAuditEvent(
-          {
-            userId,
-            action: EmailAuditEvents.ADMIN_VERIFICATION_RESENT,
-            ip: req.ip,
-            userAgent: req.headers['user-agent'] || 'unknown',
-            adminUserId: req.user.id,
-            adminUsername: req.user.username,
-          },
-          req.logger
-        );
+        await recordAdminActionFromRequest(req, {
+          action: 'user.email.verification_resent',
+          target: { kind: 'user', id: userId, displayName: userId },
+          summary: 'resent email verification',
+        });
 
         req.logger.info(`Admin ${req.user.id} resent email verification for user ${userId}`);
 

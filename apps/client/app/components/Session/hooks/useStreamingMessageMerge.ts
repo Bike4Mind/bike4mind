@@ -91,6 +91,8 @@ export function useStreamingMessageMerge({
           prompt: chatCompletion.quest.prompt || baseQuest.prompt,
           images: chatCompletion.quest.images || baseQuest.images,
           videos: chatCompletion.quest.videos || baseQuest.videos,
+          videoJobIds: chatCompletion.quest.videoJobIds ?? baseQuest.videoJobIds,
+          generationJobs: chatCompletion.quest.generationJobs ?? baseQuest.generationJobs,
           status: chatCompletion.quest.status || baseQuest.status,
           // Prefer the live streamed classifier so the error CTA renders immediately,
           // before the post-completion quest refetch backfills it from the DB.
@@ -114,6 +116,8 @@ export function useStreamingMessageMerge({
         reply: sq.replies?.[sq.replies.length - 1] ?? sq.reply ?? null,
         images: sq.images || [],
         videos: sq.videos || [],
+        videoJobIds: sq.videoJobIds,
+        generationJobs: sq.generationJobs,
         status: sq.status || 'running',
         type: sq.type || 'message',
         errorCode: sq.errorCode,

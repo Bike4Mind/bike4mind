@@ -26,12 +26,14 @@ describe('githubLakeIngestQueue mirrors the Drive ingest queue', () => {
     expect(queue).toMatch(/retry:\s*2\b/);
   });
 
-  it('subscribes the handler with a 10-minute timeout, the VPC, the bucket and a self-link, one record at a time', () => {
+  it('subscribes the handler with a 10-minute timeout, the VPC, the bucket, a self-link and the revoke queue, one record at a time', () => {
     const sub = cut(QUEUES, 'const githubLakeIngestQueueSubscription = githubLakeIngestQueue.subscribe(', '\n);');
-    expect(sub).toMatch(/handler:\s*'apps\/client\/server\/queueHandlers\/githubLakeIngest\.dispatch'/);
+    expect(sub).toMatch(/handler:\s*'apps\/workers\/src\/queueHandlers\/githubLakeIngest\.dispatch'/);
     expect(sub).toMatch(/timeout:\s*'10 minutes'/);
     expect(sub).toMatch(/vpc:\s*lambdaVpc/);
-    expect(sub).toMatch(/link:\s*\[\.\.\.allSecrets,\s*fabFileBucket,\s*githubLakeIngestQueue\]/);
+    expect(sub).toMatch(
+      /link:\s*\[\.\.\.allSecrets,\s*fabFileBucket,\s*githubLakeIngestQueue,\s*githubLakeRevokeQueue\]/
+    );
     expect(sub).toMatch(/SINGLE_RECORD_BATCH\s*$/);
   });
 

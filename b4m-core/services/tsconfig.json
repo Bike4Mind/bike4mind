@@ -24,7 +24,7 @@
     "allowSyntheticDefaultImports": true,
     "incremental": true
   },
-  "include": ["src/**/*.ts"],
+  "include": ["src/**/*.ts", "src/llm/evals/lakeRag/bank.json"],
   "exclude": ["dist", "node_modules", "**/*.test.ts", "**/*.d.ts", "**/examples/**"],
   "references": [
     { "path": "../common" },

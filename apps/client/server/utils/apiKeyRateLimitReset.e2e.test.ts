@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
-import { cacheRepository } from '@bike4mind/database';
+import { Cache, cacheRepository } from '@bike4mind/database';
 import { buildRateLimitKeys, checkApiKeyRateLimit, resetApiKeyRateLimit } from './apiKeyRateLimitCheck';
 
 // Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
@@ -27,6 +27,8 @@ const rateLimit = { requestsPerMinute: 2, requestsPerDay: 1000 };
 beforeAll(async () => {
   mongoServer = await createMongoServer();
   await mongoose.connect(mongoServer.getUri());
+  // Settle Cache's unique `key` index before driving the limiter - see createMongoServer.
+  await Cache.init();
 });
 afterAll(async () => {
   await mongoose.disconnect();

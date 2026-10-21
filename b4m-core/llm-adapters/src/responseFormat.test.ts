@@ -574,8 +574,8 @@ describe('GeminiBackend best-effort response_format', () => {
       cb
     );
 
-    expect(lastConfig.systemInstruction).toContain('extract_user');
-    expect(lastConfig.systemInstruction).toContain('JSON Schema');
+    expect(lastConfig.config.systemInstruction).toContain('extract_user');
+    expect(lastConfig.config.systemInstruction).toContain('JSON Schema');
 
     const last = calls[calls.length - 1];
     expect(last?.info?.responseFormatMode).toBe('best-effort');

@@ -3,7 +3,7 @@ import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
 import { IChatHistoryItemDocument, PromptIntent } from '@bike4mind/common';
 import { getEffectiveApiKeyByBackend, OperationsModelService } from '@client/services/operationsModelService';
-import { serializeError } from './serializeError';
+import { serializeError } from '@bike4mind/server-utils/utils/serializeError';
 import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
 
 export const HISTORY_LOOKBACK = 6;

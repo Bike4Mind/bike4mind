@@ -120,9 +120,14 @@ function firstAtOrAfter(sorted: number[], min: number): number {
 /**
  * Every `<artifact ...>body</artifact>` block in `content`, identical to exec-looping
  * `/<artifact\s+(ATTRS)>([\s\S]*?)<\/artifact>/gi`: the body ends at the first closer after
- * the tag, and a failed opener retries one character later.
+ * the tag, and a failed opener retries one character later. A block `descendInto` accepts is
+ * still returned, but the scan resumes at its body instead of after its closer, so blocks
+ * nested inside it (which may share its closer) are found in the same linear pass.
  */
-export function matchArtifactBlocks(content: string): ArtifactBlockMatch[] {
+export function matchArtifactBlocks(
+  content: string,
+  descendInto?: (block: ArtifactBlockMatch) => boolean
+): ArtifactBlockMatch[] {
   const blocks: ArtifactBlockMatch[] = [];
   const closers = Array.from(content.matchAll(/<\/artifact>/gi), m => m.index);
   const memo: ArtifactTagMemo = {};
@@ -135,13 +140,14 @@ export function matchArtifactBlocks(content: string): ArtifactBlockMatch[] {
       continue;
     }
     const end = close + CLOSER_LENGTH;
-    blocks.push({
+    const block = {
       index: open.index,
       fullMatch: content.slice(open.index, end),
       attrs: tag.attrs,
       body: content.slice(tag.end, close),
-    });
-    opener.lastIndex = end;
+    };
+    blocks.push(block);
+    opener.lastIndex = descendInto?.(block) ? tag.end : end;
   }
   return blocks;
 }

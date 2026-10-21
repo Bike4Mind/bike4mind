@@ -15,7 +15,6 @@ vi.mock('@bike4mind/services', async importOriginal => ({
 }));
 vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
-  usdToCredits: vi.fn(() => 42),
   getSettingsByNames: vi.fn(),
 }));
 vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
@@ -25,10 +24,11 @@ vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
 vi.mock('@bike4mind/common', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/common')>()),
   getTextModelCost: vi.fn(() => 1),
+  getTurnsCost: vi.fn(() => 2),
 }));
 
 import { logEvent } from '@server/utils/analyticsLog';
-import { AiEvents } from '@bike4mind/common';
+import { AiEvents, CREDITS_PER_USD_COST, getTextModelCost, getTurnsCost } from '@bike4mind/common';
 import { logCompletionAnalytics } from './logCompletionAnalytics';
 
 const baseParams = {
@@ -67,7 +67,8 @@ describe('logCompletionAnalytics - OpenAI bare model alias resolution', () => {
     const completedCall = vi
       .mocked(logEvent)
       .mock.calls.find(([event]) => event.type === AiEvents.COMPLETION_API_COMPLETED);
-    expect((completedCall?.[0] as any)?.metadata.creditsUsed).toBe(42);
+    // getTextModelCost is mocked to $1: the unrounded expectation, not a round-up.
+    expect((completedCall?.[0] as any)?.metadata.creditsUsed).toBe(CREDITS_PER_USD_COST);
   });
 
   it('still logs "model not found" for a genuinely unknown model', async () => {
@@ -82,5 +83,100 @@ describe('logCompletionAnalytics - OpenAI bare model alias resolution', () => {
     expect(logger.error).toHaveBeenCalledWith('[COMPLETION_ANALYTICS] Model not found for credits calculation:', {
       model: 'not-a-real-model',
     });
+  });
+});
+
+describe('logCompletionAnalytics - per-request pricing', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('prices the per-request usage when the completion reported it, not the summed totals', async () => {
+    const finalTurnUsage = [
+      { inputTokens: 40, outputTokens: 20, cacheReadInputTokens: 210_000 },
+      { inputTokens: 60, outputTokens: 30 },
+    ];
+
+    await logCompletionAnalytics({
+      ...baseParams,
+      finalTurnUsage,
+      body: { model: 'gpt-4.1', messages: [] } as any,
+    });
+
+    expect(getTurnsCost).toHaveBeenCalledWith(expect.objectContaining({ id: 'gpt-4.1-2025-04-14' }), finalTurnUsage);
+    expect(getTextModelCost).not.toHaveBeenCalled();
+    const completedCall = vi
+      .mocked(logEvent)
+      .mock.calls.find(([event]) => event.type === AiEvents.COMPLETION_API_COMPLETED);
+    expect((completedCall?.[0] as any)?.metadata.creditsUsed).toBe(2 * CREDITS_PER_USD_COST);
+  });
+
+  it('prices the cache tokens in the totals fallback when no per-request usage was reported', async () => {
+    await logCompletionAnalytics({
+      ...baseParams,
+      finalCacheReadTokens: 150_000,
+      finalCacheWriteTokens: 2_000,
+      body: { model: 'gpt-4.1', messages: [] } as any,
+    });
+
+    expect(getTurnsCost).not.toHaveBeenCalled();
+    expect(getTextModelCost).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'gpt-4.1-2025-04-14' }),
+      baseParams.finalInputTokens,
+      baseParams.finalOutputTokens,
+      150_000,
+      2_000,
+      baseParams.finalInputTokens + 150_000 + 2_000
+    );
+  });
+});
+
+describe('logCompletionAnalytics - credits logged', () => {
+  const creditsLogged = () =>
+    (vi.mocked(logEvent).mock.calls.find(([event]) => event.type === AiEvents.COMPLETION_API_COMPLETED)?.[0] as any)
+      ?.metadata.creditsUsed;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('logs the credits the completion actually settled, whatever the cost prices to', async () => {
+    await logCompletionAnalytics({
+      ...baseParams,
+      finalCreditsUsed: 7,
+      body: { model: 'gpt-4.1', messages: [] } as any,
+    });
+
+    expect(creditsLogged()).toBe(7);
+  });
+
+  it('logs a settled 0 as 0 rather than falling back to the expectation', async () => {
+    await logCompletionAnalytics({
+      ...baseParams,
+      finalCreditsUsed: 0,
+      body: { model: 'gpt-4.1', messages: [] } as any,
+    });
+
+    expect(creditsLogged()).toBe(0);
+  });
+
+  it('logs the settled credits even when the completion reported no output tokens', async () => {
+    await logCompletionAnalytics({
+      ...baseParams,
+      finalOutputTokens: 0,
+      finalCreditsUsed: 7,
+      body: { model: 'gpt-4.1', messages: [] } as any,
+    });
+
+    expect(creditsLogged()).toBe(7);
+  });
+
+  it('falls back to the unrounded expectation to two decimals, with no 1-credit minimum', async () => {
+    vi.mocked(getTextModelCost).mockReturnValueOnce(0.00001);
+
+    await logCompletionAnalytics({ ...baseParams, body: { model: 'gpt-4.1', messages: [] } as any });
+
+    expect(creditsLogged()).toBe(Math.round(0.00001 * CREDITS_PER_USD_COST * 100) / 100);
+    expect(creditsLogged()).toBeLessThan(1);
   });
 });

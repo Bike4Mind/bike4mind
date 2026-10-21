@@ -9,6 +9,7 @@ import { removeFileFromLake, type MembershipActor, type MembershipOriginOptions 
 import { recomputeLakeStats } from './recomputeLakeStats';
 import type { LakeConfigAuditAdapters } from './recordLakeConfigChange';
 import type { LakeMembershipAuditAdapters } from './recordLakeMembershipChange';
+import type { StorageOwnerTransferDb } from '../fabFileService/reassignStorageOwner';
 
 /** How long a removal's restore record stays live - see `lakeMembershipRemovals` below. */
 const REMOVAL_RECORD_TTL_MS = 30 * 60 * 1000;
@@ -19,8 +20,10 @@ export interface RemoveFileFromDataLakeAdapters extends LakeConfigAuditAdapters,
   // visible at all: TS skips excess-property checks on SPREAD properties, so `...lakeConfigAuditDb`
   // at the call site is never checked against this shape and dropping it still compiles. The route
   // test is what actually catches that; this keeps the contract honest for a reader.
+  // StorageOwnerTransferDb: a membership change moves the file's billed bytes (reassignStorageOwner).
   db: LakeConfigAuditAdapters['db'] &
-    LakeMembershipAuditAdapters['db'] & {
+    LakeMembershipAuditAdapters['db'] &
+    StorageOwnerTransferDb & {
       dataLakes: Pick<IDataLakeRepository, 'findById' | 'setStats' | 'activateIfDraft'>;
       fabFiles: Pick<IFabFileRepository, 'findById' | 'pullTagsByFabFileId' | 'computeDataLakeStats'>;
       dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
@@ -30,6 +33,16 @@ export interface RemoveFileFromDataLakeAdapters extends LakeConfigAuditAdapters,
       // authorization (see the load-bearing note on lakeMembership.ts's `!inLake` refusal).
       lakeMembershipRemovals: Pick<ILakeMembershipRemovalRepository, 'upsertRemoval'>;
     };
+}
+
+export interface RemoveFileFromDataLakeOptions extends MembershipOriginOptions {
+  /**
+   * Skip the stats recompute; the caller owes ONE `recomputeLakeStats` after its loop. For a bulk
+   * caller inside a transaction, where a lake-wide aggregate per removal can outrun the transaction's
+   * lifetime and holds the lake-doc write lock the whole time. The result then carries the lake's
+   * last-known counts with `statsUpdated: false`.
+   */
+  deferStatsRecompute?: boolean;
 }
 
 /**
@@ -105,7 +118,7 @@ export const removeFileFromDataLake = async (
   dataLakeId: string,
   fabFileId: string,
   { db, logger }: RemoveFileFromDataLakeAdapters,
-  opts: MembershipOriginOptions = {}
+  { deferStatsRecompute = false, ...opts }: RemoveFileFromDataLakeOptions = {}
 ): Promise<{
   success: true;
   fileCount: number;
@@ -129,6 +142,8 @@ export const removeFileFromDataLake = async (
   // Reported rather than only logged (#2245): a BULK caller removes N files sharing one 30-minute
   // undo window, so "which of these can still be re-added" is the difference between an accurate
   // undo affordance and one that silently does nothing. A single-file caller can ignore it.
+  // Both catches here hold only OUTSIDE a transaction. The single-file routes run this inside
+  // `withTransaction`, where a failed write aborts the transaction and the removal rolls back with it.
   let restoreTokenMinted = false;
   try {
     const removedAt = new Date();
@@ -160,6 +175,7 @@ export const removeFileFromDataLake = async (
     totalChunkedChars: lake.totalChunkedChars ?? 0,
   };
   let statsUpdated = false;
+  if (deferStatsRecompute) return { success: true, ...stats, restoreTokenMinted, statsUpdated };
   try {
     stats = await recomputeLakeStats(lake, { db, logger });
     statsUpdated = true;

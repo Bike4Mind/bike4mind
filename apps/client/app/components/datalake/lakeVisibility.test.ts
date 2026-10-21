@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { DATA_LAKES } from '@bike4mind/common';
 import {
-  canConnectLakeDrive,
+  canConnectLakeConnector,
   isBuiltInLake,
   isDraftLake,
   lakeVisibilityLabel,
@@ -46,22 +46,22 @@ describe('lakeVisibilityLabel', () => {
   });
 });
 
-describe('canConnectLakeDrive', () => {
+describe('canConnectLakeConnector', () => {
   it('gates a personal lake on isCreator, not effective ownership', () => {
     // Ownership can transfer (isOwn flips), but personal-lake membership and the Drive ingest's
     // admin-actor writes stay anchored to createdByUserId - so the creator keeps the control
     // whether or not they still read as the effective owner.
-    expect(canConnectLakeDrive({ isCreator: false })).toBe(false);
-    expect(canConnectLakeDrive({ isCreator: true })).toBe(true);
+    expect(canConnectLakeConnector({ isCreator: false })).toBe(false);
+    expect(canConnectLakeConnector({ isCreator: true })).toBe(true);
   });
 
   it('gates an org lake on canManage regardless of isCreator', () => {
-    expect(canConnectLakeDrive({ organizationId: 'org-1', canManage: true, isCreator: false })).toBe(true);
-    expect(canConnectLakeDrive({ organizationId: 'org-1', canManage: false, isCreator: true })).toBe(false);
+    expect(canConnectLakeConnector({ organizationId: 'org-1', canManage: true, isCreator: false })).toBe(true);
+    expect(canConnectLakeConnector({ organizationId: 'org-1', canManage: false, isCreator: true })).toBe(false);
   });
 
   it('fails closed on absent fields', () => {
-    expect(canConnectLakeDrive({})).toBe(false);
+    expect(canConnectLakeConnector({})).toBe(false);
   });
 });
 

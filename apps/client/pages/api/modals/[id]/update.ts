@@ -1,13 +1,13 @@
 import { ModalModel } from '@bike4mind/database/social';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import { WHATS_NEW_DEFAULT_REPOSITORY } from '@bike4mind/common';
 import { cacheExternalImage, cacheExternalImages } from '@server/utils/cacheExternalImage';
-import { isValidObjectId } from '@server/utils/objectId';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { WhatsNewDistributionService } from '@server/services/whatsNewDistribution';
-import { emitModalGenerationMetrics } from '@server/utils/cloudwatch';
+import { emitModalGenerationMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
 import { Logger } from '@bike4mind/observability';
 import { extractVariantForViewer, viewerClassifier, MODAL_SAFE_DEFAULT_KEY } from '@bike4mind/services';
 

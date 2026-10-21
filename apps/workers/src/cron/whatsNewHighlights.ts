@@ -1,10 +1,10 @@
 import { randomUUID } from 'crypto';
 import { connectDB, AdminSettings } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
-import { sendToQueue } from '@server/utils/sqs';
-import type { WhatsNewHighlightsPayload } from '@server/queueHandlers/whatsNewHighlights.types';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
+import type { WhatsNewHighlightsPayload } from '@bike4mind/server-utils/whatsNew/whatsNewHighlights.types';
 
 const logger = new Logger({ metadata: { service: 'whatsNewHighlightsCron' } });
 

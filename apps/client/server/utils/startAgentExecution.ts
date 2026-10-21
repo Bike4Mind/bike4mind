@@ -18,19 +18,25 @@ import {
   organizationRepository,
   sessionRepository,
   sessionToolApprovalRepository,
+  userRepository,
   Quest,
   type AgentExecutionStatus,
 } from '@bike4mind/database';
 import type { GenerateImageToolCall, AudioGenerationToolCall, IChatHistoryItem } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
+import { credentialExecutionFields, type ApiKeyCredential } from '@server/dataLakes/dataLakeScopes';
+import type { ApiKeyInfo } from '@server/cli/auth';
+import { apiKeyBillingOrgId, resolveApiKeyBillingOrg } from '@server/billing/apiKeyBillingOrg';
 import { MAX_CONCURRENT_EXECUTIONS_PER_USER, STALE_ACTIVE_MS } from '@server/utils/executionLimits';
 import {
   dispatchAgentExecution,
   resolveAgentExecutorTarget,
   AgentExecutorRejectedError,
 } from '@server/utils/dispatchAgentExecution';
-import { settleStrandedQuests } from '@server/utils/settleStrandedQuests';
-import { isHeadlessConnection } from '@server/utils/headlessConnection';
+import { settleStrandedQuests } from '@bike4mind/server-utils/utils/settleStrandedQuests';
+import { isHeadlessConnection } from '@bike4mind/server-utils/utils/headlessConnection';
+import { pinFilesToSessionKnowledge } from '@server/managers/sessionCrud';
+import { pinnableMessageFileIds } from '@server/managers/pinnableMessageFileIds';
 
 /**
  * Per-user, in-container memoization of the stale-active sweep. The sweep is an
@@ -82,8 +88,12 @@ export type StartAgentExecutionInput = {
   questId: string;
   query: string;
   model: string;
-  /** `HEADLESS_CONNECTION_ID` (`@server/utils/headlessConnection`) when there is no WS peer. */
+  /** `HEADLESS_CONNECTION_ID` (`@bike4mind/server-utils/utils/headlessConnection`) when there is no WS peer. */
   connectionId: string;
+  /**
+   * The org to bill, or omitted for the caller personally. An org-billed `apiKeyInfo` overrides it:
+   * the key's org pays, and naming any other org is refused (`billing_organization_mismatch`).
+   */
   organizationId?: string;
   /**
    * Persisted IAgent id. When present the executor resolves that agent's orchestration
@@ -101,8 +111,22 @@ export type StartAgentExecutionInput = {
    * never does.
    */
   enabledToolsAreAmbient?: boolean;
+  /**
+   * The authenticating API key (`req.apiKeyInfo`), never a request body; `undefined` for a signed-in
+   * session. Required as a property so each door states it. The persisted `authOrigin`,
+   * `scopeDeniedTools` and `apiKeyId` are all derived from it here so a door cannot forward one
+   * without the others.
+   */
+  apiKeyInfo: (ApiKeyCredential & Pick<ApiKeyInfo, 'billingOwnerType' | 'organizationId'>) | undefined;
   maxIterations?: number;
   messageFileIds?: string[];
+  /**
+   * Pin this run's notebook-scope `messageFileIds` to the session (except `messageOnlyFileIds`), so
+   * they stay in context on later turns, as the chat path does. Set by the in-app door; the public
+   * REST route leaves its `file_ids` per-run.
+   */
+  pinMessageFiles?: boolean;
+  messageOnlyFileIds?: string[];
   sessionFabFileIds?: string[];
   temperature?: number;
   maxTokens?: number;
@@ -115,11 +139,22 @@ export type StartAgentExecutionInput = {
   imageConfig?: Partial<GenerateImageToolCall>;
   audioConfig?: Partial<AudioGenerationToolCall>;
   routingSource?: AgentExecutionRoutingSource;
+  /**
+   * Extra system context for this run only. Forwarded on the executor start payload and
+   * kept off the execution doc's own fields and the Quest: the executor folds it into the
+   * system message, carried in the server-only checkpoint so continuations keep it.
+   */
+  systemContext?: string;
 };
 
 /** Why a start was refused. Callers map these onto their own transport's errors. */
 export type StartAgentExecutionFailureReason =
-  'session_not_found' | 'organization_not_found' | 'concurrent_limit' | 'dispatch_failed';
+  | 'session_not_found'
+  | 'organization_not_found'
+  | 'billing_organization_mismatch'
+  | 'billing_key_stale'
+  | 'concurrent_limit'
+  | 'dispatch_failed';
 
 export type StartAgentExecutionResult =
   | {
@@ -150,21 +185,9 @@ export async function startAgentExecution(
     return { ok: false, reason: 'session_not_found', message: 'Session not found or unauthorized' };
   }
 
-  // Validate organization membership. Without this, a caller could pass another
-  // tenant's organizationId and bill executions to that org's credit pool.
-  if (input.organizationId) {
-    const org = await organizationRepository.findById(input.organizationId);
-    const isOwner = org?.userId === userId;
-    const isManager = org?.managerId === userId;
-    const isMember = org?.users?.some(u => u.userId === userId) ?? false;
-    if (!org || (!isOwner && !isManager && !isMember)) {
-      logger.warn('[Start] Organization membership validation failed', {
-        organizationId: input.organizationId,
-        userId,
-      });
-      return { ok: false, reason: 'organization_not_found', message: 'Organization not found or unauthorized' };
-    }
-  }
+  const billing = await resolveRunBillingOrg(input, logger);
+  if (!billing.ok) return billing;
+  const { organizationId } = billing;
 
   // Sweep stale active executions before counting - `pending` / `running` /
   // `continuing` / `awaiting_permission` / `paused` that the executor never
@@ -268,7 +291,7 @@ export async function startAgentExecution(
 
   const execution = await agentExecutionRepository.create({
     userId,
-    organizationId: input.organizationId,
+    organizationId,
     sessionId: input.sessionId,
     questId: input.questId,
     query: input.query,
@@ -288,6 +311,7 @@ export async function startAgentExecution(
     // A headless caller's explicit tool list is the approval; it must not be second-guessed by a
     // stale interactive-session denial (deny is checked first in classifyToolPermission).
     deniedTools: isHeadlessConnection(input.connectionId) ? [] : (remembered?.deniedTools ?? []),
+    ...credentialExecutionFields(input.apiKeyInfo),
     iterationBilling: [],
     totalCreditsUsed: 0,
     lambdaInvocationCount: 1,
@@ -307,6 +331,23 @@ export async function startAgentExecution(
   });
 
   const executionId = execution.id;
+
+  // After the run is accepted, so a refused start pins nothing; this run carries the files itself.
+  // Runs alongside the prompt Quest persist below and is awaited before dispatch, so it adds no
+  // latency of its own. pinFilesToSessionKnowledge never throws.
+  const messagePins = input.pinMessageFiles
+    ? pinnableMessageFileIds(input.messageFileIds, input.messageOnlyFileIds)
+    : [];
+  const pinning =
+    messagePins.length > 0
+      ? userRepository
+          .findById(userId)
+          .catch(error => {
+            logger.warn('[Start] Could not load the user for the session knowledge pin', { userId, error });
+            return null;
+          })
+          .then(user => (user ? pinFilesToSessionKnowledge(session, messagePins, { user, logger }) : undefined))
+      : Promise.resolve();
 
   // Persist the user's prompt as a Quest immediately so the bubble survives a mid-run
   // reload, and so a REST caller has a chat-history record of what it asked. The
@@ -329,6 +370,9 @@ export async function startAgentExecution(
       status: 'pending',
       agentExecutionId: executionId,
       routingSource: input.routingSource,
+      // Message files only, matching the chat path (ChatCompletionInvoke): the sent message's
+      // attachment chip reads them off the Quest.
+      fabFileIds: input.messageFileIds ?? [],
     });
     const linkedQuestId = quest.id;
     persistedQuestId = linkedQuestId;
@@ -351,6 +395,7 @@ export async function startAgentExecution(
     });
   }
 
+  await pinning;
   logger.info('[Start] Created execution, dispatching executor', { executionId, persistedQuestId });
 
   // Invoke the agent executor (async - don't wait for completion). If dispatch is
@@ -373,7 +418,7 @@ export async function startAgentExecution(
         query: input.query,
         model: input.model,
         connectionId: input.connectionId,
-        organizationId: input.organizationId,
+        organizationId,
         agentId: input.agentId,
         enabledTools: input.enabledTools,
         enabledToolsAreAmbient: input.enabledToolsAreAmbient,
@@ -388,6 +433,9 @@ export async function startAgentExecution(
         // resolves `startPayload?.enableArtifacts ?? execution.enableArtifacts`, so the
         // first iteration never depends on the doc write having landed first.
         enableArtifacts: input.enableArtifacts,
+        // Start-payload only (see `systemContext` on the input type). Spread so a run
+        // without it dispatches the same payload as before.
+        ...(input.systemContext ? { systemContext: input.systemContext } : {}),
       },
       executorTarget
     );
@@ -424,4 +472,58 @@ export async function startAgentExecution(
 
   logger.info('[Start] Executor dispatched', { executionId });
   return { ok: true, executionId, questId: persistedQuestId };
+}
+
+type RunBillingOrg =
+  { ok: true; organizationId: string | undefined } | Extract<StartAgentExecutionResult, { ok: false }>;
+
+/**
+ * The org a run bills, or undefined for the caller personally.
+ *
+ * An org-billed API key bills its own org on every transport, whether or not the start names one, by
+ * the same rule as the v1 media routes (resolveApiKeyBillingOrg). Anyone else bills the org they
+ * name, which must be one they belong to: without this, a caller could pass another tenant's
+ * organizationId and bill that org's credit pool.
+ */
+async function resolveRunBillingOrg(input: StartAgentExecutionInput, logger: Logger): Promise<RunBillingOrg> {
+  const { userId } = input;
+
+  // Also decides whether the user read below is needed: only an org-billed key can fail on billing
+  // before the membership check, and resolveApiKeyBillingOrg applies the same key test.
+  if (apiKeyBillingOrgId(input.apiKeyInfo)) {
+    const user = await userRepository.findById(userId);
+    const billing = await resolveApiKeyBillingOrg({
+      apiKeyInfo: input.apiKeyInfo,
+      user: { id: userId, isAdmin: user?.isAdmin ?? false },
+      requestedOrgId: input.organizationId,
+    });
+    switch (billing.kind) {
+      case 'org':
+        return { ok: true, organizationId: billing.organizationId };
+      case 'mismatch':
+        return { ok: false, reason: 'billing_organization_mismatch', message: billing.message };
+      case 'stale':
+        logger.warn('[Start] Org-billed API key no longer speaks for its organization', {
+          userId,
+          keyId: input.apiKeyInfo?.keyId,
+        });
+        return { ok: false, reason: 'billing_key_stale', message: billing.message };
+      case 'not_org_billed':
+        break;
+    }
+  }
+
+  if (!input.organizationId) return { ok: true, organizationId: undefined };
+
+  const org = await organizationRepository.findById(input.organizationId);
+  const isOwner = org?.userId === userId;
+  const isMember = org?.users?.some(u => u.userId === userId) ?? false;
+  if (!org || (!isOwner && !isMember)) {
+    logger.warn('[Start] Organization membership validation failed', {
+      organizationId: input.organizationId,
+      userId,
+    });
+    return { ok: false, reason: 'organization_not_found', message: 'Organization not found or unauthorized' };
+  }
+  return { ok: true, organizationId: input.organizationId };
 }

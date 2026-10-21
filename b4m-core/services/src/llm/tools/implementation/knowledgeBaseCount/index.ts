@@ -5,7 +5,13 @@ import {
   normalizeExclusionMarkers,
   type RetrievalExclusionOptions,
 } from '@bike4mind/utils/retrievalExclusion';
-import { resolveSessionLakeAccess } from '../../base/resolveSessionLakeAccess';
+import {
+  LIBRARY_OFF_ATTACHMENTS_LEAD,
+  LIBRARY_OFF_NO_LAKE_MESSAGE,
+  admittedAttachmentIds,
+  resolveSessionLakeAccess,
+  sessionExcludesLibrary,
+} from '../../base/resolveSessionLakeAccess';
 import type { ResolvedLakeAccess } from '../../../../dataLakeService/getDynamicDataLakeTags';
 
 /**
@@ -156,6 +162,19 @@ export const knowledgeBaseCountTool: ToolDefinition = {
         const { lakes } = await resolveSessionLakeAccess(context);
 
         if (lakes.length === 0) {
+          if (await sessionExcludesLibrary(context)) {
+            const attached = admittedAttachmentIds(context, true);
+            if (!attached.length) return LIBRARY_OFF_NO_LAKE_MESSAGE;
+            // Same ownership check as any other count: an attached id only counts if the caller can read it.
+            const counted = await countScope(context, {
+              filters: { restrictToFileIds: attached },
+              options: { includeShared: true, userGroups: context.user.groups ?? [] },
+            });
+            return (
+              `${LIBRARY_OFF_ATTACHMENTS_LEAD}. The files ` +
+              `attached to this chat are still searchable: ${describeCount(counted)}.${REPORTING_NOTE}`
+            );
+          }
           // No curated library, but the caller's own and shared files are still what
           // search_knowledge_base reads, so counting nothing here would misreport the corpus.
           const own = await countScope(context, {
@@ -172,6 +191,16 @@ export const knowledgeBaseCountTool: ToolDefinition = {
         );
 
         const lines = counted.map(({ lake, result }) => `- ${lake.name}: ${describeCount(result)}`);
+        // Library off still admits this chat's attachments (search/retrieve read them), so report them
+        // too. Not added to the total: an attachment may itself be one of the lake files counted above.
+        const attached = admittedAttachmentIds(context, await sessionExcludesLibrary(context));
+        if (attached.length) {
+          const attachedCount = await countScope(context, {
+            filters: { restrictToFileIds: attached },
+            options: { includeShared: true, userGroups: context.user.groups ?? [] },
+          });
+          lines.push(`- Files attached to this chat: ${describeCount(attachedCount)}`);
+        }
         const total = counted.reduce((n, c) => n + c.result.count, 0);
         const totalExact = counted.every(c => c.result.exact);
         const totalLine =

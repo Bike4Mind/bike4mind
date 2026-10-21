@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { buildMetaEvent, buildPublicSSEEvent, buildSSEEvent, formatSSEError, serializeSSEEvent } from './sseEvents';
+import {
+  buildCompletionStreamEvent,
+  buildMetaEvent,
+  buildPublicSSEEvent,
+  buildSSEEvent,
+  formatSSEError,
+  serializeSSEEvent,
+} from './sseEvents';
+import { CompletionStreamEventSchema } from '../schemas/cliCompletions';
 
 describe('buildPublicSSEEvent', () => {
   // `text` is indexed by the provider's content-block/choice index, not by channel.
@@ -118,6 +126,11 @@ describe('buildPublicSSEEvent', () => {
     expect(serializeSSEEvent(e)).not.toContain('usdCost');
   });
 
+  it('allowlists reasoningTokens for public callers', () => {
+    const e = buildPublicSSEEvent([''], { inputTokens: 10, outputTokens: 800, reasoningTokens: 780 });
+    expect(e.usage).toMatchObject({ outputTokens: 800, reasoningTokens: 780 });
+  });
+
   it('emits no credits block when usdCost is the only credit field', () => {
     const e = buildPublicSSEEvent(['the answer'], { usdCost: 0.0123 });
     expect(e.credits).toBeUndefined();
@@ -126,9 +139,69 @@ describe('buildPublicSSEEvent', () => {
 });
 
 describe('buildSSEEvent', () => {
+  it('drops the text of a reasoning-tagged frame but keeps its accounting', () => {
+    const e = buildSSEEvent(['<think>weighing the options'], {
+      channel: 'reasoning',
+      outputTokens: 7,
+      thinking: [{ type: 'thinking', thinking: 'x', signature: 's' }] as never,
+    });
+    expect(e.text).toBe('');
+    expect(buildSSEEvent(['', '<think>'], { channel: 'reasoning' }).text).toBe('');
+    expect(e.usage?.outputTokens).toBe(7);
+    expect(e.thinking).toHaveLength(1);
+  });
+
+  it('blanks reasoning text on a tool_use frame too', () => {
+    // In a tool loop the reasoning frame carries toolsUsed, so it goes out as tool_use.
+    const e = buildSSEEvent(['<think>x'], {
+      channel: 'reasoning',
+      toolsUsed: [{ name: 'search', arguments: '{}' }] as never,
+    });
+    expect(e.type).toBe('tool_use');
+    expect(e.text).toBe('');
+  });
+
+  it('keeps the text of untagged and tool-artifact frames', () => {
+    expect(buildSSEEvent(['', 'the answer']).text).toBe('the answer');
+    expect(buildSSEEvent(['artifact'], { channel: 'tool-artifact' }).text).toBe('artifact');
+  });
+
+  it('carries reasoningTokens inside usage', () => {
+    const e = buildSSEEvent([''], { outputTokens: 800, reasoningTokens: 780 });
+    expect(e.usage).toMatchObject({ outputTokens: 800, reasoningTokens: 780 });
+  });
+
+  it('carries reasoningTokens even when no other token field is present', () => {
+    const e = buildSSEEvent([''], { reasoningTokens: 5 });
+    expect(e.usage).toMatchObject({ reasoningTokens: 5 });
+  });
+
+  it('leaves reasoningTokens off the wire when unreported', () => {
+    const e = buildSSEEvent([''], { inputTokens: 10, outputTokens: 5 });
+    expect(e.usage).not.toHaveProperty('reasoningTokens');
+    expect(serializeSSEEvent(e)).not.toContain('reasoningTokens');
+  });
+
   it('still forwards usdCost to authenticated first-party surfaces', () => {
     const e = buildSSEEvent(['', 'the answer'], { creditsUsed: 2, usdCost: 0.0123 });
     expect(e.credits).toMatchObject({ used: 2, usdCost: 0.0123 });
+  });
+
+  it('carries text written at index 2+ (after a tool search) instead of blanking it', () => {
+    const sparse: string[] = [];
+    sparse[3] = 'Found it.';
+    expect(buildSSEEvent(sparse).text).toBe('Found it.');
+  });
+
+  it('keeps the [1]-over-[0] read for the shapes that depend on it', () => {
+    expect(buildSSEEvent(['first', 'second']).text).toBe('second');
+    expect(buildSSEEvent(['only']).text).toBe('only');
+  });
+
+  it('still blanks a reasoning frame written at index 2+', () => {
+    const sparse: string[] = [];
+    sparse[2] = 'interleaved thought';
+    expect(buildSSEEvent(sparse, { channel: 'reasoning' }).text).toBe('');
   });
 
   it('projects tools down to name/arguments/id, dropping returnValue and success', () => {
@@ -145,6 +218,46 @@ describe('buildSSEEvent', () => {
     });
     expect(e.tools).toEqual([{ name: 'web_search', arguments: '{}', id: 't1' }]);
     expect(serializeSSEEvent(e)).not.toContain('returnValue');
+  });
+});
+
+describe('toolStarted', () => {
+  const info = { toolStarted: { name: 'file_write', id: 'call_1' } };
+
+  it('reaches a first-party stream as an empty content frame', () => {
+    expect(buildSSEEvent([], info)).toEqual({
+      type: 'content',
+      text: '',
+      toolStarted: { name: 'file_write', id: 'call_1' },
+    });
+  });
+
+  it('stays off the public stream, which names no tools', () => {
+    expect(buildPublicSSEEvent([], info)).not.toHaveProperty('toolStarted');
+  });
+});
+
+describe('buildCompletionStreamEvent', () => {
+  const block = { type: 'tool_search_tool_result', tool_use_id: 'srvtoolu_1', content: {} };
+
+  it('sends a provider block as its own provider_block frame', () => {
+    const event = buildCompletionStreamEvent([], { providerBlock: { provider: 'anthropic', block } });
+    expect(event).toEqual({ type: 'provider_block', provider: 'anthropic', block });
+    expect(CompletionStreamEventSchema.safeParse(event).success).toBe(true);
+    expect(serializeSSEEvent(event)).toBe(
+      `data: ${JSON.stringify({ type: 'provider_block', provider: 'anthropic', block })}\n\n`
+    );
+  });
+
+  it('builds the usual content frame for everything else', () => {
+    expect(buildCompletionStreamEvent(['hi'], { outputTokens: 1 })).toEqual(buildSSEEvent(['hi'], { outputTokens: 1 }));
+  });
+
+  it('keeps provider blocks off the public builder', () => {
+    expect(buildPublicSSEEvent([], { providerBlock: { provider: 'anthropic', block } })).toEqual({
+      type: 'content',
+      text: '',
+    });
   });
 });
 
@@ -179,6 +292,17 @@ describe('formatSSEError', () => {
       message: 'capped',
       requestId: 'req-1',
       code: 'spend_cap_exceeded',
+    });
+  });
+
+  it('attaches a provider classifier', () => {
+    expect(
+      formatSSEError(new Error('Model provider returned an error (upstream 404)'), 'req-2', 'provider_error')
+    ).toEqual({
+      type: 'error',
+      message: 'Model provider returned an error (upstream 404)',
+      requestId: 'req-2',
+      code: 'provider_error',
     });
   });
 

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { ICaller, IBriefcasePromptDocument, IPromptBatchQuery } from '@bike4mind/common';
-import { canSeeSystemPrompt, assertCanReadPrompts } from './briefcaseAccess';
+import { canSeeSystemPrompt, canReadPrompt, assertCanReadPrompts } from './briefcaseAccess';
 import { getPersonalPrompts } from './getPersonalPrompts';
 import { getCatalog } from './getCatalog';
 
@@ -44,6 +44,23 @@ describe('canSeeSystemPrompt — visibility scoping', () => {
     expect(canSeeSystemPrompt(prompt({ visibilityScopes: ['vip'] }), caller({ isAdmin: true, isApiKey: true }))).toBe(
       false
     );
+  });
+});
+
+describe('canReadPrompt - by-id read gate', () => {
+  it("returns the owner's personal prompt to a session caller", () => {
+    expect(canReadPrompt(prompt({ userId: 'u1' }), caller())).toBe(true);
+  });
+
+  it('refuses a personal prompt to an API-key caller, admin or not (confused-deputy guard)', () => {
+    expect(canReadPrompt(prompt({ userId: 'u1' }), caller({ isApiKey: true }))).toBe(false);
+    expect(canReadPrompt(prompt({ userId: 'u1' }), caller({ isApiKey: true, isAdmin: true }))).toBe(false);
+  });
+
+  it('applies the catalog visibility gate to system prompts, for API keys too', () => {
+    expect(canReadPrompt(prompt({ visibilityScopes: [] }), caller({ isApiKey: true }))).toBe(true);
+    expect(canReadPrompt(prompt({ visibilityScopes: ['vip'] }), caller({ isApiKey: true }))).toBe(false);
+    expect(canReadPrompt(prompt({ visibilityScopes: ['vip'] }), caller({ entitlements: ['vip'] }))).toBe(true);
   });
 });
 

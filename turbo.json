@@ -14,11 +14,7 @@
       // packages resolve), which no input glob can capture. A cache replay would
       // restore glue for the WRONG link state. The script is sub-second.
       "cache": false,
-      "inputs": [
-        "scripts/generate-premium-glue.mjs",
-        "../../packages/premium/*/package.json",
-        "../../sst.config.ts"
-      ],
+      "inputs": ["scripts/generate-premium-glue.mjs", "../../packages/premium/*/package.json", "../../sst.config.ts"],
       "outputs": [
         "app/premium-generated/**",
         "pages/api/premium-*/**",
@@ -57,18 +53,42 @@
     // @bike4mind/scripts. These package-specific overrides add the missing cross-package edge;
     // package-specific config REPLACES the generic entry, so ^build is repeated here.
     "@bike4mind/scripts#typecheck": {
-      "dependsOn": ["^build", "@bike4mind/client#codegen"]
+      "dependsOn": ["^build", "@bike4mind/client#codegen"],
+      "inputs": ["$TURBO_DEFAULT$", "../server-utils/**", "!../server-utils/node_modules/**"]
     },
     "@bike4mind/scripts#typecheck:native": {
-      "dependsOn": ["^build", "@bike4mind/client#codegen"]
+      "dependsOn": ["^build", "@bike4mind/client#codegen"],
+      "inputs": ["$TURBO_DEFAULT$", "../server-utils/**", "!../server-utils/node_modules/**"]
     },
     "@bike4mind/scripts#typecheck:fast": {
-      "dependsOn": ["^build", "@bike4mind/client#codegen"]
+      "dependsOn": ["^build", "@bike4mind/client#codegen"],
+      "inputs": ["$TURBO_DEFAULT$", "../server-utils/**", "!../server-utils/node_modules/**"]
     },
     // migrations/index.test.ts statically imports the same premium.generated.ts stub - same
     // cross-package edge as the typecheck overrides above, for the same reason.
+    // checkSnapshotPublishPackages.test.ts reads .github/workflows/snapshot-publish.yaml and every
+    // workspace manifest under the diff roots, which sit outside the package: without them as
+    // inputs, an edit to one replays a cached pass for the very test meant to catch that drift.
     "@bike4mind/scripts#test": {
-      "dependsOn": ["^build", "@bike4mind/client#codegen"]
+      "dependsOn": ["^build", "@bike4mind/client#codegen"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "../server-utils/**",
+        "!../server-utils/node_modules/**",
+        "$TURBO_ROOT$/.github/workflows/snapshot-publish.yaml",
+        "$TURBO_ROOT$/b4m-core/*/package.json",
+        "$TURBO_ROOT$/packages/*/package.json"
+      ]
+    },
+    // electron-vite writes three bundles (main, preload, renderer) to out/, not dist/, and
+    // its config plus the split tsconfigs sit outside the generic task's "src/**" inputs.
+    // Package-specific config REPLACES the generic entry, so ^build is repeated here.
+    // No "codegen" dependency on purpose: the desktop app must not consume the premium
+    // overlay glue that @bike4mind/client's codegen task generates.
+    "@bike4mind/desktop#build": {
+      "dependsOn": ["^build"],
+      "outputs": ["out/**"],
+      "inputs": ["src/**", "electron.vite.config.ts", "tsconfig*.json", "package.json"]
     },
     // @bike4mind/workers compiles and tests apps/client/server code through its interim path
     // alias (apps/workers/tsconfig.json), and some of that code imports the premium-generated
@@ -78,19 +98,94 @@
     // task, so ^build never hashes it - list it here for the same reason.
     "@bike4mind/workers#typecheck": {
       "dependsOn": ["^build", "@bike4mind/client#codegen"],
-      "inputs": ["$TURBO_DEFAULT$", "../client/**/*.ts", "../client/tsconfig.json", "../../packages/scripts/help/**/*.ts"]
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "../client/**/*.ts",
+        "../client/tsconfig.json",
+        "../../packages/scripts/help/**/*.ts",
+        "../../packages/server-utils/**",
+        "!../../packages/server-utils/node_modules/**"
+      ]
     },
     "@bike4mind/workers#typecheck:native": {
       "dependsOn": ["^build", "@bike4mind/client#codegen"],
-      "inputs": ["$TURBO_DEFAULT$", "../client/**/*.ts", "../client/tsconfig.json", "../../packages/scripts/help/**/*.ts"]
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "../client/**/*.ts",
+        "../client/tsconfig.json",
+        "../../packages/scripts/help/**/*.ts",
+        "../../packages/server-utils/**",
+        "!../../packages/server-utils/node_modules/**"
+      ]
     },
     "@bike4mind/workers#typecheck:fast": {
       "dependsOn": ["^build", "@bike4mind/client#codegen"],
-      "inputs": ["$TURBO_DEFAULT$", "../client/**/*.ts", "../client/tsconfig.json", "../../packages/scripts/help/**/*.ts"]
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "../client/**/*.ts",
+        "../client/tsconfig.json",
+        "../../packages/scripts/help/**/*.ts",
+        "../../packages/server-utils/**",
+        "!../../packages/server-utils/node_modules/**"
+      ]
     },
     "@bike4mind/workers#test": {
       "dependsOn": ["^build", "@bike4mind/client#codegen"],
-      "inputs": ["$TURBO_DEFAULT$", "../client/**/*.ts", "../client/tsconfig.json", "../../packages/scripts/help/**/*.ts"]
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "../client/**/*.ts",
+        "../client/tsconfig.json",
+        "../../packages/scripts/help/**/*.ts",
+        "../../packages/server-utils/**",
+        "!../../packages/server-utils/node_modules/**"
+      ]
+    },
+    // @bike4mind/server-utils is source-only (no build script), so ^build is not relied on to hash
+    // its source: an edit there must not replay a cached client result. The package is listed as an
+    // input explicitly instead - the workers entries above carry the same glob. Package-specific
+    // config REPLACES the generic entry, so dependsOn is repeated here.
+    "@bike4mind/client#typecheck": {
+      "dependsOn": ["codegen", "^build"],
+      "inputs": ["$TURBO_DEFAULT$", "../../packages/server-utils/**", "!../../packages/server-utils/node_modules/**"]
+    },
+    "@bike4mind/client#typecheck:native": {
+      "dependsOn": ["codegen", "^build"],
+      "inputs": ["$TURBO_DEFAULT$", "../../packages/server-utils/**", "!../../packages/server-utils/node_modules/**"]
+    },
+    "@bike4mind/client#typecheck:fast": {
+      "dependsOn": ["codegen", "^build"],
+      "inputs": ["$TURBO_DEFAULT$", "../../packages/server-utils/**", "!../../packages/server-utils/node_modules/**"]
+    },
+    "@bike4mind/client#test": {
+      "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", "../../packages/server-utils/**", "!../../packages/server-utils/node_modules/**"]
+    },
+    // The wiring tests read app, infra and self-host files outside this package.
+    "@bike4mind/server-utils#test": {
+      "dependsOn": ["^build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "../../apps/client/pages/**",
+        "../../apps/client/server/**",
+        "../../apps/workers/src/**",
+        "$TURBO_ROOT$/infra/**",
+        "$TURBO_ROOT$/compose.*.yaml",
+        "$TURBO_ROOT$/selfhost/kubernetes/files/**",
+        "$TURBO_ROOT$/scripts/smoke_selfhost_objectstore.py"
+      ]
+    },
+    // The moderation scanner reads source outside this package.
+    "@bike4mind/infra#test": {
+      "dependsOn": ["^build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/turbo.json",
+        "../../apps/client/pages/**",
+        "../../apps/client/server/**",
+        "../../apps/workers/src/**",
+        "../services/src/**",
+        "../slack/src/**"
+      ]
     },
     "test": {
       "dependsOn": ["^build"]

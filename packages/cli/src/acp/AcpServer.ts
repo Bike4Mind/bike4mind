@@ -19,6 +19,7 @@
 import { randomUUID } from 'crypto';
 import { Mutex } from 'async-mutex';
 import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-adapters';
+import { createToolSearchTool } from '@bike4mind/agents';
 import type { AgentStep, AgentResult, ConversationMessage, ReActAgent } from '@bike4mind/agents';
 import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services/llm';
 
@@ -27,11 +28,11 @@ import { CustomCommandStore } from '../storage/CustomCommandStore.js';
 import { RemoteSkillSource } from '../storage/RemoteSkillSource.js';
 import { CheckpointStore } from '../storage/CheckpointStore.js';
 import { ApiClient } from '../auth/ApiClient';
-import { requireApiUrl, wrapTools, type AgentContext } from '../utils';
+import { requireApiUrl, buildCliToolList, type AgentContext } from '../utils';
 import { PermissionManager } from '../utils';
 import type { SandboxOrchestrator } from '../sandbox/SandboxOrchestrator.js';
 import type { PermissionResponse } from '../components';
-import { isReadOnlyTool } from '../config/toolSafety.js';
+import { ToolCatalog, type PermissionPromptKind } from '../tools/gateway/index.js';
 import { logger } from '../utils/Logger';
 
 import { buildLlmBackend } from '../bootstrap/buildLlmBackend.js';
@@ -42,7 +43,6 @@ import type { InteractionMode } from '../bootstrap/types.js';
 import { FallbackLlmBackend } from '../llm/FallbackLlmBackend';
 import { NotifyingLlmBackend } from '../llm/NotifyingLlmBackend.js';
 import { setWebSocketToolExecutor } from '../llm/ToolRouter';
-import { createToolSearchTool } from '../tools/toolSearchTool.js';
 import { deferredToolRegistry } from '../tools/deferredToolRegistry.js';
 import { createAgentDelegateTool } from '../agents/delegateTool.js';
 import { createBackgroundAgentTools } from '../agents/backgroundTools.js';
@@ -281,7 +281,7 @@ export class AcpServer {
         result = await stack.agent.run(userText, {
           signal: abortController.signal,
           previousMessages: session.history,
-          isReadOnlyTool,
+          isReadOnlyTool: toolName => stack.permissionManager.catalog.isReadOnly(toolName),
           maxHistoryIterations: 4,
         });
       } catch (error) {
@@ -458,8 +458,10 @@ export class AcpServer {
   private readonly promptFn = async (
     toolName: string,
     args: unknown,
-    preview?: string
+    preview?: string,
+    kind?: PermissionPromptKind
   ): Promise<{ action: PermissionResponse }> => {
+    const isSandboxEscalation = kind === 'sandbox-escalation';
     const turn = this.activeTurn;
     // No active turn should never happen, but deny rather than assume.
     if (!turn) return { action: 'deny' };
@@ -467,7 +469,7 @@ export class AcpServer {
     const toolCallId = `perm-${randomUUID()}`;
     const toolCall: schema.ToolCallUpdate = {
       toolCallId,
-      title: toolCallTitle(toolName, args),
+      title: `${isSandboxEscalation ? 'Run outside sandbox: ' : ''}${toolCallTitle(toolName, args)}`,
       kind: toolKind(toolName),
       status: 'pending',
       rawInput: args,
@@ -489,7 +491,11 @@ export class AcpServer {
         turn.client
           .request(
             methods.client.session.requestPermission,
-            { sessionId: turn.sessionId, toolCall, options: buildPermissionOptions() },
+            {
+              sessionId: turn.sessionId,
+              toolCall,
+              options: buildPermissionOptions({ allowAlways: !isSandboxEscalation }),
+            },
             { cancellationSignal: decisionController.signal }
           )
           .then(res => permissionResponseFromOutcome(res?.outcome))
@@ -499,6 +505,9 @@ export class AcpServer {
           decisionController.signal.addEventListener('abort', () => resolve('deny'), { once: true });
         }),
       ]);
+      // allow-always was never offered for an escalation; a client that answers it anyway
+      // (e.g. replaying a remembered choice) gets a deny, not a retry.
+      if (isSandboxEscalation && action === 'allow-always') return { action: 'deny' };
       return { action };
     } finally {
       clearTimeout(timer);
@@ -549,7 +558,11 @@ export class AcpServer {
     const startupLog: string[] = [];
     const { llm, wsManager, modelInfo } = await buildLlmBackend({ config, apiClient, tokenGetter, startupLog });
 
-    const permissionManager = new PermissionManager(config.trustedTools ?? [], undefined, config.tools.disabled ?? []);
+    const permissionManager = new PermissionManager(
+      new ToolCatalog(),
+      config.trustedTools ?? [],
+      config.tools.disabled ?? []
+    );
 
     const checkpointStore = new CheckpointStore(this.configStore.getProjectConfigDir() ?? process.cwd());
     const stackSessionId = randomUUID();
@@ -561,7 +574,7 @@ export class AcpServer {
     });
 
     const additionalDirectories = await this.resolveAdditionalDirectories();
-    const agentContext: AgentContext = { currentAgent: null, observationQueue: [] };
+    const agentContext: AgentContext = { currentAgent: null };
 
     const { agentStore, contextResult, loadedB4mTools, orchestrator, backgroundManager, historyStore, mcpManager } =
       await buildSupportingStores({
@@ -592,6 +605,19 @@ export class AcpServer {
         : llm;
     const notifyingLlm = new NotifyingLlmBackend(llmWithFallback, backgroundManager);
 
+    const agentToolsRef: { current: ICompletionOptionTools[] | null } = { current: null };
+    const toolSearchTool =
+      deferredToolRegistry.size() > 0
+        ? createToolSearchTool({
+            registry: deferredToolRegistry,
+            logger,
+            toolListAccessor: () => {
+              if (!agentToolsRef.current) throw new Error('tool_search invoked before agent context was wired');
+              return agentToolsRef.current;
+            },
+          })
+        : null;
+
     const cliTools = this.buildCliTools({
       config,
       orchestrator,
@@ -604,17 +630,10 @@ export class AcpServer {
       apiClient,
       sandboxOrchestrator: sandboxOrchestrator ?? undefined,
       allowedDirectories: additionalDirectories,
+      toolSearchTool,
     });
 
-    const agentToolsRef: { current: ICompletionOptionTools[] | null } = { current: null };
-    const toolSearchTool =
-      deferredToolRegistry.size() > 0
-        ? createToolSearchTool(() => {
-            if (!agentToolsRef.current) throw new Error('tool_search invoked before agent context was wired');
-            return agentToolsRef.current;
-          })
-        : null;
-    const allTools = [...loadedB4mTools, ...(toolSearchTool ? [toolSearchTool] : []), ...cliTools];
+    const allTools = [...loadedB4mTools, ...cliTools];
 
     const { agent, buildPromptForMode } = buildAgent({
       config,
@@ -656,6 +675,7 @@ export class AcpServer {
     apiClient: ApiClient;
     sandboxOrchestrator?: SandboxOrchestrator;
     allowedDirectories: string[];
+    toolSearchTool?: ICompletionOptionTools | null;
   }): ICompletionOptionTools[] {
     const {
       config,
@@ -669,10 +689,10 @@ export class AcpServer {
       apiClient,
       sandboxOrchestrator,
       allowedDirectories,
+      toolSearchTool,
     } = input;
 
-    // Route the security-relevant raw tools (skill, find_definition,
-    // get_file_structure) through the ONE permission wrapper.
+    // Every CLI-built tool goes through the ONE permission wrapper (see index.tsx).
     const cliWrapDeps = {
       permissionManager,
       showPermissionPrompt: this.promptFn,
@@ -682,37 +702,33 @@ export class AcpServer {
       sandboxOrchestrator,
       allowedDirectories,
     };
-    const wrappedSecurityTools = wrapTools(
-      [
-        createFindDefinitionTool(allowedDirectories),
-        createGetFileStructureTool(allowedDirectories),
-        ...(config.preferences.enableSkillTool !== false
-          ? [
-              createSkillTool({
+    return buildCliToolList(
+      {
+        toolSearchTool,
+        agentDelegateTool: createAgentDelegateTool(orchestrator, agentStore, sessionId, backgroundManager),
+        backgroundTools: createBackgroundAgentTools(backgroundManager),
+        resumeAgentTool: createResumeAgentTool(orchestrator, historyStore, backgroundManager),
+        writeTodosTool: createWriteTodosTool(createTodoStore()),
+        findDefinitionTool: createFindDefinitionTool(allowedDirectories),
+        getFileStructureTool: createGetFileStructureTool(allowedDirectories),
+        skillTool:
+          config.preferences.enableSkillTool !== false
+            ? createSkillTool({
                 customCommandStore: this.customCommandStore,
                 subagentOrchestrator: orchestrator,
                 sessionId,
                 // Gate skill lifecycle hook shell commands through permission.
                 permission: { permissionManager, promptFn: this.promptFn },
                 allowedDirectories,
-              }),
-            ]
-          : []),
-      ],
+              })
+            : null,
+        coordinateTaskTool:
+          config.preferences.enableCoordinatorMode === true
+            ? createCoordinateTaskTool(orchestrator, agentStore, sessionId)
+            : null,
+      },
       cliWrapDeps
     );
-
-    const tools: ICompletionOptionTools[] = [
-      createAgentDelegateTool(orchestrator, agentStore, sessionId, backgroundManager),
-      ...createBackgroundAgentTools(backgroundManager),
-      createResumeAgentTool(orchestrator, historyStore, backgroundManager),
-      createWriteTodosTool(createTodoStore()),
-      ...wrappedSecurityTools,
-    ];
-    if (config.preferences.enableCoordinatorMode === true) {
-      tools.push(createCoordinateTaskTool(orchestrator, agentStore, sessionId));
-    }
-    return tools;
   }
 
   private async loadCustomCommands(): Promise<void> {

@@ -17,7 +17,7 @@ import { Quest, questRepository } from '../QuestModel';
 // artifacts[].type is the live example, since parseArtifacts emits 'html', never 'text'.
 const FULL_PROMPT_META = {
   model: {
-    name: 'claude-opus-5',
+    name: 'claude-opus-5-5',
     type: 'text',
     backend: 'anthropic',
     contextWindow: 200000,
@@ -159,6 +159,7 @@ const FULL_PROMPT_META = {
     partial: true,
     reasons: ['more than the 100-document candidate cap matched, so some were never considered'],
   },
+  retrievalFloorRejection: { floorPct: 75, measuredPct: 58, embeddingModel: 'text-embedding-3-small' },
   functionCalls: [
     {
       name: 'web_search',
@@ -171,6 +172,9 @@ const FULL_PROMPT_META = {
       id: 'toolu_01',
     },
   ],
+  offeredTools: ['web_search'],
+  toolMode: 'smart',
+  redirectedFrom: 'claude-opus-5',
   performance: {
     totalResponseTime: 1000,
     contextRetrievalTime: 100,
@@ -199,6 +203,7 @@ const FULL_PROMPT_META = {
   generatedAt: '2026-07-30T00:00:00.000Z',
   finishReason: 'end_turn',
   replyChoices: { offered: true, status: 'invalid', reason: 'too_few' },
+  narratedToolCall: { toolNames: ['web_search'] },
   artifacts: [{ type: 'html', content: '<div />', metadata: { source: 'tool_result' }, timestamp: new Date() }],
   toolHealth: [
     {
@@ -338,6 +343,19 @@ describe('QuestModel promptMeta persistence', () => {
     expect(doc?.promptMeta.retrieval).toBeDefined();
     expect('excludedLakes' in doc!.promptMeta.retrieval).toBe(false);
     expect('notServingLakes' in doc!.promptMeta.retrieval).toBe(false);
+  });
+
+  it('rejects a toolMode outside the public /api/chat modes', async () => {
+    await expect(
+      Quest.create({
+        sessionId: 'session-3',
+        type: 'message',
+        timestamp: new Date(),
+        prompt: 'hi',
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        promptMeta: { toolMode: 'turbo' } as any, // any: the value is deliberately outside the PromptMeta type.
+      })
+    ).rejects.toThrow(/toolMode/);
   });
 
   it('survives the ingress parse that runs on every subsequent turn', () => {

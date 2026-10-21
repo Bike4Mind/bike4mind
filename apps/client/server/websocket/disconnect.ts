@@ -1,4 +1,10 @@
-import { activeCodeAgentRepository, Connection, QuerySubscription, User, userRepository } from '@bike4mind/database';
+import {
+  activeCodeAgentRepository,
+  Connection,
+  realtimeConnectionRepository,
+  User,
+  userRepository,
+} from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { reportCcAgentPresence } from '@server/websocket/ccAgentHearth';
 import { sendToClient, withWebSocketContext } from '@server/websocket/utils';
@@ -8,15 +14,13 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   const { connectionId, domainName, stage } = event.requestContext;
   const endpoint = `https://${domainName}/${stage}`;
 
-  // Find the connection to get the userId
-  const connection = await Connection.findOne({ connectionId });
+  // Delete the row and read its userId in one step. findOneAndDelete is not filtered like find,
+  // so a row already ended by a revoke is still found here and removed.
+  const connection = await Connection.findOneAndDelete({ connectionId }).lean();
   const userId = connection?.userId;
 
   // Update logout time if a userId was found
   if (userId) {
-    // Delete this connection first so the count below excludes it
-    await Connection.deleteOne({ connectionId });
-
     // Only mark user offline if no other connections remain (e.g., CLI + web client both connected)
     const remainingConnections = await Connection.countDocuments({ userId });
     if (remainingConnections === 0) {
@@ -27,12 +31,11 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     }
   }
 
-  // Clean up query subscription subscribers for this connection
-  const updatedSubscriptions = await QuerySubscription.updateMany(
-    { 'subscribers.connectionId': connectionId },
-    { $pull: { subscribers: { connectionId } } }
-  );
-  console.debug(`Updated ${updatedSubscriptions.modifiedCount} query subscriptions`);
+  // Pull this connection's subscribers, deleting any QuerySubscription it leaves empty. Best-effort:
+  // the orphan pass removes whatever a failure leaves, and the rest of the cleanup must still run.
+  await realtimeConnectionRepository.removeConnectionSubscribers(connectionId).catch((error: unknown) => {
+    logger.warn('[DISCONNECT] Failed to pull connection subscribers (non-fatal):', error as Error);
+  });
 
   // Sweep any Claude Code agent sprites owned by this connection and
   // broadcast their despawn to every other tab the user has open.
@@ -83,11 +86,6 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
         )
       );
     }
-  }
-
-  // Delete connection if not already deleted above (no userId case)
-  if (!userId) {
-    await Connection.deleteOne({ connectionId });
   }
 
   return {

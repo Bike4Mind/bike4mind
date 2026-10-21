@@ -35,7 +35,15 @@ COPY packages ./packages
 # pnpm hashes every patchedDependencies entry during install, so a missing patches/
 # fails the install with ENOENT rather than silently skipping the patch.
 COPY patches ./patches
-RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --frozen-lockfile
+# A hydrated premium overlay is a workspace member the tracked lockfile never lists,
+# so the build links it and installs unfrozen. Without one the install stays frozen.
+COPY scripts/link-premium-overlays.mjs ./scripts/
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
+    if ls packages/premium/*/package.json >/dev/null 2>&1; then \
+      node scripts/link-premium-overlays.mjs && pnpm install --no-frozen-lockfile; \
+    else \
+      pnpm install --frozen-lockfile; \
+    fi
 
 # ── Builder: build all @bike4mind/* packages, then the Next app (shim active) ─
 FROM deps AS builder

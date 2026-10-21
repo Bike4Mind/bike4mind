@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ConflictError, ForbiddenError } from '@server/utils/errors';
+import { ConflictError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 // Unit test of the repository-pick completion route. The connect lib (which has its own dedicated
 // unit tests) is mocked; the request body's Zod validation runs for real.
@@ -23,7 +23,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/featureFlag', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
   requireFeatureEnabled: (flag: string) => h.requireFeatureEnabled(flag),
 }));
 vi.mock('@server/auth/oauthFlowCookie', async importOriginal => {

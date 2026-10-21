@@ -673,7 +673,9 @@ export function isLlmUnavailableError(error: unknown): boolean {
     // ServerLlmBackend wraps axios errors as "Request failed with status NNN: <text>".
     // Match the wrapped form first; the bare "5NN " prefix is kept as a belt-and-braces
     // catch for any caller that throws raw status strings.
+    // The server sanitizes provider 5xx frames to "Model provider returned an error (upstream NNN)".
     /Request failed with status 5\d\d/.test(message) ||
-    /^5\d\d\b/.test(message)
+    /^5\d\d\b/.test(message) ||
+    /\(upstream 5\d\d\)/.test(message)
   );
 }

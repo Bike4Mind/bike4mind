@@ -67,7 +67,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 }));
 
 // Mock Atlassian config
-vi.mock('@server/integrations/jira/atlassianConfig', () => ({
+vi.mock('@bike4mind/server-utils/integrations/jira/atlassianConfig', () => ({
   getAtlassianOAuthConfig: vi.fn().mockResolvedValue({
     clientId: 'atlassian-client-id',
     redirectUri: 'https://app.test.com/api/mcp-servers/atlassian/callback',
@@ -107,20 +107,20 @@ vi.mock('jsonwebtoken', () => ({
 }));
 
 // Mock Config
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: {
     JWT_SECRET: 'test-jwt-secret',
   },
 }));
 
 // Mock CloudWatch
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   recordTokenRotationInitiated: vi.fn(),
   recordTokenRotationFailed: vi.fn(),
 }));
 
 import handler from '../../../pages/api/integrations/[integration]/rotate-token';
-import { recordTokenRotationInitiated, recordTokenRotationFailed } from '@server/utils/cloudwatch';
+import { recordTokenRotationInitiated, recordTokenRotationFailed } from '@bike4mind/server-utils/utils/cloudwatch';
 import { getSettingsValue } from '@bike4mind/utils';
 
 function createReq(overrides: Record<string, unknown> = {}) {

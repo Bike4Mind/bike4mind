@@ -15,7 +15,10 @@ import {
   type TaxonomyStatus,
 } from '@bike4mind/common';
 import { sendToClient } from '@server/websocket/utils';
-import { runTaxonomyInference, sampleFabFilesForTaxonomy } from '@server/dataLakes/runTaxonomyInference';
+import {
+  runTaxonomyInference,
+  sampleFabFilesForTaxonomy,
+} from '@bike4mind/server-utils/dataLakes/runTaxonomyInference';
 import { Resource } from 'sst';
 
 export interface AnalyzeBatchTaxonomyResult {
@@ -28,6 +31,18 @@ export interface AnalyzeBatchTaxonomyResult {
   /** Present when outcome is 'ready' - the batch document with its fresh taxonomySuggestions. */
   batch?: IDataLakeBatchDocument;
 }
+
+/**
+ * The guarded claim alone, for a caller that must run it inside its own transaction alongside a
+ * manage gate (the manual re-analyze door), then call `analyzeBatchTaxonomy` with
+ * `claimHeldByCaller`. Truthy when the batch moved to 'analyzing'.
+ */
+export const claimBatchForAnalysis = (batchId: string, from: TaxonomyStatus[]) =>
+  // Refresh taxonomyStartedAt on the claim itself, not just on later transitions - the
+  // stuck-job reconciler's clock must start from when THIS attempt began, not an earlier
+  // enqueue/prior-attempt time, or a claim that sat briefly in queue (or was redelivered)
+  // could look instantly stuck and get force-failed mid-run.
+  dataLakeBatchRepository.setTaxonomyStatusIfActive(batchId, from, 'analyzing', { taxonomyStartedAt: new Date() });
 
 /**
  * Shared claim -> sample -> infer -> sanitize -> store -> notify orchestration for background
@@ -56,16 +71,9 @@ export async function analyzeBatchTaxonomy(
   dataLakeId: string,
   userId: string,
   logger: { error: (msg: string) => void; warn: (msg: string) => void },
-  options: { from: TaxonomyStatus[]; context?: string }
+  options: ({ from: TaxonomyStatus[] } | { claimHeldByCaller: true }) & { context?: string }
 ): Promise<AnalyzeBatchTaxonomyResult> {
-  // Refresh taxonomyStartedAt on the claim itself, not just on later transitions - the
-  // stuck-job reconciler's clock must start from when THIS attempt began, not an earlier
-  // enqueue/prior-attempt time, or a claim that sat briefly in queue (or was redelivered)
-  // could look instantly stuck and get force-failed mid-run.
-  const claimed = await dataLakeBatchRepository.setTaxonomyStatusIfActive(batchId, options.from, 'analyzing', {
-    taxonomyStartedAt: new Date(),
-  });
-  if (!claimed) return { claimed: false };
+  if ('from' in options && !(await claimBatchForAnalysis(batchId, options.from))) return { claimed: false };
 
   const notify = (taxonomyStatus: 'ready' | 'failed') =>
     sendToClient(userId, Resource.websocket.managementEndpoint, {

@@ -1,8 +1,16 @@
 import {
+  CHAT_MODELS,
   ChatModels,
   IMessage,
+  ModelBackend,
+  type ModelInfo,
   CompletionInfo,
   getTextModelCost,
+  getTurnsCost,
+  type TurnUsage,
+  pricingTierForTokens,
+  publishesCacheReadRate,
+  PUBLISHED_CACHE_READ_BACKENDS,
   CreditHolderType,
   ICreditHolder,
   ICreditHolderMethods,
@@ -15,7 +23,16 @@ import {
   IUserApiKeyRepository,
   IUserRepository,
   normalizeMultimodalMessages,
+  BadRequestError,
+  HTTPError,
   type CompletionSource,
+  UNKNOWN_MODEL_ERROR_CODE,
+  DEGENERATE_FINISH_REASON,
+  estimateStreamedOutputTokens,
+  completionsSupportsToolSearch,
+  isClaudeModelId,
+  type CreditHoldRecord,
+  type ICacheStrategy,
 } from '@bike4mind/common';
 import {
   usdToCredits,
@@ -25,6 +42,7 @@ import {
   getSettingsValue,
   getSettingsByNames,
   DEFAULT_OUTPUT_MAX_TOKENS,
+  isSafetyRefusalError,
 } from '@bike4mind/utils';
 import {
   getLlmByModel,
@@ -33,14 +51,25 @@ import {
   resolveOutputMaxTokens,
   type ICompletionOptions,
   type ICompletionOptionTools,
-  type ApiKeyTable,
+  isModelProviderConfigured,
+  isAdaptiveThinkingByDefault,
 } from '@bike4mind/llm-adapters';
+import { WORKFLOW_REMINDER_MARKER } from '@bike4mind/agents';
 import { Logger } from '@bike4mind/observability';
 import { getEffectiveLLMApiKeys } from './apiKeyService';
 import { subtractCredits, isMemberCreditCapExceeded, MEMBER_CREDIT_CAP_MESSAGE } from './creditService';
 import { isCurrentOrgMember } from './organizationService/orgAuthority';
 import { InsufficientCreditsError } from './llm/ChatCompletionProcess';
-import { buildEarlyStopStamp } from './llm/earlyStopStamp';
+import { usageEventStatusForFinish } from './llm/earlyStopStamp';
+import { prepareWireTools } from './cliCompletionsToolSearch';
+import { withOllamaThinkingDefault } from './llm/ollamaThinkingDefault';
+
+/** Persistence boundary: implementations commit each callback and its hold transition atomically. */
+export type CompletionCreditHolds = {
+  reserve(hold: Omit<CreditHoldRecord, 'balanceAfterHold'>, debit: () => Promise<ICreditHolder>): Promise<void>;
+  refund(refund: () => Promise<void>): Promise<boolean>;
+  settle(chargedCredits: number, settle: () => Promise<void>): Promise<boolean>;
+};
 
 export interface CompletionParams {
   userId: string;
@@ -61,6 +90,15 @@ export interface CompletionParams {
      * b4m-core/common/src/schemas/cliCompletions.ts.
      */
     response_format?: import('@bike4mind/common').ResponseFormat;
+    /**
+     * Forwarded to the adapter, which the OpenAI (reasoning models), Kimi (K3 only),
+     * DeepSeek and Anthropic (direct and Bedrock) backends read. Gemini, xAI and
+     * Ollama drop it, so it is a silent no-op there. With `thinking.enabled`, Claude
+     * keeps thinking on and uses this as its effort.
+     */
+    reasoningEffort?: import('@bike4mind/common').ReasoningEffort;
+    /** See the `thinking` field of CompletionRequestSchema. */
+    thinking?: { enabled: boolean; budget_tokens?: number };
   };
   /**
    * Server-side executable tools (each carries a live toolFn). When present, the backend
@@ -134,8 +172,16 @@ export interface CompletionParams {
    * default, so existing callers record only on the settlement-success path as before.
    */
   alwaysRecordUsage?: boolean;
+  /** Durable reservation lifecycle, supplied by every hosted completion transport. */
+  creditHolds?: CompletionCreditHolds;
   logger?: Logger;
   onChunk: (text: (string | null | undefined)[], info?: CompletionInfo) => Promise<void>;
+  /**
+   * Called once, after model resolution and the credit hold, immediately before the provider call.
+   * The SSE route commits its 200 here, so anything thrown earlier can still be a real HTTP status.
+   * A throw from it refunds the hold.
+   */
+  onReady?: () => void | Promise<void>;
 }
 
 /**
@@ -148,6 +194,169 @@ function estimateInputTokens(messages: IMessage[]): number {
     return sum + contentLength;
   }, 0);
   return Math.ceil(totalChars / 2.5);
+}
+
+/**
+ * Same heuristic as estimateInputTokens, over the tool schemas the provider is sent (wire or
+ * server-executed). A deferred tool is left out only where `deferralHonoured`: native tool search
+ * keeps it out of the prompt until it is referenced, and anywhere else the flag is ignored and
+ * the tool is sent in full. Decided here rather than trusting prepareWireTools to have stripped
+ * the flag, because `serverTools` never pass through it.
+ */
+function estimateToolTokens(tools: ICompletionOptionTools[], deferralHonoured: boolean): number {
+  const totalChars = tools.reduce(
+    (sum, tool) =>
+      deferralHonoured && tool.toolSchema.defer_loading === true ? sum : sum + JSON.stringify(tool.toolSchema).length,
+    0
+  );
+  return Math.ceil(totalChars / 2.5);
+}
+
+/**
+ * Backends whose server caches prompt prefixes without a client flag; they only get the cache
+ * rate when the catalog publishes an explicit cache_read (the default 0.1x multiplier is
+ * Anthropic's). Must stay in sync with the adapters that report cache reads into settlement
+ * (those calling `splitCacheInclusiveInput`); the Gemini and xAI adapters forward them only for a
+ * model that publishes cache_read, the same condition this path checks. Ollama publishes no
+ * cache_read. Claude is not listed: buildClaudeCacheStrategy sets its cache_control, and the hold
+ * below discounts it only on Anthropic and only for client-sent `cache` flags, so server-set
+ * caching never lowers a hold.
+ */
+const AUTO_CACHING_BACKENDS: ReadonlySet<ModelBackend> = new Set([
+  ModelBackend.OpenAI,
+  ModelBackend.Kimi,
+  ModelBackend.DeepSeek,
+  ModelBackend.Gemini,
+  ModelBackend.XAI,
+]);
+
+/**
+ * Claude prompt caching, set here so no CLI or Desktop release is needed. Mirrors the strategy web
+ * chat builds in ChatCompletionProcess (system prompt, tools, history, 5m TTL); the Anthropic
+ * caching adapter places the breakpoints and budgets them around any client-sent `cache: true`
+ * flags. Other backends cache server-side without a flag or ignore the strategy.
+ *
+ * CLI and Desktop send a growing conversation, so even their first round writes a prefix the next
+ * round reads. Any other source with no assistant message yet is a one-shot call: caching it pays
+ * the 1.25x write and never reads it back, so it stays off until a prior turn exists.
+ */
+function buildClaudeCacheStrategy(
+  modelInfo: ModelInfo | undefined,
+  messages: IMessage[],
+  hasTools: boolean,
+  source: CompletionSource
+): ICacheStrategy | undefined {
+  const isClaude =
+    modelInfo?.backend === ModelBackend.Anthropic ||
+    (modelInfo?.backend === ModelBackend.Bedrock && isClaudeModelId(modelInfo.id));
+  if (!isClaude) return undefined;
+  const reusablePrefix =
+    messages.length >= 2 && (source === 'cli' || source === 'desktop' || messages.some(m => m.role === 'assistant'));
+  // The CLI re-appends a workflow reminder after the history on every request. Anchoring on it would
+  // never hit, so the history breakpoint goes on the message before it (as ReActAgent does locally).
+  const lastMessage = messages[messages.length - 1];
+  const endsWithReminder =
+    lastMessage?.role === 'user' &&
+    typeof lastMessage.content === 'string' &&
+    lastMessage.content.startsWith(WORKFLOW_REMINDER_MARKER);
+  return {
+    enableCaching: reusablePrefix,
+    cacheSystemPrompt: true,
+    cacheTools: hasTools,
+    cacheConversationHistory: reusablePrefix,
+    ...(endsWithReminder ? { historyCacheExcludeTrailingCount: 1 } : {}),
+    cacheTTL: '5m',
+  };
+}
+
+// Bounds a cold or fabricated cache at about 2.5x the floor (a write costs 1.25x against the 0.5x floor).
+const CACHED_INPUT_RESERVATION_FLOOR = 0.5;
+
+/**
+ * Prices the input side of the pre-flight reservation. Every request in a tool loop re-sends
+ * the whole conversation, but the part before the newest tool results / user text is served
+ * from the provider's prompt cache at a fraction of the input rate, so pricing it uncached
+ * over-reserves by an order of magnitude and refuses users who can afford many real rounds.
+ *
+ * Billing rule: a cache read can only cover what an earlier round wrote, which ended before the
+ * last assistant message. Anthropic hoists every system message into the `system` param ahead of
+ * the conversation, so system messages are their own leading segment: read when one is flagged
+ * (or a conversation breakpoint follows them) and an assistant turn exists. Conversation
+ * (non-system) messages read up to min(last flagged, message before the last assistant); from
+ * there to the last flagged one they bill at cache_write (the new breakpoint writes them, the
+ * last assistant message included); the rest is plain input. Auto-caching backends read the
+ * system messages that precede the last assistant message (they preserve message order, so a later
+ * one is new content) and the conversation up to the message before the last assistant, and bill
+ * the rest plain. A conversation with no assistant message yet has nothing cached, so it stays fully
+ * uncached. If the provider misses (cache TTL lapsed) the real cost is higher; settlement charges
+ * actual usage.
+ *
+ * The input side is floored at CACHED_INPUT_RESERVATION_FLOOR of the uncached input cost, so a
+ * client-claimed or lapsed cache cannot shrink the hold below it.
+ *
+ * The pricing tier comes from the total input, since a request's tier is set by its whole prompt
+ * and not by the uncached remainder.
+ */
+function estimateReservationUsd(
+  modelInfo: ModelInfo,
+  messages: IMessage[],
+  estimatedInputTokens: number,
+  estimatedOutputTokens: number,
+  estimatedToolTokens: number
+): number {
+  const uncachedUsd = getTextModelCost(modelInfo, estimatedInputTokens, estimatedOutputTokens);
+  if (!messages.some(m => m.role === 'assistant')) return uncachedUsd;
+
+  const lastAssistantMessageIndex = messages.reduce((last, m, i) => (m.role === 'assistant' ? i : last), -1);
+  const conversation = messages.filter(m => m.role !== 'system');
+  const lastAssistantIndex = conversation.reduce((last, m, i) => (m.role === 'assistant' ? i : last), -1);
+  const tier = pricingTierForTokens(modelInfo, estimatedInputTokens);
+
+  let readEnd: number;
+  let writeEnd = -1;
+  let hoistsSystem: boolean;
+  if (modelInfo.backend === ModelBackend.Anthropic) {
+    const lastFlagged = conversation.reduce((last, m, i) => (m.cache === true ? i : last), -1);
+    if (lastFlagged < 0 && !messages.some(m => m.role === 'system' && m.cache === true)) return uncachedUsd;
+    readEnd = Math.min(lastFlagged, lastAssistantIndex - 1);
+    writeEnd = lastFlagged;
+    hoistsSystem = true;
+  } else {
+    // Mirror the adapter gate exactly: for a backend that forwards cache reads only for a model
+    // publishing cache_read on every tier, a single tier carrying one must not discount the hold,
+    // or settlement bills full-rate input against a discounted reservation.
+    const publishesCacheRead = PUBLISHED_CACHE_READ_BACKENDS.has(modelInfo.backend)
+      ? publishesCacheReadRate(modelInfo)
+      : tier !== null && modelInfo.pricing[tier]?.cache_read !== undefined;
+    if (!AUTO_CACHING_BACKENDS.has(modelInfo.backend) || !publishesCacheRead) return uncachedUsd;
+    readEnd = lastAssistantIndex - 1;
+    hoistsSystem = false;
+  }
+
+  let readTokens = 0;
+  let writeTokens = 0;
+  // Priced plain: tool schemas are not flagged for caching on this path, so no discount is assumed.
+  let plainTokens = estimatedToolTokens;
+  let conversationIndex = 0;
+  messages.forEach((m, index) => {
+    const tokens = estimateInputTokens([m]);
+    if (m.role === 'system') {
+      if (hoistsSystem || index < lastAssistantMessageIndex) readTokens += tokens;
+      else plainTokens += tokens;
+      return;
+    }
+    const i = conversationIndex++;
+    if (i <= readEnd) readTokens += tokens;
+    else if (i <= writeEnd) writeTokens += tokens;
+    else plainTokens += tokens;
+  });
+
+  const tieredModel =
+    tier === null ? modelInfo : ({ ...modelInfo, pricing: { [tier]: modelInfo.pricing[tier] } } as ModelInfo);
+  const cachedInputUsd = getTextModelCost(tieredModel, plainTokens, 0, readTokens, writeTokens);
+  const uncachedInputUsd = getTextModelCost(tieredModel, estimatedInputTokens, 0);
+  const outputUsd = getTextModelCost(tieredModel, 0, estimatedOutputTokens);
+  return Math.max(cachedInputUsd, CACHED_INPUT_RESERVATION_FLOOR * uncachedInputUsd) + outputUsd;
 }
 
 /**
@@ -177,8 +386,7 @@ export function resolveOpenAiBareModelAlias(modelId: string): string {
 }
 
 /**
- * Shared LLM completion logic
- * Used by Next.js API route, Lambda function, and available for 3rd party integrations
+ * Shared LLM completion logic for the SSE, WebSocket and embed completion routes.
  */
 export async function executeCompletion(params: CompletionParams): Promise<void> {
   const { userId, options, db, logger, onChunk, apiKeyInfo } = params;
@@ -194,7 +402,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // false) and server tools (executeTools true) imply opposite loop semantics - silently
   // picking a winner could bill a server tool loop the client never asked for.
   if (params.serverTools?.length && options?.tools?.length) {
-    throw new Error(
+    throw new BadRequestError(
       '[CLI_COMPLETIONS] serverTools (server-executed) and options.tools (wire/client-executed) are mutually exclusive'
     );
   }
@@ -230,8 +438,12 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     if (!isCurrentOrgMember(organization, userId)) {
       const actor = await db.users.findById(userId);
       if (!actor?.isAdmin) {
-        throw new Error(
-          `[CLI_CREDITS] User ${userId} is no longer a member of billing organization ${organization.id}`
+        logger?.warn?.('[CLI_CREDITS] API key minter is no longer a member of the billing organization', {
+          userId,
+          organizationId: organization.id,
+        });
+        throw new BadRequestError(
+          'This API key bills an organization you are no longer a member of. Re-mint the key to continue.'
         );
       }
     }
@@ -248,15 +460,41 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
 
   const models = await getAvailableModels(apiKeys);
   const modelInfo = models.find(m => m.id === (model as ChatModels));
+  const catalogued = CHAT_MODELS.includes(model as ChatModels);
 
-  const llm = getLlmByModel(apiKeys as ApiKeyTable, {
+  // Catalogued but never runnable; unlike provider_not_configured, retrying cannot help.
+  if (modelInfo?.disabled) {
+    const reason = modelInfo.disabledReason ? `: ${modelInfo.disabledReason}` : '';
+    throw new BadRequestError(
+      `Model '${params.model}' is currently unavailable${reason}. List the models you can call with GET /api/v1/models.`,
+      { errorCode: UNKNOWN_MODEL_ERROR_CODE }
+    );
+  }
+
+  const llm = getLlmByModel(apiKeys, {
     modelInfo,
     logger: logger ?? new Logger(),
     endUserId: userId,
   });
 
   if (!llm) {
-    throw new Error(`Failed to create LLM backend for model: ${model}`);
+    const unknownModel = new BadRequestError(
+      `Unknown model '${params.model}'. List the models you can call with GET /api/v1/models.`,
+      { errorCode: UNKNOWN_MODEL_ERROR_CODE }
+    );
+    if (!catalogued) throw unknownModel;
+    const providerConfigured = await isModelProviderConfigured(model, apiKeys).catch((cause: unknown) => {
+      logger?.error?.('[cliCompletions] provider check failed; answering 503', { model, cause });
+      return false;
+    });
+    if (!providerConfigured)
+      throw new HTTPError(503, `Failed to create LLM backend for model: ${params.model}`, {
+        errorCode: 'provider_not_configured',
+      });
+    // A retired or unlisted model on a configured provider must be changed by the caller; a retryable status
+    // would loop clients forever. Static listings cannot time out, so absence here is not transient.
+    logger?.warn?.('[cliCompletions] catalogued model unavailable on a configured provider', { model });
+    throw unknownModel;
   }
 
   llm.currentModel = model;
@@ -285,6 +523,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         modelMaxOutputTokens: modelInfo.max_tokens,
       })
     : (options?.maxTokens ?? DEFAULT_OUTPUT_MAX_TOKENS);
+  // Before any credit reservation, so a refused tool search request costs nothing.
+  const wireTools = prepareWireTools(options?.tools, messages, modelInfo);
   // Promote wire tools to ICompletionOptionTools by stamping a no-op toolFn.
   // executeTools: false means the backend never calls toolFn - it only reads
   // toolSchema. The placeholder satisfies the type contract without changing
@@ -292,7 +532,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // ICompletionOptionTools requires a stricter property shape - the backend's
   // formatTools() coerces both shapes correctly.
   const noopToolFn: ICompletionOptionTools['toolFn'] = async () => '';
-  const promotedTools: ICompletionOptionTools[] | undefined = options?.tools?.map(t => ({
+  const promotedTools: ICompletionOptionTools[] | undefined = wireTools.tools.map(t => ({
     ...t,
     toolFn: (t as { toolFn?: ICompletionOptionTools['toolFn'] }).toolFn ?? noopToolFn,
   })) as ICompletionOptionTools[] | undefined;
@@ -303,17 +543,42 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // existing caller (CLI/API clients execute tools locally).
   const useServerTools = (params.serverTools?.length ?? 0) > 0;
 
+  // Gated on can_think as ChatCompletionProcess gates it: Ollama 400s a non-thinking model
+  // asked to think. budget_tokens only sizes legacy thinking; adaptive models take an effort.
+  const thinking = withOllamaThinkingDefault(
+    options?.thinking?.enabled && modelInfo?.can_think
+      ? { enabled: true, budget_tokens: options.thinking.budget_tokens ?? 16000 }
+      : undefined,
+    modelInfo
+  );
+
+  const requestTools = useServerTools ? params.serverTools! : (promotedTools ?? []);
+  const cacheStrategy = buildClaudeCacheStrategy(modelInfo, messages, requestTools.length > 0, source);
+
+  // This path has no complexity classifier and clients rarely send an effort, so an adaptive Claude
+  // that thinks unasked would run every request at the provider default (high on Opus 5). Any
+  // explicit effort or thinking value from the client wins.
+  const reasoningEffort =
+    options?.reasoningEffort ??
+    (options?.thinking === undefined && modelInfo && isAdaptiveThinkingByDefault(model, modelInfo)
+      ? 'medium'
+      : undefined);
+
   const completionOptions: Partial<ICompletionOptions> = {
     temperature: options?.temperature,
     maxTokens,
     stream: options?.stream ?? true,
-    tools: useServerTools ? params.serverTools! : (promotedTools ?? []),
+    tools: requestTools,
+    ...(cacheStrategy ? { cacheStrategy } : {}),
+    ...(wireTools.providerTools.length > 0 ? { providerTools: wireTools.providerTools } : {}),
     executeTools: useServerTools,
     ...(useServerTools && params.maxToolCalls !== undefined
       ? { _internal: { maxToolCalls: params.maxToolCalls } }
       : {}),
     ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
+    ...(reasoningEffort ? { reasoningEffort } : {}),
     ...(responseFormatEnabled && options?.response_format ? { responseFormat: options.response_format } : {}),
+    ...(thinking ? { thinking } : {}),
   };
 
   if (options?.response_format) {
@@ -352,13 +617,23 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     // through - 8x what this keeps - and reject short prompts outright for anyone near their
     // balance. That also makes the reservationOutputTokens term inert on this no-budget path -
     // it only binds once a caller passes an explicit options.maxTokens above the ceiling.
-    const estimatedInputTokens = estimateInputTokens(messages);
+    const estimatedToolTokens = estimateToolTokens(
+      completionOptions.tools ?? [],
+      completionsSupportsToolSearch(modelInfo)
+    );
+    const estimatedInputTokens = estimateInputTokens(messages) + estimatedToolTokens;
     const estimatedOutputTokens = Math.min(
       maxTokens,
       options?.maxTokens ?? DEFAULT_OUTPUT_MAX_TOKENS,
       reservationOutputTokens(maxTokens, reasonsWithinOutputBudget(modelInfo))
     );
-    const estimatedUsdCost = getTextModelCost(modelInfo, estimatedInputTokens, estimatedOutputTokens);
+    const estimatedUsdCost = estimateReservationUsd(
+      modelInfo,
+      messages,
+      estimatedInputTokens,
+      estimatedOutputTokens,
+      estimatedToolTokens
+    );
     reservedCredits = usdToCredits(estimatedUsdCost);
 
     // Rail the money path independently of whatever sized it. A non-finite estimate must
@@ -387,25 +662,42 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       }
     }
 
-    // Atomically reserve credits using incrementCredits with negative value
-    const holderAfterReservation = await holderMethods.incrementCredits(holderId, -reservedCredits);
+    const debit = async (): Promise<ICreditHolder> => {
+      // Atomically reserve credits using incrementCredits with negative value
+      const holderAfterReservation = await holderMethods.incrementCredits(holderId, -reservedCredits);
 
-    if (!holderAfterReservation || holderAfterReservation.currentCredits < 0) {
-      // Rollback the reservation immediately
-      await holderMethods.incrementCredits(holderId, reservedCredits);
-      const actualBalance = (holderAfterReservation?.currentCredits ?? 0) + reservedCredits;
-      throw new InsufficientCreditsError(
-        billToOrg
-          ? `Your organization does not have enough credits. It has ${actualBalance} credits, but this request requires approximately ${reservedCredits}. Please contact your organization administrator to add more credits.`
-          : `Insufficient credits. You have ${actualBalance} credits, but this request requires approximately ${reservedCredits} credits. ` +
-              `Try using a smaller model or reducing the prompt size.`,
-        'insufficient_credits'
+      if (!holderAfterReservation || holderAfterReservation.currentCredits < 0) {
+        // Rollback the reservation immediately
+        await holderMethods.incrementCredits(holderId, reservedCredits);
+        const actualBalance = (holderAfterReservation?.currentCredits ?? 0) + reservedCredits;
+        throw new InsufficientCreditsError(
+          billToOrg
+            ? `Your organization does not have enough credits. It has ${actualBalance} credits, but this request requires approximately ${reservedCredits}. Please contact your organization administrator to add more credits.`
+            : `Insufficient credits. You have ${actualBalance} credits, but this request requires approximately ${reservedCredits} credits. ` +
+                `Try using a smaller model or reducing the prompt size.`,
+          'insufficient_credits'
+        );
+      }
+
+      logger?.debug?.(
+        `[CLI_CREDITS] Credits reserved successfully. Balance after reservation: ${holderAfterReservation.currentCredits}`
       );
+      return holderAfterReservation;
+    };
+    if (params.creditHolds) {
+      await params.creditHolds.reserve(
+        {
+          ownerId: holderId,
+          ownerType: holderType,
+          userId,
+          organizationId: billToOrg ? holderId : null,
+          reservedCredits,
+        },
+        debit
+      );
+    } else {
+      await debit();
     }
-
-    logger?.debug?.(
-      `[CLI_CREDITS] Credits reserved successfully. Balance after reservation: ${holderAfterReservation.currentCredits}`
-    );
   }
 
   // Track tokens across callback invocations for credit calculation.
@@ -423,17 +715,48 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // Same assign-not-add contract as input/output tokens.
   let finalCacheReadTokens = 0;
   let finalCacheCreationTokens = 0;
+  // Per-request breakdown of the same totals, from adapters that report it; prices each request on
+  // its own long-context tier. Same assign-not-add contract.
+  let finalTurnUsage: TurnUsage[] | undefined;
+  // Informational subset of finalOutputTokens, never billed. Undefined until a provider
+  // reports a count, and checked against undefined (not truthiness) so a reported 0 survives.
+  let finalReasoningTokens: number | undefined;
   // Latched from whichever chunk carries it (backends emit it on their terminal chunk)
   // and re-emitted on the final settlement event below, so a client that only inspects
   // the last event still learns the reply was truncated.
   let finalStopReason: string | undefined;
+  // Every char streamed to the caller, for pricing a first call that was cut short (see below).
+  let streamedOutputChars = 0;
+
+  const settledUsdCost = (pricedModel: ModelInfo): number =>
+    finalTurnUsage?.length
+      ? getTurnsCost(pricedModel, finalTurnUsage)
+      : getTextModelCost(
+          pricedModel,
+          finalInputTokens,
+          finalOutputTokens,
+          finalCacheReadTokens,
+          finalCacheCreationTokens,
+          finalInputTokens + finalCacheReadTokens + finalCacheCreationTokens
+        );
 
   const wrappedOnChunk = async (text: (string | null | undefined)[], info?: CompletionInfo) => {
     if (info?.inputTokens) finalInputTokens = info.inputTokens;
     if (info?.outputTokens) finalOutputTokens = info.outputTokens;
     if (info?.cacheReadInputTokens) finalCacheReadTokens = info.cacheReadInputTokens;
     if (info?.cacheCreationInputTokens) finalCacheCreationTokens = info.cacheCreationInputTokens;
+    if (info?.turnUsage?.length) finalTurnUsage = info.turnUsage;
+    // Latched only alongside outputTokens so the pair always comes from the same frame.
+    // Compared against undefined (not truthiness) so a reported outputTokens: 0 - an empty or
+    // fully-filtered reply - still latches its count instead of dropping it.
+    if (info?.outputTokens !== undefined && info.reasoningTokens !== undefined)
+      finalReasoningTokens = info.reasoningTokens;
     if (info?.stopReason) finalStopReason = info.stopReason;
+    // Tool-artifact frames carry a tool's own output for a renderer, not the model's, so they are not
+    // output the provider bills on this call.
+    if (info?.channel !== 'tool-artifact') {
+      for (const t of text) streamedOutputChars += t?.length ?? 0;
+    }
 
     if (info?.inputTokens || info?.outputTokens) {
       logger?.debug?.(
@@ -444,80 +767,94 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       );
     }
 
-    // Calculate credit usage for display purposes (always, regardless of enforcement)
-    // Calculate even when tokens are 0 (some models have minimum charges)
-    if (modelInfo && (info?.inputTokens || info?.outputTokens)) {
-      const currentInputTokens = info.inputTokens || 0;
-      const currentOutputTokens = info.outputTokens || 0;
-      const currentCacheReadTokens = info.cacheReadInputTokens || 0;
-      const currentCacheCreationTokens = info.cacheCreationInputTokens || 0;
-      const currentUsdCost = getTextModelCost(
-        modelInfo,
-        currentInputTokens,
-        currentOutputTokens,
-        currentCacheReadTokens,
-        currentCacheCreationTokens
-      );
-      const currentCredits = usdToCredits(currentUsdCost);
-
-      logger?.debug?.(
-        `[CLI_CREDITS] Calculated ${currentCredits} credits during streaming ($${currentUsdCost.toFixed(6)} USD)`
-      );
-
-      // Pass credit info to client via CompletionInfo
-      await onChunk(text, {
-        ...info,
-        creditsUsed: currentCredits,
-        usdCost: currentUsdCost,
-      });
-    } else {
-      await onChunk(text, info);
-    }
+    // Streaming frames carry token usage but never credits: the settlement event below is the
+    // only frame with `credits`, so a client reading credits sees exactly one number, and it is
+    // the one the ledger charged. A provisional round-up here (usdToCredits, minimum 1) used to
+    // precede a stochastic settlement of 0 on cheap calls, which read as a double charge.
+    await onChunk(text, info);
   };
 
+  // A Stop or client disconnect (res 'close' -> abort) that makes the adapter throw mid-stream still
+  // spent what it streamed: it settles below like an abort the adapter resolves on, and is rethrown
+  // once settled. Any other failure refunds the reservation here.
+  let abortError: unknown;
   try {
+    await params.onReady?.();
     await llm.complete(model, messages, completionOptions, wrappedOnChunk);
   } catch (error) {
-    // If completion fails, refund the reserved credits to whichever pool paid
-    if (reservedCredits > 0) {
-      logger?.info?.(`[CLI_CREDITS] Completion failed, refunding ${reservedCredits} reserved credits`);
-      await holderMethods.incrementCredits(holderId, reservedCredits);
+    if (params.abortSignal?.aborted && streamedOutputChars > 0) {
+      abortError = error;
+    } else {
+      // If completion fails, refund the reserved credits to whichever pool paid
+      if (reservedCredits > 0) {
+        logger?.info?.(`[CLI_CREDITS] Completion failed, refunding ${reservedCredits} reserved credits`);
+        const refund = async () => {
+          await holderMethods.incrementCredits(holderId, reservedCredits);
+        };
+        if (params.creditHolds) await params.creditHolds.refund(refund);
+        else await refund();
+      }
+      // The success-path settlement/metering below is now unreachable, so an
+      // alwaysRecordUsage caller (embed) would otherwise have NO ledger trace of a run
+      // the provider already partially billed - most visibly on a client disconnect
+      // (res 'close' -> abort -> AbortError here) before anything streamed. Record the partial spend
+      // as an errored event so org metering stays complete. creditsCharged is 0: the
+      // reservation was refunded above and nothing settled. Status 'error' (no 'aborted'
+      // in USAGE_EVENT_STATUSES; a disconnect is an errored completion). A safety-classifier
+      // refusal is recorded as 'refusal' under the same gate as the settled success row
+      // (enforceCredits or alwaysRecordUsage), so Refusal Rate = refusals / calls stays unskewed;
+      // this path has no fallback loop, so the refused call is the whole request.
+      const isRefusal = error instanceof Error && isSafetyRefusalError(error);
+      const recordsUsage = enforceCredits || params.alwaysRecordUsage;
+      if (
+        modelInfo &&
+        ((isRefusal && recordsUsage) || (params.alwaysRecordUsage && (finalInputTokens > 0 || finalOutputTokens > 0)))
+      ) {
+        db.usageEvents
+          ?.record({
+            requestId: params.requestId ?? `completion-${apiKeyInfo?.keyId ?? userId}-${Date.now()}`,
+            userId,
+            ownerId: holderId,
+            ownerType: holderType,
+            feature: 'completion_api',
+            source,
+            apiKeyId: apiKeyInfo?.keyId,
+            provider: modelInfo.backend,
+            model,
+            inputTokens: finalInputTokens,
+            outputTokens: finalOutputTokens,
+            cachedInputTokens: finalCacheReadTokens,
+            cacheWriteTokens: finalCacheCreationTokens,
+            costUsd: settledUsdCost(modelInfo),
+            creditsCharged: 0,
+            status: isRefusal ? 'refusal' : 'error',
+            latencyMs: Date.now() - completionStartTime,
+          })
+          .catch(err => logger?.warn?.('Failed to record aborted usage event', err));
+      }
+      throw error;
     }
-    // The success-path settlement/metering below is now unreachable, so an
-    // alwaysRecordUsage caller (embed) would otherwise have NO ledger trace of a run
-    // the provider already partially billed - most visibly on a client disconnect
-    // (res 'close' -> abort -> AbortError here) mid tool-loop. Record the partial spend
-    // as an errored event so org metering stays complete. creditsCharged is 0: the
-    // reservation was refunded above and nothing settled. Status 'error' (no 'aborted'
-    // in USAGE_EVENT_STATUSES; a disconnect is an errored completion).
-    if (params.alwaysRecordUsage && modelInfo && (finalInputTokens > 0 || finalOutputTokens > 0)) {
-      db.usageEvents
-        ?.record({
-          requestId: params.requestId ?? `completion-${apiKeyInfo?.keyId ?? userId}-${Date.now()}`,
-          userId,
-          ownerId: holderId,
-          ownerType: holderType,
-          feature: 'completion_api',
-          provider: modelInfo.backend,
-          model,
-          inputTokens: finalInputTokens,
-          outputTokens: finalOutputTokens,
-          cachedInputTokens: finalCacheReadTokens,
-          cacheWriteTokens: finalCacheCreationTokens,
-          costUsd: getTextModelCost(
-            modelInfo,
-            finalInputTokens,
-            finalOutputTokens,
-            finalCacheReadTokens,
-            finalCacheCreationTokens
-          ),
-          creditsCharged: 0,
-          status: 'error',
-          latencyMs: Date.now() - completionStartTime,
-        })
-        .catch(err => logger?.warn?.('Failed to record aborted usage event', err));
+  }
+
+  // An abort that threw before any usage frame reported nothing: price its prompt on the local
+  // estimate, so the output estimate below has an input to go with.
+  if (abortError !== undefined && finalInputTokens + finalCacheReadTokens + finalCacheCreationTokens === 0) {
+    finalInputTokens = estimateInputTokens(messages);
+  }
+
+  // Any adapter reporting a prompt but 0 output on a Stop or degenerate abort lands here (today only
+  // Claude, which sends output tokens on message_delta alone); call 2+ is estimated in the adapter.
+  // The char sum counts think markup. Zero usage on an abort is a different gap, left as it was.
+  if (
+    finalOutputTokens === 0 &&
+    finalInputTokens + finalCacheReadTokens + finalCacheCreationTokens > 0 &&
+    streamedOutputChars > 0 &&
+    (params.abortSignal?.aborted || finalStopReason === DEGENERATE_FINISH_REASON)
+  ) {
+    finalOutputTokens = estimateStreamedOutputTokens(streamedOutputChars, model);
+    if (finalTurnUsage?.length) {
+      finalTurnUsage = [...finalTurnUsage.slice(0, -1), { ...finalTurnUsage.at(-1)!, outputTokens: finalOutputTokens }];
     }
-    throw error;
   }
 
   // Send final credit info to client so it shows the accurate final count.
@@ -531,13 +868,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   let finalCredits = 0;
 
   if (modelInfo) {
-    finalUsdCost = getTextModelCost(
-      modelInfo,
-      finalInputTokens,
-      finalOutputTokens,
-      finalCacheReadTokens,
-      finalCacheCreationTokens
-    );
+    finalUsdCost = settledUsdCost(modelInfo);
     finalCredits = usdToCreditsStochastic(finalUsdCost);
 
     logger?.info?.(
@@ -548,16 +879,18 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         `, $${finalUsdCost.toFixed(6)} USD)`
     );
 
-    // Send empty text with final credit info
-    await onChunk([], {
-      inputTokens: finalInputTokens,
-      outputTokens: finalOutputTokens,
-      cacheReadInputTokens: finalCacheReadTokens || undefined,
-      cacheCreationInputTokens: finalCacheCreationTokens || undefined,
-      creditsUsed: finalCredits,
-      usdCost: finalUsdCost,
-      stopReason: finalStopReason,
-    });
+    // Send empty text with final credit info; an aborted caller is no longer listening.
+    if (abortError === undefined)
+      await onChunk([], {
+        inputTokens: finalInputTokens,
+        outputTokens: finalOutputTokens,
+        ...(finalReasoningTokens !== undefined ? { reasoningTokens: finalReasoningTokens } : {}),
+        cacheReadInputTokens: finalCacheReadTokens || undefined,
+        cacheCreationInputTokens: finalCacheCreationTokens || undefined,
+        creditsUsed: finalCredits,
+        usdCost: finalUsdCost,
+        stopReason: finalStopReason,
+      });
   } else {
     logger?.warn?.('[CLI_CREDITS] Cannot send credits - modelInfo is undefined');
   }
@@ -589,158 +922,169 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         creditsCharged,
         // Same refund key the web chat path records: a stream aborted as degenerate is
         // priced normally (the provider tokens were spent) but must not read as a clean,
-        // fully-valued success. See buildEarlyStopStamp.
-        status: buildEarlyStopStamp(finalStopReason)?.usageEventStatus ?? 'ok',
+        // fully-valued success. See usageEventStatusForFinish.
+        status: abortError !== undefined ? 'error' : usageEventStatusForFinish(finalStopReason),
         latencyMs: Date.now() - completionStartTime,
       })
       .catch(err => logger?.warn?.('Failed to record usage event', err));
     usageRecorded = true;
   };
 
+  let settlementCommitted = false;
+
   // Adjust credits after completion: refund over-reservation or charge under-reservation
   if (enforceCredits && modelInfo) {
     try {
-      // Reuse the settlement values computed above - recomputing would draw a
-      // second stochastic rounding and desync the charge from what the client saw.
-      const usdCost = finalUsdCost;
-      const actualCredits = finalCredits;
-      const creditDifference = reservedCredits - actualCredits;
+      let ledgerWritten = false;
+      const settle = async () => {
+        // Reuse the settlement values computed above - recomputing would draw a
+        // second stochastic rounding and desync the charge from what the client saw.
+        const usdCost = finalUsdCost;
+        const actualCredits = finalCredits;
+        const creditDifference = reservedCredits - actualCredits;
 
-      logger?.info?.(
-        `[CLI_CREDITS] Actual usage: ${actualCredits} credits for ${finalInputTokens} input + ${finalOutputTokens} output tokens. ` +
-          `Reserved: ${reservedCredits}, Difference: ${creditDifference}`
-      );
-
-      // Track the final holder (user or org) state for the transaction record
-      let holderAfterAdjustment: ICreditHolder | null = null;
-
-      // Adjust the difference between reserved and actual against the paying pool
-      if (creditDifference !== 0) {
-        // Pre-check: warn if adjustment will cause negative balance (under-reservation case)
-        if (creditDifference < 0) {
-          // Under-reservation: we need to charge more credits
-          // Check if this will cause negative balance
-          const currentHolder = await fetchHolder();
-          const currentBalance = currentHolder?.currentCredits ?? 0;
-          const projectedBalance = currentBalance + creditDifference;
-
-          if (projectedBalance < 0) {
-            logger?.warn?.(
-              '[CLI_CREDITS] WARNING: Adjustment will cause negative balance - tracking for reconciliation',
-              {
-                userId,
-                holderId,
-                holderType,
-                currentBalance,
-                adjustment: creditDifference,
-                projectedBalance,
-                reserved: reservedCredits,
-                actual: actualCredits,
-              }
-            );
-            // Proceed with adjustment but track the shortfall in transaction metadata
-          }
-        }
-
-        holderAfterAdjustment = await holderMethods.incrementCredits(holderId, creditDifference);
-        logger?.debug?.(
-          `[CLI_CREDITS] Credit adjustment applied: ${creditDifference > 0 ? 'refunded' : 'charged'} ${Math.abs(creditDifference)} credits. ` +
-            `New balance: ${holderAfterAdjustment?.currentCredits}`
+        logger?.info?.(
+          `[CLI_CREDITS] Actual usage: ${actualCredits} credits for ${finalInputTokens} input + ${finalOutputTokens} output tokens. ` +
+            `Reserved: ${reservedCredits}, Difference: ${creditDifference}`
         );
 
-        // Check for negative balance (should be rare with atomic reservation)
-        if (holderAfterAdjustment && holderAfterAdjustment.currentCredits < 0) {
-          logger?.error?.('[CLI_CREDITS] ALERT: Credit holder went into negative balance after adjustment', {
-            userId,
-            holderId,
-            holderType,
-            balance: holderAfterAdjustment.currentCredits,
-            reserved: reservedCredits,
-            actual: actualCredits,
-          });
-        }
-      } else {
-        // No adjustment needed, fetch current state for transaction record
-        holderAfterAdjustment = await fetchHolder();
-      }
+        // Track the final holder (user or org) state for the transaction record
+        let holderAfterAdjustment: ICreditHolder | null = null;
 
-      // Create transaction record with ACTUAL usage (not estimated/reserved)
-      // Skip balance update since we already adjusted atomically above
-      if (holderAfterAdjustment) {
-        // Org-billed keys: record the actual charge against the acting member so
-        // per-member usage + maxCreditsPerMember stay accurate (matches
-        // deductCreditsWithOrgSupport). Balance already moved on the org above.
-        // Kept inside this guard so per-member tracking and the ledger row commit
-        // together: a null holder fetch skips both, never advancing usedCredits
-        // without a matching transaction.
-        if (billToOrg) {
-          // Self-heal a member with no `userDetails` row (added before grant-point seeding existed):
-          // the positional $inc in updateUserDetails cannot create the row it positions on, so without
-          // this their org-billed usage is never tracked and `maxCreditsPerMember` never trips. Only
-          // pays the extra read/write when the row is actually absent.
-          const member = organization!.userDetails?.find(u => u.id === userId);
-          if (!member) {
-            const actingUser = await db.users.findById(userId);
-            if (actingUser) {
-              await db.organizations!.ensureUserDetails(holderId, {
-                id: userId,
-                email: actingUser.email ?? actingUser.username,
-                name: actingUser.name,
-              });
+        // Adjust the difference between reserved and actual against the paying pool
+        if (creditDifference !== 0) {
+          // Pre-check: warn if adjustment will cause negative balance (under-reservation case)
+          if (creditDifference < 0) {
+            // Under-reservation: we need to charge more credits
+            // Check if this will cause negative balance
+            const currentHolder = await fetchHolder();
+            const currentBalance = currentHolder?.currentCredits ?? 0;
+            const projectedBalance = currentBalance + creditDifference;
+
+            if (projectedBalance < 0) {
+              logger?.warn?.(
+                '[CLI_CREDITS] WARNING: Adjustment will cause negative balance - tracking for reconciliation',
+                {
+                  userId,
+                  holderId,
+                  holderType,
+                  currentBalance,
+                  adjustment: creditDifference,
+                  projectedBalance,
+                  reserved: reservedCredits,
+                  actual: actualCredits,
+                }
+              );
+              // Proceed with adjustment but track the shortfall in transaction metadata
             }
           }
 
-          await db.organizations!.updateUserDetails(holderId, userId, {
-            creditsDelta: actualCredits,
-            lastCreditUsedAt: new Date(),
-          });
+          holderAfterAdjustment = await holderMethods.incrementCredits(holderId, creditDifference);
+          logger?.debug?.(
+            `[CLI_CREDITS] Credit adjustment applied: ${creditDifference > 0 ? 'refunded' : 'charged'} ${Math.abs(creditDifference)} credits. ` +
+              `New balance: ${holderAfterAdjustment?.currentCredits}`
+          );
+
+          // Check for negative balance (should be rare with atomic reservation)
+          if (holderAfterAdjustment && holderAfterAdjustment.currentCredits < 0) {
+            logger?.error?.('[CLI_CREDITS] ALERT: Credit holder went into negative balance after adjustment', {
+              userId,
+              holderId,
+              holderType,
+              balance: holderAfterAdjustment.currentCredits,
+              reserved: reservedCredits,
+              actual: actualCredits,
+            });
+          }
+        } else {
+          // No adjustment needed, fetch current state for transaction record
+          holderAfterAdjustment = await fetchHolder();
         }
 
-        Logger.globalInstance.debug('Credit usage:', actualCredits);
-        // Use completion_api_usage for ALL /api/ai/v1/completions requests
-        // Differentiate by endpoint, not by auth method
-        const description = apiKeyInfo
-          ? `API key (${apiKeyInfo.keyName}) completion usage${billToOrg ? ' (org-billed)' : ''}`
-          : 'Completion API usage';
+        // Create transaction record with ACTUAL usage (not estimated/reserved)
+        // Skip balance update since we already adjusted atomically above
+        if (!holderAfterAdjustment && params.creditHolds)
+          throw new Error('Completion billing owner disappeared during settlement');
+        if (holderAfterAdjustment) {
+          // Org-billed keys: record the actual charge against the acting member so
+          // per-member usage + maxCreditsPerMember stay accurate (matches
+          // deductCreditsWithOrgSupport). Balance already moved on the org above.
+          // Kept inside this guard so per-member tracking and the ledger row commit
+          // together: a null holder fetch skips both, never advancing usedCredits
+          // without a matching transaction.
+          if (billToOrg) {
+            // Self-heal a member with no `userDetails` row (added before grant-point seeding existed):
+            // the positional $inc in updateUserDetails cannot create the row it positions on, so without
+            // this their org-billed usage is never tracked and `maxCreditsPerMember` never trips. Only
+            // pays the extra read/write when the row is actually absent.
+            const member = organization!.userDetails?.find(u => u.id === userId);
+            if (!member) {
+              const actingUser = await db.users.findById(userId);
+              if (actingUser) {
+                await db.organizations!.ensureUserDetails(holderId, {
+                  id: userId,
+                  email: actingUser.email ?? actingUser.username,
+                  name: actingUser.name,
+                });
+              }
+            }
 
-        await subtractCredits(
-          {
-            type: 'completion_api_usage',
-            ownerId: holderId,
-            ownerType: holderType,
-            credits: actualCredits,
-            description,
-            model: model as ChatModels,
-            apiKeyId: apiKeyInfo?.keyId, // Optional - present for API key auth, undefined for JWT
-            inputTokens: finalInputTokens,
-            outputTokens: finalOutputTokens,
-            source,
-            metadata: {
-              // Include API key info if present
-              ...(apiKeyInfo && {
-                apiKeyName: apiKeyInfo.keyName,
-              }),
-              authMethod: apiKeyInfo ? 'api_key' : 'jwt',
-              // For org-billed keys, keep the acting user for attribution even
-              // though the credits leave the org pool.
-              ...(billToOrg && { billedTo: 'organization', actingUserId: userId }),
-              usdCost,
-              reservedCredits,
-              creditDifference,
-            },
-          },
-          {
-            db: { creditTransactions: db.creditTransactions },
-            creditHolderMethods: holderMethods,
-            skipBalanceUpdate: true,
-            currentCreditHolder: holderAfterAdjustment,
+            await db.organizations!.updateUserDetails(holderId, userId, {
+              creditsDelta: actualCredits,
+              lastCreditUsedAt: new Date(),
+            });
           }
-        );
 
-        // Usage event on the settlement-success path (legacy behavior: an enforced
-        // run records an event only when the ledger row committed).
-        recordUsageEvent(actualCredits);
-      }
+          Logger.globalInstance.debug('Credit usage:', actualCredits);
+          // Use completion_api_usage for ALL /api/ai/v1/completions requests
+          // Differentiate by endpoint, not by auth method
+          const description = apiKeyInfo
+            ? `API key (${apiKeyInfo.keyName}) completion usage${billToOrg ? ' (org-billed)' : ''}`
+            : 'Completion API usage';
+
+          await subtractCredits(
+            {
+              type: 'completion_api_usage',
+              ownerId: holderId,
+              ownerType: holderType,
+              credits: actualCredits,
+              description,
+              model: model as ChatModels,
+              apiKeyId: apiKeyInfo?.keyId, // Optional - present for API key auth, undefined for JWT
+              inputTokens: finalInputTokens,
+              outputTokens: finalOutputTokens,
+              source,
+              metadata: {
+                // Include API key info if present
+                ...(apiKeyInfo && {
+                  apiKeyName: apiKeyInfo.keyName,
+                }),
+                authMethod: apiKeyInfo ? 'api_key' : 'jwt',
+                // For org-billed keys, keep the acting user for attribution even
+                // though the credits leave the org pool.
+                ...(billToOrg && { billedTo: 'organization', actingUserId: userId }),
+                usdCost,
+                reservedCredits,
+                creditDifference,
+              },
+            },
+            {
+              db: { creditTransactions: db.creditTransactions },
+              creditHolderMethods: holderMethods,
+              skipBalanceUpdate: true,
+              currentCreditHolder: holderAfterAdjustment,
+            }
+          );
+
+          ledgerWritten = true;
+        }
+      };
+      const settled = params.creditHolds
+        ? await params.creditHolds.settle(finalCredits, settle)
+        : (await settle(), true);
+      settlementCommitted = settled && ledgerWritten;
+      // Emit analytics only after the transaction containing the ledger has committed.
+      if (settlementCommitted) recordUsageEvent(finalCredits);
     } catch (error) {
       // Log with sufficient detail for manual reconciliation
       logger?.error?.('[CLI_CREDITS] CRITICAL: Failed to adjust credits - requires manual reconciliation', {
@@ -760,11 +1104,13 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // the rare enforced run whose settlement threw before recording). Guarded by
   // `usageRecorded` so an enforced run that already recorded on success never
   // double-writes. creditsCharged is 0 when enforcement is off (no charge occurred);
-  // in the enforced-but-settlement-missed case it records finalCredits, and a
-  // `[CLI_CREDITS] CRITICAL` reconciliation alert has already fired for that path.
+  // A swept or rolled-back durable reservation records zero charged credits. Legacy
+  // callers have already moved the balance even when their ledger write fails.
+  // Provider cost and per-key spend still reflect the work that actually ran.
   // Only the embed path opts in (alwaysRecordUsage) - legacy callers are untouched.
   if (modelInfo && params.alwaysRecordUsage && !usageRecorded) {
-    recordUsageEvent(enforceCredits ? finalCredits : 0);
+    const charged = params.creditHolds ? settlementCommitted : enforceCredits;
+    recordUsageEvent(charged ? finalCredits : 0);
   }
 
   // A model missing from the catalog computes no cost, so per-key spend cannot
@@ -790,4 +1136,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       .incrementSpend(keyId, finalCredits)
       .catch(err => logger?.warn?.('[CLI_CREDITS] Failed to increment per-key spend', { keyId, err }));
   }
+
+  // Settled and metered above; the caller still sees the abort it caused.
+  if (abortError !== undefined) throw abortError;
 }

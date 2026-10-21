@@ -94,4 +94,13 @@ describe('stripFrontmatter', () => {
     const content = '---\nRead this first\n---\nBody';
     expect(stripFrontmatter(content)).toBe(content);
   });
+
+  it('strips a prose line with a colon after plain words (known trade-off of spaced keys)', () => {
+    expect(stripFrontmatter('---\nImportant notice: please read\n---\nBody')).toBe('Body');
+  });
+
+  it('keeps a colon line whose pre-colon text contains a comma', () => {
+    const content = '---\nPlease read this, carefully: ok\n---\nBody';
+    expect(stripFrontmatter(content)).toBe(content);
+  });
 });

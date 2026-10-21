@@ -18,6 +18,7 @@ vi.mock('@bike4mind/llm-adapters', () => ({
     ({ requested, fallback }: { requested?: number; fallback: number }) => requested ?? fallback
   ),
   getAvailableModels: vi.fn().mockResolvedValue([{ id: 'test-model', backend: 'anthropic' }]),
+  isAdaptiveThinkingByDefault: vi.fn(() => false),
   getLlmByModel: vi.fn(() => ({
     currentModel: '',
     complete: vi.fn(async (_model, _messages, _options, onChunk) => {

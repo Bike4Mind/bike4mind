@@ -54,9 +54,7 @@ test.describe('Projects - CRUD & Management', () => {
       await projectsPage.gotoProjects();
       await projectsPage.createProject(PROJECT_NAME, 'A test project for E2E automation');
 
-      await expect(projectsPage.page.getByTestId('project-card-name').filter({ hasText: PROJECT_NAME })).toBeVisible({
-        timeout: TIMEOUTS.VISIBLE,
-      });
+      await projectsPage.expectOnProjectPage(PROJECT_NAME);
     });
 
     await test.step('rename a project', async () => {
@@ -129,7 +127,7 @@ test.describe('Projects - CRUD & Management', () => {
       await chatPage.sendMessageAndWaitForResponse('What is the recipe for Sinigang?');
 
       await verifyAnswers(['tamarind', 'sinigang', 'pork'], {
-        selector: '[data-testid="ai-response"]',
+        selector: '[data-testid="ai-response-body"]',
         logic: 'or',
       });
     });

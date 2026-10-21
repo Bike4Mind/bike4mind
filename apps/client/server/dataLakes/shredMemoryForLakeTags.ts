@@ -1,6 +1,6 @@
 import { dataLakeRepository, memoryLedgerRepository } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
-import { shredMemoryFromSource } from '@server/memory/ledgerMemoryStore';
+import { shredMemoryFromSource } from '@bike4mind/server-utils/memory/ledgerMemoryStore';
 
 /**
  * Crypto-shred every fact a purged document contributed, across EVERY lake it belonged to by

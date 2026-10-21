@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
-import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
   dataLakeAccessGrantRepository,
@@ -10,13 +10,15 @@ import {
   fabFileRepository,
   lakeMembershipRemovalRepository,
   scopedSettingsRepository,
+  withTransaction,
 } from '@bike4mind/database';
 import { LAKE_CORPUS_ACTION_NOTE_MAX_CHARS, MAX_LAKE_FILE_TAG_NAME_LENGTH } from '@bike4mind/common';
 import { Request } from 'express';
 import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
-import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
+import { storageOwnerTransferDb } from '@server/files/storageOwnerTransferDb';
 
 /**
  * The four corpus actions, as a discriminated union rather than a partial patch: they touch
@@ -87,22 +89,30 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
     // the human, on that row and on this action's own.
     const actor = { ...ctx, auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo) };
 
-    const result = await dataLakeService.applyCorpusAction(actor, id, findingId, body, {
-      db: {
-        dataLakes: dataLakeRepository,
-        dataLakeAccessGrants: dataLakeAccessGrantRepository,
-        fabFiles: fabFileRepository,
-        dataLakeFindings: dataLakeFindingRepository,
-        dataLakeCorpusActions: dataLakeCorpusActionRepository,
-        // The removal door's restore record - required, not optional: without it "Undo" on a
-        // merge silently does nothing.
-        lakeMembershipRemovals: lakeMembershipRemovalRepository,
-        // `adminSettings` is NOT listed here: `lakeConfigAuditDb` below already carries it, and
-        // the tag door's required `findAll`/`findBySettingNames` are satisfied from there.
-        scopedSettings: scopedSettingsRepository,
-        ...lakeConfigAuditDb,
-      },
-      logger: req.logger,
+    // One transaction for the gate, the mutation and its audit row (see `applyCorpusAction`).
+    // Touching the lake the service gated, last, serializes the action against a concurrent grant
+    // revoke - see WRITE-TIME RESIDUAL on `canManageLake`.
+    const result = await withTransaction(async () => {
+      const applied = await dataLakeService.applyCorpusAction(actor, id, findingId, body, {
+        db: {
+          ...storageOwnerTransferDb,
+          dataLakes: dataLakeRepository,
+          dataLakeAccessGrants: dataLakeAccessGrantRepository,
+          fabFiles: fabFileRepository,
+          dataLakeFindings: dataLakeFindingRepository,
+          dataLakeCorpusActions: dataLakeCorpusActionRepository,
+          // The removal door's restore record - required, not optional: without it "Undo" on a
+          // merge silently does nothing.
+          lakeMembershipRemovals: lakeMembershipRemovalRepository,
+          // `adminSettings` is NOT listed here: `lakeConfigAuditDb` below already carries it, and
+          // the tag door's required `findAll`/`findBySettingNames` are satisfied from there.
+          scopedSettings: scopedSettingsRepository,
+          ...lakeConfigAuditDb,
+        },
+        logger: req.logger,
+      });
+      await dataLakeRepository.touchIfStable(applied.lakeId);
+      return applied;
     });
 
     return res.json({ data: result });

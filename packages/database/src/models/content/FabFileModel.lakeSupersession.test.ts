@@ -1,4 +1,4 @@
-import { beforeEach, describe, it, expect } from 'vitest';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
 import { KnowledgeType } from '@bike4mind/common';
 import { FabFile, fabFileRepository as repo } from './FabFileModel';
 import { setupMongoTest } from '../../__test__/utils';
@@ -133,5 +133,49 @@ describe('FabFileRepository lake supersession', () => {
   it('getLakeSupersessionWinner returns null for a file with no ruling or that does not exist', async () => {
     expect(await repo.getLakeSupersessionWinner!(fileId, 'lake-1')).toBeNull();
     expect(await repo.getLakeSupersessionWinner!('64b7f9c2d1e4a5b6c7d8e9f0', 'lake-1')).toBeNull();
+  });
+
+  it('listLakeSupersededIds ignores a ruled file that is not in the input', async () => {
+    const other = await FabFile.create({
+      userId: 'owner-1',
+      fileName: 'unqueried.md',
+      mimeType: 'text/markdown',
+      type: KnowledgeType.FILE,
+      filePath: 'unqueried.md',
+    });
+    await repo.setLakeSupersession(fileId, ruling());
+    await repo.setLakeSupersession(other._id.toString(), ruling());
+
+    expect(await repo.listLakeSupersededIds!([fileId], 'lake-1')).toEqual([fileId]);
+  });
+
+  it('listLakeSupersededIds returns only the named files ruled in the named lake', async () => {
+    const other = await FabFile.create({
+      userId: 'owner-1',
+      fileName: 'other.md',
+      mimeType: 'text/markdown',
+      type: KnowledgeType.FILE,
+      filePath: 'other.md',
+    });
+    const otherId = other._id.toString();
+    await repo.setLakeSupersession(fileId, ruling());
+    await repo.setLakeSupersession(otherId, ruling({ dataLakeId: 'lake-2' }));
+
+    expect(await repo.listLakeSupersededIds!([fileId, otherId], 'lake-1')).toEqual([fileId]);
+    expect(await repo.listLakeSupersededIds!([fileId, otherId], 'lake-2')).toEqual([otherId]);
+    expect(await repo.listLakeSupersededIds!([fileId], 'lake-3')).toEqual([]);
+  });
+
+  it('listLakeSupersededIds is empty for no ids without querying', async () => {
+    const find = vi.spyOn(FabFile, 'find');
+    expect(await repo.listLakeSupersededIds!([], 'lake-1')).toEqual([]);
+    expect(find).not.toHaveBeenCalled();
+    find.mockRestore();
+  });
+
+  it('listLakeSupersededIds skips an id that is not a valid ObjectId instead of throwing', async () => {
+    await repo.setLakeSupersession(fileId, ruling());
+
+    expect(await repo.listLakeSupersededIds!([fileId, 'not-an-object-id'], 'lake-1')).toEqual([fileId]);
   });
 });

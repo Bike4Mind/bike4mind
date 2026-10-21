@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, cleanup, act } from '@testing-library/react';
+import { render, cleanup, act, screen } from '@testing-library/react';
 import type { IFabFileDocument } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
@@ -45,6 +45,7 @@ vi.mock('@client/app/components/common/DownloadMenu', () => ({
 }));
 vi.mock('@client/app/components/ProfileModal/ContentPreviewModal', () => ({ default: () => null }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: vi.fn(), post: vi.fn(), put: vi.fn() } }));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 
 import { FileContent } from '../KnowledgeViewer';
 
@@ -94,5 +95,30 @@ describe('FileContent skips content fetch for PDFs', () => {
     expect(h.getContentFromFabfile).toHaveBeenCalledWith(
       expect.objectContaining({ fileUrl: markdownFile.fileUrl, mimeType: 'text/markdown' })
     );
+  });
+});
+
+// Audio and video play straight off the signed URL through MediaPlayer; their bytes are never text.
+describe('FileContent plays media without fetching it as text', () => {
+  beforeEach(() => {
+    h.getContentFromFabfile.mockClear();
+  });
+  afterEach(() => cleanup());
+
+  it.each([
+    ['audio', 'audio/mpeg', 'media-player-audio'],
+    ['video', 'video/mp4', 'media-player-video'],
+  ])('%s', async (_kind, mimeType, testId) => {
+    await renderFile({
+      id: 'file-media',
+      fileName: 'media',
+      mimeType,
+      fileUrl: 'https://files.example.test/media',
+      sourceMetadata: { generation: { generator: 'music', provider: 'elevenlabs', prompt: 'A folk song' } },
+    } as IFabFileDocument);
+
+    expect(screen.getByTestId(testId).getAttribute('src')).toBe('https://files.example.test/media');
+    expect(screen.getByTestId('generation-details')).toBeTruthy();
+    expect(h.getContentFromFabfile).not.toHaveBeenCalled();
   });
 });

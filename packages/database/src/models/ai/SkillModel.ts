@@ -248,6 +248,19 @@ export const SkillSchema = new Schema<ISkill, ISkillModel, ISkillMethods>(
     organizationId: { type: String },
     isSystem: { type: Boolean },
 
+    importedFrom: {
+      type: new Schema(
+        {
+          listingId: { type: String, required: true },
+          versionId: { type: String, required: true },
+          version: { type: Number, required: true },
+          contentHash: { type: String, required: true },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
+
     ...ShareableDocumentSchema,
   },
   {

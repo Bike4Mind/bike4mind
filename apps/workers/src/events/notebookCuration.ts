@@ -1,7 +1,7 @@
-import { withEventContext } from '@server/utils/eventContext';
+import { withEventContext } from '@workers/utils/eventContext';
 import { NotebookCurationEvents } from '@server/utils/eventBus';
 import { Session, User } from '@bike4mind/database';
-import { sendToQueue } from '@server/utils/sqs';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { Resource } from 'sst';
 
 export const handler = withEventContext(async (event, logger) => {

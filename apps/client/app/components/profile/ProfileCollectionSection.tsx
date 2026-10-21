@@ -244,6 +244,7 @@ const ProfileCollectionSection = ({ userId }: { userId: string }) => {
           <Select
             data-testid="profile-collection-type-filter"
             className="profile-collection-section-type-select"
+            aria-label={t('profile.collections.type_filter', 'Filter by type')}
             action={action}
             value={type}
             placeholder={t('profile.collections.all_types')}
@@ -257,6 +258,7 @@ const ProfileCollectionSection = ({ userId }: { userId: string }) => {
               // when user has selected a value
               endDecorator: (
                 <IconButton
+                  aria-label={t('a11y.clear_type_filter', 'Clear type filter')}
                   className="profile-collection-section-type-clear"
                   size="sm"
                   variant="plain"
@@ -489,6 +491,7 @@ const ProfileCollectionSection = ({ userId }: { userId: string }) => {
           sx={{ alignSelf: 'end', display: 'flex', gap: '10px', marginTop: '10px' }}
         >
           <IconButton
+            aria-label={t('a11y.previous_page', 'Previous page')}
             className="profile-collection-section-pagination-prev"
             disabled={!hasPreviousPage}
             onClick={() => setPage(page - 1)}
@@ -536,6 +539,8 @@ const ProfileCollectionSection = ({ userId }: { userId: string }) => {
                     </Box>
                   ) : (
                     <IconButton
+                      aria-label={t('a11y.page_number', 'Page {{page}}', { page })}
+                      aria-current={page === currentPage ? 'page' : undefined}
                       key={page}
                       variant={page === currentPage ? 'solid' : 'plain'}
                       color={page === currentPage ? 'primary' : 'neutral'}
@@ -550,6 +555,7 @@ const ProfileCollectionSection = ({ userId }: { userId: string }) => {
           ) : null}
 
           <IconButton
+            aria-label={t('a11y.next_page', 'Next page')}
             className="profile-collection-section-pagination-next"
             disabled={!hasNextPage}
             onClick={() => setPage(page + 1)}

@@ -370,19 +370,43 @@ function setSerpApiGeoTargeting(searchParams: URLSearchParams, options?: WebSear
 
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
 
+// An allowlist, not a copy minus api_key: the key rides in the query string, so logging the URL or
+// the raw params would leak it, and a deny-list would miss any secret param added later.
+const SERPAPI_LOGGED_PARAMS = ['q', 'num', 'tbs', 'location', 'gl'] as const;
+
+/** The log-safe subset of a SerpAPI request, so an off-topic result set can be traced to what was sent. */
+function summarizeSerpApiRequest(url: URL): Record<string, string> {
+  const summary: Record<string, string> = {};
+  for (const key of SERPAPI_LOGGED_PARAMS) {
+    const value = url.searchParams.get(key);
+    if (value !== null) summary[key] = value;
+  }
+  return summary;
+}
+
+function logSerpApiAttemptFailure(retryable: boolean, message: string, details: Record<string, unknown>): void {
+  if (retryable) Logger.globalInstance.warn(message, details);
+  else Logger.globalInstance.error(message, details);
+}
+
 /**
  * One SerpAPI organic-search attempt, bounded by SERPAPI_ATTEMPT_TIMEOUT_MS. Never throws -
  * failures (timeout, network error, non-OK response) come back as a tagged result so
  * serpApiSearch can decide whether to retry without duplicating the timeout/abort bookkeeping.
+ * A transient failure logs at warn, not error: the retry or the hedged backup provider often
+ * recovers it, and the error-level alert belongs to whichever caller sees the final failure. A
+ * non-transient one (e.g. a revoked key) stays at error, since no retry or backup can fix it.
  */
 async function attemptSerpApiRequest(url: URL, attempt: number): Promise<SerpApiAttemptResult> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), SERPAPI_ATTEMPT_TIMEOUT_MS);
   const startedAt = Date.now();
+  const request = summarizeSerpApiRequest(url);
   try {
     const response = await fetch(url.toString(), { method: 'GET', signal: controller.signal });
     Logger.globalInstance.log('📡 WebSearch Tool: SerpAPI response', {
       attempt,
+      request,
       status: response.status,
       elapsedMs: Date.now() - startedAt,
     });
@@ -390,16 +414,18 @@ async function attemptSerpApiRequest(url: URL, attempt: number): Promise<SerpApi
     if (response.ok) return { ok: true, data: (await response.json()) as SerpApiResponse };
 
     const errorText = await response.text();
-    Logger.globalInstance.error('❌ WebSearch Tool: API error details:', {
+    const retryable = response.status === 429 || response.status >= 500;
+    logSerpApiAttemptFailure(retryable, '❌ WebSearch Tool: API error details:', {
       status: response.status,
       statusText: response.statusText,
       errorText,
       endpoint: url.origin,
       attempt,
+      request,
     });
     return {
       ok: false,
-      retryable: response.status === 429 || response.status >= 500,
+      retryable,
       timedOut: false,
       status: response.status,
       error: new Error(`SERP API error: ${response.statusText} - ${errorText}`),
@@ -409,8 +435,9 @@ async function attemptSerpApiRequest(url: URL, attempt: number): Promise<SerpApi
     // A network-level failure (DNS, connection reset, TLS, ...) surfaces from fetch as a
     // TypeError; anything else is unexpected and is not treated as transient.
     const retryable = timedOut || error instanceof TypeError;
-    Logger.globalInstance.error('❌ WebSearch Tool: SerpAPI request failed:', {
+    logSerpApiAttemptFailure(retryable, '❌ WebSearch Tool: SerpAPI request failed:', {
       attempt,
+      request,
       timedOut,
       elapsedMs: Date.now() - startedAt,
       error: error instanceof Error ? error.message : String(error),
@@ -746,6 +773,24 @@ function parseSearxngPlaces(data: unknown, limit: number): WebSearchPlace[] {
 }
 
 /**
+ * Under throwOnError a hedge owns the outcome (the other provider may still answer) and alerts on
+ * the final failure itself, so a transient attempt logs at warn: a network/abort error (no status)
+ * or a retryable HTTP 429/5xx. A permanent client error (any other 4xx) cannot be recovered by the
+ * backup, so it stays at error. Fail-soft returns [] and this log is the only record, so it stays
+ * at error there too.
+ */
+function logSearxngFailure(
+  options: WebSearchOptions | undefined,
+  message: string,
+  details: Record<string, unknown>,
+  status?: number
+): void {
+  const transient = status === undefined || status === 429 || status >= 500;
+  if (options?.throwOnError && transient) Logger.globalInstance.warn(message, details);
+  else Logger.globalInstance.error(message, details);
+}
+
+/**
  * SearXNG provider. Calls the admin-configured JSON search endpoint (trusted config, so NOT subject
  * to the SSRF guard). Any transport/parse failure (including the abort timeout) resolves to [] so a
  * flaky local instance degrades to "no results" instead of throwing, matching how search is best-
@@ -791,22 +836,39 @@ export function createSearxngProvider(baseUrl: string): WebSearchProvider {
       if (bucket) params.set('time_range', bucket);
       url.search = params.toString();
 
+      const request = { q: query, ...(bucket && { time_range: bucket }), limit };
+
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
       try {
         const response = await fetch(url.toString(), { method: 'GET', signal: controller.signal });
         if (!response.ok) {
-          Logger.globalInstance.error('❌ WebSearch Tool: SearXNG error', {
-            status: response.status,
-            statusText: response.statusText,
-          });
+          logSearxngFailure(
+            options,
+            '❌ WebSearch Tool: SearXNG error',
+            {
+              request,
+              status: response.status,
+              statusText: response.statusText,
+            },
+            response.status
+          );
           if (options?.throwOnError) throw new Error(`SearXNG error: HTTP ${response.status}`);
           return [];
         }
         const data: unknown = await response.json();
-        return parseSearxngResults(data, limit);
+        const results = parseSearxngResults(data, limit);
+        Logger.globalInstance.log('WebSearch Tool: SearXNG response', {
+          status: response.status,
+          request,
+          hits: results.length,
+        });
+        return results;
       } catch (error) {
-        Logger.globalInstance.error('❌ WebSearch Tool: SearXNG request failed:', error);
+        logSearxngFailure(options, '❌ WebSearch Tool: SearXNG request failed:', {
+          request,
+          error: error instanceof Error ? error.message : String(error),
+        });
         if (!options?.throwOnError) return [];
         if (isAbortError(error)) {
           throw new Error(`Web search timed out: SearXNG did not respond within ${SEARCH_TIMEOUT_MS / 1000}s`);
@@ -863,7 +925,7 @@ function pickPrimaryProvider(
 }
 
 /**
- * Returns [lead, backup] for the chat tool's hedged search. The lead is exactly what
+ * Returns [lead, backup] for searchWithHedge. The lead is exactly what
  * resolveWebSearchProvider picks: the admin's WebSearchProvider choice, or under 'auto' SerpAPI
  * when a key is set, else SearXNG. The backup is the other provider when it is configured too. An
  * unconfigured explicit choice yields no lead at all; it is never quietly replaced by the other.

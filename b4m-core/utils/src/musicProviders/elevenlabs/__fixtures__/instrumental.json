@@ -1,0 +1,91 @@
+{
+  "scenario": "instrumental",
+  "recordedAt": "2026-10-13T12:25:28.847Z",
+  "renderSeconds": 5,
+  "requestedSeconds": 10,
+  "exchanges": [
+    {
+      "name": "generate",
+      "request": {
+        "method": "POST",
+        "path": "/v1/music/detailed?output_format=mp3_44100_128",
+        "body": {
+          "model_id": "music_v2",
+          "prompt": "Upbeat acoustic guitar tune with hand claps",
+          "music_length_ms": 10000,
+          "force_instrumental": true
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "multipart/mixed; boundary=----boundaryf431b6efc01e48e78d1360734ec2f0eb",
+          "song-id": "<redacted>"
+        },
+        "parts": [
+          {
+            "contentType": "application/json",
+            "body": {
+              "composition_plan": {
+                "chunks": [
+                  {
+                    "text": "[Intro]",
+                    "duration_ms": 4000,
+                    "positive_styles": [
+                      "115 BPM",
+                      "solo steel-string acoustic guitar",
+                      "bright fingerpicked pattern",
+                      "cheerful tone",
+                      "dry room acoustics",
+                      "crisp transients",
+                      "opening motif"
+                    ],
+                    "negative_styles": [],
+                    "context_adherence": "high",
+                    "conditioning_ref": null,
+                    "condition_strength": null
+                  },
+                  {
+                    "text": "[Main Theme]",
+                    "duration_ms": 6000,
+                    "positive_styles": [
+                      "115 BPM",
+                      "upbeat acoustic guitar strumming",
+                      "crisp hand claps on beats two and four",
+                      "steady rhythmic groove",
+                      "bright folk-pop aesthetic",
+                      "warm analog warmth",
+                      "lively and energetic",
+                      "wide stereo field"
+                    ],
+                    "negative_styles": [],
+                    "context_adherence": "high",
+                    "conditioning_ref": null,
+                    "condition_strength": null
+                  }
+                ]
+              },
+              "song_metadata": {
+                "title": "Sunlit Strumming",
+                "description": "An upbeat acoustic guitar tune featuring bright fingerpicking, energetic strumming patterns, and crisp hand claps.",
+                "genres": ["folk", "pop"],
+                "languages": [],
+                "is_explicit": false
+              },
+              "words_timestamps": null,
+              "waveform_visual": null
+            }
+          },
+          {
+            "contentType": "audio/mpeg",
+            "audio": {
+              "mimeType": "audio/mpeg",
+              "bytes": 160541,
+              "durationSeconds": 10.031
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

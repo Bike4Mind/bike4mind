@@ -48,10 +48,18 @@ vi.mock('@client/app/hooks/data/googleDrive', () => ({
 }));
 // The GitHub chip reads the flag cache and its own query; it has its own suite (LakeGitHubStatusChip.test.tsx).
 vi.mock('@client/app/components/datalake/LakeGitHubStatusChip', () => ({ default: () => null }));
-vi.mock('./manager/FinishGitHubConnectBanner', () => ({ default: () => null }));
+// The sync-time line has its own suite (LakeSyncStatus.test.tsx).
+vi.mock('@client/app/components/datalake/LakeSyncStatus', () => ({ default: () => null }));
+// The not-ingested chip has its own suite (LakeSkippedFilesChip.test.tsx).
+vi.mock('@client/app/components/datalake/LakeSkippedFilesChip', () => ({ default: () => null }));
+vi.mock('./manager/FinishSourceConnectBanner', () => ({ default: () => null }));
+// The source card has its own suite (LakeSourceConnectActions.test.tsx) and reads react-query hooks.
+vi.mock('./steps/LakeSourceConnectActions', () => ({ default: () => null }));
 // The repository picker has its own suite (GitHubRepositoryPickerModal.test.tsx) and reaches
 // react-query hooks this suite does not mock; here it is only mounted-once wiring, not behavior.
 vi.mock('./manager/GitHubRepositoryPickerModal', () => ({ default: () => null }));
+// Its own suite (DriveLakeResyncResume.test.tsx); it reads the user store this suite mocks as a hook.
+vi.mock('./manager/DriveLakeResyncResume', () => ({ default: () => null }));
 vi.mock('@client/app/hooks/data/dataLakes', () => {
   const mutation = () => ({ mutate: vi.fn(), isPending: false });
   return {
@@ -193,6 +201,8 @@ const lakeFiles = [
 ];
 
 const useGetDataLakes = vi.fn(() => ({ data: [] as unknown[], isLoading: false }));
+const toastError = vi.hoisted(() => vi.fn());
+vi.mock('sonner', () => ({ toast: { error: toastError, success: vi.fn(), info: vi.fn(), warning: vi.fn() } }));
 // Controllable per-test so a canRebuild-gating test can put a backlog on the lake, while the
 // default (below, in beforeEach) keeps every other test's Rebuild button/chip hidden as before.
 const useUnderChunkedCount = vi.fn(() => ({
@@ -345,7 +355,8 @@ beforeEach(() => {
   retryMutate.mockClear();
   // managerTab is module state in the real store, so a test left in Discover would otherwise
   // decide what the next one renders.
-  useDataLakeWizardStore.setState({ managerTab: 'mine' });
+  useDataLakeWizardStore.setState({ managerTab: 'mine', managerLakeId: null, gitHubConnectFailure: null });
+  toastError.mockClear();
 });
 
 describe('DataLakeManagerPanel - EnableDataLakes gating', () => {
@@ -654,6 +665,41 @@ describe('DataLakeManagerPanel - lake navigation', () => {
     expect(screen.queryByTestId('datalake-manager-lakeinfo')).not.toBeInTheDocument();
     expect(screen.getByTestId('datalake-manager-overview')).toBeInTheDocument();
   });
+
+  it('opens a deep-linked lake on its categories, not on a folder named after its prefix', () => {
+    useDataLakeWizardStore.setState({ managerLakeId: 'mine' });
+    renderPanel();
+
+    expect(screen.getByTestId('datalake-manager-node-genre')).toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-manager-node-lk')).not.toBeInTheDocument();
+  });
+
+  it('seeds past the prefix once a deep-linked lake appears in the list (GitHub connect lands before the refetch)', () => {
+    useGetDataLakes.mockReturnValue({ data: [theirsLake], isLoading: false });
+    useDataLakeWizardStore.setState({ managerLakeId: 'mine' });
+    const { rerender } = renderPanel();
+    expect(screen.queryByTestId('datalake-manager-lakeinfo')).not.toBeInTheDocument();
+
+    useGetDataLakes.mockReturnValue({ data: [mineLake, theirsLake], isLoading: false });
+    rerenderPanel(rerender);
+
+    expect(screen.getByTestId('datalake-manager-node-genre')).toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-manager-node-lk')).not.toBeInTheDocument();
+  });
+
+  it('seeds a deep-linked lake once, so a refetch does not pull the user back out of a folder', () => {
+    useDataLakeWizardStore.setState({ managerLakeId: 'mine' });
+    const { rerender } = renderPanel();
+    fireEvent.click(screen.getByTestId('datalake-manager-node-genre'));
+    expect(screen.getByTestId('datalake-manager-node-war')).toBeInTheDocument();
+
+    // Fresh objects, as a refetch returns, so activeLake changes identity and the seed effect reruns.
+    useGetDataLakes.mockReturnValue({ data: [{ ...mineLake }, { ...theirsLake }], isLoading: false });
+    rerenderPanel(rerender);
+
+    expect(screen.getByTestId('datalake-manager-node-war')).toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-manager-node-genre')).not.toBeInTheDocument();
+  });
 });
 
 describe('DataLakeManagerPanel - management affordances gate on canManage', () => {
@@ -776,6 +822,28 @@ describe('DataLakeManagerPanel - management affordances gate on canManage', () =
     // lakes tab"), so the owner cue must live on the row, before anything is opened.
     expect(screen.getByTestId('datalake-manager-owner-icon-theirs')).toBeInTheDocument();
     expect(screen.queryByTestId('datalake-manager-owner-icon-mine')).toBeNull();
+  });
+
+  it('names the owner in the sidebar icon label with no native title', () => {
+    useGetDataLakes.mockReturnValue({
+      data: [mineLake, { ...theirsLake, ownerDisplayName: 'Dana' }],
+      isLoading: false,
+    });
+    renderPanel();
+
+    const icon = screen.getByRole('img', { name: 'Owned by Dana' });
+    expect(icon.querySelector('title')).toBeNull();
+  });
+
+  it('falls back to a generic sidebar icon label when the owner name is missing', () => {
+    useGetDataLakes.mockReturnValue({
+      data: [mineLake, { ...theirsLake, ownerDisplayName: undefined }],
+      isLoading: false,
+    });
+    renderPanel();
+
+    const icon = screen.getByRole('img', { name: 'Owned by another user' });
+    expect(icon.querySelector('title')).toBeNull();
   });
 
   it('keeps the owner chip AND the management buttons on an admin-managed lake owned by someone else', async () => {
@@ -1491,5 +1559,32 @@ describe('DataLakeManagerPanel - needs-attention section', () => {
 
     await user.type(screen.getByTestId('datalake-manager-search').querySelector('input')!, 'zzz');
     expect(screen.queryByTestId('datalake-transitional-section')).not.toBeInTheDocument();
+  });
+});
+
+describe('DataLakeManagerPanel - failed GitHub connect', () => {
+  it("leaves a listed lake's failure to its banner", () => {
+    useDataLakeWizardStore.setState({ gitHubConnectFailure: { lakeId: 'mine', message: 'Cancelled.' } });
+    renderPanel();
+
+    expect(toastError).not.toHaveBeenCalled();
+    expect(useDataLakeWizardStore.getState().gitHubConnectFailure).toEqual({ lakeId: 'mine', message: 'Cancelled.' });
+  });
+
+  it('toasts the reason for a lake that is no longer in the list', () => {
+    useDataLakeWizardStore.setState({ gitHubConnectFailure: { lakeId: 'gone', message: 'The lake was archived.' } });
+    renderPanel();
+
+    expect(toastError).toHaveBeenCalledWith('The lake was archived.');
+    expect(useDataLakeWizardStore.getState().gitHubConnectFailure).toBeNull();
+  });
+
+  it('waits for the lake list before deciding', () => {
+    useGetDataLakes.mockReturnValue({ data: undefined as unknown as unknown[], isLoading: true });
+    useDataLakeWizardStore.setState({ gitHubConnectFailure: { lakeId: 'mine', message: 'Cancelled.' } });
+    renderPanel();
+
+    expect(toastError).not.toHaveBeenCalled();
+    expect(useDataLakeWizardStore.getState().gitHubConnectFailure).not.toBeNull();
   });
 });

@@ -6,7 +6,7 @@ import {
   IQuestMasterPlanRepository,
   QuestMasterData,
 } from '@bike4mind/common';
-import { ICompletionOptions, ICompletionOptionTools, type ICompletionBackend } from './llm';
+import type { ICompletionBackend, ICompletionOptions, ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { extractQuestMasterData } from './questMasterUtils';
 import {

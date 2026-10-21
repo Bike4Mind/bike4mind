@@ -16,7 +16,7 @@
 import { agentExecutionRepository, Quest } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { materializePromptMetaSession, type PromptMeta } from '@bike4mind/common';
-import { createAgentToolEchoMarker, persistedExecutionSteps } from './markAgentToolEchoes';
+import { createAgentToolEchoMarker, persistedExecutionSteps } from '@bike4mind/server-utils/utils/markAgentToolEchoes';
 import { persistAgentArtifacts } from './persistAgentArtifacts';
 
 export async function persistRunAsQuest(
@@ -118,6 +118,7 @@ export async function persistRunAsQuest(
         sessionId: execution.sessionId,
         type: 'message',
         prompt: execution.query,
+        fabFileIds: execution.messageFileIds ?? [],
         replies: [replyText],
         timestamp: new Date(),
         status: 'done',

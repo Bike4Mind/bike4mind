@@ -3,7 +3,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { mfaService } from '@bike4mind/services';
 import { userRepository } from '@bike4mind/database';
 
-const handler = baseApi().post(
+const handler = baseApi({ auth: 'jwtOnly' }).post(
   asyncHandler(async (req, res) => {
     const user = req.user;
     if (!user) {

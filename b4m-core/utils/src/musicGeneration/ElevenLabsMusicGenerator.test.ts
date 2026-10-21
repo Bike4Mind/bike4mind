@@ -1,4 +1,5 @@
 import { Logger } from '@bike4mind/observability';
+import { DEFAULT_MUSIC_LENGTH_MS } from '@bike4mind/common';
 import { describe, expect, it, vi } from 'vitest';
 import { ElevenLabsMusicGenerator, MUSIC_GENERATION_TIMEOUT_MS } from './ElevenLabsMusicGenerator';
 
@@ -52,14 +53,20 @@ describe('ElevenLabsMusicGenerator', () => {
     expect(result.audio.toString()).toBe('music-bytes');
   });
 
-  it('defaults the model and omits optional params when not provided', async () => {
+  it('defaults the model and length and omits optional params when not provided', async () => {
     const fetchImpl = mockFetch('x');
     const generator = new ElevenLabsMusicGenerator({ apiKey: 'secret', logger, fetchImpl });
 
     await generator.generate('ambient pad');
 
+    // The length is always sent: leaving it to the provider's auto-duration would let the
+    // generated length drift from the billed one.
     const [, init] = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(JSON.parse(init.body)).toEqual({ prompt: 'ambient pad', model_id: 'music_v1' });
+    expect(JSON.parse(init.body)).toEqual({
+      prompt: 'ambient pad',
+      model_id: 'music_v1',
+      music_length_ms: DEFAULT_MUSIC_LENGTH_MS,
+    });
   });
 
   it('aborts a stalled provider round-trip so the route can refund the reservation', async () => {
@@ -111,11 +118,18 @@ describe('ElevenLabsMusicGenerator', () => {
   it.each([
     ['opus_48000_128', 'audio/opus'],
     ['ulaw_8000', 'audio/basic'],
-    ['not_a_codec', 'application/octet-stream'],
   ])('maps %s to %s', async (format, expected) => {
     const generator = new ElevenLabsMusicGenerator({ apiKey: 'secret', logger, fetchImpl: mockFetch('x') });
 
     expect((await generator.generate('beep', { format })).contentType).toBe(expected);
+  });
+
+  it('refuses an unsupported output format before calling the provider', async () => {
+    const fetchImpl = mockFetch('x');
+    const generator = new ElevenLabsMusicGenerator({ apiKey: 'secret', logger, fetchImpl });
+
+    await expect(generator.generate('beep', { format: 'alaw_8000' })).rejects.toThrow(/Unsupported .* alaw_8000/);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it('forwards forceInstrumental: false rather than dropping it as falsy', async () => {

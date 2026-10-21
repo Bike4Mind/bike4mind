@@ -1,5 +1,5 @@
 import type { Logger } from '@bike4mind/observability';
-import { dispatch } from '@server/queueHandlers/lakeMemoryExtraction';
+import { dispatch } from '@workers/queueHandlers/lakeMemoryExtraction';
 import type { SelfHostWorker } from './selfHostWorker';
 
 export function registerLakeMemoryQueue(

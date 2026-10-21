@@ -2,10 +2,10 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { ApiKeyScope, OverwatchAnalyticsEventSchema, OVERWATCH_ANALYTICS_SCHEMA_VERSION } from '@bike4mind/common';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
-import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
-import { sendBatchToQueue } from '@server/utils/sqs';
-import { emitMetric, emitMetrics } from '@server/utils/cloudwatch';
-import { Config } from '@server/utils/config';
+import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
+import { sendBatchToQueue } from '@bike4mind/server-utils/utils/sqs';
+import { emitMetric, emitMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { z } from 'zod';
 
 const INGEST_NAMESPACE = 'Lumina5/OverwatchIngest';
@@ -88,26 +88,38 @@ const handler = baseApi({
     accepted.push(i);
   }
 
-  // Fire-and-forget: per-product metric for per-product alarms + dimensionless total for the
+  // Emits run alongside the queue send but every response awaits them first: the Lambda can
+  // freeze once the response is sent, losing a pending PutMetricData or sending it later with an
+  // expired signature. emitMetric(s) log their own errors and never reject.
+  const pendingMetrics: Array<Promise<void>> = [];
+  const flushMetrics = () => Promise.all(pendingMetrics);
+
+  // Per-product metric for per-product alarms + dimensionless total for the
   // global absence-alarm (overwatchIngestSilent in alarms.ts). The global alarm watches
   // IngestRequestTotal (no dimensions) - emitting only IngestRequest{productId} would leave
   // the dimensionless series empty, keeping the alarm stuck in ALARM permanently.
-  emitMetrics(INGEST_NAMESPACE, [
-    { name: 'IngestRequest', value: 1, dimensions: { productId }, unit: StandardUnit.Count },
-    { name: 'IngestRequestTotal', value: 1, unit: StandardUnit.Count },
-  ]).catch(() => {});
+  pendingMetrics.push(
+    emitMetrics(INGEST_NAMESPACE, [
+      { name: 'IngestRequest', value: 1, dimensions: { productId }, unit: StandardUnit.Count },
+      { name: 'IngestRequestTotal', value: 1, unit: StandardUnit.Count },
+    ])
+  );
 
   // Emit per-product IngestError{productId} + dimensionless IngestErrorTotal in one call.
   // The overwatchIngestErrors alarm (alarms.ts) watches IngestErrorTotal (no dimensions) - emitting
   // only IngestError{productId} leaves the dimensionless series empty so the alarm can never fire.
   // Mirrors the IngestRequest/IngestRequestTotal pattern above.
-  const emitIngestError = (count: number) =>
-    emitMetrics(INGEST_NAMESPACE, [
-      { name: 'IngestError', value: count, dimensions: { productId }, unit: StandardUnit.Count },
-      { name: 'IngestErrorTotal', value: count, unit: StandardUnit.Count },
-    ]).catch(() => {});
+  const emitIngestError = (count: number) => {
+    pendingMetrics.push(
+      emitMetrics(INGEST_NAMESPACE, [
+        { name: 'IngestError', value: count, dimensions: { productId }, unit: StandardUnit.Count },
+        { name: 'IngestErrorTotal', value: count, unit: StandardUnit.Count },
+      ])
+    );
+  };
 
   if (accepted.length === 0) {
+    await flushMetrics();
     return res.status(400).json({
       accepted: 0,
       rejected: results.length,
@@ -139,7 +151,9 @@ const handler = baseApi({
 
     const latencyMs = Date.now() - startMs;
     req.logger?.info('overwatch.ingest', { productId, eventCount: succeededInBatch.length, latencyMs });
-    emitMetric(INGEST_NAMESPACE, 'IngestLatency', latencyMs, { productId }, StandardUnit.Milliseconds).catch(() => {});
+    pendingMetrics.push(
+      emitMetric(INGEST_NAMESPACE, 'IngestLatency', latencyMs, { productId }, StandardUnit.Milliseconds)
+    );
 
     if (failedInBatch.length > 0) {
       emitIngestError(failedInBatch.length);
@@ -150,17 +164,20 @@ const handler = baseApi({
 
     if (finalAccepted === 0) {
       emitIngestError(1);
+      await flushMetrics();
       return res
         .status(500)
         .json({ accepted: 0, rejected: finalRejected, results: results.sort((a, b) => a.index - b.index) });
     }
 
+    await flushMetrics();
     return res
       .status(200)
       .json({ accepted: finalAccepted, rejected: finalRejected, results: results.sort((a, b) => a.index - b.index) });
   } catch (err) {
     req.logger?.error('overwatch.ingest.error', { productId, error: err });
     emitIngestError(1);
+    await flushMetrics();
     return res.status(500).json({ error: 'Failed to queue events' });
   }
 });

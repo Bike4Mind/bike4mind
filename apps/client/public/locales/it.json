@@ -30,7 +30,8 @@
     "title": "Registro de cambios"
   },
   "feedback": {
-    "send": "Enviar comentarios"
+    "send": "Enviar comentarios",
+    "rollupTitle": "Il tuo feedback"
   },
   "terms_policies": "Términos y políticas",
   "login": "Accedi",
@@ -166,7 +167,8 @@
     "messages": "Messaggi",
     "invites": "Inviti",
     "sendMessage": "Invia un messaggio",
-    "noMessages": "Nessun messaggio"
+    "noMessages": "Nessun messaggio",
+    "title_unread": "Posta in arrivo, elementi non letti"
   },
   "addSomething": "Aggiungi {{ name }}",
   "deleteAllSomething": "Elimina tutto {{ name }}",
@@ -286,7 +288,30 @@
     "renews_on": "Se renueva el {{ date }}"
   },
   "billing": {
-    "title": "Facturación"
+    "title": "Fatturazione",
+    "balance": "Saldo",
+    "credits_heading": "Ricarica crediti",
+    "credits_sub": "Pacchetti una tantum, aggiunti al tuo saldo. Nessun abbonamento necessario.",
+    "credits_sub_with_plan": "Pacchetti una tantum, in aggiunta alla tua quota mensile.",
+    "free_plan": "Gratuito",
+    "free_plan_detail": "Paga a consumo con pacchetti di crediti",
+    "low_org": "Un amministratore dell'organizzazione può aggiungere crediti a questo account.",
+    "low_with_plan": "Ricarica per continuare a lavorare fino al rinnovo della tua quota.",
+    "low_without_plan": "Un piano aggiunge crediti ogni mese; un pacchetto ti ricarica subito.",
+    "payment_failed": "Pagamento non riuscito",
+    "plan": "Piano",
+    "plan_fallback": "Abbonamento",
+    "plan_unavailable": "Non disponibile",
+    "plan_unavailable_detail": "Impossibile caricare il tuo piano.",
+    "plans_change": "Il tuo piano",
+    "plans_change_sub": "Gestisci, modifica o annulla il tuo abbonamento.",
+    "plans_heading": "Piani",
+    "plans_heading_sub": "Piani mensili con una quota di crediti.",
+    "plans_upgrade": "Passa a un piano",
+    "plans_upgrade_sub": "Ottieni una quota mensile di crediti invece di ricaricare a mano.",
+    "retry": "Riprova",
+    "see_plans": "Vedi i piani",
+    "top_up": "Ricarica"
   },
   "credits": {
     "title": "Crediti",
@@ -314,7 +339,8 @@
     "usage_pattern": "Basado en tu patrón de uso de los últimos {{days}} días",
     "credits_used": "Créditos utilizados",
     "credits_purchased": "Créditos comprados",
-    "net_credits": "Créditos netos"
+    "net_credits": "Créditos netos",
+    "unit": "crediti"
   },
   "time": {
     "last_7_days": "Últimos 7 días",
@@ -351,7 +377,7 @@
     "current_credits": "Aktuelle kreditter sum",
     "best_value": "Bedste værdi",
     "purchase_success": "Købt {{credits}} kreditter",
-    "history_title": "Kreditter købs historie",
+    "history_title": "Cronologia degli acquisti di crediti",
     "purchase": "Køb",
     "no_transactions": "Ingen transaktioner endnu",
     "low_credits": "Tus créditos son bajos",
@@ -362,7 +388,15 @@
       "completed": "Færdig",
       "pending": "Ventende",
       "failed": "Fejlet"
-    }
+    },
+    "buy_pack": "Acquista {{credits}} crediti per {{price}}",
+    "choose_pack": "Scegli un pacchetto di crediti",
+    "history_usage_hint": "Qui sono elencati solo gli acquisti.",
+    "organization_credits_active": "Crediti dell'organizzazione attivi",
+    "rate_per_thousand": "{{rate}} ogni 1.000 crediti",
+    "see_usage": "Vedi utilizzo",
+    "shared_rate": "Ogni pacchetto ha la stessa tariffa: {{rate}} ogni 1.000 crediti.",
+    "switch_to_personal": "Passa al tuo account personale per acquistare crediti per uso personale."
   },
   "settings": {
     "title": "Configuraciones",
@@ -531,7 +565,7 @@
   },
   "subscription_modal": {
     "title": "Abbonamento",
-    "description": "Accedi a ogni modello AI principale attraverso un'interfaccia unificata. Esegui modelli avanzati come Deepseek R1 in modo privato.",
+    "description": "Accedi a ogni modello AI principale attraverso un'interfaccia unificata.",
     "no_free_tier": "NESSUN LIVELLO GRATUITO - FOCALIZZATO SUI PROFESSIONISTI.",
     "credits_rollover": "I crediti non utilizzati vengono trasferiti per 3 mesi.",
     "monthly_billing": "Fatturazione Mensile",
@@ -543,7 +577,9 @@
     "personal": "Personal",
     "business": "Negocios",
     "team": "Equipo",
-    "enterprise": "Empresa"
+    "enterprise": "Empresa",
+    "audience_label": "Tipo di piano",
+    "includes": "Include"
   },
   "agents": {
     "title": "Agentes",
@@ -572,5 +608,13 @@
   "skills": {
     "title": "Competenze",
     "command_palette_description": "Gestisci modelli di istruzioni riutilizzabili"
+  },
+  "apiKeys": {
+    "title": "Chiavi API"
+  },
+  "connections": {
+    "menuTooltip": "Integrazioni come Google Drive e Slack, più chiavi API per il tuo codice",
+    "sections": "Sezioni delle connessioni",
+    "title": "Connessioni"
   }
 }

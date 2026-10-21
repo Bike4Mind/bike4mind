@@ -2,6 +2,7 @@ import { DetailedHTMLProps, HTMLAttributes, ReactNode } from 'react';
 import {
   IChatHistoryItem,
   IChatHistoryItemDocument,
+  GenerationJobRef,
   IFabFileDocument,
   PromptMeta,
   SnippetMeta,
@@ -38,6 +39,8 @@ export interface PromptReplyProps {
     replies?: string[];
     images?: string[];
     videos?: string[];
+    videoJobIds?: string[];
+    generationJobs?: GenerationJobRef[];
     status?: string;
     promptMeta?: PromptMeta;
     deepResearchState?: IChatHistoryItem['deepResearchState'];
@@ -59,7 +62,9 @@ export interface ReplyContainerProps {
   /** Non-image files a tool generated this turn (e.g. .xlsx), rendered as download chips. */
   generatedFiles?: { name: string; url: string }[];
   videos?: string[];
-  /** Audio tracks a tool generated this turn (music_generation), rendered as inline players. */
+  /** Generation jobs (video, music) started by the agent tool this turn, one live card each. */
+  generationJobs?: GenerationJobRef[];
+  /** Audio tracks a tool generated this turn (audio_generation, or a pre-job music turn), rendered as inline players. */
   audio?: string[];
   search?: string;
   isExpandable?: boolean;
@@ -92,6 +97,8 @@ export interface ReplyContainerProps {
   attachmentDelivery?: IChatHistoryItem['attachmentDelivery'];
   /** Generalized UI side-effects from tool results */
   uiSideEffects?: IChatHistoryItem['uiSideEffects'];
+  /** Session the reply belongs to; scopes its side-effect replay (see claimReplayDispatch) */
+  replySessionId?: string;
   /** Jupyter notebook execution state and content */
   jupyterNotebook?: IChatHistoryItem['jupyterNotebook'];
   /** The notebook JSON content (from generate_jupyter_notebook tool) */

@@ -40,7 +40,25 @@ export interface IProjectRepository extends IBaseRepository<IProjectDocument> {
     orderBy: { by: 'createdAt' | 'updatedAt'; direction: 'asc' | 'desc' }
   ) => Promise<{ data: IProject[]; hasMore: boolean; total: number }>;
 
+  /**
+   * One keyset page of readable projects in ascending `_id` order, starting after `afterId`. Same
+   * reach as `shareable.findAccessibleById` (owner, user or group read/write share; no global
+   * read), so every id it returns resolves by id. Returns at most `limit + 1` documents.
+   */
+  listAccessibleAfterId: (
+    user: Pick<IUserDocument, 'id' | 'groups'>,
+    options: { afterId?: string; limit: number }
+  ) => Promise<{ data: IProject[]; hasMore: boolean }>;
+
   removeSession: (sessionId: string) => Promise<void>;
+
+  /**
+   * Remove the given file ids from `fileIds` and `systemPrompts` (idempotent $pull), in one project
+   * (`projectId`) or in every live project owned by or directly shared with any of `userIds`. Both
+   * forms are bounded by an index (`_id`; `userId`+`name` and `users.userId`) - there is
+   * deliberately no unscoped form, since neither file-id field is indexed.
+   */
+  pullFileReferences: (fileIds: string[], scope: { projectId: string } | { userIds: string[] }) => Promise<void>;
 
   /**
    * Find all projects by session ID

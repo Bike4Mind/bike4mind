@@ -16,7 +16,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
 
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: {},
   isDevelopment: () => false,
 }));

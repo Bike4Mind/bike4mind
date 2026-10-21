@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import mongoose from 'mongoose';
 import { update } from './update';
-import { IOrganizationDocument, IUserDocument } from '@bike4mind/common';
+import { IOrganizationDocument, IUserDocument, MAX_STORAGE_LIMIT_MB } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
 
 describe('organizationService - update', () => {
@@ -129,7 +129,7 @@ describe('organizationService - update', () => {
     expect(updateCall).not.toHaveProperty('seats');
   });
 
-  it('should update currentCredits when provided by admin user', async () => {
+  it('never writes currentCredits, even for an admin', async () => {
     const updateParams = {
       id: 'org1',
       currentCredits: 5000,
@@ -137,14 +137,10 @@ describe('organizationService - update', () => {
 
     const result = await update(mockAdminUser as IUserDocument, updateParams, mockAdapters);
 
-    expect(result.currentCredits).toBe(5000);
-
-    expect(mockAdapters.db.organizations.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: 'org1',
-        currentCredits: 5000,
-      })
-    );
+    // An admin balance change goes through the ledger in the route, never this $set.
+    expect(result.currentCredits).toBe(1000);
+    const persisted = mockAdapters.db.organizations.update.mock.calls[0][0];
+    expect(persisted).not.toHaveProperty('currentCredits');
   });
 
   it('should not update currentCredits when provided by non-admin user', async () => {
@@ -213,6 +209,13 @@ describe('organizationService - update', () => {
     );
   });
 
+  it('rejects a fractional per-member cap', async () => {
+    await expect(
+      update(mockAdminUser as IUserDocument, { id: 'org1', maxCreditsPerMember: 12.5 }, mockAdapters)
+    ).rejects.toThrow();
+    expect(mockAdapters.db.organizations.update).not.toHaveBeenCalled();
+  });
+
   it('clears the per-member cap to null (not undefined) so $set actually unsets it', async () => {
     // Regression: `?? undefined` left the old cap in place because BSON drops undefined from
     // `$set`, so a "set null" PUT silently no-oped. The cleared cap MUST persist as null.
@@ -243,6 +246,43 @@ describe('organizationService - update', () => {
     );
 
     expect(result.maxCreditsPerMember).toBe(5); // unchanged
+  });
+
+  it('sets a fractional decimal-MB storage limit when admin', async () => {
+    const result = await update(mockAdminUser as IUserDocument, { id: 'org1', storageLimit: 0.5 }, mockAdapters);
+
+    expect(result.storageLimit).toBe(0.5);
+    expect(mockAdapters.db.organizations.update).toHaveBeenCalledWith({ id: 'org1', storageLimit: 0.5 });
+  });
+
+  it.each([-1, MAX_STORAGE_LIMIT_MB + 1])('rejects an out-of-range storage limit (%d)', async storageLimit => {
+    await expect(update(mockAdminUser as IUserDocument, { id: 'org1', storageLimit }, mockAdapters)).rejects.toThrow();
+    expect(mockAdapters.db.organizations.update).not.toHaveBeenCalled();
+  });
+
+  it('clears the storage limit to null so the org falls back to the default', async () => {
+    const limitedOrg = { ...existingOrganization, storageLimit: 50 };
+    mockAdapters.db.organizations.findById.mockResolvedValue(limitedOrg);
+
+    const result = await update(mockAdminUser as IUserDocument, { id: 'org1', storageLimit: null }, mockAdapters);
+
+    expect(result.storageLimit).toBeNull();
+    const persisted = mockAdapters.db.organizations.update.mock.calls[0][0];
+    expect(persisted.storageLimit).toBeNull();
+  });
+
+  it('ignores a storage limit change from a non-admin manager', async () => {
+    const limitedOrg = { ...existingOrganization, managerId: 'user1', storageLimit: 50 };
+    mockAdapters.db.organizations.shareable.findUpdateAccessById.mockResolvedValue(limitedOrg);
+
+    const result = await update(
+      mockRegularUser as IUserDocument,
+      { id: 'org1', storageLimit: 1_000_000 },
+      mockAdapters
+    );
+
+    expect(result.storageLimit).toBe(50);
+    expect(mockAdapters.db.organizations.update).toHaveBeenCalledWith({ id: 'org1' });
   });
 
   it('should allow non-admin users to update other fields but not currentCredits', async () => {

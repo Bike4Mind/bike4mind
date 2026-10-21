@@ -34,7 +34,11 @@ describe('ToolBuilder threads inlinedAttachmentIds into ToolContext', () => {
     return { tool, getContext: () => seen };
   }
 
-  function makeBuilder(inlinedAttachmentIds?: string[], fullyInlinedAttachmentIds?: string[]): ToolBuilder {
+  function makeBuilder(
+    inlinedAttachmentIds?: string[],
+    fullyInlinedAttachmentIds?: string[],
+    extra: Record<string, unknown> = {}
+  ): ToolBuilder {
     const deps = {
       user: { id: 'u1' },
       db: {},
@@ -46,6 +50,7 @@ describe('ToolBuilder threads inlinedAttachmentIds into ToolContext', () => {
       sendStatusUpdate: vi.fn(),
       inlinedAttachmentIds,
       fullyInlinedAttachmentIds,
+      ...extra,
     } as unknown as ToolBuilderConfig;
     return new ToolBuilder(deps);
   }
@@ -84,5 +89,21 @@ describe('ToolBuilder threads inlinedAttachmentIds into ToolContext', () => {
     const { tool, getContext } = probeTool();
     callBuildTools(makeBuilder(['f1'], undefined), tool);
     expect(getContext()?.fullyInlinedAttachmentIds).toBeUndefined();
+  });
+
+  it('passes attachedFileIds and sessionIncludeLibraryFiles through to the tool context', () => {
+    const { tool, getContext } = probeTool();
+    callBuildTools(
+      makeBuilder(undefined, undefined, { attachedFileIds: ['a1'], sessionIncludeLibraryFiles: false }),
+      tool
+    );
+    expect(getContext()?.attachedFileIds).toEqual(['a1']);
+    expect(getContext()?.sessionIncludeLibraryFiles).toBe(false);
+  });
+
+  it('forwards an explicit sessionIncludeLibraryFiles: true rather than dropping it to unset', () => {
+    const { tool, getContext } = probeTool();
+    callBuildTools(makeBuilder(undefined, undefined, { sessionIncludeLibraryFiles: true }), tool);
+    expect(getContext()?.sessionIncludeLibraryFiles).toBe(true);
   });
 });

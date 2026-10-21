@@ -1,7 +1,7 @@
 import { connectDB, AdminSettings } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { WhatsNewSyncConfigSchema } from '@bike4mind/common';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { WhatsNewForkFetcher } from '@server/services/whatsNewForkFetcher';
 import { getWhatsNewEnvInfo } from '@server/utils/whatsNewEnv';
 

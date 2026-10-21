@@ -13,6 +13,18 @@ describe('verifyPendingOTC', () => {
     expect(await verifyPendingOTC('000000', hash)).toBe(false);
   });
 
+  it('verifies an 8-digit code', async () => {
+    const hash = await bcrypt.hash('00412345', 10);
+    expect(await verifyPendingOTC('00412345', hash)).toBe(true);
+    expect(await verifyPendingOTC('412345', hash)).toBe(false);
+  });
+
+  it('still verifies a legacy 6-digit code against its live token hash', async () => {
+    const hash = await bcrypt.hash('654321', 10);
+    expect(await verifyPendingOTC('654321', hash)).toBe(true);
+    expect(await verifyPendingOTC('65432100', hash)).toBe(false);
+  });
+
   it('returns false for empty/invalid input instead of throwing', async () => {
     const hash = await bcrypt.hash('654321', 10);
     expect(await verifyPendingOTC('', hash)).toBe(false);

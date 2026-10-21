@@ -1,0 +1,26 @@
+{
+  "scenario": "blocked.synthetic",
+  "synthetic": true,
+  "basis": "Hand-built: the envelope is the live-probed {code, error} with a hyphenated code; the moderation wording is assumed (no blocked-prompt string is documented). Prompt redacted as the recorder does. Replace with a recording.",
+  "exchanges": [
+    {
+      "name": "submit",
+      "request": {
+        "method": "POST",
+        "path": "/v1/videos/generations",
+        "body": {
+          "model": "grok-imagine-video-1.5",
+          "prompt": "<redacted:blocked-prompt>",
+          "duration": 2,
+          "aspect_ratio": "16:9",
+          "resolution": "480p"
+        }
+      },
+      "response": {
+        "status": 400,
+        "headers": { "content-type": "application/json" },
+        "body": { "code": "invalid-argument", "error": "Content blocked by moderation" }
+      }
+    }
+  ]
+}

@@ -2,6 +2,9 @@ import type { EndpointContract } from '../types';
 import { chatContract } from './chat.contract';
 import { startAgentExecutionContract, getAgentExecutionContract } from './agentExecutions.contract';
 import { sessionUpdateContract } from './sessionUpdate.contract';
+import { sessionGetContract } from './sessionGet.contract';
+import { sessionDeleteContract } from './sessionDelete.contract';
+import { sessionCloneContract } from './sessionClone.contract';
 import { executeToolContract } from './tools.contract';
 import { createCompletionContract } from './completions.contract';
 import { synthesizeSpeechContract } from './tts.contract';
@@ -9,12 +12,32 @@ import { generateMusicContract } from './music.contract';
 import { generateSoundEffectContract } from './soundEffects.contract';
 import { getMeContract } from './me.contract';
 import { getCreditBalanceContract } from './credits.contract';
+import { listModelsContract } from './models.contract';
 import { generateImageContract } from './imageGeneration.contract';
 import { editImageContract } from './imageEdit.contract';
-import { createFileUploadContract, getFileContract } from './files.contract';
+import {
+  createFileUploadContract,
+  getFileContract,
+  listFilesContract,
+  updateFileContract,
+  deleteFileContract,
+} from './files.contract';
 import { createEmbeddingsContract } from './embeddings.contract';
-import { getQuestContract } from './quest.contract';
+import { createDecisionContract, listDecisionModelsContract } from './decisions.contract';
+import { getQuestContract, listQuestFilesContract } from './quest.contract';
+import {
+  listArtifactsContract,
+  createArtifactContract,
+  getArtifactContract,
+  updateArtifactContract,
+  deleteArtifactContract,
+  listArtifactVersionsContract,
+  getArtifactVersionContract,
+} from './artifacts.contract';
+import { createTranscriptionUploadContract, createTranscriptionContract } from './transcription.contract';
 import { createSessionContract } from './sessionCreate.contract';
+import { listSessionsContract } from './sessionList.contract';
+import { listWhatsNewContract } from './whatsNew.contract';
 import {
   listDataLakesContract,
   getDataLakeContract,
@@ -23,7 +46,35 @@ import {
   removeDataLakeFileContract,
   searchDataLakeContract,
 } from './dataLakes.contract';
-import { generateVideoContract } from './videoGeneration.contract';
+import {
+  cancelVideoGenerationContract,
+  createVideoGenerationContract,
+  getVideoGenerationContract,
+  listVideoGenerationsContract,
+  listVideoModelsContract,
+} from './videoGeneration.contract';
+import {
+  cancelMusicGenerationContract,
+  createMusicGenerationContract,
+  getMusicGenerationContract,
+  listMusicGenerationsContract,
+  listMusicModelsContract,
+} from './musicGeneration.contract';
+import { listVoicesContract, createVoiceSessionContract, endVoiceSessionContract } from './voice.contract';
+import {
+  listProjectsContract,
+  getProjectContract,
+  createProjectContract,
+  updateProjectContract,
+  deleteProjectContract,
+} from './projects.contract';
+import {
+  listAgentsContract,
+  getAgentContract,
+  createAgentContract,
+  updateAgentContract,
+  deleteAgentContract,
+} from './agents.contract';
 
 /**
  * Every public endpoint, as a contract. The OpenAPI generator registers each of
@@ -35,7 +86,10 @@ export const CONTRACTS: readonly EndpointContract[] = [
   chatContract,
   startAgentExecutionContract,
   getAgentExecutionContract,
+  sessionGetContract,
   sessionUpdateContract,
+  sessionDeleteContract,
+  sessionCloneContract,
   executeToolContract,
   createCompletionContract,
   synthesizeSpeechContract,
@@ -43,18 +97,58 @@ export const CONTRACTS: readonly EndpointContract[] = [
   generateSoundEffectContract,
   getMeContract,
   getCreditBalanceContract,
+  listModelsContract,
   generateImageContract,
   editImageContract,
   createFileUploadContract,
   getFileContract,
+  listFilesContract,
+  updateFileContract,
+  deleteFileContract,
   createEmbeddingsContract,
+  createDecisionContract,
+  listDecisionModelsContract,
   getQuestContract,
+  listQuestFilesContract,
   createSessionContract,
+  listSessionsContract,
   listDataLakesContract,
   getDataLakeContract,
   getDataLakeFileContract,
   addDataLakeFileContract,
   removeDataLakeFileContract,
   searchDataLakeContract,
-  generateVideoContract,
+  cancelVideoGenerationContract,
+  createVideoGenerationContract,
+  getVideoGenerationContract,
+  listVideoGenerationsContract,
+  listVideoModelsContract,
+  cancelMusicGenerationContract,
+  createMusicGenerationContract,
+  getMusicGenerationContract,
+  listMusicGenerationsContract,
+  listMusicModelsContract,
+  listVoicesContract,
+  createVoiceSessionContract,
+  endVoiceSessionContract,
+  listWhatsNewContract,
+  listProjectsContract,
+  getProjectContract,
+  createProjectContract,
+  listArtifactsContract,
+  createArtifactContract,
+  getArtifactContract,
+  updateArtifactContract,
+  deleteArtifactContract,
+  listArtifactVersionsContract,
+  getArtifactVersionContract,
+  createTranscriptionUploadContract,
+  createTranscriptionContract,
+  updateProjectContract,
+  deleteProjectContract,
+  listAgentsContract,
+  getAgentContract,
+  createAgentContract,
+  updateAgentContract,
+  deleteAgentContract,
 ];

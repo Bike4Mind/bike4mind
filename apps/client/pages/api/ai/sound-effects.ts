@@ -1,21 +1,32 @@
-import { ApiKeyType, generateSoundEffectContract, SoundGenerationVendor } from '@bike4mind/common';
+import { randomUUID } from 'crypto';
+import {
+  isSupportedElevenLabsFormat,
+  UnprocessableEntityError,
+  shouldPersistGeneratedAudio,
+  generateSoundEffectContract,
+  SoundGenerationVendor,
+  usdToCreditsStochastic,
+} from '@bike4mind/common';
 import { adminSettingsRepository, apiKeyRepository, usageEventRepository } from '@bike4mind/database';
 import { apiKeyService, estimateSoundCredits } from '@bike4mind/services';
 import { aiSoundService, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { reserveRequestCredits } from '@server/billing/reserveRequestCredits';
+import { resolveAudioBillingOrgId } from '@server/billing/resolveAudioBillingOrgId';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { persistGeneratedAudio } from '@server/utils/persistGeneratedAudio';
+import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
+import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
+import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
+import { AUDIO_VENDOR_API_KEY_TYPE } from '@server/utils/audioVendorApiKeyType';
 
-// The stored key type each vendor needs. Resolved per-user first, then falling
-// back to the admin-configured key (getEffectiveApiKey), so the feature works
-// out of the box on platforms that provide a shared provider key.
-const PROVIDER_API_KEY_TYPE: Record<SoundGenerationVendor, ApiKeyType> = {
-  elevenlabs: ApiKeyType.elevenlabs,
+// Each vendor's output-format check. Run before the reservation: an unmapped codec would be generated and
+// billed, then could be neither labelled nor saved.
+const SUPPORTS_OUTPUT_FORMAT: Record<SoundGenerationVendor, (format: string) => boolean> = {
+  elevenlabs: isSupportedElevenLabsFormat,
 };
 
 // Provider-agnostic sound-effects generation. Meters usage: because the cost is
-// deterministic (duration-driven), it RESERVES the exact charge before calling
-// the provider and settles it on success / refunds it on failure - so a charge
+// deterministic (duration-driven), it RESERVES the rounded-up charge before
+// calling the provider and settles the exact cost on success / refunds it on failure - so a charge
 // can never fail after the audio is produced. Bills the organization's shared
 // pool for org-billed API keys and for org-seat members; otherwise the user. All
 // billing is gated on the enforceCredits admin setting, so self-host /
@@ -26,12 +37,19 @@ const PROVIDER_API_KEY_TYPE: Record<SoundGenerationVendor, ApiKeyType> = {
 // generateSoundEffectContract (the same source of truth that drives the OpenAPI
 // spec); `req.validated` is the parsed, typed body.
 const handler = nextRouteForContract(generateSoundEffectContract).post(async (req, res) => {
-  const { provider, text, durationSeconds, promptInfluence, format } = req.validated;
+  const { provider, text, durationSeconds, promptInfluence, format, encoding, preview, organization_id } =
+    req.validated;
   const userId = req.user?.id;
+
+  // Undefined falls back to the vendor's mp3 default, which every vendor supports. An empty string is
+  // checked too: the generators keep it (`??`), so it would otherwise fail only after the reservation.
+  if (format !== undefined && !SUPPORTS_OUTPUT_FORMAT[provider](format)) {
+    throw new UnprocessableEntityError(`The ${provider} provider does not support the '${format}' output format`);
+  }
 
   const apiKey = await apiKeyService.getEffectiveApiKey(
     userId,
-    { type: PROVIDER_API_KEY_TYPE[provider] },
+    { type: AUDIO_VENDOR_API_KEY_TYPE[provider] },
     { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } }
   );
 
@@ -55,15 +73,21 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
   // cost even on credits-off / self-host deployments.
   const { requiredCredits, usdCost, billedSeconds } = estimateSoundCredits(provider, { durationSeconds });
 
+  // Omitted keeps the home-org default. A key bills its own account (resolveAudioBillingOrgId 403s any
+  // other target), so only the JWT caller's value changes the payer.
+  const billingOrganizationId = await resolveAudioBillingOrgId(req, organization_id, 'home-org');
+
   const reservation = await reserveRequestCredits({
     req,
     requiredCredits,
     enforceCredits,
     featureLabel: 'sound generation',
+    billingOrganizationId,
   });
   const { ownerId: creditOwnerId, ownerType: creditOwnerType } = reservation;
 
-  const sessionId = `sound-effects-${userId}-${Date.now()}`;
+  const sessionId = `sound-effects-${userId}-${randomUUID()}`;
+  const source = resolveRequestUsageSource(req);
 
   // Analytics is never part of the billing path: one usage event per provider
   // call (ok or error), independent of enforceCredits and of whether the charge
@@ -79,8 +103,8 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
         feature: 'sound_effects',
         provider,
         model: provider,
-        // Matches this call's ledger write (deductCreditsWithOrgSupport, source: 'api').
-        source: 'api',
+        // Matches this call's ledger write (deductCreditsWithOrgSupport).
+        source,
         inputTokens: 0,
         outputTokens: 0,
         cachedInputTokens: 0,
@@ -111,45 +135,39 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
     return res.status(502).json({ error: 'Sound generation failed' });
   }
 
-  // Settle the full reservation: the provider generates exactly the billed duration.
-  const creditsCharged = await reservation.settle(reservation.reservedCredits, {
+  // The provider generates exactly the billed duration, so settle that exact cost; the round-up held at
+  // reservation is refunded.
+  const creditsCharged = await reservation.settle(usdToCreditsStochastic(usdCost), {
     type: 'sound_effects_usage',
     sessionId,
     model: provider,
-    source: 'api',
+    source,
   });
 
   recordUsage('ok', creditsCharged, usdCost);
 
-  // Persist a browsable copy of the generated audio (on by default; opt out via
-  // the saveGeneratedAudio preference). Best-effort: a save failure (e.g. over
-  // quota) never blocks returning the audio the caller was already charged for.
-  if (userId && (req.user?.preferences?.saveGeneratedAudio ?? true)) {
-    const save = await persistGeneratedAudio({
-      userId,
-      audio,
-      contentType,
-      format,
-      source: 'sound-effect',
-      text,
-      logger: req.logger,
-    });
-    res.setHeader('X-B4M-Audio-Saved', String(save.saved));
-    if (save.saved) {
-      res.setHeader('X-B4M-Audio-Fab-File-Id', save.fabFileId);
-      res.setHeader('X-B4M-Audio-File-Name', save.fileName);
-      // Forward the signed URL minted at creation. Non-image audio gets a working URL
-      // immediately (createFabFile), whereas re-resolving it via GET /api/files/:id
-      // fails closed until the async moderation scan flips moderationStatus to 'clean'
-      // (isImageServeable gates every mime type) - so callers must use this URL, not
-      // re-fetch one. Absent only in the rare case createFabFile minted no URL.
-      if (save.fileUrl) res.setHeader('X-B4M-Audio-File-Url', save.fileUrl);
-    }
-  }
+  // Best-effort browsable copy, skipped only for a throwaway `preview` call: a
+  // save failure never blocks returning audio the caller was already charged for.
+  const save =
+    userId && shouldPersistGeneratedAudio({ userId, preview })
+      ? await saveGeneratedAssetToFiles(
+          {
+            userId,
+            bytes: audio,
+            contentType,
+            generation: {
+              generator: 'sound_effect',
+              provider,
+              prompt: text,
+              ...(durationSeconds !== undefined && { durationSeconds }),
+              ...(promptInfluence !== undefined && { promptInfluence }),
+            },
+          },
+          req.logger
+        )
+      : undefined;
 
-  res.setHeader('Content-Type', contentType);
-  res.setHeader('Content-Length', audio.length);
-  return res.send(audio);
+  return deliverGeneratedAudio(res, { audio, contentType, encoding: encoding ?? 'binary', save, logger: req.logger });
 });
 
 export const config = {

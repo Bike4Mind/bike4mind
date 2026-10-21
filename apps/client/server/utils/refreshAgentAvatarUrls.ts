@@ -1,6 +1,6 @@
 import { fabFileRepository } from '@bike4mind/database';
 import { IAgent, isImageServeable } from '@bike4mind/common';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 
 /**
  * Refresh agents' portrait signed URLs for display. `viewerId` is the REQUESTING user.
@@ -13,9 +13,10 @@ import { getFilesStorage } from '@server/utils/storage';
  * gated to the file's OWNER (viewerId) - a viewer of a *shared* agent still gets a freshly minted
  * display URL but never rewrites another user's FabFile record.
  *
- * Shared by GET /api/agents, GET /api/sessions/:id/agents and GET /api/agents/:id. These carried
- * near-identical copies before; the access gate must not drift between them, so it lives here once
- * rather than in each route. Held/blocked avatars are never re-minted.
+ * Shared by GET /api/agents, GET /api/sessions/:id/agents and GET /api/agents/:id (through
+ * `server/agents/presentAgentsForViewer`). These carried near-identical copies before; the access
+ * gate must not drift between them, so it lives here once rather than in each route. Held/blocked
+ * avatars are never re-minted.
  */
 export const refreshAgentAvatarUrls = async (agents: IAgent[], viewerId: string): Promise<IAgent[]> => {
   const refreshedAgents = await Promise.all(

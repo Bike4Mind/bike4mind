@@ -10,7 +10,7 @@ const Wrapper = ({ children }: { children: React.ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
 );
 
-const renderCard = (props: { fromChat?: boolean } = {}) =>
+const renderCard = () =>
   render(
     <Wrapper>
       <ActiveBriefCard
@@ -19,7 +19,7 @@ const renderCard = (props: { fromChat?: boolean } = {}) =>
         stats={['10 stops']}
         objectiveLine="objective: minimize tour length"
         isDark
-        {...props}
+        actions={<button data-testid="brief-action-btn">Edit</button>}
       />
     </Wrapper>
   );
@@ -33,14 +33,7 @@ describe('ActiveBriefCard', () => {
     const card = screen.getByTestId('opti-active-brief');
     expect(within(card).getByText('Austin Food Truck Circuit')).toBeInTheDocument();
     expect(within(card).getByText('objective: minimize tour length')).toBeInTheDocument();
-  });
-
-  it('flags a brief the chat formulated, and stays quiet otherwise', () => {
-    renderCard();
-    expect(screen.queryByTestId('opti-brief-from-chat')).toBeNull();
-
-    cleanup();
-    renderCard({ fromChat: true });
-    expect(screen.getByTestId('opti-brief-from-chat')).toHaveTextContent('synced from chat');
+    expect(within(card).getByText('10 stops')).toBeInTheDocument();
+    expect(within(card).getByTestId('brief-action-btn')).toBeInTheDocument();
   });
 });

@@ -14,7 +14,12 @@ import { useStreamingState } from './useStreamingState';
 import { useStreamingQueryUpdates } from './useStreamingQueryUpdates';
 import { useStreamingMetrics } from './useStreamingMetrics';
 import { useStreamingArtifactPersistence } from './useStreamingArtifactPersistence';
-import { dispatchUiSideEffects } from '../utils/uiSideEffectDispatcher';
+import {
+  claimLiveDispatch,
+  dispatchUiSideEffects,
+  noteReplyInFlight,
+  settleReplyInFlight,
+} from '../utils/uiSideEffectDispatcher';
 import { fabFileKeys } from './data/fabFileKeys';
 import useSessionLayout from './useSessionLayout';
 import {
@@ -214,6 +219,21 @@ export function useSubscribeChatCompletion(sessionId: string | null) {
         });
 
         if (!isValidSession) {
+          // Still close out the other session's streaming entry on its terminal frame: nothing else
+          // will (its timeout check only runs while it is the viewed session), and a leftover entry
+          // keeps isAnyStreaming() true, which holds the composer credit chip at its pre-turn value.
+          // Matched on the quest when the entry knows it, so a late duplicate of an earlier quest's
+          // terminal frame cannot end a newer turn in that session.
+          const frameSessionId = typedMsg.quest.sessionId;
+          const leftEntry = frameSessionId ? useStreamingState.getState().getStreamingInfo(frameSessionId) : undefined;
+          if (
+            frameSessionId &&
+            isTerminalQuestStatus(typedMsg.quest.status) &&
+            leftEntry?.status === 'streaming' &&
+            (!leftEntry.questId || leftEntry.questId === typedMsg.quest.id)
+          ) {
+            completeStreaming(frameSessionId);
+          }
           console.warn(`[QUEST-DROP] Wrong session for streaming chunk - subscription ${metrics.subscriptionId}`, {
             chunkSessionId: typedMsg.quest.sessionId,
             expectedSessionId: sessionId,
@@ -312,6 +332,10 @@ export function useSubscribeChatCompletion(sessionId: string | null) {
         }
 
         updateStreamingQuest(typedMsg.quest, isComplete, typedMsg.statusMessage);
+        // A non-terminal frame means the reply is still arriving in this client session, so
+        // its completion is a live arrival (see claimLiveDispatch). A terminal frame with no
+        // earlier one (reconnect after the reply finished) is not: it settles instead.
+        if (typedMsg.quest.id && !isComplete) noteReplyInFlight(typedMsg.quest.id, typedMsg.quest.sessionId);
 
         // OPTIMIZED STREAMING: Real-time visual updates with performance optimizations
         if (isComplete) {
@@ -323,10 +347,13 @@ export function useSubscribeChatCompletion(sessionId: string | null) {
             perfLogger.log(
               `🎯 [UI_SIDE_EFFECTS] Dispatching ${typedMsg.quest.uiSideEffects.length} side effect(s) from streaming completion`
             );
-            // Live streaming completion - auto-apply the formulated brief and follow
-            // the AI to its console. dedupeKey (quest id) makes this and the
-            // render-pipeline dispatch apply the same quest exactly once.
-            dispatchUiSideEffects(typedMsg.quest.uiSideEffects, { live: true, dedupeKey: typedMsg.quest.id });
+            // Live streaming completion. The claim (quest id) makes this and the
+            // render-pipeline dispatcher apply the same quest live exactly once.
+            if (typedMsg.quest.id && claimLiveDispatch(typedMsg.quest.id, typedMsg.quest.sessionId)) {
+              dispatchUiSideEffects(typedMsg.quest.uiSideEffects, { live: true, dedupeKey: typedMsg.quest.id });
+            }
+          } else if (typedMsg.quest.id) {
+            settleReplyInFlight(typedMsg.quest.id);
           }
 
           // PERFORMANCE PROTECTION: Mark streaming as complete

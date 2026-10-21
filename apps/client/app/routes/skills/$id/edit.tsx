@@ -1,7 +1,8 @@
 import { FC } from 'react';
-import { Box, CircularProgress, Stack, Typography } from '@mui/joy';
+import { Alert, Box, CircularProgress, Stack, Typography } from '@mui/joy';
 import { useNavigate, useParams } from '@tanstack/react-router';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
+import { useUser } from '@client/app/contexts/UserContext';
 import { useGetSkill, useUpdateSkill } from '@client/app/hooks/data/skills';
 import { SkillForm } from '@client/app/components/SkillsManagement/SkillForm';
 import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
@@ -11,6 +12,7 @@ const EditSkillPage: FC = () => {
   const navigate = useNavigate();
   const { data: skill, isLoading } = useGetSkill(id);
   const updateSkill = useUpdateSkill();
+  const isAdmin = Boolean(useUser().currentUser?.isAdmin);
 
   useDocumentTitle(skill ? `Edit /${skill.name}` : 'Edit skill');
 
@@ -46,6 +48,13 @@ const EditSkillPage: FC = () => {
         <Typography level="h2">
           Edit <Typography component="code">/{skill.name}</Typography>
         </Typography>
+
+        {!isAdmin && (skill.isGlobalRead || skill.isGlobalWrite) && (
+          <Alert color="neutral" variant="soft" data-testid="skill-edit-global-alert">
+            This skill is shared with everyone, so content changes are reviewed by the Skill Market safety scan when you
+            save.
+          </Alert>
+        )}
 
         <SkillForm
           initialValue={{

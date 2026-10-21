@@ -1,6 +1,11 @@
 import { getDynamicDataLakeAccess } from '../../../dataLakeService/getDynamicDataLakeTags';
-import { sessionGroundsOnNoLake, type ResolvedLakeAccessSet } from '../../../dataLakeService/narrowLakeAccessToSession';
+import {
+  sessionExcludesLibraryFiles,
+  sessionGroundsOnNoLake,
+  type ResolvedLakeAccessSet,
+} from '../../../dataLakeService/narrowLakeAccessToSession';
 import { admitSessionLakes, noSessionLakes, searchedSessionLakes } from '../../../dataLakeService/sessionLakeAdmission';
+import { isObjectIdShaped } from './objectId';
 import type { ToolContext } from './types';
 
 /**
@@ -39,3 +44,37 @@ export async function resolveOwnerLakeAccess(context: ToolContext): Promise<Reso
   // user, and the identity-substituting worker paths never reach that call at all.
   return admitSessionLakes(resolved, context.sessionPreauthorizedLakeIds, context.userId, context.db);
 }
+
+/**
+ * Whether the knowledge tools must leave the caller's own/shared library out of this session's
+ * corpus (the "+ My files" chip off). Same derivation and input as forced retrieval
+ * (sessionExcludesLibraryFiles on the pre-narrowing owner access), so a tool can never re-admit
+ * what forced retrieval left out. An agent kbScope is already its own fail-closed corpus and is
+ * never narrowed here. Owner access is resolved only when the answer depends on it.
+ */
+export async function sessionExcludesLibrary(
+  context: ToolContext,
+  ownerAccess: () => Promise<ResolvedLakeAccessSet> = () => resolveOwnerLakeAccess(context)
+): Promise<boolean> {
+  if (context.kbScope) return false;
+  const tags = context.sessionRetrievalTags;
+  const needsAccess = context.sessionIncludeLibraryFiles === undefined && !!tags?.length;
+  const access = needsAccess ? await ownerAccess() : noSessionLakes();
+  return sessionExcludesLibraryFiles(context.sessionIncludeLibraryFiles, access, tags);
+}
+
+/**
+ * The attached files a library-off session still admits (the rest of the library stays out).
+ * Ids are caller-supplied strings, so anything not ObjectId-shaped is dropped before a query sees it.
+ */
+export function admittedAttachmentIds(context: ToolContext, excludesLibrary: boolean): string[] {
+  return excludesLibrary ? (context.attachedFileIds ?? []).filter(isObjectIdShaped) : [];
+}
+
+/** Lead-in for a library-off, no-lake answer when attached files are still in reach. */
+export const LIBRARY_OFF_ATTACHMENTS_LEAD =
+  "No data lake is in this chat's scope and your other files are turned off for this chat";
+
+/** What a knowledge tool says when the library is off and no lake is left to search. */
+export const LIBRARY_OFF_NO_LAKE_MESSAGE =
+  "No data lake is in this chat's scope and your files are turned off for this chat, so there is nothing to search.";

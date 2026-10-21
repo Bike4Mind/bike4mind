@@ -12,9 +12,11 @@ import { join, relative } from 'node:path';
  * path and silently no-op (exactly how /api/opti slipped through when the
  * seam was introduced).
  *
- * This test statically walks apps/client for `new ChatCompletionProcess(`
- * call sites and asserts each file either references `premiumLlmTools` or is
- * explicitly allowlisted as an intentional omission with a justification.
+ * This test statically walks apps/client and apps/workers/src for
+ * `new ChatCompletionProcess(` call sites and asserts each file either references
+ * `premiumLlmTools` or is explicitly allowlisted as an intentional omission with a
+ * justification. Workers files are read from disk, never imported, so the one-way
+ * client -> workers import rule still holds.
  */
 
 const CLIENT_ROOT = join(__dirname, '..');
@@ -26,7 +28,8 @@ const INTENTIONAL_OMISSIONS = new Set<string>([
   'pages/api/admin/rapid-reply/test.ts',
 ]);
 
-const SCAN_DIRS = ['pages', 'server', 'app'];
+// Relative to CLIENT_ROOT; handlers moved into apps/workers keep their call sites.
+const SCAN_DIRS = ['pages', 'server', 'app', '../workers/src'];
 const SKIP_DIRS = new Set(['node_modules', '.next', '.open-next', '.sst', '__tests__', 'premium-generated']);
 
 function walk(dir: string, out: string[] = []): string[] {

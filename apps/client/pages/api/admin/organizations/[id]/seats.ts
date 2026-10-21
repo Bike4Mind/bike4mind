@@ -1,19 +1,19 @@
 import { BadRequestError } from '@bike4mind/utils';
-import { ForbiddenError } from '@server/utils/errors';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { ApiKeyScope, TEAM_PLAN_SEATS_HARD_LIMIT } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sendToClient } from '@server/websocket/utils';
-import { AdminOrgAuditEvents, logAuditEvent } from '@server/utils/auditLog';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { resolveSubscriptionSource, setSeats } from '@server/services/organizationService';
 import { subscriptionRepository } from '@server/models/Subscription';
-import { ORGANIZATION_SUBSCRIPTION_MAX_SEATS } from '@client/lib/subscriptions/constants';
 import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
 import { z } from 'zod';
 import { Resource } from 'sst';
 
 const SeatsSchema = z.object({
-  seats: z.number().int().min(1).max(ORGANIZATION_SUBSCRIPTION_MAX_SEATS),
+  // setSeats enforces the configured teamPlanMaxSeats ceiling; this is only the absolute rail.
+  seats: z.number().int().min(1).max(TEAM_PLAN_SEATS_HARD_LIMIT),
 });
 
 interface RequestQuery {
@@ -50,19 +50,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).patch(
 
     const organization = await setSeats(id, seats, { type: 'admin', userId: req.user!.id });
 
-    await logAuditEvent(
-      {
-        userId: organization.userId,
-        action: AdminOrgAuditEvents.ORG_SEATS_CHANGED,
-        adminUserId: req.user!.id,
-        adminUsername: req.user!.username,
-        metadata: {
-          organizationId: organization.id,
-          seats: organization.seats,
-        },
-      },
-      req.logger
-    );
+    await recordAdminActionFromRequest(req, {
+      action: 'org.seats.changed',
+      target: { kind: 'organization', id: organization.id, displayName: organization.name },
+      summary: `set seats to ${organization.seats}`,
+      details: { seats: organization.seats, ownerId: organization.userId },
+    });
 
     await sendToClient(organization.userId, Resource.websocket.managementEndpoint, {
       action: 'invalidate_query',

@@ -65,7 +65,7 @@ vi.mock('@bike4mind/database', () => ({
   Tool: { find: vi.fn(), findById: vi.fn() },
 }));
 
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({
     getContentAsBuffer: async () => storageBytes.value,
     // The route wires these two into the other adapters. Stubbed so a future test that
@@ -75,7 +75,7 @@ vi.mock('@server/utils/storage', () => ({
   }),
 }));
 
-vi.mock('@server/queueHandlers/agentExecutor.attachmentLakeAccess', () => ({
+vi.mock('@server/dataLakes/attachmentLakeAccess', () => ({
   createAttachmentLakeAccess: mockCreateLakeAccess,
 }));
 

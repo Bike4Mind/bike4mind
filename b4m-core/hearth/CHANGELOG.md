@@ -1,5 +1,11 @@
 # @bike4mind/hearth
 
+## 0.3.1
+
+### Patch Changes
+
+- [#4122](https://github.com/Bike4Mind/bike4mind/pull/4122) [`0838962`](https://github.com/Bike4Mind/bike4mind/commit/0838962cc87930266d8b4918c081b3dc4bade3eb) Thanks [@julsanchez](https://github.com/julsanchez)! - stop API keys posting as the human actor, record event origin, validate delegations
+
 ## 0.3.0
 
 ### Minor Changes

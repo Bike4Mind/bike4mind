@@ -19,7 +19,7 @@ const CATALOG_KEY = 'briefcase-catalog';
  * here, or two queries differing only in a new field would collide on one cache
  * entry (wrong catalog) or fail to coalesce.
  */
-function canonicalKey(queries: IPromptBatchQuery[]): string {
+function canonicalKey(queries: readonly IPromptBatchQuery[]): string {
   const normalized = queries
     .map(q => ({ key: q.key, type: q.type ?? null, personal: q.personal ?? false, tags: [...(q.tags ?? [])].sort() }))
     .sort((a, b) => a.key.localeCompare(b.key));
@@ -31,7 +31,7 @@ function canonicalKey(queries: IPromptBatchQuery[]): string {
  * logical queries share one request. All-or-nothing on the server; a transient
  * failure self-heals via bounded backoff rather than wedging the panel.
  */
-export function useBriefcaseCatalog(queries: IPromptBatchQuery[], enabled = true) {
+export function useBriefcaseCatalog(queries: readonly IPromptBatchQuery[], enabled = true) {
   return useQuery({
     queryKey: [CATALOG_KEY, canonicalKey(queries)],
     queryFn: async () => {

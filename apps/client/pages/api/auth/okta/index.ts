@@ -17,10 +17,11 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { getOktaConfigWithFallback, generatePkceParams, buildAuthorizationUrl } from '@server/auth/oktaOidcClient';
+import { clientIdFromAuthorizeRedirect } from '@bike4mind/common';
 import { createStateToken } from '@server/auth/jwtStateStore';
 import { issueStateNonce, setPkceVerifierCookie } from '@server/auth/oauthFlowCookie';
 import { OKTA_STATE_AUDIENCE, LOG_URL_TRUNCATE_LENGTH, OktaStateInput } from '@server/auth/oktaConstants';
-import { NotFoundError } from '@server/utils/errors';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { validateAppUrl } from '@server/utils/validators';
 import { Logger } from '@bike4mind/observability';
 import { isLocalAppUrl } from '@server/utils/validators';
@@ -70,9 +71,11 @@ const handler = baseApi({ auth: false })
 
       // Create state token with IDP ID and the post-login redirect target
       // (round-tripped via the IdP, restored in the callback).
+      const redirectTo = typeof req.query.redirectTo === 'string' ? req.query.redirectTo : undefined;
       const statePayload: OktaStateInput = {
         idpId: idp?.id || undefined,
-        redirectTo: typeof req.query.redirectTo === 'string' ? req.query.redirectTo : undefined,
+        redirectTo,
+        clientId: clientIdFromAuthorizeRedirect(redirectTo),
       };
 
       const stateToken = createStateToken<OktaStateInput>({ audience: OKTA_STATE_AUDIENCE }, statePayload, nonceHash);

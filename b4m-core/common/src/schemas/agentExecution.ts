@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { MAX_THINKING_BUDGET_TOKENS } from '../constants/llmLimits';
 
 /**
  * Public wire schemas for the agent-executor (ReAct) endpoints:
@@ -35,11 +36,15 @@ export const AgentExecutionStartRequestSchema = z.object({
    * is what reproduces the product UI's Agent Mode toggle.
    */
   agent_id: z.string().optional(),
-  /**
-   * Bill this run to an organization's credit pool. The caller must belong to it; a
-   * non-member gets 404. Omit to bill the caller personally.
-   */
-  organization_id: z.string().optional(),
+  organization_id: z
+    .string()
+    .optional()
+    .describe(
+      'The organization whose credit pool pays for this run. You must belong to it; a non-member gets 404. ' +
+        'Omit it to bill your personal credits. An organization-billed API key always bills its own ' +
+        "organization: omit this or set it to the key's; any other value is a 403 " +
+        '(`errorCode: billing_organization_mismatch`).'
+    ),
   /**
    * Tool-id allowlist for the run. Omit to use the resolved profile's own list.
    *
@@ -58,8 +63,7 @@ export const AgentExecutionStartRequestSchema = z.object({
   thinking: z
     .object({
       enabled: z.boolean(),
-      /** Bounded at 32000: Anthropic rejects rather than clamps an oversized budget. */
-      budget_tokens: z.number().int().positive().max(32000).optional(),
+      budget_tokens: z.number().int().positive().max(MAX_THINKING_BUDGET_TOKENS).optional(),
     })
     .optional(),
   /** Per-message file attachments (fabFile ids), materialized into the first iteration. */

@@ -219,6 +219,38 @@ describe('sessionOperations', () => {
       SessionMock.findOne.mockResolvedValueOnce({ id: 's1' });
       await expect(stopReply('s1', ability)).rejects.toThrow('No active quest found');
     });
+
+    it('stops the given quest, not the latest one, when questId is passed', async () => {
+      QuestMock.findOne.mockResolvedValueOnce({ id: 'q5', status: 'running' });
+      SessionMock.findOne.mockResolvedValueOnce({ id: 's1' });
+      QuestMock.findOneAndUpdate.mockResolvedValueOnce({ id: 'q5', status: 'stopped' });
+
+      const result = await stopReply('s1', ability, 'q5');
+
+      expect(QuestMock.findOne).toHaveBeenCalledWith({ _id: 'q5', sessionId: 's1' });
+      expect(QuestMock.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: 'q5', status: { $nin: ['done', 'stopped'] } },
+        { status: 'stopped', statusMessage: 'Generation cancelled by user' },
+        { new: true }
+      );
+      expect(result).toMatchObject({ id: 'q5', status: 'stopped' });
+    });
+
+    it('leaves a targeted quest that already finished untouched', async () => {
+      QuestMock.findOne.mockResolvedValueOnce({ id: 'q5', status: 'done' });
+      SessionMock.findOne.mockResolvedValueOnce({ id: 's1' });
+
+      const result = await stopReply('s1', ability, 'q5');
+
+      expect(QuestMock.findOneAndUpdate).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ status: 'done' });
+    });
+
+    it('throws when the targeted quest is not in the session', async () => {
+      QuestMock.findOne.mockResolvedValueOnce(null);
+      SessionMock.findOne.mockResolvedValueOnce({ id: 's1' });
+      await expect(stopReply('s1', ability, 'q5')).rejects.toThrow('No active quest found');
+    });
   });
 
   describe('summarization triggers', () => {

@@ -48,9 +48,8 @@ describe('OrganizationModel - org-groups fields', () => {
 });
 
 describe('OrganizationModel - findIdsWithAdminRights (#1668 org-manageable data lakes)', () => {
-  it('returns orgs where the user is billing owner, manager, OR an appointed admin', async () => {
+  it('returns orgs where the user is billing owner OR an appointed admin', async () => {
     const owned = await Organization.create({ name: 'Owned', userId: 'u1', personal: false });
-    const managed = await Organization.create({ name: 'Managed', userId: 'other', managerId: 'u1', personal: false });
     const appointed = await Organization.create({
       name: 'Appointed',
       userId: 'other',
@@ -61,12 +60,35 @@ describe('OrganizationModel - findIdsWithAdminRights (#1668 org-manageable data 
     await Organization.create({ name: 'MemberOnly', userId: 'other', users: [{ userId: 'u1' }], personal: false });
 
     const ids = (await organizationRepository.findIdsWithAdminRights('u1')).sort();
-    expect(ids).toEqual([owned.id, managed.id, appointed.id].sort());
+    expect(ids).toEqual([owned.id, appointed.id].sort());
   });
 
   it('returns an empty list for a user who administers nothing', async () => {
     await Organization.create({ name: 'Someone else', userId: 'other', personal: false });
     expect(await organizationRepository.findIdsWithAdminRights('nobody')).toEqual([]);
+  });
+});
+
+describe('OrganizationModel - findIdsAdministeredBy', () => {
+  it('returns orgs the user owns or manages with a roster row, never a bare admin entry or a plain member', async () => {
+    const owned = await Organization.create({ name: 'Owned', userId: 'u1', personal: false });
+    const managed = await Organization.create({
+      name: 'Managed',
+      userId: 'other',
+      adminUserIds: ['u1'],
+      users: [{ userId: 'u1', permissions: ['read'] }],
+      personal: false,
+    });
+    await Organization.create({ name: 'AdminNoRow', userId: 'other', adminUserIds: ['u1'], personal: false });
+    await Organization.create({
+      name: 'MemberOnly',
+      userId: 'other',
+      users: [{ userId: 'u1', permissions: ['read'] }],
+      personal: false,
+    });
+
+    const ids = (await organizationRepository.findIdsAdministeredBy('u1')).sort();
+    expect(ids).toEqual([owned.id, managed.id].sort());
   });
 });
 
@@ -131,5 +153,145 @@ describe('OrganizationModel - ensureUserDetails (#1460)', () => {
     await organizationRepository.updateUserDetails(org.id, 'member-1', { creditsDelta: 10 });
     reloaded = await Organization.findById(org.id);
     expect(reloaded?.userDetails?.[0]).toMatchObject({ id: 'member-1', usedCredits: 10 });
+  });
+});
+
+describe('OrganizationModel - updateUserDetails monthly budget period', () => {
+  const october = new Date('2026-10-15T12:00:00Z');
+  const octoberStart = new Date('2026-10-01T00:00:00Z');
+  const member = (extra: Record<string, unknown>) => ({
+    id: 'member-1',
+    email: 'm@example.com',
+    name: 'M',
+    lastCreditUsedAt: null,
+    ...extra,
+  });
+  const reloadRow = async (orgId: string, userId = 'member-1') =>
+    (await Organization.findById(orgId))?.userDetails?.find(d => d.id === userId);
+
+  it('accumulates within the current month without touching periodStart', async () => {
+    const org = await Organization.create({
+      name: 'Acme',
+      userId: 'owner-1',
+      personal: false,
+      userDetails: [member({ usedCredits: 30, periodStart: octoberStart })],
+    });
+
+    await organizationRepository.updateUserDetails(org.id, 'member-1', { creditsDelta: 5 }, october);
+
+    expect(await reloadRow(org.id)).toMatchObject({ usedCredits: 35, periodStart: octoberStart });
+  });
+
+  it('resets usage from an earlier month to the new delta and stamps the current period', async () => {
+    const org = await Organization.create({
+      name: 'Acme',
+      userId: 'owner-1',
+      personal: false,
+      userDetails: [member({ usedCredits: 900, periodStart: new Date('2026-09-01T00:00:00Z') })],
+    });
+
+    const usedAt = new Date('2026-10-15T12:00:00Z');
+    await organizationRepository.updateUserDetails(
+      org.id,
+      'member-1',
+      { creditsDelta: 5, lastCreditUsedAt: usedAt },
+      october
+    );
+
+    expect(await reloadRow(org.id)).toMatchObject({
+      usedCredits: 5,
+      periodStart: octoberStart,
+      lastCreditUsedAt: usedAt,
+    });
+  });
+
+  it('treats a legacy row with no periodStart as a stale lifetime counter and resets it', async () => {
+    const org = await Organization.create({
+      name: 'Acme',
+      userId: 'owner-1',
+      personal: false,
+      userDetails: [member({ usedCredits: 900 })],
+    });
+
+    await organizationRepository.updateUserDetails(org.id, 'member-1', { creditsDelta: 5 }, october);
+
+    expect(await reloadRow(org.id)).toMatchObject({ usedCredits: 5, periodStart: octoberStart });
+  });
+
+  it('touches only the target member and preserves their per-member override', async () => {
+    const org = await Organization.create({
+      name: 'Acme',
+      userId: 'owner-1',
+      personal: false,
+      userDetails: [
+        member({ usedCredits: 10, periodStart: octoberStart, maxCredits: 50 }),
+        member({ id: 'member-2', usedCredits: 20, periodStart: octoberStart }),
+      ],
+    });
+
+    await organizationRepository.updateUserDetails(org.id, 'member-1', { creditsDelta: 5 }, october);
+
+    expect(await reloadRow(org.id)).toMatchObject({ usedCredits: 15, maxCredits: 50 });
+    expect(await reloadRow(org.id, 'member-2')).toMatchObject({ usedCredits: 20 });
+  });
+});
+
+describe('OrganizationModel - setMemberMaxCredits', () => {
+  it('sets and clears one member override without touching usage or other members', async () => {
+    const org = await Organization.create({
+      name: 'Acme',
+      userId: 'owner-1',
+      personal: false,
+      users: [
+        { userId: 'member-1', permissions: ['read'] },
+        { userId: 'member-2', permissions: ['read'] },
+      ],
+      userDetails: [
+        { id: 'member-1', email: 'a@example.com', name: 'A', usedCredits: 7, lastCreditUsedAt: null },
+        { id: 'member-2', email: 'b@example.com', name: 'B', usedCredits: 9, lastCreditUsedAt: null, maxCredits: 3 },
+      ],
+    });
+
+    expect(await organizationRepository.setMemberMaxCredits(org.id, 'member-1', 40)).toBe(true);
+    let reloaded = await Organization.findById(org.id);
+    expect(reloaded?.userDetails?.[0]).toMatchObject({ id: 'member-1', usedCredits: 7, maxCredits: 40 });
+    expect(reloaded?.userDetails?.[1]).toMatchObject({ id: 'member-2', usedCredits: 9, maxCredits: 3 });
+
+    expect(await organizationRepository.setMemberMaxCredits(org.id, 'member-1', null)).toBe(true);
+    reloaded = await Organization.findById(org.id);
+    expect(reloaded?.userDetails?.[0]?.maxCredits).toBeNull();
+  });
+
+  it('reports false for a member with no row', async () => {
+    const org = await Organization.create({ name: 'Acme', userId: 'owner-1', personal: false, userDetails: [] });
+    expect(await organizationRepository.setMemberMaxCredits(org.id, 'member-1', 40)).toBe(false);
+  });
+
+  it('reports false and writes nothing for a userDetails row whose user is no longer owner or a member', async () => {
+    const org = await Organization.create({
+      name: 'Acme',
+      userId: 'owner-1',
+      personal: false,
+      users: [{ userId: 'member-1', permissions: ['read'] }],
+      userDetails: [{ id: 'removed-1', email: 'r@example.com', name: 'R', usedCredits: 4, lastCreditUsedAt: null }],
+    });
+
+    expect(await organizationRepository.setMemberMaxCredits(org.id, 'removed-1', 40)).toBe(false);
+    const reloaded = await Organization.findById(org.id);
+    expect(reloaded?.userDetails?.[0]?.maxCredits ?? null).toBeNull();
+  });
+
+  it('still sets an override for the owner, who has no users[] row', async () => {
+    const org = await Organization.create({
+      name: 'Acme',
+      userId: 'owner-1',
+      personal: false,
+      users: [],
+      userDetails: [{ id: 'owner-1', email: 'o@example.com', name: 'O', usedCredits: 0, lastCreditUsedAt: null }],
+    });
+
+    expect(await organizationRepository.setMemberMaxCredits(org.id, 'owner-1', 40)).toBe(true);
+    const reloaded = await Organization.findById(org.id);
+    expect(reloaded?.userDetails?.[0]?.maxCredits).toBe(40);
   });
 });

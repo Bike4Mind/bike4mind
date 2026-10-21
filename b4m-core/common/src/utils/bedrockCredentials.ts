@@ -1,0 +1,52 @@
+import { isPlaceholderApiKey } from '../types/entities/SystemSecretsTypes';
+
+export interface BedrockStaticCredentials {
+  accessKeyId: string;
+  secretAccessKey: string;
+  sessionToken?: string;
+}
+
+const usable = (value: string | undefined): string | undefined =>
+  isPlaceholderApiKey(value) ? undefined : value?.trim();
+
+/**
+ * The credential part of a Bedrock SDK client config, or null when Bedrock is unreachable.
+ *
+ * Hosted returns `{}`: the default chain (task/Lambda role) signs, as it always has. Self-host
+ * returns explicit BEDROCK_AWS_* credentials, or null without them - there the plain AWS_* pair
+ * is the local MinIO credential and must never be sent to Bedrock, which also rules out the
+ * default chain (it would pick that pair up first). Every Bedrock gate (model discovery, the
+ * picker in llm-adapters' backendGate, the runtime client) reads this, so they cannot disagree.
+ */
+export function bedrockClientCredentials(
+  env: Readonly<Record<string, string | undefined>> = process.env
+): { credentials?: BedrockStaticCredentials } | null {
+  if (env.B4M_SELF_HOST !== 'true') return {};
+  const accessKeyId = usable(env.BEDROCK_AWS_ACCESS_KEY_ID);
+  const secretAccessKey = usable(env.BEDROCK_AWS_SECRET_ACCESS_KEY);
+  if (!accessKeyId || !secretAccessKey) return null;
+  const sessionToken = usable(env.BEDROCK_AWS_SESSION_TOKEN);
+  return { credentials: { accessKeyId, secretAccessKey, ...(sessionToken && { sessionToken }) } };
+}
+
+// The default chain on self-host would sign with the MinIO AWS_* pair. Rejecting per request (not at
+// construction) keeps eager client construction safe on installs that never call Bedrock.
+const BEDROCK_UNCONFIGURED = {
+  credentials: (): Promise<BedrockStaticCredentials> =>
+    Promise.reject(
+      new Error(
+        'Bedrock is not configured on this self-host install: set BEDROCK_AWS_ACCESS_KEY_ID and BEDROCK_AWS_SECRET_ACCESS_KEY'
+      )
+    ),
+};
+
+/**
+ * The credential part of every Bedrock SDK client config: `{}` on hosted, the BEDROCK_AWS_* pair on
+ * self-host, or a provider that rejects when self-host has no pair. Spread it into each
+ * `new Bedrock*Client(...)`; never spread `bedrockClientCredentials() ?? {}`, which fails open.
+ */
+export function bedrockClientConfig(env: Readonly<Record<string, string | undefined>> = process.env): {
+  credentials?: BedrockStaticCredentials | (() => Promise<BedrockStaticCredentials>);
+} {
+  return bedrockClientCredentials(env) ?? BEDROCK_UNCONFIGURED;
+}

@@ -18,6 +18,7 @@ const DEMO_KEY_MAP: Partial<Record<ApiKeyType, IAdminSettings['settingName']>> =
   [ApiKeyType.deepseek]: 'deepseekApiKey',
   [ApiKeyType.bfl]: 'bflApiKey',
   [ApiKeyType.voyageai]: 'voyageApiKey',
+  [ApiKeyType.typesafe]: 'typesafeApiKey',
   // Admin-provisioned ElevenLabs key powers TTS for all users (same key the
   // Voice v2 sessions use), so no per-user key is required - matching how every
   // other provider falls back to its admin key.
@@ -39,6 +40,7 @@ const ENV_KEY_MAP: Partial<Record<ApiKeyType, string>> = {
   [ApiKeyType.xai]: 'XAI_API_KEY',
   [ApiKeyType.kimi]: 'MOONSHOT_API_KEY',
   [ApiKeyType.deepseek]: 'DEEPSEEK_API_KEY',
+  [ApiKeyType.typesafe]: 'TYPESAFE_API_KEY',
 };
 
 // Base type - used by getEffectiveApiKey (~15 callers, unchanged contract)
@@ -179,6 +181,7 @@ export const getEffectiveLLMApiKeys = async (
     'moonshotApiKey',
     'deepseekApiKey',
     'voyageApiKey',
+    'typesafeApiKey',
     'ollamaBackend',
     'EnableOllama',
   ];
@@ -199,6 +202,7 @@ export const getEffectiveLLMApiKeys = async (
             ApiKeyType.kimi,
             ApiKeyType.deepseek,
             ApiKeyType.voyageai,
+            ApiKeyType.typesafe,
           ],
           adapters
         )
@@ -222,6 +226,7 @@ export const getEffectiveLLMApiKeys = async (
   const kimiUserKey = userKeyMap.get(ApiKeyType.kimi) || null;
   const deepseekUserKey = userKeyMap.get(ApiKeyType.deepseek) || null;
   const voyageaiUserKey = userKeyMap.get(ApiKeyType.voyageai) || null;
+  const typesafeUserKey = userKeyMap.get(ApiKeyType.typesafe) || null;
 
   // Extract individual settings for backward compatibility
   const openaiDemoKey = adminSettings['openaiDemoKey'];
@@ -232,6 +237,7 @@ export const getEffectiveLLMApiKeys = async (
   const kimiDemoKey = adminSettings['moonshotApiKey'];
   const deepseekDemoKey = adminSettings['deepseekApiKey'];
   const voyageaiDemoKey = adminSettings['voyageApiKey'];
+  const typesafeDemoKey = adminSettings['typesafeApiKey'];
   const ollamaBackend = adminSettings['ollamaBackend'];
   const enableOllama = adminSettings['EnableOllama'];
 
@@ -261,6 +267,7 @@ export const getEffectiveLLMApiKeys = async (
     kimi: keyOrExpired(kimiUserKey) || kimiDemoKey || envKey('MOONSHOT_API_KEY'),
     deepseek: keyOrExpired(deepseekUserKey) || deepseekDemoKey || envKey('DEEPSEEK_API_KEY'),
     voyageai: keyOrExpired(voyageaiUserKey) || voyageaiDemoKey || null,
+    typesafe: keyOrExpired(typesafeUserKey) || typesafeDemoKey || envKey('TYPESAFE_API_KEY'),
     // Self-host: when OLLAMA_BASE_URL is set in the environment, enable Ollama
     // pointed at that endpoint without requiring the DB admin settings
     // (EnableOllama / ollamaBackend). This is what makes local models work

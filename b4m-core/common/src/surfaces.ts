@@ -43,6 +43,10 @@ export interface WorkspaceSurface {
   routePrefix: string;
   /** Client URL that opens `sessionId` in this workspace. */
   sessionHref: (sessionId: string) => string;
+  /** Whether a user may hide this workspace from their own UI (`isSurfaceHidden`). The main list never is. */
+  hideable: boolean;
+  /** Name prefix of the LLM tools this workspace contributes, filtered while it is hidden (`isToolHiddenBySurface`). */
+  toolNamePrefix?: string;
 }
 
 export const WORKSPACE_SURFACES: readonly WorkspaceSurface[] = [
@@ -54,6 +58,7 @@ export const WORKSPACE_SURFACES: readonly WorkspaceSurface[] = [
     movable: true,
     routePrefix: '/notebooks',
     sessionHref: sessionId => `/notebooks/${encodeURIComponent(sessionId)}`,
+    hideable: false,
   },
   {
     id: OPTI_SURFACE,
@@ -65,6 +70,8 @@ export const WORKSPACE_SURFACES: readonly WorkspaceSurface[] = [
     movable: true,
     routePrefix: '/opti',
     sessionHref: sessionId => `/opti?mode=canvas&session=${encodeURIComponent(sessionId)}`,
+    hideable: true,
+    toolNamePrefix: 'optihashi_',
   },
 ];
 
@@ -73,10 +80,57 @@ export function normalizeSurfaceId(surface: string | null | undefined): SurfaceI
   return surface ? surface : null;
 }
 
+/**
+ * A contributed `{ surface id: tool names }` table of tools denied to sessions on that surface. The
+ * one home for the shape, so the generated table and both the server and the client can name it
+ * without reaching into `apps/client/app` (workers must not import the UI layer).
+ */
+export type WorkspaceDeniedToolsTable = Readonly<Record<string, readonly string[]>>;
+
+/** Tools a contributed `WorkspaceDeniedToolsTable` denies to a session on `surface`. */
+export function resolveWorkspaceDeniedTools(
+  surface: string | null | undefined,
+  table: WorkspaceDeniedToolsTable | null | undefined
+): string[] {
+  const id = normalizeSurfaceId(surface);
+  if (id === null || !table || !Object.prototype.hasOwnProperty.call(table, id)) return [];
+  return [...table[id]];
+}
+
 /** The registered workspace for `surface`, or undefined for a surface this repo does not know. */
 export function getWorkspaceSurface(surface: string | null | undefined): WorkspaceSurface | undefined {
   const id = normalizeSurfaceId(surface);
   return WORKSPACE_SURFACES.find(entry => entry.id === id);
+}
+
+/**
+ * True when the user's `hiddenSurfaces` display preference hides `id`. Hiding is display-only: it
+ * never changes access, so route gates and `canUseSurface` deliberately ignore it. The main list
+ * and any unregistered or non-hideable id are never hidden.
+ */
+export function isSurfaceHidden(hiddenSurfaces: readonly string[] | undefined | null, id: SurfaceId): boolean {
+  if (!id || !hiddenSurfaces?.includes(id)) return false;
+  return getWorkspaceSurface(id)?.hideable === true;
+}
+
+/**
+ * True when `toolName` belongs to a workspace the user has hidden and the active session is not in
+ * that workspace. Inside the workspace's own sessions its tools stay available.
+ */
+export function isToolHiddenBySurface(
+  toolName: string,
+  hiddenSurfaces: readonly string[] | undefined | null,
+  activeSurface: string | null | undefined
+): boolean {
+  if (!hiddenSurfaces?.length) return false;
+  const active = normalizeSurfaceId(activeSurface);
+  return WORKSPACE_SURFACES.some(
+    surface =>
+      !!surface.toolNamePrefix &&
+      surface.id !== active &&
+      toolName.startsWith(surface.toolNamePrefix) &&
+      isSurfaceHidden(hiddenSurfaces, surface.id)
+  );
 }
 
 /** What `canUseSurface` reads off a user: no DB access, so the caller resolves entitlements first. */
@@ -85,6 +139,12 @@ export interface SurfaceAccessUser {
   tags?: readonly string[] | null;
   /** The user's resolved entitlement keys (subscriptions, tag grants, domain grants). */
   entitlements?: readonly string[] | null;
+  /**
+   * Extra entitlement keys per workspace id whose holders may keep a fork, snip or clone of a session
+   * in that workspace (see `canCopyWithinSurface`). Host-supplied from what the build's premium
+   * overlays declare (apps/client `PremiumWorkspaceCopyEntitlements`); this repo registers none.
+   */
+  copyEntitlements?: Readonly<Record<string, readonly string[]>> | null;
 }
 
 /** True when `surface` is registered and the user may use it. */
@@ -95,6 +155,26 @@ export function canUseSurface(user: SurfaceAccessUser | null | undefined, surfac
   if (user.isAdmin || hasDeveloperUserTag(user.tags)) return true;
   const required = entry.requiredEntitlement.trim().toLowerCase();
   return (user.entitlements ?? []).some(key => key.trim().toLowerCase() === required);
+}
+
+/**
+ * True when `user` may fork, snip or clone a session that lives in `surface` and keep the copy there:
+ * anyone `canUseSurface` admits, plus holders of a key `user.copyEntitlements` lists for that
+ * workspace. A copy grant is deliberately weaker than use: creating a session in the workspace,
+ * moving one into it, or naming it as an explicit copy target all still go through `canUseSurface`.
+ */
+export function canCopyWithinSurface(
+  user: SurfaceAccessUser | null | undefined,
+  surface: string | null | undefined
+): boolean {
+  if (canUseSurface(user, surface)) return true;
+  const entry = getWorkspaceSurface(surface);
+  // A null id is the main list, which is ungated, so canUseSurface has already answered for it.
+  if (!entry?.id || !user?.copyEntitlements) return false;
+  const granted = user.copyEntitlements[entry.id];
+  if (!Array.isArray(granted) || granted.length === 0) return false;
+  const held = new Set((user.entitlements ?? []).map(key => key.trim().toLowerCase()));
+  return granted.some(key => held.has(key.trim().toLowerCase()));
 }
 
 export type SurfaceTransitionDenial = {
@@ -125,4 +205,160 @@ export function checkSurfaceTransition(
     return { ok: false, status: 403, message: 'You do not have access to that workspace' };
   }
   return { ok: true, target: target.id };
+}
+
+/** Session fields a contributed workspace may own (see `WorkspaceSessionSettingsTable`). */
+export const SURFACE_OWNABLE_SESSION_FIELDS = [
+  'systemPromptText',
+  'enabledTools',
+  'disableUserIntegrations',
+  'temperature',
+  'maxToolCalls',
+] as const;
+
+export type SurfaceOwnableSessionField = (typeof SURFACE_OWNABLE_SESSION_FIELDS)[number];
+
+export interface SurfaceOwnableSessionSettings {
+  systemPromptText?: string;
+  enabledTools?: string[];
+  disableUserIntegrations?: boolean;
+  temperature?: number;
+  maxToolCalls?: number;
+}
+
+/** The slice of a session the workspace-settings helpers read. */
+export type SurfaceSettingsSession = SurfaceOwnableSessionSettings & {
+  surface?: string | null;
+  /**
+   * Owned fields the user set explicitly. The workspace still decides them while the session is on it,
+   * but leaving or copying off it keeps the stored value, which applies again once off the workspace.
+   */
+  userSetFields?: readonly string[] | null;
+};
+
+export interface WorkspaceSessionSettingsContext<TSession extends SurfaceSettingsSession = SurfaceSettingsSession> {
+  user: unknown;
+  session: TSession;
+  logger?: { warn: (...args: unknown[]) => void };
+}
+
+export interface WorkspaceSessionSettingsEntry {
+  ownedFields: readonly SurfaceOwnableSessionField[];
+  resolve: (ctx: WorkspaceSessionSettingsContext) => Promise<Partial<SurfaceOwnableSessionSettings>>;
+}
+
+/**
+ * A contributed `{ surface id: settings }` table: the session fields each workspace owns, resolved at
+ * read time instead of being written onto its sessions. Generated by apps/client
+ * scripts/generate-premium-glue.mjs (`premiumWorkspaceSessionSettings`).
+ */
+export type WorkspaceSessionSettingsTable = Readonly<Record<string, WorkspaceSessionSettingsEntry>>;
+
+const OWNABLE_FIELD_SET: ReadonlySet<string> = new Set(SURFACE_OWNABLE_SESSION_FIELDS);
+
+function ownedFieldsFor(session: SurfaceSettingsSession, table: WorkspaceSessionSettingsTable, keepUserSet: boolean) {
+  // An absent table would read as "the workspace owns nothing" and skip both resolve and strip; the open-core
+  // value is the generated empty table, so a missing one is a wiring bug.
+  if (!table) throw new Error('Workspace session settings table is required');
+  const id = normalizeSurfaceId(session.surface);
+  if (id === null || !Object.prototype.hasOwnProperty.call(table, id)) return null;
+  const entry = table[id];
+  const userSet = new Set(keepUserSet ? (session.userSetFields ?? []) : []);
+  const fields = entry.ownedFields.filter(field => OWNABLE_FIELD_SET.has(field) && !userSet.has(field));
+  return { entry, fields };
+}
+
+/**
+ * The session as its workspace sees it: each owned field takes the resolver's value, or is cleared when
+ * the resolver yields none, user-set or not. Returns a copy; a live document is toJSON()'d first, since a
+ * spread would drop its virtuals (`id` among them).
+ */
+export async function applyWorkspaceSessionSettings<TSession extends SurfaceSettingsSession>(
+  input: TSession,
+  ctx: Omit<WorkspaceSessionSettingsContext<TSession>, 'session'>,
+  table: WorkspaceSessionSettingsTable
+): Promise<TSession> {
+  const owned = ownedFieldsFor(input, table, false);
+  if (!owned || owned.fields.length === 0) return input;
+  const doc = input as TSession & { toJSON?: () => TSession };
+  const session = typeof doc.toJSON === 'function' ? doc.toJSON() : input;
+  const surface = normalizeSurfaceId(session.surface);
+  let resolved: Partial<SurfaceOwnableSessionSettings>;
+  try {
+    resolved = await owned.entry.resolve({ ...ctx, session });
+  } catch (error) {
+    ctx.logger?.warn(`Workspace session settings resolver for "${surface}" failed`, error);
+    throw new Error(`Workspace session settings resolver for "${surface}" failed`, { cause: error });
+  }
+  const effective = { ...session } as Record<string, unknown>;
+  for (const field of owned.fields) {
+    const value = resolved && Object.prototype.hasOwnProperty.call(resolved, field) ? resolved[field] : undefined;
+    if (value === undefined) delete effective[field];
+    else effective[field] = value;
+  }
+  return effective as TSession;
+}
+
+/**
+ * A shallow copy of `copy` without the fields `source`'s workspace owns, for a copy that must not
+ * inherit them. `source` defaults to `copy`; pass the original session when `copy` is a new record
+ * built from it (its surface may differ, and a live document must not be spread).
+ */
+export function stripSurfaceOwnedFields<TCopy extends object>(
+  copy: TCopy,
+  table: WorkspaceSessionSettingsTable,
+  source: SurfaceSettingsSession = copy as SurfaceSettingsSession
+): TCopy {
+  const fields = surfaceOwnedFields(source, table);
+  if (fields.length === 0) return copy;
+  const stripped = { ...copy } as Record<string, unknown>;
+  for (const field of fields) delete stripped[field];
+  return stripped as TCopy;
+}
+
+/** The fields `session`'s workspace owns, minus those the user set; what a move off it unsets. */
+export function surfaceOwnedFields(
+  session: SurfaceSettingsSession,
+  table: WorkspaceSessionSettingsTable
+): SurfaceOwnableSessionField[] {
+  return ownedFieldsFor(session, table, true)?.fields ?? [];
+}
+
+/**
+ * The owned fields `session` sets that are the user's own: those its workspace does not own, plus the
+ * `carried` entries (a copy's source's) it still sets. Without a table a session on a workspace records
+ * only `carried`, so values a workspace's own create path bakes in stay the workspace's.
+ */
+export function userSetSessionFields(
+  session: SurfaceSettingsSession,
+  table: WorkspaceSessionSettingsTable | null | undefined,
+  carried: readonly string[] | null | undefined = []
+): SurfaceOwnableSessionField[] {
+  const id = normalizeSurfaceId(session.surface);
+  const owned: ReadonlySet<string> | null =
+    id === null
+      ? new Set()
+      : !table
+        ? null
+        : new Set(Object.prototype.hasOwnProperty.call(table, id) ? table[id].ownedFields : []);
+  const carriedSet = new Set(carried ?? []);
+  return SURFACE_OWNABLE_SESSION_FIELDS.filter(
+    field => session[field] !== undefined && (carriedSet.has(field) || (owned !== null && !owned.has(field)))
+  );
+}
+
+/** Checks a contributed table once, at load, so a malformed entry fails at startup rather than every turn. */
+export function defineWorkspaceSessionSettingsTable(entries: Record<string, unknown>): WorkspaceSessionSettingsTable {
+  for (const [id, entry] of Object.entries(entries)) {
+    const { ownedFields, resolve } = (entry ?? {}) as Partial<Record<keyof WorkspaceSessionSettingsEntry, unknown>>;
+    if (!Array.isArray(ownedFields) || !ownedFields.every(field => OWNABLE_FIELD_SET.has(field))) {
+      throw new Error(
+        `Workspace session settings for "${id}": ownedFields must be an array of ${SURFACE_OWNABLE_SESSION_FIELDS.join(', ')}`
+      );
+    }
+    if (typeof resolve !== 'function') {
+      throw new Error(`Workspace session settings for "${id}": resolve must be a function`);
+    }
+  }
+  return entries as WorkspaceSessionSettingsTable;
 }

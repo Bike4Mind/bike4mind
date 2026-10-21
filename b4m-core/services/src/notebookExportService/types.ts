@@ -85,6 +85,7 @@ export interface ExportedChatMessage {
   promptMeta?: {
     /** Passed through whole, so derived - narrowing here would silently drop emitted fields. */
     model?: PromptMeta['model'];
+    redirectedFrom?: PromptMeta['redirectedFrom'];
     tokenUsage?: PromptMeta['tokenUsage'];
     /** Projected by the mapper: the full groups carry raw prompt text this export must not ship. */
     performance?: { totalResponseTime?: number };

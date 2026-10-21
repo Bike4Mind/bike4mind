@@ -1,8 +1,8 @@
 import { dataLakeRepository, fabFileRepository } from '@bike4mind/database';
 import type { RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
-import { resolveEffectiveEmbeddingModel } from '../embeddings/effectiveEmbeddingModel';
+import { resolveEffectiveEmbeddingModel } from '@bike4mind/server-utils/embeddings/effectiveEmbeddingModel';
 import { recallLakeMemory, type AccessibleLake, type LakeBeliefRecall } from './recallLakeMemory';
-import { createReachableSourcesResolver } from './lakeSourceReachability';
+import { createReachableSourcesResolver } from '@bike4mind/server-utils/memory/lakeSourceReachability';
 
 /**
  * App-layer wiring for the `recallLakeMemory` the chat service injects (#1440). Adapts the core

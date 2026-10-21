@@ -7,17 +7,19 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 
 const mockSendBatch = vi.fn();
-vi.mock('@server/utils/sqs', () => ({ sendBatchToQueue: (...args: unknown[]) => mockSendBatch(...args) }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({
+  sendBatchToQueue: (...args: unknown[]) => mockSendBatch(...args),
+}));
 
 const mockEmitMetric = vi.fn().mockResolvedValue(undefined);
 const mockEmitMetrics = vi.fn().mockResolvedValue(undefined);
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   emitMetric: (...args: unknown[]) => mockEmitMetric(...args),
   emitMetrics: (...args: unknown[]) => mockEmitMetrics(...args),
 }));
 
 const mockGetSourceQueueUrl = vi.fn().mockReturnValue('https://sqs.us-east-2.amazonaws.com/123/overwatch');
-vi.mock('@server/utils/dlqRegistry', () => ({
+vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({
   getSourceQueueUrl: (...args: unknown[]) => mockGetSourceQueueUrl(...args),
 }));
 
@@ -26,13 +28,13 @@ vi.mock('@bike4mind/common', async () => {
   return { ...actual };
 });
 
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { OVERWATCH_INGEST_ENABLED: 'true' },
 }));
 
 import handler from '../events';
 import { ApiKeyScope } from '@bike4mind/common';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 
 function nowIso() {
   return new Date().toISOString();
@@ -252,6 +254,51 @@ describe('POST /api/overwatch/v1/events', () => {
       expect(errorCall).toBeDefined();
       const total = errorCall![1].find(m => m.name === 'IngestErrorTotal');
       expect(total?.dimensions).toBeUndefined();
+    });
+  });
+
+  // The Lambda can freeze once the response is sent, so a pending emit would be lost or sent later
+  // with an expired SigV4 signature.
+  describe('metric delivery', () => {
+    const holdEmit = (mock: typeof mockEmitMetrics) => {
+      let release: () => void = () => {};
+      mock.mockReturnValueOnce(
+        new Promise<void>(resolve => {
+          release = resolve;
+        })
+      );
+      return () => release();
+    };
+
+    it.each([
+      ['the IngestRequest metric', mockEmitMetrics],
+      ['the IngestLatency metric', mockEmitMetric],
+    ])('does not respond while %s is still pending', async (_metric, mock) => {
+      const releaseEmit = holdEmit(mock);
+      const { req, res } = createReq();
+
+      const handled = handler(req, res);
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(res._isEndCalled()).toBe(false);
+
+      releaseEmit();
+      await handled;
+      expect(res._getStatusCode()).toBe(200);
+    });
+
+    it('does not respond to a failed ingest while the IngestError metric is still pending', async () => {
+      mockSendBatch.mockRejectedValue(new Error('SQS down'));
+      mockEmitMetrics.mockResolvedValueOnce(undefined);
+      const releaseEmit = holdEmit(mockEmitMetrics);
+      const { req, res } = createReq();
+
+      const handled = handler(req, res);
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(res._isEndCalled()).toBe(false);
+
+      releaseEmit();
+      await handled;
+      expect(res._getStatusCode()).toBe(500);
     });
   });
 });

@@ -13,6 +13,7 @@ import { resolveRapidModel } from './resolveRapidModel';
  */
 const BEDROCK_HAIKU_45 = 'us.anthropic.claude-haiku-4-5-20251001-v1:0';
 const DIRECT_HAIKU_45 = 'claude-haiku-4-5-20251001';
+const BEDROCK_HAIKU_55 = 'global.anthropic.claude-haiku-5-5';
 
 function createModelInfo(overrides: Partial<ModelInfo> & { id: string; backend: ModelBackend }): ModelInfo {
   return {
@@ -45,6 +46,7 @@ const warnLines = (logger: { warn: ReturnType<typeof vi.fn> }): string[] =>
 
 const bedrockHaiku = createModelInfo({ id: BEDROCK_HAIKU_45, backend: ModelBackend.Bedrock });
 const directHaiku = createModelInfo({ id: DIRECT_HAIKU_45, backend: ModelBackend.Anthropic });
+const bedrockHaiku55 = createModelInfo({ id: BEDROCK_HAIKU_55, backend: ModelBackend.Bedrock });
 const gptMini = createModelInfo({ id: 'gpt-4o-mini', backend: ModelBackend.OpenAI });
 
 const ALL_KEYS: ApiKeyTable = { anthropic: 'sk-ant-test', openai: 'sk-openai-test' };
@@ -107,19 +109,19 @@ describe('resolveRapidModel', () => {
   });
 
   it('forwards a sunset id with a known successor instead of substituting', () => {
-    // anthropic.claude-3-haiku-20240307-v1:0 -> us.anthropic.claude-haiku-4-5-20251001-v1:0
+    // anthropic.claude-3-haiku-20240307-v1:0 -> global.anthropic.claude-haiku-5-5
     // in DEPRECATED_MODEL_MAP. A mapping row pinned to the old snapshot should land on the
     // successor as the primary, not go through the fallback chain.
     const logger = createLogger();
 
     const result = resolveRapidModel({
       mappedModelId: 'anthropic.claude-3-haiku-20240307-v1:0',
-      models: [bedrockHaiku, directHaiku, gptMini],
+      models: [bedrockHaiku, bedrockHaiku55, directHaiku, gptMini],
       apiKeyTable: ALL_KEYS,
       logger,
     });
 
-    expect(result).toMatchObject({ status: 'ready', modelId: BEDROCK_HAIKU_45 });
+    expect(result).toMatchObject({ status: 'ready', modelId: BEDROCK_HAIKU_55 });
     expect(result).not.toHaveProperty('substitutedFor');
     expect(logger.error).not.toHaveBeenCalled();
   });

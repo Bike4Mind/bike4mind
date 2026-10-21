@@ -17,14 +17,12 @@ export interface ICounterLog {
 
 export interface ICounterLogDocument extends ICounterLog, IMongoDocument {}
 
-export interface TopUserResult {
-  _id: string;
-  userName?: string;
-  email: string;
-  interactions: number;
-  rankChange?: 'up' | 'down' | 'new' | 'same';
-  lastWeekRank?: number | 'new' | '>#20';
-}
+/**
+ * Element shape of `FacetResults['topUsers']`, derived from it so the facet
+ * projection and this name cannot drift. Neither topUsers facet projects a
+ * `userName`.
+ */
+export type TopUserResult = NonNullable<FacetResults['topUsers']>[number];
 
 export interface AggregationResult {
   _id: string;

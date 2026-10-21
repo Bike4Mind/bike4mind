@@ -56,6 +56,22 @@ describe('getEffectiveLLMApiKeys', () => {
     expect(names).toContain('geminiDemoKey');
     expect(names).toContain('EnableOllama');
     expect(names).toContain('ollamaBackend');
+    expect(names).toContain('typesafeApiKey');
+  });
+
+  it('resolves the TypeSafe key from the user key, then the admin setting', async () => {
+    const userKey = { type: ApiKeyType.typesafe, apiKey: 'ts-user' } as IApiKeyDocument;
+    const withUserKey = await getEffectiveLLMApiKeys('user-123', {
+      db: { apiKeys: makeApiKeyRepo([userKey]), adminSettings: makeAdminSettingsRepo() },
+      getSettingsByNames: makeGetSettingsByNames({ typesafeApiKey: 'ts-admin' }),
+    });
+    expect(withUserKey.typesafe).toBe('ts-user');
+
+    const adminOnly = await getEffectiveLLMApiKeys('user-123', {
+      db: { apiKeys: makeApiKeyRepo(), adminSettings: makeAdminSettingsRepo() },
+      getSettingsByNames: makeGetSettingsByNames({ typesafeApiKey: 'ts-admin' }),
+    });
+    expect(adminOnly.typesafe).toBe('ts-admin');
   });
 
   it('returns null keys when userId is null and no admin demo keys are set', async () => {
@@ -227,6 +243,7 @@ describe('getEffectiveLLMApiKeys', () => {
           OPENAI_API_KEY: 'sk-oai-env',
           XAI_API_KEY: 'xai-env',
           BFL_API_KEY: 'bfl-env',
+          TYPESAFE_API_KEY: 'ts-env',
         },
         async () => {
           const result = await getEffectiveLLMApiKeys(null, {
@@ -239,6 +256,7 @@ describe('getEffectiveLLMApiKeys', () => {
           expect(result.openai).toBe('sk-oai-env');
           expect(result.xai).toBe('xai-env');
           expect(result.bfl).toBe('bfl-env');
+          expect(result.typesafe).toBe('ts-env');
           // Only the documented .env.selfhost provider keys get the fallback.
           expect(result.voyageai).toBeNull();
         }

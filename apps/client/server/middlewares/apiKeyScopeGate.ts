@@ -1,5 +1,5 @@
 import { ApiKeyScope, CONFINED_API_KEY_SCOPES } from '@bike4mind/common';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 /**
  * Env var naming the scopes whose route gates are still being rolled out, e.g.
@@ -149,7 +149,8 @@ export type ScopedRequest = {
  * In-handler counterpart of `baseApi`'s `requiredScopes` gate, for a route whose methods
  * need different scopes (the gate is per route, not per method). Honors
  * API_KEY_SCOPE_STAGING, so a grandfathered key rides the same grace window it would at
- * the route gate. Family wrappers: server/dataLakes/dataLakeScopes.ts, server/files/fileScopes.ts.
+ * the route gate. Family wrappers: server/dataLakes/dataLakeScopes.ts, server/files/fileScopes.ts,
+ * server/projects/projectScopes.ts, server/agents/agentScopes.ts.
  *
  * A caller with no `apiKeyInfo` is a JWT/browser caller - the key gate never ran for them
  * and this must not either. The check is on `apiKeyInfo` itself, not on `scopes`: a key

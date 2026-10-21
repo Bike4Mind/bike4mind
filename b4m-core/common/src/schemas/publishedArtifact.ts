@@ -41,16 +41,18 @@ export type PublishVisibility = z.infer<typeof VisibilitySchema>;
  *  reason about "is this rung at least as open as X". */
 export const VISIBILITY_ORDER: readonly PublishVisibility[] = ['private', 'project', 'organization', 'public'] as const;
 
-/** Per-tier publish policy: default visibility + the overrides a publisher may pick. */
+/** Per-tier publish policy: default visibility + the overrides a publisher may pick.
+ *  'private' (owner/admin only, see checkVisibility) is valid at every tier, so an owner can
+ *  always take any page they published - Team and project pages included - back to Private. */
 export const SCOPE_POLICY: Record<
   PublishScopeTier,
   { defaultVisibility: PublishVisibility; allowedOverrides: readonly PublishVisibility[] }
 > = {
   user: { defaultVisibility: 'private', allowedOverrides: ['private', 'organization', 'public'] },
-  project: { defaultVisibility: 'project', allowedOverrides: ['project', 'organization', 'public'] },
+  project: { defaultVisibility: 'project', allowedOverrides: ['private', 'project', 'organization', 'public'] },
   organization: {
     defaultVisibility: 'organization',
-    allowedOverrides: ['organization', 'public'],
+    allowedOverrides: ['private', 'organization', 'public'],
   },
 };
 
@@ -129,6 +131,9 @@ export const RESERVED_SLUGS: readonly string[] = [
   '_next',
   'health',
 ];
+
+/** Error `code` the publish routes put on a 403/409 when a slug belongs to another publisher. */
+export const SLUG_OWNED_BY_OTHER = 'slug_owned_by_other';
 
 export const SlugSchema = z
   .string()
@@ -400,16 +405,12 @@ export const PublishedArtifactSchema = z.object({
   /** Group id a viewer must belong to when gated cross-scope. */
   gatedToGroupId: z.string().optional(),
 
-  /** Unguessable capability token for no-sign-in `/a/<shareToken>` links. Distinct
-   *  from `publicId` (which stays stable for `/p/*`) so rotating it revokes every
-   *  outstanding link without touching the artifact. Absent until the owner opts in. */
-  shareToken: z.string().optional(),
-  /** When `shareToken` was last minted/rotated; drives the owner-facing "link created" surface. */
-  shareTokenUpdatedAt: z.date().nullish(),
-  /** Every share link ever minted, revoked ones included. THE source of truth for share links
-   *  as of #3255 step 3 - the two fields above are now only mirrored from the newest live entry
-   *  for rollback safety. `token` is stripped from serialized responses, so an owner-facing
-   *  read sees only the metadata. */
+  /** Every share link ever minted, revoked ones included. THE single representation of a
+   *  share link as of #3523, which dropped the `shareToken` / `shareTokenUpdatedAt` scalars
+   *  that #3255 step 3 kept mirrored here for rollback safety. Unguessable capability tokens
+   *  for no-sign-in `/a/<token>` links, distinct from `publicId` (which stays stable for
+   *  `/p/*`) so revoking one never touches the artifact. `token` is stripped from serialized
+   *  responses, so an owner-facing read sees only the metadata. */
   shareTokens: z.array(ShareTokenEntrySchema).prefault([]),
 
   /** Collaboration gate: who (among viewers) may annotate. Orthogonal to

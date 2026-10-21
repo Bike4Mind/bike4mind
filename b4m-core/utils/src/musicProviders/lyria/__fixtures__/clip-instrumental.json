@@ -1,0 +1,73 @@
+{
+  "scenario": "clip-instrumental",
+  "recordedAt": "2026-10-13T03:41:32.000Z",
+  "renderSeconds": 14,
+  "audio": {
+    "bytes": 735252,
+    "mimeType": "audio/mpeg",
+    "durationSeconds": 30.380333333333333
+  },
+  "exchanges": [
+    {
+      "name": "generate",
+      "request": {
+        "method": "POST",
+        "path": "/v1beta/interactions",
+        "body": {
+          "model": "lyria-3-clip-preview",
+          "input": "An upbeat acoustic folk tune with hand claps. Instrumental only, no vocals."
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "id": "v1_ChdZYWpOYXNySkNxN3Mycm9QNHEyZHdBNBIXWWFqTmFzckpDcTdzMnJvUDRxMmR3QTQ",
+          "status": "completed",
+          "usage": {
+            "total_tokens": 314,
+            "total_input_tokens": 17,
+            "input_tokens_by_modality": [
+              {
+                "modality": "text",
+                "tokens": 17
+              }
+            ],
+            "total_cached_tokens": 0,
+            "total_output_tokens": 297,
+            "total_tool_use_tokens": 0,
+            "total_thought_tokens": 0
+          },
+          "created": "2026-10-13T03:41:32Z",
+          "updated": "2026-10-13T03:41:32Z",
+          "service_tier": "standard",
+          "steps": [
+            {
+              "content": [
+                {
+                  "text": "<instrumental>",
+                  "type": "text"
+                }
+              ],
+              "type": "model_output"
+            },
+            {
+              "content": [
+                {
+                  "data": "<redacted:base64 980336 chars>",
+                  "mime_type": "audio/mpeg",
+                  "type": "audio"
+                }
+              ],
+              "type": "model_output"
+            }
+          ],
+          "object": "interaction",
+          "model": "lyria-3-clip-preview"
+        }
+      }
+    }
+  ]
+}

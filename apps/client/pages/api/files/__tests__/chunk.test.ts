@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 const h = vi.hoisted(() => ({
   getFabFileById: vi.fn(),
@@ -21,9 +21,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'wss://test' } } }));
 
 vi.mock('@server/managers/fabFileManager', () => ({ getFabFileById: h.getFabFileById }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: h.sendToClient }));
-vi.mock('@server/utils/dlqRegistry', () => ({ getSourceQueueUrl: h.getSourceQueueUrl }));
+vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({ getSourceQueueUrl: h.getSourceQueueUrl }));
 
 import handler from '../chunk';
 

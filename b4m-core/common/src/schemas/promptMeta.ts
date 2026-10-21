@@ -36,8 +36,8 @@ const PromptMetaModelParametersSchema = z.object({
   background: z.string().optional(), // Background handling (transparent/opaque/auto), gpt-image only
   response_format: z.string().optional(), // Response format (url/b64_json)
 
-  // Video generation parameters (Sora)
-  seconds: z.number().optional(), // Video duration in seconds (4, 8, or 12)
+  // Video generation parameters
+  seconds: z.number().optional(), // Requested clip length in seconds
   model: z.string().optional(), // Video model name
 });
 
@@ -231,6 +231,10 @@ const PromptMetaContextSchema = z.object({
     .optional(),
 });
 
+/** A public /api/chat request's tool-selection mode (`SimplifiedChatRequestSchema.toolMode` in schemas/chat.ts). */
+export const ChatToolModeSchema = z.enum(['fast', 'smart']);
+export type ChatToolMode = z.infer<typeof ChatToolModeSchema>;
+
 const PromptMetaFunctionCallSchema = z.object({
   name: z.string().optional(),
   parameters: z.record(z.string(), z.any()).optional(), // z.any() supports arrays, objects, and all JSON types
@@ -256,7 +260,8 @@ const PromptMetaPerformanceSchema = z.object({
   firstTokenTime: z.number().optional(),
   /** Elapsed ms until the first chunk of any kind, including a hidden thinking block. */
   firstChunkTime: z.number().optional(),
-  clientFirstTokenTime: z.number().optional(), // Time from client sending prompt to client rendering first token
+  /** @deprecated Read/write the quest-level clientFirstTokenTime instead. */
+  clientFirstTokenTime: z.number().optional(),
   streamingPerformance: z
     .object({
       chunkCount: z.number().optional(),
@@ -340,6 +345,12 @@ export const CitableSourceSchema = z.object({
        * stamps the wrong shape should fail here, not render a badge that silently names nobody.
        */
       conflictsWith: z.array(z.string()).optional(),
+      /**
+       * The N of the inline `[N]` marker this source answers to. Stamped only on the index-aligned
+       * forced-retrieval prefix of an indexed-style session; the client links a reply's markers only
+       * when every citable carries its own position's stamp (citationMarkersLinkable).
+       */
+      citationIndex: z.number().int().positive().optional(),
       /** Chip label origin (CitableSourceOrigin); a writer that stamps the wrong shape should fail here. */
       sourceOrigin: z
         .discriminatedUnion('kind', [
@@ -782,11 +793,10 @@ export const RetrievalSummarySchema = z.object({
    * an archived or quota-limited lake) adds an enum value here rather than a description.
    *
    * 'access' is the only reason today: the caller could see the lake exists (their org membership,
-   * the lake's public listing, or having created it; for a lake named by identity, also administering
-   * its org; an admin may see any lake) but they hold neither its own gate/entitlement nor an
-   * ownership or grant exception for it. A lake the caller could not see is never counted, so the
-   * count cannot confirm that a guessed lake tag exists. The account-wide count still bounds on
-   * membership only.
+   * the lake's public listing, or having created it; administering its org; an admin may see any
+   * lake) but they hold neither its own gate/entitlement nor an ownership or grant exception for
+   * it. A lake the caller could not see is never counted, so the count cannot confirm that a
+   * guessed lake tag exists.
    *
    * A session-preauthorized lake (unionPreauthorizedLakeAccess) that is ALSO gate-dropped from
    * this account-wide count is corrected, not merely narrow: the seed's targeted measurement
@@ -849,6 +859,17 @@ export const RetrievalCoverageSchema = z.object({
   reasons: z.array(z.string()),
 });
 
+/**
+ * Written only when forced retrieval injected nothing because every scored passage fell under an
+ * absolute floor an operator configured above the one measured for the embedding space. Single
+ * producer (ChatCompletionFeatures, the no-match exit); the chat banner reads it.
+ */
+export const RetrievalFloorRejectionSchema = z.object({
+  floorPct: z.number(),
+  measuredPct: z.number(),
+  embeddingModel: z.string(),
+});
+
 // Main PromptMeta Schema
 export const PromptMetaZodSchema = z.object({
   model: PromptMetaModelSchema.optional(),
@@ -861,6 +882,8 @@ export const PromptMetaZodSchema = z.object({
   /** Partial-grounding-coverage detail - see RetrievalCoverageSchema. Top-level for the same
    * one-level-spread-merge reason as `retrieval` above. */
   retrievalCoverage: RetrievalCoverageSchema.optional(),
+  /** See RetrievalFloorRejectionSchema. Top-level for the same reason as `retrieval` above. */
+  retrievalFloorRejection: RetrievalFloorRejectionSchema.optional(),
   functionCalls: z.array(PromptMetaFunctionCallSchema).optional(),
   /**
    * Names of the tools actually offered to the model this turn - the output of `buildTools`
@@ -873,6 +896,11 @@ export const PromptMetaZodSchema = z.object({
    * eval/measurement and for diagnosing the silent no-tool-offered state.
    */
   offeredTools: z.array(z.string()).optional(),
+  /** The public /api/chat request's `toolMode`, kept so tool-calling evals can split by it. Absent
+   * when the request set none, which includes every in-app turn. */
+  toolMode: ChatToolModeSchema.optional(),
+  /** The retired model id the turn was asked to run on, set only when it was redirected to `model.name`. */
+  redirectedFrom: z.string().optional(),
   performance: PromptMetaPerformanceSchema.optional(),
   session: PromptMetaSessionSchema.optional(),
   questId: z.string().optional(),
@@ -906,6 +934,13 @@ export const PromptMetaZodSchema = z.object({
       reason: z.enum(REPLY_CHOICES_INVALID_REASONS).optional(),
     })
     .optional(),
+  /**
+   * Set when finalize stripped a tool call the model wrote into its reply as text instead of
+   * calling it (see ../utils/narratedToolCalls.ts). The call never ran; `toolNames` are the
+   * offered tools it named. Absent when nothing was stripped. Consumers read this rather than
+   * matching the reply text, which no longer carries the call.
+   */
+  narratedToolCall: z.object({ toolNames: z.array(z.string()) }).optional(),
   /**
    * Set when an emitted artifact looks voluntarily abbreviated - placeholder comments in
    * place of real code, or calls into functions that were never defined. The complement to

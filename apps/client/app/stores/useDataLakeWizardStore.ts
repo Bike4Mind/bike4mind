@@ -1,6 +1,12 @@
 import { create } from 'zustand';
-import { deriveTagPrefixFromLakeName, isReservedTagPrefix } from '@bike4mind/common';
-import type { DataLakeStatus, TaxonomyStatus } from '@bike4mind/common';
+import {
+  deriveTagPrefixFromLakeName,
+  isReservedTagPrefix,
+  MAX_TAG_PREFIX_SUFFIX_ATTEMPTS,
+  withTagPrefixSuffix,
+} from '@bike4mind/common';
+import type { DataLakeOrigin, DataLakeStatus, TaxonomyStatus } from '@bike4mind/common';
+import type { CreateLakeSourceKind } from '../components/datalake/createLakeSourceKinds';
 import type { FolderTreeNode, WizardFile } from '../utils/folderTreeParser';
 import {
   parseFilesToTree,
@@ -16,6 +22,11 @@ export type WizardStep = 'source' | 'preview' | 'config' | 'upload';
 
 /** The two tabs of the Data Lakes management panel: own lakes vs. the public discover catalog. */
 export type ManagerTab = 'mine' | 'discover';
+
+export interface GitHubConnectFailure {
+  lakeId: string;
+  message: string;
+}
 
 /**
  * Which of the two optional steps/behaviors the user opted into on the source step.
@@ -35,7 +46,7 @@ export interface OptionalSteps {
  * The wizard has no lake id to connect to while it is still collecting, so the selection is
  * carried here and the connect fires on commit (see useCreateLakeFromDrive for the fileless
  * case, useBatchUpload for files + Drive). Keeping it in wizard state is what makes abandoning
- * the wizard leave nothing behind - nothing has been created yet. Never set in append mode:
+ * the wizard leave nothing behind - nothing has been created yet. Append mode does not use it:
  * there the lake already exists, so DriveConnectAction connects immediately.
  */
 export interface PendingDriveFolder {
@@ -101,6 +112,12 @@ export interface UploadProgress {
 
 // ── Defaults ────────────────────────────────────────────────────────────────
 
+const isSuffixedTagPrefixOf = (prefix: string, base: string): boolean =>
+  !!base &&
+  Array.from({ length: MAX_TAG_PREFIX_SUFFIX_ATTEMPTS - 1 }, (_, i) => withTagPrefixSuffix(base, i + 1)).includes(
+    prefix
+  );
+
 const DEFAULT_OPTIONAL_STEPS: OptionalSteps = {
   preview: false,
   taxonomy: false,
@@ -143,6 +160,7 @@ const freshSession = () => ({
   uploadProgress: { ...DEFAULT_UPLOAD_PROGRESS },
   hashingProgress: { total: 0, completed: 0, status: 'idle' as const },
   targetLake: null as WizardTargetLake | null,
+  createSource: null as CreateLakeSourceKind | null,
   pendingDriveFolder: null as PendingDriveFolder | null,
   recoverableLake: null as RecoverableLake | null,
 });
@@ -163,8 +181,8 @@ export interface WizardTargetLake {
   requiredUserTag?: string;
   requiredEntitlement?: string;
   /**
-   * The lake's org scope, `null` for a personal lake. Carried so the wizard can gate the Drive
-   * connect control the way `SelectedLakeHeader` does (canConnectLakeDrive): an org lake needs a
+   * The lake's org scope, `null` for a personal lake. Carried so the wizard can gate the Drive and
+   * GitHub connect controls the way `SelectedLakeHeader` does (canConnectLakeConnector): an org lake needs a
    * manager, a personal lake its creator, so offering it otherwise is a button that can only ever fail.
    *
    * REQUIRED-and-nullable rather than optional, matching `isCreator` on ManageableDataLakeConfig and
@@ -187,6 +205,8 @@ export interface WizardTargetLake {
    * is: a built-in fallback lake has no document and always serves.
    */
   status?: DataLakeStatus;
+  /** Lets the GitHub connect control offer the switch to connector-fed before it starts. */
+  origin?: DataLakeOrigin;
 }
 
 /**
@@ -208,6 +228,7 @@ export const toWizardTargetLake = (lake: {
   canManage?: boolean;
   isCreator: boolean;
   status?: DataLakeStatus;
+  origin?: DataLakeOrigin;
 }): WizardTargetLake => ({
   id: lake.id,
   slug: lake.slug,
@@ -219,6 +240,7 @@ export const toWizardTargetLake = (lake: {
   canManage: lake.canManage ?? false,
   isCreator: lake.isCreator,
   status: lake.status,
+  origin: lake.origin,
 });
 
 /**
@@ -231,6 +253,11 @@ export const toWizardTargetLake = (lake: {
 export interface RecoverableLake {
   id: string;
   tagPrefix: string;
+  /**
+   * The slug the lake was created with. A reuse keeps it, so ConfigStep shows it instead of the
+   * server preview, which counts this archived lake as taken and would say "-1".
+   */
+  slug: string;
   /**
    * The account scope the lake was created under (undefined = personal), since the account
    * switcher stays reachable behind the wizard modal. Prefix claims are scoped per owner
@@ -258,7 +285,8 @@ interface DataLakeWizardStore {
   config: DataLakeFormValues;
   /**
    * The last prefix deriveTagPrefixFromName produced, so a rename can re-derive over it while a
-   * hand-edited prefix stays untouched. Never read outside that action.
+   * hand-edited prefix stays untouched. Also tells useWizardIdentityPreview whether the prefix
+   * is still the wizard's to change (adoptAutoTagPrefix).
    */
   autoDerivedTagPrefix: string;
   duplicateCheckResults: { duplicateCount: number; checkedAt: number } | null;
@@ -266,6 +294,12 @@ interface DataLakeWizardStore {
   hashingProgress: { total: number; completed: number; status: 'idle' | 'hashing' | 'done' };
   /** Non-null when appending to an existing lake (vs creating a new one). */
   targetLake: WizardTargetLake | null;
+  /**
+   * Which source the user picked on the create wizard's first screen, or null while the question is
+   * still open. It decides the new lake's `origin` (see createLakeOrigin) and which panel the source
+   * step renders. Append mode seeds `upload` because an existing lake already declares its own origin.
+   */
+  createSource: CreateLakeSourceKind | null;
   /** Drive folder chosen during create, connected on commit once the lake has an id. */
   pendingDriveFolder: PendingDriveFolder | null;
   /** See RecoverableLake. Non-null only after a create-mode total-upload-failure rollback. */
@@ -285,6 +319,11 @@ interface DataLakeWizardStore {
    * callback page; read by GitHubRepositoryPickerModal, mounted once in DataLakeManagerPanel.
    */
   gitHubRepoPickerLakeId: string | null;
+  /**
+   * Why a lake's GitHub connect just failed or was cancelled at the callback page, shown on that lake
+   * by FinishSourceConnectBanner with a way to restart. In memory only: a reload drops it.
+   */
+  gitHubConnectFailure: GitHubConnectFailure | null;
 
   // Navigation
   openWizard: () => void;
@@ -294,11 +333,13 @@ interface DataLakeWizardStore {
   closeManager: () => void;
   openGitHubRepoPicker: (lakeId: string) => void;
   closeGitHubRepoPicker: () => void;
+  setGitHubConnectFailure: (failure: GitHubConnectFailure | null) => void;
   setStep: (step: WizardStep) => void;
 
   // Source step
   setFiles: (files: File[]) => void;
   setOptionalStep: (key: keyof OptionalSteps, enabled: boolean) => void;
+  setCreateSource: (source: CreateLakeSourceKind | null) => void;
   setPendingDriveFolder: (folder: PendingDriveFolder | null) => void;
 
   // Preview step
@@ -308,6 +349,7 @@ interface DataLakeWizardStore {
   // Tag prefix (owned by the Config step; the taxonomy step's competing home was removed)
   setTagPrefix: (prefix: string) => void;
   deriveTagPrefixFromName: () => void;
+  adoptAutoTagPrefix: (prefix: string) => void;
 
   // Config step
   setConfig: (config: Partial<DataLakeFormValues>) => void;
@@ -342,12 +384,14 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
   uploadProgress: { ...DEFAULT_UPLOAD_PROGRESS },
   hashingProgress: { total: 0, completed: 0, status: 'idle' as const },
   targetLake: null,
+  createSource: null,
   pendingDriveFolder: null,
   recoverableLake: null,
   isManagerOpen: false,
   managerTab: 'mine',
   managerLakeId: null,
   gitHubRepoPickerLakeId: null,
+  gitHubConnectFailure: null,
 
   // ── Navigation ──────────────────────────────────────────────────────────
 
@@ -360,18 +404,22 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
     set({ isManagerOpen: true, managerTab: tab, managerLakeId: lakeId }),
   // The picker is mounted inside the manager, so closing the manager closes it too; left set, it
   // would pop back up on the next, unrelated manager open.
-  closeManager: () => set({ isManagerOpen: false, managerLakeId: null, gitHubRepoPickerLakeId: null }),
+  closeManager: () =>
+    set({ isManagerOpen: false, managerLakeId: null, gitHubRepoPickerLakeId: null, gitHubConnectFailure: null }),
 
   openGitHubRepoPicker: lakeId => set({ gitHubRepoPickerLakeId: lakeId }),
   closeGitHubRepoPicker: () => set({ gitHubRepoPickerLakeId: null }),
+  setGitHubConnectFailure: failure => set({ gitHubConnectFailure: failure }),
 
   // Append mode: upload into an existing lake. Preseeds config from the lake so
-  // the (locked) Config step shows the right values.
+  // the (locked) Config step shows the right values. The source question is never asked here - the
+  // lake exists, so files go straight in.
   openWizardForLake: lake =>
     set({
       isOpen: true,
       ...freshSession(),
       targetLake: lake,
+      createSource: 'upload',
       config: {
         ...DEFAULT_CONFIG,
         name: lake.name,
@@ -395,6 +443,24 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
   },
 
   setOptionalStep: (key, enabled) => set(state => ({ optionalSteps: { ...state.optionalSteps, [key]: enabled } })),
+
+  // Going back to the cards drops whatever the abandoned source had gathered, so a lake is never
+  // created with an origin from one source and content from another.
+  setCreateSource: source =>
+    set(state =>
+      source === state.createSource
+        ? state
+        : {
+            createSource: source,
+            folderTree: null,
+            allFiles: [],
+            pendingDriveFolder: null,
+            optionalSteps: { ...DEFAULT_OPTIONAL_STEPS },
+            recoverableLake: null,
+            hashingProgress: { total: 0, completed: 0, status: 'idle' },
+            duplicateCheckResults: null,
+          }
+    ),
 
   setPendingDriveFolder: folder => set({ pendingDriveFolder: folder }),
 
@@ -445,6 +511,10 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
       // used to derive a prefix the create endpoint refuses, which is the one value in this
       // form the user never chose.
       const prefix = deriveTagPrefixFromLakeName(state.config.name);
+      // Same name, and the current value is the free `-N` the server picked for it (see
+      // adoptAutoTagPrefix): keep it. Re-deriving would drop back to the held base, and a retry
+      // would then miss the lake its failed attempt archived under that `-N` (canReuseRecoverableLake).
+      if (current && isSuffixedTagPrefixOf(current, prefix)) return state;
       // A lake named "Datalake" derives the reserved membership namespace, which the server
       // rejects and Start Upload gates on - leaving the user blocked over a value they never
       // typed. Leave the field for them to fill instead of seeding one that cannot be used.
@@ -457,6 +527,19 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
         config: { ...state.config, tagPrefix: prefix },
       };
     }),
+
+  /**
+   * Take the server's free prefix (useWizardIdentityPreview) in place of an auto-derived one the
+   * preview found held, keeping it marked auto-derived so a rename still re-derives. A no-op once
+   * the user has typed a prefix, which also covers a keystroke landing while the preview was in
+   * flight.
+   */
+  adoptAutoTagPrefix: prefix =>
+    set(state =>
+      state.autoDerivedTagPrefix && state.config.tagPrefix === state.autoDerivedTagPrefix
+        ? { autoDerivedTagPrefix: prefix, config: { ...state.config, tagPrefix: prefix } }
+        : state
+    ),
 
   // ── Config Step ─────────────────────────────────────────────────────────
 

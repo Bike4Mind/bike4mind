@@ -1,0 +1,10 @@
+{
+  "label": "Tools & Integration",
+  "position": 3,
+  "link": {
+    "type": "generated-index",
+    "title": "Agent Tools & Integration",
+    "description": "Function calling, tool development, and external system integration.",
+    "slug": "/agents/tools"
+  }
+}

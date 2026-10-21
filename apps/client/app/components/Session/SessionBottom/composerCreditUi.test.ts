@@ -55,7 +55,7 @@ describe('getComposerCreditUi', () => {
     });
   });
 
-  it('leaves the box to NoModelsWarning without models, but still blocks an exhausted toolbar', () => {
+  it('leaves the box to the no-models placeholder, but still blocks an exhausted toolbar', () => {
     expect(getComposerCreditUi({ ...base, hasModels: false, effectiveCredits: 0 })).toEqual({
       replaceComposer: false,
       lowCreditsNotice: false,

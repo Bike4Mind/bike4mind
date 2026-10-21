@@ -1,0 +1,27 @@
+{
+  "scenario": "unknown-operation.synthetic",
+  "synthetic": true,
+  "basis": "Hand-built from the 2026-10-06 probe: a GET on a nonexistent operation returned 403 PERMISSION_DENIED with a \"may not exist\" message; the exact message text is paraphrased.",
+  "exchanges": [
+    {
+      "name": "poll_terminal",
+      "request": {
+        "method": "GET",
+        "path": "/v1beta/models/veo-3.1-fast-generate-preview/operations/syntheticgone"
+      },
+      "response": {
+        "status": 403,
+        "headers": {
+          "content-type": "application/json; charset=UTF-8"
+        },
+        "body": {
+          "error": {
+            "code": 403,
+            "message": "Permission denied on resource; it may not exist.",
+            "status": "PERMISSION_DENIED"
+          }
+        }
+      }
+    }
+  ]
+}

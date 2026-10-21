@@ -5,10 +5,8 @@ import {
   IChatHistoryItemDocument,
   IFabFileDocument,
   IMAGE_MODELS,
-  VIDEO_MODELS,
   ISessionDocument,
   ImageModelName,
-  VideoModelName,
   LLMApiRequestBody,
   LLMModelConfig,
 } from '@bike4mind/common';
@@ -29,9 +27,16 @@ export type CommandArgExtra = {
   currentSession: ISessionDocument | null;
   model: string;
   workBenchFiles: IFabFileDocument[];
+  /**
+   * Agents the composer's Agents panel has selected. Sent only on the turn that creates a session
+   * (see LLMCommandArgs.agentIds).
+   */
+  agentIds?: string[];
   sendJsonMessage?: WebsocketContextValue['sendJsonMessage'];
   dashboardParams?: LLMApiRequestBody['dashboardParams'];
   promptFileIds?: string[];
+  /** See LLMCommandArgs.messageOnlyFileIds. */
+  messageOnlyFileIds?: string[];
   questId?: string; // If we want to retry a quest response we pass the questId
   // Correct-and-retry target. Distinct from `questId`: that re-runs a quest in place, this
   // sends a new turn carrying the user's correction and links it to the answer it corrects.
@@ -48,6 +53,10 @@ export type CommandArgExtra = {
   researchMode?: LLMApiRequestBody['researchMode'];
   /** Suppresses the server-side tool auto-offers for this turn. See LLMContext.skipAutoOffers. */
   skipAutoOffers?: LLMApiRequestBody['skipAutoOffers'];
+  /** Suppresses the instant ack for this turn. See LLMCommandArgs.skipRapidReply. */
+  skipRapidReply?: boolean;
+  /** Extra system context for this one send. See LLMCommandArgs.systemContext. */
+  systemContext?: string;
   /** Agent-mode routing provenance, forwarded to the `/llm` handler's payload. See LLMCommandArgs.agentMode. */
   agentMode?: LLMApiRequestBody['agentMode'];
   deepResearchConfig?: {
@@ -69,7 +78,7 @@ export type CommandArgExtra = {
 };
 
 export type CommandKey =
-  '/llm' | '/roll' | '/key' | '/models' | '/gen_image' | '/gen_video' | '/edit_image' | '/create_agent' | '/feedback';
+  '/llm' | '/roll' | '/key' | '/models' | '/gen_image' | '/edit_image' | '/create_agent' | '/feedback';
 
 export type CommandHandlers = {
   [key in CommandKey]?: (args: any) => Promise<void | { session: ISessionDocument; quest: IChatHistoryItemDocument }>;
@@ -80,7 +89,7 @@ export const handleCommand = async (commandHandlers: CommandHandlers, args: Comm
   const handler = commandHandlers[command as CommandKey];
   if (handler) {
     // A re-run restarts an existing quest in place; its earlier terminal frame must not mark
-    // the new run's chunks stale. Image/video payloads carry no updatedAt to prove recency.
+    // the new run's chunks stale. Image payloads carry no updatedAt to prove recency.
     if (rest.questId) terminalQuests.forget(rest.questId);
     return await handler({ userId, params, ...rest });
   } else {
@@ -91,11 +100,6 @@ export const handleCommand = async (commandHandlers: CommandHandlers, args: Comm
 export function isImageModel(model: string): model is ImageModelName {
   const imageModel = IMAGE_MODELS.includes(model as ImageModelName);
   return imageModel;
-}
-
-export function isVideoModel(model: string): model is VideoModelName {
-  const videoModel = VIDEO_MODELS.includes(model as VideoModelName);
-  return videoModel;
 }
 
 export const extractCommandAndParams = (
@@ -117,7 +121,6 @@ export const extractCommandAndParams = (
     '/key',
     '/models',
     '/gen_image',
-    '/gen_video',
     '/edit_image',
     '/admin',
     '/more',
@@ -134,8 +137,6 @@ export const extractCommandAndParams = (
 
     if (isImageModel(model)) {
       modifiedChatInputValue = `/gen_image ${input}`;
-    } else if (isVideoModel(model)) {
-      modifiedChatInputValue = `/gen_video ${input}`;
     } else {
       modifiedChatInputValue = `/llm ${modifiedChatInputValue}`;
     }

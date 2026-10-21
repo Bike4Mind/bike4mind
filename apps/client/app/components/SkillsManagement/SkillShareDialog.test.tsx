@@ -8,6 +8,11 @@ import SkillShareDialog from './SkillShareDialog';
 
 const h = vi.hoisted(() => ({ mutateAsync: vi.fn(), lookupUserByEmail: vi.fn() }));
 
+const user = vi.hoisted(() => ({ isAdmin: false }));
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: () => ({ currentUser: { id: 'u1', isAdmin: user.isAdmin } }),
+}));
+
 vi.mock('@client/app/hooks/data/skills', () => ({
   useUpdateSkillSharing: () => ({ mutateAsync: h.mutateAsync, isPending: false }),
   lookupUserByEmail: h.lookupUserByEmail,
@@ -17,15 +22,49 @@ const appTheme = extendTheme({ ...getThemeConfig() });
 
 const skill = { id: 'skill-1', name: 'Summarize', users: [], isGlobalRead: false, isGlobalWrite: false };
 
-const renderDialog = () =>
+const renderDialog = (overrides: Partial<typeof skill> = {}) =>
   render(
     <CssVarsProvider theme={appTheme}>
-      <SkillShareDialog onClose={vi.fn()} skill={skill as unknown as ISkillWithSharing} />
+      <SkillShareDialog onClose={vi.fn()} skill={{ ...skill, ...overrides } as unknown as ISkillWithSharing} />
     </CssVarsProvider>
   );
 
 describe('SkillShareDialog', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    user.isAdmin = false;
+  });
+
+  it('hides the global toggles from a non-admin and points to the Skill Market', () => {
+    renderDialog();
+    expect(screen.getByTestId('skill-share-market-hint')).toBeInTheDocument();
+    expect(screen.queryByTestId('skill-share-global-read')).not.toBeVisible();
+  });
+
+  it('shows the global toggles to a super-admin', () => {
+    user.isAdmin = true;
+    renderDialog();
+    expect(screen.queryByTestId('skill-share-market-hint')).toBeNull();
+    expect(screen.getByTestId('skill-share-global-read')).toBeVisible();
+  });
+
+  it('never sends a global flag as true from a non-admin', async () => {
+    h.mutateAsync.mockResolvedValue({});
+    renderDialog();
+    fireEvent.click(screen.getByTestId('skill-share-save-btn'));
+    await waitFor(() => expect(h.mutateAsync).toHaveBeenCalled());
+    expect(h.mutateAsync.mock.calls[0][0]).toMatchObject({ isGlobalRead: false, isGlobalWrite: false });
+  });
+
+  it('omits the global keys when a non-admin saves a skill whose legacy flags are true', async () => {
+    h.mutateAsync.mockResolvedValue({});
+    renderDialog({ isGlobalRead: true, isGlobalWrite: true });
+    fireEvent.click(screen.getByTestId('skill-share-save-btn'));
+    await waitFor(() => expect(h.mutateAsync).toHaveBeenCalled());
+    const payload = h.mutateAsync.mock.calls[0][0];
+    expect(payload).not.toHaveProperty('isGlobalRead');
+    expect(payload).not.toHaveProperty('isGlobalWrite');
+  });
 
   // The live global-share surface. isGlobalRead/isGlobalWrite publish a skill to the whole
   // instance, so the server gates them on the SHARE predicate rather than update - which means an

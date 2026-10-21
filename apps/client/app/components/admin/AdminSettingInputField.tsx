@@ -1,4 +1,4 @@
-import { useUpdateSettings } from '@client/app/hooks/data/settings';
+import { useFloorAboveMeasuredWarning, useUpdateSettings } from '@client/app/hooks/data/settings';
 import { getErrorMessage } from '@client/app/utils/error';
 import { isMaskedSensitiveSettingValue, settingsMap } from '@bike4mind/common';
 import SaveIcon from '@mui/icons-material/Save';
@@ -96,7 +96,8 @@ const AdminSettingInputField = ({
   subSettings,
 }: {
   setting: (typeof settingsMap)[keyof typeof settingsMap];
-  defaultValue: string | number | boolean | object | undefined;
+  // null is a clearDeletesRow setting whose platform row is absent: unset, not the declared default.
+  defaultValue: string | number | boolean | object | undefined | null;
   index: number;
   subSettings?: SubSetting[];
 }) => {
@@ -115,7 +116,9 @@ const AdminSettingInputField = ({
   // so Save stays disabled. Without this the field reads as dirty the moment it is focused
   // and an empty write becomes one click away (saveValue guards the write itself as well).
   const isUntouchedClearedSecret = setting.isSensitive === true && value === '' && !secretEdited;
-  const isDirty = value !== defaultValue && !isUntouchedClearedSecret;
+  // clearDeletesRow: an emptied field is unset, so typing into an unset field and deleting it again is no edit.
+  const comparable = setting.clearDeletesRow && value === '' ? null : value;
+  const isDirty = comparable !== defaultValue && !isUntouchedClearedSecret;
   const showsStoredSecretMask = setting.isSensitive === true && isMaskedSensitiveSettingValue(value);
   const isEmbeddingModelSetting = setting.key === 'defaultEmbeddingModel';
 
@@ -132,6 +135,7 @@ const AdminSettingInputField = ({
   // Save button simply stops spinning.
   const saveError = updateSettings.error ? getErrorMessage(updateSettings.error) : undefined;
   const fieldError = rangeError ?? saveError;
+  const floorWarning = useFloorAboveMeasuredWarning(setting.key, value);
 
   const saveValue = (next: string | number | boolean) => {
     // Backstop, intentionally unreachable while isDirty excludes the untouched-empty state
@@ -146,7 +150,12 @@ const AdminSettingInputField = ({
     updateSettings.mutate(
       // An empty value on a sensitive setting destroys a live credential, so the server
       // requires the intent to be explicit rather than inferred from an absent value.
-      { key: setting.key, value: next, ...(setting.isSensitive && next === '' ? { confirmClear: true } : {}) },
+      {
+        key: setting.key,
+        value: next,
+        ...(setting.isSensitive && next === '' ? { confirmClear: true } : {}),
+        ...(floorWarning ? { confirmAboveMeasuredFloor: true } : {}),
+      },
       {
         // Drop the typed plaintext as soon as it is stored: the server answers a sensitive
         // write with the mask, which is all this field should ever hold afterwards.
@@ -157,6 +166,9 @@ const AdminSettingInputField = ({
           // not to what was submitted - sync from the response instead of leaving the field
           // empty until the next full settings refetch.
           if (setting.type === 'number' && typeof data?.settingValue === 'number') setValue(data.settingValue);
+          // clearDeletesRow answers null for a clear (the platform row was deleted): sync to the
+          // empty state so the field does not read as dirty against the default it used to hold.
+          if (setting.clearDeletesRow && data?.settingValue === null) setValue(null);
         },
       }
     );
@@ -210,6 +222,9 @@ const AdminSettingInputField = ({
                     },
                   }}
                   type="number"
+                  // clearDeletesRow with no row: the blank field is the "unset" state, not a missing
+                  // value. Name what it resolves to so an admin can tell it from a stored default.
+                  placeholder={setting.clearDeletesRow ? setting.unsetLabel : undefined}
                   // A cleared field is kept as '' rather than coerced: Number('') is 0, which
                   // the server would store as a real zero instead of letting makeNumberSetting's
                   // empty-string preprocess fall back to the setting's own default.
@@ -260,7 +275,10 @@ const AdminSettingInputField = ({
               ) : null}
 
               <FormHelperText data-testid={`admin-setting-${setting.key}-helper`}>
-                {fieldError ?? setting.description}
+                {/* The floor warning outranks a stale save error: `saveValue` sends the confirm flag
+                    whenever `floorWarning` is truthy, so the warning must be the line the admin sees
+                    before that save, not one hidden behind a previous failure's message. */}
+                {rangeError ?? floorWarning ?? saveError ?? setting.description}
               </FormHelperText>
             </FormControl>
           </Grid>

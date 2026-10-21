@@ -29,6 +29,8 @@ vi.mock('@server/dataLakes', () => ({
   resolveAccessibleLakes: vi.fn(),
 }));
 
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: vi.fn() }));
+
 import { filterServeableFilePaths } from '../presigned-url';
 
 // The ownership axis is exercised separately below; these moderation cases grant access to all.

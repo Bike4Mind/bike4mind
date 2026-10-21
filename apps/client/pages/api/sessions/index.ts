@@ -1,12 +1,20 @@
 import { accessibleBy } from '@casl/mongoose';
-import { Permission, sessionSearchSchema, SessionEvents, redactSessionsForClient } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  Permission,
+  sessionSearchSchema,
+  SessionEvents,
+  redactSessionsForClient,
+} from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { assertApiKeyScope } from '@server/middlewares/apiKeyScopeGate';
 import qs from 'qs';
 import { Request } from 'express';
 import { sessionService } from '@bike4mind/services';
 import { Session as SessionModel, sessionRepository } from '@bike4mind/database/auth';
 import { logEvent } from '@server/utils/analyticsLog';
+import { unpublishUserArtifactsBySource } from '@server/services/publish/purgeUserPublishedArtifacts';
 
 const handler = baseApi()
   /**
@@ -52,14 +60,26 @@ const handler = baseApi()
    */
   .delete(
     asyncHandler(async (req, res) => {
+      // Gated per verb, not at the door: GET above is the notebook list that notebooks:read and
+      // unscoped keys rely on, so a route-level requiredScopes would newly deny them.
+      assertApiKeyScope(
+        req,
+        [ApiKeyScope.WRITE_NOTEBOOKS],
+        'This API key is read-only for notebooks; notebooks:write is required'
+      );
       const userId = req.user?.id;
-      if (!req.ability?.can(Permission.delete, SessionModel)) {
+      if (!userId || !req.ability?.can(Permission.delete, SessionModel)) {
         return res.status(403).send({ message: 'Forbidden' });
       }
-      const deleteResult = await SessionModel.deleteMany({
+      const ownedFilter = {
         userId,
         ...accessibleBy(req.ability, Permission.delete).ofType(SessionModel),
-      });
+      };
+      // Published replies are snapshots that outlive their notebook, so take them down first: a
+      // retry after a failed delete still finds the notebooks and finishes the job.
+      const sessionIds = (await SessionModel.find(ownedFilter).select('_id').lean()).map(s => String(s._id));
+      await unpublishUserArtifactsBySource(userId, { kind: 'reply', sessionIds }, { logger: req.logger });
+      const deleteResult = await SessionModel.deleteMany(ownedFilter);
 
       await logEvent({
         userId,

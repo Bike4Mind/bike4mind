@@ -69,8 +69,10 @@ export function computeImageUsdCostPerImage(modelId: string, input: CostInput): 
 
 /**
  * Credit cost of generating `n` images with `modelInfo`, using the SAME cost
- * path as charging (`validateUserCredits`) so a client-side preview always
- * matches what the user is billed. Returns the n-scaled USD alongside credits.
+ * path as charging (`validateUserCredits`). `requiredCredits` is the rounded-up
+ * gate/preview figure; the final debit settles `usdCost` with usdToCreditsStochastic.
+ * Returns the n-scaled USD alongside credits.
+ * A GPT model's input images (`inputImageCount`) are added once, not per output image.
  */
 export function estimateImageCredits(
   modelInfo: ModelInfo,
@@ -78,7 +80,10 @@ export function estimateImageCredits(
   input: CostInput
 ): { requiredCredits: number; usdCost: number } {
   const usdPerImage = computeImageUsdCostPerImage(modelInfo.id, input);
-  const totalUsdCost = usdPerImage * n;
+  const inputUsd = isGPTImageModel(modelInfo.id)
+    ? new OpenAIImageCostCalculator().getInputImageCost(input as OpenAICostInput)
+    : 0;
+  const totalUsdCost = usdPerImage * n + inputUsd;
   const requiredCredits = usdToCredits(totalUsdCost);
   if (!Number.isFinite(requiredCredits)) {
     // Keep the per-image value in the message - it distinguishes "calculator

@@ -171,6 +171,9 @@ const nextConfig = {
     'react-syntax-highlighter',
     '@icons-pack/react-simple-icons',
     'pdfjs-dist',
+    // Source-only TS workspace package (exports point at src/*.ts). Without this the pages router
+    // externalizes it and Node require()s raw .ts at route load.
+    '@bike4mind/server-utils',
     // ESM-only packages that need transpilation for API routes. An entry here can be retired
     // once check-api-routes-cjs-require.mjs reports the built route still loads without it; that
     // probe runs on the built standalone tree and is what proves the bundler inlined it.

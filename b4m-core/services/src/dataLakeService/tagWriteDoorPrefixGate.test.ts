@@ -149,6 +149,7 @@ const batchAdapters = (
     fabFiles: { findByBatchId: vi.fn(async () => []), bulkUpdateTags: vi.fn(async () => 0) },
   },
   logger: { warn: vi.fn() },
+  serializeClaim: claim => claim(),
 });
 
 /** The single-file door: refuses at the gate, so nothing past the lake read is exercised. */

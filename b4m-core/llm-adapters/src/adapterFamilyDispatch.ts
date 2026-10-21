@@ -60,7 +60,9 @@ function keyOrThrow(value: string | null | undefined, providerLabel: string): st
  * MUST STAY IN SYNC WITH the legacy `modelInfo.backend` switch in ./index.ts and
  * with DISPATCHABLE_ADAPTER_FAMILIES in ./mergeCatalog.ts: the merge promises a
  * catalog-only record in a dispatchable family reaches a real backend, and this
- * is the function that has to keep that promise.
+ * is the function that has to keep that promise. Also MUST STAY IN SYNC WITH
+ * completionsForwardsNativeTools in @bike4mind/common (claudeToolCapabilities.ts),
+ * which restates which family reaches the Anthropic adapter.
  */
 export function backendForAdapterFamily(
   family: AdapterFamily,

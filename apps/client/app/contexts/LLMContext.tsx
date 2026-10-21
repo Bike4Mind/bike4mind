@@ -15,6 +15,7 @@ import {
   requiresImageInput,
 } from '@bike4mind/common';
 import React, { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
+import { toast } from 'sonner';
 
 import { useUserSettings } from '@/app/contexts/UserSettingsContext';
 import { useFeatureEnabled } from '@/app/hooks/useFeatureEnabled';
@@ -389,10 +390,19 @@ export const LLMProvider: React.FC = () => {
   const { setState } = useLLM;
   const { settings, isHydrated: settingsHydrated } = useUserSettings();
   const { isFeatureEnabled, isLoading: areFeaturesLoading } = useFeatureEnabled();
-  const { accessibleModels, isModelAccessible, getFallbackModel } = useAccessibleModels();
+  const { accessibleModels, isModelAccessible, getFallbackModel, isEntitlementsLoading } = useAccessibleModels();
   const { data: modelInfoRepo } = useModelInfo();
   const activeModel = useLLM(s => s.model);
-  const { getSetting, isLoading: isAdminSettingsLoading } = useAdminSettings();
+  const {
+    getSetting,
+    isLoading: isAdminSettingsLoading,
+    authedSettingsLoaded,
+    error: adminSettingsError,
+  } = useAdminSettings();
+  // The text default waits for the AUTHENTICATED settings fetch (or its failure). `isLoading` clears
+  // as soon as the public CDN artifact lands, and resolving from that would pin whatever it held;
+  // the effect below never re-resolves an accessible model, so an early pick stuck for the session.
+  const adminDefaultReady = !isAdminSettingsLoading && (authedSettingsLoaded || !!adminSettingsError);
   // Default users to the highest Sonnet (workhorse tier) via BEDROCK - keyless (AWS IAM only),
   // so the fallback works even where no Anthropic API key is configured. Mirrors the server-side
   // `DefaultAPIModel` default. Opus/Fable are an explicit opt-in via the model picker.
@@ -494,10 +504,14 @@ export const LLMProvider: React.FC = () => {
   // current model is missing or inaccessible, so re-runs after the user picks a
   // valid model are no-ops and cannot clobber the selection.
   useEffect(() => {
+    // Written by the updater below when it replaces a model the user was already on.
+    let replaced: { from: string; to: string } | null = null;
     setState(state => {
       const models = accessibleModelsRef.current;
       // Make sure admin settings are fetched before setting the default model
-      if (models && models.length > 0 && !isAdminSettingsLoading) {
+      // Also wait out the first entitlements fetch: before it lands, an entitlement-gated model reads
+      // as inaccessible, so a persisted pick would be swapped (and toasted) for no reason.
+      if (models && models.length > 0 && adminDefaultReady && !isEntitlementsLoading) {
         // Check if current model needs to be changed
         const hasNoModel = !state.model;
         const needsModelSwitch = state.model && !stableIsModelAccessible(state.model);
@@ -511,6 +525,7 @@ export const LLMProvider: React.FC = () => {
             if (fallback) {
               const liveFallbackInfo = modelInfoRepoRef.current?.find(m => m.id === fallback.id) ?? fallback;
               autoResolvedModelRef.current = { from: state.model, to: fallback.id };
+              replaced = { from: state.model, to: fallback.id };
               return {
                 ...state,
                 model: fallback.id,
@@ -522,10 +537,14 @@ export const LLMProvider: React.FC = () => {
             }
           }
 
-          // Fallback chain: admin default -> last used text model -> first accessible
+          // Fallback chain: admin default -> the admin default's configured fallback -> last used text
+          // model -> first accessible text model. Never bare catalog order first: it leads with the
+          // most capable (and most expensive) model, which is not a default anyone chose.
           const adminDefault = models.find(model => model.id === adminDefaultTextModel);
+          const adminDefaultFallback = adminDefault ? null : stableGetFallbackModel(String(adminDefaultTextModel));
           const lastUsed = state.lastUsedTextModel ? models.find(model => model.id === state.lastUsedTextModel) : null;
-          const modelToUse = adminDefault || lastUsed || models[0];
+          const firstText = models.find(model => model.type === 'text' && !isModelDeprecated(model));
+          const modelToUse = adminDefault || adminDefaultFallback || lastUsed || firstText || models[0];
 
           // This branch only runs when the user did NOT choose the resolved model - theirs was unset
           // or failed the accessibility predicate - so it must never RAISE the output ceiling, or a
@@ -550,6 +569,7 @@ export const LLMProvider: React.FC = () => {
           // them. Without it that effect sees a model change, sets allowRaise, and raises the ceiling
           // straight back to the new model's default - undoing the line above.
           autoResolvedModelRef.current = { from: state.model, to: modelToUse.id };
+          if (state.model) replaced = { from: state.model, to: modelToUse.id };
 
           return {
             ...state,
@@ -563,6 +583,14 @@ export const LLMProvider: React.FC = () => {
       }
       return state;
     });
+    if (replaced) {
+      // Never switch the model under the user silently: the next answer bills a different model.
+      const { from, to } = replaced;
+      const nameOf = (id: string) => modelInfoRepoRef.current?.find(m => m.id === id)?.name ?? id;
+      toast.info(`${nameOf(from)} isn't available on your account, so new messages use ${nameOf(to)}.`, {
+        id: 'llm-model-replaced',
+      });
+    }
     // stableGetFallbackModel / stableIsModelAccessible read from refs at call time,
     // their identity is stable and they don't need to be in deps. accessibleModels
     // IS in deps so we re-run when models arrive after isAdminSettingsLoading has
@@ -576,7 +604,7 @@ export const LLMProvider: React.FC = () => {
     // derive from the same cached catalog query, so accessibleModels already covers its arrival. Adding
     // it would re-run this effect on every catalog refetch for no new decision.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [setState, adminDefaultTextModel, isAdminSettingsLoading, accessibleModels, activeModel]);
+  }, [setState, adminDefaultTextModel, adminDefaultReady, isEntitlementsLoading, accessibleModels, activeModel]);
 
   // Re-fit max_tokens whenever the active text/chat model changes (see refitMaxTokensForModel -
   // it corrects both a too-high carry-over and a too-low one). Skip image models: their catalog
@@ -650,7 +678,10 @@ export const LLMProvider: React.FC = () => {
           // resolved default does not depend on backend fan-out order.
           const candidates = models
             .filter(m => m.type === 'image' && !isModelDeprecated(m) && !requiresImageInput(m.id))
-            .sort((a, b) => (a.rank ?? Number.MAX_SAFE_INTEGER) - (b.rank ?? Number.MAX_SAFE_INTEGER) || a.id.localeCompare(b.id));
+            .sort(
+              (a, b) =>
+                (a.rank ?? Number.MAX_SAFE_INTEGER) - (b.rank ?? Number.MAX_SAFE_INTEGER) || a.id.localeCompare(b.id)
+            );
 
           const preferred = candidates.find(m => m.id === ImageModels.FLUX_PRO_ULTRA);
           const imageModelToUse: string | null = (preferred ?? candidates[0])?.id ?? null;

@@ -1,4 +1,4 @@
-import { McpServerName } from '@bike4mind/common';
+import { McpServerName, type IMcpServerResponse } from '@bike4mind/common';
 import { Checkbox, FormControl, Input, Stack, Typography, Button, FormLabel, Table, IconButton, Box } from '@mui/joy';
 import React, { useState } from 'react';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -59,13 +59,17 @@ const McpSection = () => {
   };
 
   const [editingId, setEditingId] = useState<string | null>(null);
+  // Keys already stored on the server being edited: their values are never sent to the client,
+  // so a blank value for one of them means "keep the stored value".
+  const [storedKeys, setStoredKeys] = useState<ReadonlySet<string>>(new Set());
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [toolsModalServer, setToolsModalServer] = useState<McpServer | null>(null);
+  const [toolsModalServer, setToolsModalServer] = useState<IMcpServerResponse | null>(null);
 
   const { data: servers, isLoading } = useMcpServers();
 
   const createMutation = useMutation({
-    mutationFn: (data: Omit<McpServer, 'id'>) => api.post('/api/mcp-servers', data),
+    mutationFn: (data: Omit<McpServer, 'id'>) =>
+      api.post<IMcpServerResponse & { connectionError?: string }>('/api/mcp-servers', data),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: mcpServerKeys.list() }),
   });
 
@@ -92,12 +96,13 @@ const McpSection = () => {
     }
   };
 
-  const handleEdit = (server: McpServer) => {
+  const handleEdit = (server: IMcpServerResponse) => {
     setFormData({
       name: server.name,
-      envVariables: server.envVariables,
+      envVariables: server.envVariables.map(({ key }) => ({ key, value: '' })),
       enabled: server.enabled,
     });
+    setStoredKeys(new Set(server.envVariables.map(({ key }) => key)));
     setEditingId(server.id);
     setIsModalOpen(true);
   };
@@ -112,6 +117,7 @@ const McpSection = () => {
       enabled: true,
     });
     setEditingId(null);
+    setStoredKeys(new Set());
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -120,7 +126,10 @@ const McpSection = () => {
       if (editingId) {
         await updateMutation.mutateAsync({ ...formData, id: editingId });
       } else {
-        await createMutation.mutateAsync(formData);
+        const { data } = await createMutation.mutateAsync(formData);
+        if (data?.connectionError) {
+          toast.warning(`Saved, but could not connect: ${data.connectionError}`);
+        }
       }
       handleCancelEdit();
       setIsModalOpen(false);
@@ -224,7 +233,7 @@ const McpSection = () => {
                           </Box>
                         ) : (
                           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-                            <IconButton onClick={() => handleEdit(server)} size="sm">
+                            <IconButton onClick={() => handleEdit(server)} size="sm" data-testid="mcp-server-edit-btn">
                               <EditIcon sx={{ fontSize: 16 }} />
                             </IconButton>
                             <IconButton onClick={() => handleDelete(server.id)} size="sm">
@@ -310,7 +319,9 @@ const McpSection = () => {
                     <Input
                       value={envVar.value}
                       onChange={e => handleEnvVariableChange(index, 'value', e.target.value)}
-                      required
+                      placeholder={storedKeys.has(envVar.key) ? 'Unchanged' : undefined}
+                      required={!storedKeys.has(envVar.key)}
+                      data-testid="mcp-env-value-input"
                     />
                   </FormControl>
                   <Button color="danger" variant="soft" onClick={() => handleRemoveEnvVariable(index)} sx={{ mt: 2 }}>
@@ -319,12 +330,18 @@ const McpSection = () => {
                 </Stack>
               ))}
 
-              <Button variant="outlined" color="neutral" onClick={handleAddEnvVariable} type="button">
+              <Button
+                variant="outlined"
+                color="neutral"
+                onClick={handleAddEnvVariable}
+                type="button"
+                data-testid="mcp-env-add-btn"
+              >
                 Add Environment Variable
               </Button>
 
               <Stack direction="row" spacing={2}>
-                <Button variant="solid" type="submit">
+                <Button variant="solid" type="submit" data-testid="mcp-server-submit-btn">
                   {editingId ? 'Update Server' : 'Create Server'}
                 </Button>
                 <Button

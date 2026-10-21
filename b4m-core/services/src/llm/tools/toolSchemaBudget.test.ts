@@ -3,6 +3,7 @@ import { ToolBuilder, type ToolBuilderConfig, type BuildToolsArgs } from './Tool
 import { b4mTools } from './index';
 import { AUTO_ADDED_TOOL_NAMES, resolveEnabledTools } from '../ChatCompletionProcess';
 import { createTokenizer } from '@bike4mind/utils';
+import { MUSIC_MODEL_IDS, VIDEO_MODEL_IDS } from '@bike4mind/common';
 
 /**
  * Tool schemas are serialized into every completion request whether or not the model calls one, so
@@ -38,8 +39,12 @@ const PER_TOOL_CEILINGS: Record<string, number> = {
 const UNLISTED_TOOL_CEILING = 600;
 const AUTO_ADDED_CEILING = 1500;
 const AUTO_ADDED_PLUS_KNOWLEDGE_CEILING = 2300;
-/** Headroom for a few new tools, so legitimate growth does not force a ceiling bump. */
-const WHOLE_REGISTRY_CEILING = 10000;
+/**
+ * Headroom for a few new tools, so legitimate growth does not force a ceiling bump. Raised once,
+ * for `decide`, whose nested question schema is structure rather than prose: the per-tool ceiling
+ * below is what keeps a single description honest.
+ */
+const WHOLE_REGISTRY_CEILING = 11400;
 
 /**
  * Derived, never hand-copied: the knowledge offer drags its companions along via addPairedTool
@@ -47,6 +52,16 @@ const WHOLE_REGISTRY_CEILING = 10000;
  * rather than being silently missed by a stale literal.
  */
 const KNOWLEDGE_AUTO_OFFER = resolveEnabledTools({ requestTools: [], hasAttachedKnowledge: true });
+
+// The job tools build an inert tool without a config; measure the real schema for every catalog model.
+const REPRESENTATIVE_VIDEO_CONFIG = {
+  usableModels: VIDEO_MODEL_IDS,
+  createJob: vi.fn(),
+};
+const REPRESENTATIVE_MUSIC_CONFIG = {
+  usableModels: MUSIC_MODEL_IDS,
+  createJob: vi.fn(),
+};
 
 function buildSchemas(enabledTools: string[]) {
   const builder = new ToolBuilder({
@@ -58,6 +73,8 @@ function buildSchemas(enabledTools: string[]) {
     toolCreditsMap: new Map(),
     subagentTelemetryData: [],
     sendStatusUpdate: vi.fn(),
+    // buildSharedTools drops `decide` for a host that injects no seam; the budget measures schemas.
+    decide: vi.fn(),
   } as unknown as ToolBuilderConfig);
 
   return (
@@ -66,7 +83,7 @@ function buildSchemas(enabledTools: string[]) {
       quest: {} as never,
       saveQuest: vi.fn() as never,
       llm: {} as never,
-      config: {},
+      config: { video_generation: REPRESENTATIVE_VIDEO_CONFIG, music_generation: REPRESENTATIVE_MUSIC_CONFIG },
     } as unknown as BuildToolsArgs) ?? []
   );
 }

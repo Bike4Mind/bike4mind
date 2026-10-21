@@ -5,6 +5,7 @@ import { CommandSuggestionsHeader } from './CommandSuggestionsHeader';
 import { useAdminTools } from '@client/app/hooks/useAdminTools';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useGetSkills } from '@client/app/hooks/data/skills';
+import { marketStatusBadge } from '@client/app/components/SkillMarket/MarketStatusBadge';
 
 interface SlashCommandSuggestionsProps {
   input: string;
@@ -79,6 +80,7 @@ export const SlashCommandSuggestions: React.FC<SlashCommandSuggestionsProps> = (
       description: skill.description,
       template: skill.argumentHint ? `/${skill.name} ${skill.argumentHint}` : `/${skill.name} `,
       isSkill: true,
+      badge: marketStatusBadge(skill.marketStatus) ?? undefined,
     }));
 
     return [...builtInCommands, ...skillCommands];

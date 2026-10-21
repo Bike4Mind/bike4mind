@@ -277,6 +277,7 @@ export const testCredentials = (overrides: Partial<DiscoveryCredentials> = {}): 
   ollama: 'http://localhost:11434',
   imageGen: null,
   elevenlabs: null,
+  bedrock: true,
   awsIam: true,
   isSelfHost: false,
   ...overrides,

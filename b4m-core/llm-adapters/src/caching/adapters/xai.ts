@@ -1,4 +1,5 @@
 import { ICachingAdapter } from './base';
+import { cachedTokensFromUsage } from '../../cacheInclusiveUsage';
 import { ICacheStrategy, CacheUsageStats, ModelBackend } from '@bike4mind/common';
 
 /**
@@ -26,9 +27,9 @@ export class XAICachingAdapter implements ICachingAdapter {
     const usage = response.usage as Record<string, unknown> | undefined;
     if (!usage) return undefined;
 
-    // xAI exposes cached_prompt_tokens in usage
+    // xAI documents prompt_tokens_details.cached_tokens, the same field billing reads.
     const totalInputTokens = (usage.prompt_tokens as number) || 0;
-    const cachedTokens = (usage.cached_prompt_tokens as number) || 0;
+    const cachedTokens = cachedTokensFromUsage(usage);
 
     const cacheHitRate = totalInputTokens > 0 ? (cachedTokens / totalInputTokens) * 100 : 0;
 

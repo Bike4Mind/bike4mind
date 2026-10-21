@@ -1,10 +1,16 @@
-import type { IChatHistoryItemDocument, ISessionDocument, ModelInfo, SupersededModelInfo } from '@bike4mind/common';
+import type {
+  GenerationJobRef,
+  IChatHistoryItemDocument,
+  ISessionDocument,
+  ModelInfo,
+  SupersededModelInfo,
+} from '@bike4mind/common';
 import type { AxiosError } from 'axios';
 import { isAxiosError } from 'axios';
 import { api } from '@client/app/contexts/ApiContext';
 import { QueryClient } from '@tanstack/react-query';
 import perfLogger from './performanceLogger';
-import { replaceQueryData, setOptimisticQueryData, updateSingleQueryDataFast } from './react-query';
+import { replaceQueryData, setOptimisticQueryData, updateSingleQueryDataFast, type Optimistic } from './react-query';
 import { useStreamingState } from '../hooks/useStreamingState';
 
 function getErrorMessage(error: unknown): string {
@@ -71,9 +77,13 @@ export function createOptimisticPromptBubble(
   // downstream patchers (swapOptimisticPromptBubbleId,
   // appendReplyToLatestOptimisticBubble) spread existing fields, so this value
   // survives until the real Quest replaces the bubble.
-  routingSource?: IChatHistoryItemDocument['routingSource']
+  routingSource?: IChatHistoryItemDocument['routingSource'],
+  // The send's per-message attachments. MessageContent only fetches a bubble's attachment
+  // chips when `fabFileIds` is set, and the id swap keeps it, so the chip renders once the
+  // bubble carries the real Quest id.
+  fabFileIds?: string[]
 ) {
-  const optimisticQuest: IChatHistoryItemDocument = {
+  const optimisticQuest: Optimistic<IChatHistoryItemDocument> = {
     id: `optimistic-quest-${sessionId}-${Date.now()}`,
     sessionId,
     type: 'message',
@@ -84,7 +94,9 @@ export function createOptimisticPromptBubble(
     timestamp: new Date(),
     createdAt: new Date(),
     updatedAt: new Date(),
+    _optimistic: true,
     ...(routingSource ? { routingSource } : {}),
+    ...(fabFileIds?.length ? { fabFileIds } : {}),
   };
   setOptimisticQueryData(queryClient, ['quests', 'session', sessionId], optimisticQuest);
 }
@@ -133,6 +145,7 @@ export function swapOptimisticPromptBubbleId(queryClient: QueryClient, sessionId
       if (realAlreadyPresent) {
         data.splice(optimisticIdx, 1);
       } else {
+        // Keep _optimistic through the re-id so the eventual server document wins across clock domains.
         data[optimisticIdx] = { ...data[optimisticIdx], id: realQuestId };
       }
       return { ...page, data };
@@ -177,10 +190,12 @@ export function appendReplyToLatestOptimisticBubble(
       // without waiting for the change-stream to deliver the persisted Quest.
       // creditsUsed rides the same path so the credits chip appears on
       // completion instead of only after the change-stream Quest lands.
-      const patched: IChatHistoryItemDocument = {
+      const patched: Optimistic<IChatHistoryItemDocument> = {
         ...page.data[idx],
         replies: [reply],
         updatedAt: new Date(),
+        // The final persisted frame repairs any transient overwrite by an older dispatch insert.
+        _optimistic: true,
         ...(agentExecutionId ? { agentExecutionId } : {}),
         ...(typeof creditsUsed === 'number' ? { creditsUsed } : {}),
         ...(mementoIds?.length
@@ -201,12 +216,65 @@ export function appendReplyToLatestOptimisticBubble(
 }
 
 /**
+ * Add generation jobs an agent run just started to its quest, so the job cards render mid-run (the agent path has no
+ * streamed quest to carry them, unlike chat). Matches the run quest by id only: the worker sends `execution_started`
+ * (which swaps the optimistic bubble to this id) before any tool can start a job, and guessing at a prompt-only bubble
+ * could land the cards on another run's reply. No match is a no-op; the persisted quest carries the jobs on refetch.
+ * updatedAt is left alone so the persisted quest still wins.
+ */
+export function addGenerationJobsToRunBubble(
+  queryClient: QueryClient,
+  sessionId: string,
+  questId: string,
+  jobs: readonly GenerationJobRef[]
+): void {
+  if (!jobs.length) return;
+  queryClient.setQueryData<SessionQuestPages>(['quests', 'session', sessionId], current => {
+    if (!current?.pages) return current;
+    const pages = current.pages.map(page => {
+      const idx = page.data.findIndex(q => q.id === questId);
+      if (idx < 0) return page;
+      const existing = page.data[idx].generationJobs ?? [];
+      const added = jobs.filter(job => !existing.some(e => e.id === job.id)).map(({ id, kind }) => ({ id, kind }));
+      if (!added.length) return page;
+      const data = [...page.data];
+      data[idx] = { ...page.data[idx], generationJobs: [...existing, ...added] };
+      return { ...page, data };
+    });
+    return { ...current, pages };
+  });
+}
+
+/**
+ * Set the write-preview action an agent run just raised on its quest, so the Confirm card renders mid-run. Same
+ * matching rules as addGenerationJobsToRunBubble; the action replaces any earlier one.
+ */
+export function setPendingActionOnRunBubble(
+  queryClient: QueryClient,
+  sessionId: string,
+  questId: string,
+  pendingAction: NonNullable<IChatHistoryItemDocument['pendingAction']>
+): void {
+  queryClient.setQueryData<SessionQuestPages>(['quests', 'session', sessionId], current => {
+    if (!current?.pages) return current;
+    const pages = current.pages.map(page => {
+      const idx = page.data.findIndex(q => q.id === questId);
+      if (idx < 0) return page;
+      const data = [...page.data];
+      data[idx] = { ...page.data[idx], pendingAction };
+      return { ...page, data };
+    });
+    return { ...current, pages };
+  });
+}
+
+/**
  * Build the optimistic quest bubble shown immediately for a freshly sent prompt.
  * Shared so callers that pre-seed the quest cache (e.g. /opti createNewSession) use the
  * exact same id/shape; the later createOptimisticQuest then replaces it in place instead
  * of creating a duplicate.
  */
-export function buildOptimisticQuest(sessionId: string, prompt: string): IChatHistoryItemDocument {
+export function buildOptimisticQuest(sessionId: string, prompt: string): Optimistic<IChatHistoryItemDocument> {
   return {
     id: `optimistic-quest-${sessionId}`,
     sessionId,
@@ -218,6 +286,7 @@ export function buildOptimisticQuest(sessionId: string, prompt: string): IChatHi
     timestamp: new Date(),
     createdAt: new Date(),
     updatedAt: new Date(),
+    _optimistic: true,
   };
 }
 
@@ -254,7 +323,7 @@ export async function createOptimisticQuest(
     return data;
   } catch (error) {
     const errorMessage = getErrorMessage(error);
-    const failedQuest: IChatHistoryItemDocument = {
+    const failedQuest: Optimistic<IChatHistoryItemDocument> = {
       ...optimisticQuest,
       status: 'done',
       replies: [`**Error:** ${errorMessage}`],

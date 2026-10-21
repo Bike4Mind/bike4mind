@@ -30,7 +30,8 @@
     "title": "Değişiklik Geçmişi"
   },
   "feedback": {
-    "send": "Geri Bildirim Gönder"
+    "send": "Geri Bildirim Gönder",
+    "rollupTitle": "Geri bildiriminiz"
   },
   "terms_policies": "Şartlar ve Politika",
   "login": "Giriş Yap",
@@ -166,7 +167,8 @@
     "messages": "Mesajlar",
     "invites": "Davetiyeler",
     "sendMessage": "Bir mesaj gönder",
-    "noMessages": "Mesaj yok"
+    "noMessages": "Mesaj yok",
+    "title_unread": "Gelen kutusu, okunmamış öğeler"
   },
   "addSomething": "{{ name }} ekle",
   "deleteAllSomething": "Tüm {{ name }}'ları sil",
@@ -286,7 +288,30 @@
     "renews_on": "{{ date }} tarihinde yenileniyor"
   },
   "billing": {
-    "title": "Faturalandırma"
+    "title": "Faturalandırma",
+    "balance": "Bakiye",
+    "credits_heading": "Kredi yükle",
+    "credits_sub": "Tek seferlik paketler, bakiyenize eklenir. Abonelik gerekmez.",
+    "credits_sub_with_plan": "Tek seferlik paketler, aylık kotanıza ek olarak.",
+    "free_plan": "Ücretsiz",
+    "free_plan_detail": "Kredi paketleriyle kullandıkça öde",
+    "low_org": "Bir kuruluş yöneticisi bu hesaba kredi ekleyebilir.",
+    "low_with_plan": "Kotanız yenilenene kadar çalışmaya devam etmek için yükleme yapın.",
+    "low_without_plan": "Bir plan her ay kredi ekler; bir paket şimdi yükler.",
+    "payment_failed": "Ödeme başarısız",
+    "plan": "Plan",
+    "plan_fallback": "Abonelik",
+    "plan_unavailable": "Kullanılamıyor",
+    "plan_unavailable_detail": "Planınız yüklenemedi.",
+    "plans_change": "Planınız",
+    "plans_change_sub": "Aboneliğinizi yönetin, değiştirin veya iptal edin.",
+    "plans_heading": "Planlar",
+    "plans_heading_sub": "Kredi kotası içeren aylık planlar.",
+    "plans_upgrade": "Yükselt",
+    "plans_upgrade_sub": "Elle yükleme yapmak yerine aylık kredi kotası alın.",
+    "retry": "Yeniden dene",
+    "see_plans": "Planları gör",
+    "top_up": "Yükle"
   },
   "credits": {
     "title": "Krediler",
@@ -314,7 +339,8 @@
     "usage_pattern": "Son {{days}} gün içindeki kullanım alışkanlığınıza dayanmaktadır",
     "credits_used": "Kullanılan Krediler",
     "credits_purchased": "Satın Alınan Krediler",
-    "net_credits": "Net Krediler"
+    "net_credits": "Net Krediler",
+    "unit": "kredi"
   },
   "time": {
     "last_7_days": "Son 7 gün",
@@ -362,7 +388,15 @@
       "completed": "Tamamlandı",
       "pending": "Beklemede",
       "failed": "Başarısız"
-    }
+    },
+    "buy_pack": "{{price}} karşılığında {{credits}} kredi satın al",
+    "choose_pack": "Bir kredi paketi seçin",
+    "history_usage_hint": "Burada yalnızca satın almalar listelenir.",
+    "organization_credits_active": "Kuruluş kredileri etkin",
+    "rate_per_thousand": "1.000 kredi başına {{rate}}",
+    "see_usage": "Kullanımı gör",
+    "shared_rate": "Tüm paketler aynı fiyatta: 1.000 kredi başına {{rate}}.",
+    "switch_to_personal": "Kişisel kullanım için kredi satın almak üzere kişisel hesabınıza geçin."
   },
   "settings": {
     "title": "Ayarlar",
@@ -531,7 +565,7 @@
   },
   "subscription_modal": {
     "title": "Abonelik",
-    "description": "Tek bir birleşik arayüz aracılığıyla her büyük AI modeline erişin. Deepseek R1 gibi gelişmiş modelleri özel olarak çalıştırın.",
+    "description": "Tek bir birleşik arayüz aracılığıyla her büyük AI modeline erişin.",
     "no_free_tier": "ÜCRETSİZ SEVİYE YOK - PROFESYONELLERE YÖNELİK.",
     "credits_rollover": "Kullanılmayan krediler 3 ay boyunca devredilir.",
     "monthly_billing": "Aylık Faturalama",
@@ -543,7 +577,9 @@
     "personal": "Bireysel",
     "business": "İş",
     "team": "Ekip",
-    "enterprise": "Kurumsal"
+    "enterprise": "Kurumsal",
+    "audience_label": "Plan türü",
+    "includes": "İçerir"
   },
   "agents": {
     "title": "Ajanlar",
@@ -572,5 +608,13 @@
   "skills": {
     "title": "Beceriler",
     "command_palette_description": "Yeniden kullanılabilir talimat şablonlarını yönetin"
+  },
+  "apiKeys": {
+    "title": "API anahtarları"
+  },
+  "connections": {
+    "menuTooltip": "Google Drive ve Slack gibi entegrasyonlar ile kendi kodunuz için API anahtarları",
+    "sections": "Bağlantı bölümleri",
+    "title": "Bağlantılar"
   }
 }

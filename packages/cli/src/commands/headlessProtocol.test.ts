@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import { ToolCatalog } from '../tools/gateway/toolCatalog.js';
+import type { ToolCategory, ToolDescriptor } from '../tools/gateway/toolDescriptor.js';
 import {
   HEADLESS_SCHEMA_VERSION,
   stampEvent,
@@ -10,6 +12,7 @@ import {
   parsePermissionPolicy,
   evaluatePermissionPolicy,
   resolveHeadlessPermissionDecision,
+  buildPermissionRequestEvent,
 } from './headlessProtocol.js';
 
 describe('headless protocol envelope', () => {
@@ -64,26 +67,41 @@ describe('headless protocol envelope', () => {
 });
 
 describe('classifyToolRisk', () => {
+  const shellTool = (approval: ToolCategory): ToolDescriptor => ({
+    source: { kind: 'core' },
+    effect: 'execute',
+    approval,
+    commandArg: 'command',
+  });
+  const plainTool = (approval: ToolCategory): ToolDescriptor => ({ source: { kind: 'cli' }, effect: 'read', approval });
+
   it('classifies a shell tool from its command text (no dangerous pattern -> unclassified)', () => {
-    const risk = classifyToolRisk('bash_execute', { command: 'ls -la' }, 'prompt_always');
+    const risk = classifyToolRisk(shellTool('prompt_always'), { command: 'ls -la' });
     expect(risk.level).toBe('unclassified');
   });
 
   it('classifies a destructive shell command as high', () => {
-    const risk = classifyToolRisk('bash_execute', { command: 'rm -rf /' }, 'prompt_default');
+    const risk = classifyToolRisk(shellTool('prompt_default'), { command: 'rm -rf /' });
+    expect(risk.level).toBe('high');
+    expect(risk.reasons.length).toBeGreaterThan(0);
+  });
+
+  it('classifies bash_execute from the command arg its core descriptor declares', () => {
+    const risk = classifyToolRisk(new ToolCatalog().resolve('bash_execute'), { command: 'rm -rf /' });
     expect(risk.level).toBe('high');
     expect(risk.reasons.length).toBeGreaterThan(0);
   });
 
   it('falls back to the permission category for non-shell tools', () => {
-    expect(classifyToolRisk('read_file', {}, 'auto_approve').level).toBe('low');
-    expect(classifyToolRisk('some_tool', {}, 'prompt_default').level).toBe('medium');
-    expect(classifyToolRisk('write_file', {}, 'prompt_always').level).toBe('high');
+    expect(classifyToolRisk(plainTool('auto_approve'), {}).level).toBe('low');
+    expect(classifyToolRisk(plainTool('prompt_default'), {}).level).toBe('medium');
+    expect(classifyToolRisk(plainTool('prompt_always'), {}).level).toBe('high');
+    expect(classifyToolRisk(undefined, {}).level).toBe('medium');
   });
 
   it('does not throw on non-object args', () => {
-    expect(() => classifyToolRisk('bash_execute', undefined, 'prompt_default')).not.toThrow();
-    expect(classifyToolRisk('bash_execute', null, 'prompt_default').level).toBe('medium');
+    expect(() => classifyToolRisk(shellTool('prompt_default'), undefined)).not.toThrow();
+    expect(classifyToolRisk(shellTool('prompt_default'), null).level).toBe('medium');
   });
 });
 
@@ -247,5 +265,50 @@ describe('resolveHeadlessPermissionDecision directory-grant fail-closed (criteri
         permissionPolicy: allowAll,
       }).action
     ).toBe('allow-once');
+  });
+});
+
+describe('resolveHeadlessPermissionDecision sandbox-escalation fail-closed', () => {
+  const base = {
+    dangerouslySkipPermissions: false,
+    isDirectoryGrant: false,
+    isSandboxEscalation: true,
+    toolName: 'bash_execute',
+    riskLevel: 'low' as const,
+  };
+
+  it('denies even when the policy allows the tool', () => {
+    const policy = parsePermissionPolicy('{"allow":["bash_execute"],"defaultAction":"deny"}');
+    const decision = resolveHeadlessPermissionDecision({ ...base, permissionPolicy: policy });
+    expect(decision.action).toBe('deny');
+    expect(decision.reason).toMatch(/outside the sandbox/);
+  });
+
+  it('denies even when maxAutoAllowRisk is high', () => {
+    const policy = parsePermissionPolicy('{"maxAutoAllowRisk":"high","defaultAction":"deny"}');
+    expect(resolveHeadlessPermissionDecision({ ...base, permissionPolicy: policy }).action).toBe('deny');
+  });
+
+  it('denies with no policy at all', () => {
+    expect(resolveHeadlessPermissionDecision({ ...base, permissionPolicy: null }).action).toBe('deny');
+  });
+
+  it('is allowed under --dangerously-skip-permissions', () => {
+    expect(
+      resolveHeadlessPermissionDecision({ ...base, dangerouslySkipPermissions: true, permissionPolicy: null }).action
+    ).toBe('allow-once');
+  });
+});
+
+describe('buildPermissionRequestEvent', () => {
+  it('carries the prompt kind, defaulting to tool', () => {
+    const risk = { level: 'low', reasons: [] };
+    expect(buildPermissionRequestEvent('bash_execute', risk)).toEqual({
+      type: 'permission_request',
+      toolName: 'bash_execute',
+      risk,
+      kind: 'tool',
+    });
+    expect(buildPermissionRequestEvent('bash_execute', risk, 'sandbox-escalation').kind).toBe('sandbox-escalation');
   });
 });

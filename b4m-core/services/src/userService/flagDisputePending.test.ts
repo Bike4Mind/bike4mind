@@ -4,22 +4,24 @@ import { flagDisputePending, type FlagDisputePendingAdapters } from './flagDispu
 function makeAdapters() {
   const deactivateAllByUserId = vi.fn().mockResolvedValue(undefined);
   const update = vi.fn().mockResolvedValue(undefined);
+  const endConnections = vi.fn().mockResolvedValue({ connectionIds: [] });
   const adapters: FlagDisputePendingAdapters = {
-    db: { users: { update }, userApiKeys: { deactivateAllByUserId } },
+    db: { users: { update }, userApiKeys: { deactivateAllByUserId }, realtimeConnections: { endConnections } },
   };
-  return { adapters, deactivateAllByUserId, update };
+  return { adapters, deactivateAllByUserId, update, endConnections };
 }
 
 describe('flagDisputePending', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('deactivates keys before writing the flag, and reports the deactivation', async () => {
-    const { adapters, deactivateAllByUserId, update } = makeAdapters();
+    const { adapters, deactivateAllByUserId, update, endConnections } = makeAdapters();
 
     const result = await flagDisputePending({ id: 'user-1' }, adapters);
 
     expect(result).toEqual({ deactivatedKeys: true });
     expect(deactivateAllByUserId).toHaveBeenCalledWith('user-1');
+    expect(endConnections).toHaveBeenCalledWith({ userId: 'user-1' });
     expect(update).toHaveBeenCalledWith({ id: 'user-1', disputePending: true });
     expect(deactivateAllByUserId.mock.invocationCallOrder[0]).toBeLessThan(update.mock.invocationCallOrder[0]);
   });

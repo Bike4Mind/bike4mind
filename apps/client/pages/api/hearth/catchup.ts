@@ -4,7 +4,7 @@ import { ApiKeyScope, NotFoundError, UnauthorizedError } from '@bike4mind/common
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
-import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { requireUser } from '@server/middlewares/requireUser';
 import {
   toWireHearthEvent,
@@ -62,7 +62,7 @@ const handler = baseApi({
 
     if (body.advance) assertHearthWriteScope(req);
 
-    const actor = await resolveRequestActor(req.user, body.actor, body.session);
+    const actor = await resolveRequestActor(req.user, body.actor, body.session, Boolean(req.apiKeyInfo));
     const actorId = actor._id.toString();
 
     const events = await hearthLog.catchup(actorId, body.channelId, {

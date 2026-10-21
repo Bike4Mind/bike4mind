@@ -199,4 +199,29 @@ describe('resolveLakeTarget', () => {
   it('returns null when the slug matches neither', () => {
     expect(resolveLakeTarget('missing', null, staticConfigs)).toBeNull();
   });
+
+  it('refuses a deleted shadow lake rather than falling back to the registry lake', () => {
+    expect(() =>
+      resolveLakeTarget('opti-knowledge', null, staticConfigs, { status: 'deleted', organizationId: 'org-1' })
+    ).toThrow(/"opti-knowledge" in org org-1 is deleted; refusing to fall back.*drop --organizationId/);
+  });
+
+  it('refuses a deleted shadow lake with no registry match instead of returning null', () => {
+    expect(() => resolveLakeTarget('missing', null, staticConfigs, { status: 'purging' })).toThrow(
+      /"missing" in the org-less scope is purging; refusing to fall back/
+    );
+  });
+
+  it('refuses a shadow lake even when findBySlug fell through to another DB lake', () => {
+    const orgLess = { id: 'db-2', slug: 'my-lake', name: 'Org-less', datalakeTag: 'datalake:my-lake' };
+    expect(() =>
+      resolveLakeTarget('my-lake', orgLess, staticConfigs, { status: 'deleted', organizationId: 'org-1' })
+    ).toThrow(/refusing to fall back/);
+  });
+
+  it('treats an explicit null shadow like no shadow', () => {
+    expect(resolveLakeTarget('opti-knowledge', null, staticConfigs, null)).toEqual(
+      resolveLakeTarget('opti-knowledge', null, staticConfigs)
+    );
+  });
 });

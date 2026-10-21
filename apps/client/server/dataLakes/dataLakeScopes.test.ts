@@ -12,6 +12,7 @@ import {
   assertDataLakeWriteScope,
   assertDataLakeTagWriteScope,
   dataLakeToolsDeniedFor,
+  credentialExecutionFields,
 } from './dataLakeScopes';
 
 const key = (...scopes: ApiKeyScope[]) => ({ apiKeyInfo: { scopes } });
@@ -165,5 +166,32 @@ describe('dataLakeToolsDeniedFor', () => {
 
   it('denies nothing to a JWT/browser caller', () => {
     expect(dataLakeToolsDeniedFor({})).toEqual([]);
+  });
+});
+
+describe('credentialExecutionFields', () => {
+  it('carries the denials and key id for a key lacking datalake:write', () => {
+    expect(
+      credentialExecutionFields({ keyId: 'key-1', scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.DATALAKE_READ] })
+    ).toEqual({
+      scopeDeniedTools: ['create_data_lake', 'save_content_to_data_lake'],
+      authOrigin: 'apiKey',
+      apiKeyId: 'key-1',
+    });
+  });
+
+  it('omits the denials but keeps the key id for a key holding datalake:write', () => {
+    expect(credentialExecutionFields({ keyId: 'key-1', scopes: [ApiKeyScope.DATALAKE_WRITE] })).toEqual({
+      authOrigin: 'apiKey',
+      apiKeyId: 'key-1',
+    });
+  });
+
+  it('refuses a credential with no key id rather than recording a session run', () => {
+    expect(() => credentialExecutionFields({ keyId: '', scopes: [ApiKeyScope.DATALAKE_WRITE] })).toThrow(/key id/);
+  });
+
+  it('marks a JWT/browser caller as a session', () => {
+    expect(credentialExecutionFields(undefined)).toEqual({ authOrigin: 'session' });
   });
 });

@@ -1,0 +1,4 @@
+# Supply MONGODB_URI only in this pre-created runtime Secret.
+existingSecret: bike4mind-runtime
+externalMongo:
+  enabled: true

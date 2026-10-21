@@ -4,7 +4,7 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import SelectedLakeHeader from './SelectedLakeHeader';
-import { DATA_LAKES, type ManageableDataLakeConfig } from '@bike4mind/common';
+import type { ManageableDataLakeConfig } from '@bike4mind/common';
 
 // The strip's two buttons are its whole reason to exist, and both are store writers - so the
 // store is a real spy pair rather than a partial stub. A stub missing one of these makes the
@@ -21,7 +21,7 @@ vi.mock('@client/app/stores/useDataLakeWizardStore', async importOriginal => ({
     selector({ openWizardForLake, openManager }),
 }));
 
-// LakeSourceConnectActions itself stays real: it gates GitHub on the lake's organizationId, so a
+// LakeSourceConnectActions itself stays real: it gates GitHub on the lake's scope and creator, so a
 // header that forwards a trimmed lake silently drops the GitHub control. Only its data and leaves are stubbed.
 const h = vi.hoisted(() => ({ gitHubFlag: { current: true } }));
 vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
@@ -76,6 +76,14 @@ beforeEach(() => {
 });
 
 describe('SelectedLakeHeader', () => {
+  it("shows a typed prefix but hides a GitHub connector lake's generated one", () => {
+    const { unmount } = renderHeader();
+    expect(screen.getByTestId('datalake-selected-lake-prefix')).toHaveTextContent('ops:');
+    unmount();
+    renderHeader({ origin: 'connector-fed', fileTagPrefix: 'gh-1a2b3c4d:' });
+    expect(screen.queryByTestId('datalake-selected-lake-prefix')).not.toBeInTheDocument();
+  });
+
   it('opens the append wizard targeting the scoped lake', () => {
     renderHeader();
 
@@ -101,7 +109,6 @@ describe('SelectedLakeHeader', () => {
 
     expect(screen.queryByTestId('datalake-selected-lake-addfiles-btn')).not.toBeInTheDocument();
     expect(screen.getByTestId('datalake-selected-lake-manage-btn')).toBeInTheDocument();
-    expect(screen.getByTestId('datalake-selected-lake-prefix')).toHaveTextContent('ops:');
   });
 
   it('offers the Drive control only on an org lake the caller manages', () => {
@@ -116,13 +123,13 @@ describe('SelectedLakeHeader', () => {
   });
 
   it('offers the Drive control on a personal lake the caller created', () => {
-    // A personal lake's connection syncs on its creator's own Google grant (authorizeLakeDriveAccess),
-    // so creation - not org management, and not effective ownership - is the gate here. GitHub stays
-    // org-only.
+    // A personal lake's connection syncs on its creator's own Google grant (authorizeLakeConnectorAccess),
+    // so creation - not org management, and not effective ownership - is the gate here. GitHub uses
+    // the same gate.
     renderHeader({ organizationId: undefined, isCreator: true });
     expect(screen.getByTestId('datalake-selected-lake-source')).toBeInTheDocument();
     expect(screen.getByTestId('drive-connect-action')).toBeInTheDocument();
-    expect(screen.queryByTestId('github-connect-action')).not.toBeInTheDocument();
+    expect(screen.getByTestId('github-connect-action')).toBeInTheDocument();
   });
 
   it('withholds the Drive control on a personal lake the caller owns but did not create', () => {
@@ -148,38 +155,17 @@ describe('SelectedLakeHeader', () => {
     expect(screen.queryByTestId('datalake-selected-lake-source')).not.toBeInTheDocument();
   });
 
-  it('marks a lake chat cannot search, and only on an explicit false', () => {
-    const { unmount } = renderHeader({ retrievable: false, status: 'active' });
-    expect(screen.getByTestId('datalake-selected-lake-unsearchable')).toHaveTextContent('Not searched by chat');
-    unmount();
-
-    renderHeader({ retrievable: undefined });
-    expect(screen.queryByTestId('datalake-selected-lake-unsearchable')).not.toBeInTheDocument();
-  });
-
-  it('lets the draft chip explain a labelled draft instead of an access warning', () => {
-    renderHeader({ status: 'draft', retrievable: false });
-    expect(screen.getByTestId('datalake-selected-draft-chip')).toBeInTheDocument();
-    expect(screen.queryByTestId('datalake-selected-lake-unsearchable')).not.toBeInTheDocument();
-  });
-
-  it('flags a draft lake as not grounding answers', () => {
-    renderHeader({ status: 'draft' });
-    expect(screen.getByTestId('datalake-selected-draft-chip')).toHaveTextContent('Draft - not grounding answers');
-  });
-
-  it('flags a user lake with no status as not grounding answers', () => {
-    renderHeader({ status: undefined });
-    expect(screen.getByTestId('datalake-selected-draft-chip')).toBeInTheDocument();
-  });
-
-  it('shows no draft chip for an active lake', () => {
-    renderHeader({ status: 'active' });
+  it('shows the visibility and prefix the strip lacks, leaving draft and not-searched state to it', () => {
+    renderHeader({
+      status: 'draft',
+      retrievable: false,
+      fileTagPrefix: 'acme:',
+      isPublic: false,
+      organizationId: 'org-1',
+    });
+    expect(screen.getByTestId('datalake-selected-lake-visibility')).toHaveTextContent('Organization');
+    expect(screen.getByTestId('datalake-selected-lake-prefix')).toHaveTextContent('acme:');
     expect(screen.queryByTestId('datalake-selected-draft-chip')).not.toBeInTheDocument();
-  });
-
-  it('shows no draft chip for a built-in lake with no status', () => {
-    renderHeader({ id: DATA_LAKES[0].id, status: undefined });
-    expect(screen.queryByTestId('datalake-selected-draft-chip')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-selected-lake-unsearchable')).not.toBeInTheDocument();
   });
 });

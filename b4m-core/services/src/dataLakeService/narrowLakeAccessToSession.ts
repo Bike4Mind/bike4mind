@@ -1,3 +1,4 @@
+import { effectiveIncludeLibraryFiles, retrievalTagsNameALake } from '@bike4mind/common';
 import type { getDynamicDataLakeAccess } from './getDynamicDataLakeTags';
 import { datalakeTagsFrom } from './getDataLakePrompts';
 
@@ -31,9 +32,39 @@ export type ResolvedLakeAccessSet = Awaited<ReturnType<typeof getDynamicDataLake
  * then type-check against `never` and hide a real error.
  */
 export function sessionNamesALake(access: ResolvedLakeAccessSet, sessionRetrievalTags: string[] | undefined): boolean {
-  if (!sessionRetrievalTags?.length) return false;
-  if (datalakeTagsFrom(sessionRetrievalTags).length > 0) return true;
-  return access.lakes.some(lake => !!lake.fileTagPrefix && sessionRetrievalTags.includes(lake.fileTagPrefix));
+  return retrievalTagsNameALake(
+    sessionRetrievalTags,
+    access.lakes.map(lake => lake.fileTagPrefix)
+  );
+}
+
+/**
+ * Whether a resolved access set still has a lake arm to search. With the library excluded and no
+ * arm, an ownership query under restrictToDataLake has zero conditions and throws, so every
+ * library-off search site checks this first.
+ */
+export function hasLakeArms(access: {
+  dataLakeTags: readonly unknown[];
+  dataLakeTagPrefixes: readonly unknown[];
+  lakeMemberships: readonly unknown[];
+}): boolean {
+  return access.dataLakeTags.length > 0 || access.dataLakeTagPrefixes.length > 0 || access.lakeMemberships.length > 0;
+}
+
+/**
+ * Whether a session leaves the caller's own/shared/group library out of its grounding (the
+ * "+ My files" chip off). The ONE derivation forced retrieval (KnowledgeRetrievalFeature) and every
+ * knowledge tool (resolveSessionLakeAccess.ts sessionExcludesLibrary) share: unset excludes exactly
+ * when the session names a lake, which is the same predicate the narrowing uses. `access` is the
+ * caller's PRE-narrowing lake access (it only matters for prefix-named lakes). Callers pass the
+ * flag through libraryFlagForScope, so tags derived from an attached file never exclude.
+ */
+export function sessionExcludesLibraryFiles(
+  includeLibraryFiles: boolean | undefined,
+  access: ResolvedLakeAccessSet,
+  sessionRetrievalTags: string[] | undefined
+): boolean {
+  return !effectiveIncludeLibraryFiles(includeLibraryFiles, sessionNamesALake(access, sessionRetrievalTags));
 }
 
 /**

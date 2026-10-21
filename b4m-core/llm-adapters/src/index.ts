@@ -6,6 +6,7 @@ import {
   ModelInfo,
   SupersededModelInfo,
   applyModelPriceCatalog,
+  bedrockClientCredentials,
   isModelDeprecated,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
@@ -18,6 +19,7 @@ import type { ApiKeyTable, BackendGateContext } from './backendGate';
 import { catalogLifecycles } from './deprecationHorizon';
 import { toProviderEndUserId } from './endUserId';
 import { mergeCatalog } from './mergeCatalog';
+import { alignRouteTwinNames } from './routeTwinNames';
 import { buildSupersededIndex, catalogSuccessors, updateReplacedByOverlay } from './resolveDeprecatedModel';
 import AnthropicBedrockBackend from './bedrockBackend/anthropic';
 import DeepSeekBedrockBackend from './bedrockBackend/deepseek';
@@ -83,6 +85,8 @@ export function getLlmByModel(
   // changes behavior. The family path is the only one that can fail loudly:
   // an unknown family throws instead of returning the null that would be
   // indistinguishable from a missing credential (sec 9 item 3).
+  // MUST STAY IN SYNC WITH completionsForwardsNativeTools in @bike4mind/common
+  // (claudeToolCapabilities.ts), which restates this family-then-backend routing.
   if (modelInfo.adapterFamily) {
     backend = backendForAdapterFamily(modelInfo.adapterFamily, {
       apiKeyTable,
@@ -114,9 +118,15 @@ export function getLlmByModel(
         case ChatModels.CLAUDE_4_5_OPUS_BEDROCK:
         case ChatModels.CLAUDE_4_6_SONNET_BEDROCK:
         case ChatModels.CLAUDE_5_SONNET_BEDROCK:
+        case ChatModels.CLAUDE_5_5_SONNET_BEDROCK:
         case ChatModels.CLAUDE_4_6_OPUS_BEDROCK:
         case ChatModels.CLAUDE_4_7_OPUS_BEDROCK:
         case ChatModels.CLAUDE_4_8_OPUS_BEDROCK:
+        case ChatModels.CLAUDE_FABLE_5_BEDROCK:
+        case ChatModels.CLAUDE_FABLE_5_1_BEDROCK:
+        case ChatModels.CLAUDE_5_OPUS_BEDROCK:
+        case ChatModels.CLAUDE_5_5_OPUS_BEDROCK:
+        case ChatModels.CLAUDE_5_5_HAIKU_BEDROCK:
           backend = new AnthropicBedrockBackend();
           break;
         case ChatModels.LLAMA3_INSTRUCT_8B_V1:
@@ -273,11 +283,13 @@ function hashKeyValue(value: string): string {
  */
 function getModelCacheKey(
   apiKeys: ApiKeyTable | null,
-  gate: { isSelfHost: boolean; perBackendTimeoutMs?: number }
+  gate: { isSelfHost: boolean; bedrockReachable: boolean; perBackendTimeoutMs?: number }
 ): string {
-  // isSelfHost decides which backends get constructed and perBackendTimeoutMs
-  // decides what a slow one contributes, so both are part of the identity.
-  const suffix = `|selfHost:${gate.isSelfHost ? '1' : '0'}|timeout:${gate.perBackendTimeoutMs ?? 0}`;
+  // isSelfHost and bedrockReachable decide which backends get constructed and
+  // perBackendTimeoutMs decides what a slow one contributes, so all are part of the identity.
+  const suffix =
+    `|selfHost:${gate.isSelfHost ? '1' : '0'}|bedrock:${gate.bedrockReachable ? '1' : '0'}` +
+    `|timeout:${gate.perBackendTimeoutMs ?? 0}`;
   if (!apiKeys) return `null${suffix}`;
   const keys = Object.keys(apiKeys)
     .sort()
@@ -305,6 +317,8 @@ export interface GetAvailableModelsOptions {
   includePrivate?: boolean;
   /** Deployment self-host flag; defaults to B4M_SELF_HOST. See BackendGateContext. */
   isSelfHost?: boolean;
+  /** Bedrock credentials are present; defaults to bedrockClientCredentials(). See BackendGateContext. */
+  bedrockReachable?: boolean;
 }
 
 /**
@@ -345,6 +359,18 @@ function withListingTimeout<T>(promise: Promise<T>, ms: number, label: string): 
 const applyPrivateVisibility = (models: ModelInfo[], includePrivate: boolean): ModelInfo[] =>
   includePrivate ? models : models.filter(m => !m.private);
 
+/** Evaluated under the effective isSelfHost, so an isSelfHost override cannot list Bedrock off hosted defaults. */
+function resolveGateContext(
+  apiKeys: ApiKeyTable | null,
+  overrides: { isSelfHost?: boolean; bedrockReachable?: boolean } = {}
+): BackendGateContext {
+  const isSelfHost = overrides.isSelfHost ?? process.env.B4M_SELF_HOST === 'true';
+  const bedrockReachable =
+    overrides.bedrockReachable ??
+    bedrockClientCredentials({ ...process.env, B4M_SELF_HOST: isSelfHost ? 'true' : undefined }) !== null;
+  return { apiKeys, isSelfHost, bedrockReachable };
+}
+
 // Given Settings data, return a list of models that are available.  In the
 // future, we might consider using this to filter based on capability.
 // Only meant to be called from the server.
@@ -354,10 +380,11 @@ export const getAvailableModels = async (
 ): Promise<ModelInfo[]> => {
   const { perBackendTimeoutMs } = options;
   const includePrivate = options.includePrivate ?? true;
-  const isSelfHost = options.isSelfHost ?? process.env.B4M_SELF_HOST === 'true';
+  const gateCtx = resolveGateContext(apiKeys, options);
+  const { isSelfHost, bedrockReachable } = gateCtx;
 
   // Check module-level cache first
-  const cacheKey = getModelCacheKey(apiKeys, { isSelfHost, perBackendTimeoutMs });
+  const cacheKey = getModelCacheKey(apiKeys, { isSelfHost, bedrockReachable, perBackendTimeoutMs });
   if (_modelCache && _modelCache.key === cacheKey && Date.now() < _modelCache.expiresAt) {
     return applyPrivateVisibility(_modelCache.models, includePrivate);
   }
@@ -366,7 +393,6 @@ export const getAvailableModels = async (
   // the catalog merge gates catalog-only records with, so the two tiers cannot
   // disagree about which backends this caller can reach. The local-image env
   // fallback lives in that predicate for the same reason.
-  const gateCtx: BackendGateContext = { apiKeys, isSelfHost };
   const openaiKey = resolveListingKey(ModelBackend.OpenAI, gateCtx);
   const anthropicKey = resolveListingKey(ModelBackend.Anthropic, gateCtx);
   const geminiKey = resolveListingKey(ModelBackend.Gemini, gateCtx);
@@ -381,8 +407,8 @@ export const getAvailableModels = async (
     [ModelBackend.OpenAI]: openaiKey ? new OpenAIBackend(openaiKey) : null,
     [ModelBackend.Anthropic]: anthropicKey ? new AnthropicBackend(anthropicKey) : null,
     // The keyless AWS-credentialed pair goes through isBackendUsable so the
-    // self-host cutoff is stated once, in the same predicate the catalog tier
-    // reads, instead of once here and once in /api/models.
+    // self-host rules (Bedrock needs BEDROCK_AWS_*, AWS is hosted-only) are stated
+    // once, in the same predicate the catalog tier reads, instead of once here and once in /api/models.
     [ModelBackend.Bedrock]: isBackendUsable(ModelBackend.Bedrock, gateCtx)
       ? new UndifferentiatedBedrockBackend()
       : null,
@@ -458,6 +484,8 @@ export const getAvailableModels = async (
     }
   }
 
+  merged = await alignRouteTwinNames(merged);
+
   // Overlay versioned catalog prices when the app wired a provider.
   let priced = merged;
   if (_priceRowsProvider) {
@@ -488,6 +516,28 @@ export const getAvailableModels = async (
 };
 
 /**
+ * Can this caller reach a static-table backend that serves `modelId`? Reads the adapter tables, not the live
+ * listing; an id no static table names (an Ollama pull, a catalog-only row) answers false.
+ */
+export async function isModelProviderConfigured(modelId: string, apiKeys: ApiKeyTable | null): Promise<boolean> {
+  const ctx = resolveGateContext(apiKeys);
+  const placeholder = 'static-listing';
+  const statics: Array<[ModelBackend, () => ICompletionBackend]> = [
+    [ModelBackend.OpenAI, () => new OpenAIBackend(placeholder)],
+    [ModelBackend.Anthropic, () => new AnthropicBackend(placeholder)],
+    [ModelBackend.Gemini, () => new GeminiBackend(placeholder)],
+    [ModelBackend.XAI, () => new XAIBackend(placeholder)],
+    [ModelBackend.Kimi, () => new KimiBackend(placeholder)],
+    [ModelBackend.DeepSeek, () => new DeepSeekBackend(placeholder)],
+    [ModelBackend.Bedrock, () => new UndifferentiatedBedrockBackend()],
+  ];
+  for (const [backend, build] of statics) {
+    if (isBackendUsable(backend, ctx) && (await build().getModelInfo()).some(m => m.id === modelId)) return true;
+  }
+  return false;
+}
+
+/**
  * Superseded pins the given caller can be upgraded off, for clients that must
  * recognize a session pinned to a model the picker no longer lists.
  *
@@ -510,6 +560,7 @@ export * from './dispatchModel';
 export * from './dispatchResolver';
 export * from './endUserId';
 export * from './mergeCatalog';
+export * from './routeTwinNames';
 
 // Implementations:
 export * from './anthropicBackend';
@@ -543,6 +594,7 @@ export {
   MAX_QUEUED_PER_TENANT,
   DEFAULT_ACQUIRE_TIMEOUT_MS,
 } from './_anthropicSemaphore';
+export { isTerminalToolError, isTurnEndingTool } from './executeToolsBatch';
 export * from './PipelineTimer';
 export * from './realtimeVoicePricing';
 export {
@@ -552,6 +604,7 @@ export {
   getFullToolResult,
   type FullToolResult,
 } from './recordToolResult';
+export * from './reasoningEfforts';
 export * from './resolveDeprecatedModel';
 export * from './deprecationHorizon';
 export * from './staleReferences';

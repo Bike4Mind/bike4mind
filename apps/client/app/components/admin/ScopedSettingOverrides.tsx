@@ -1,6 +1,7 @@
 import { CreditHolderType, SettingOwnerType, SettingScopeLevel, settingsMap } from '@bike4mind/common';
 import {
   useClearScopedSettingOverride,
+  useFloorAboveMeasuredWarning,
   useScopedSettingOverrides,
   useSetScopedSettingOverride,
 } from '@client/app/hooks/data/settings';
@@ -69,6 +70,7 @@ const ScopedSettingOverrides = ({ setting }: { setting: AdminSetting }) => {
   const [scopeId, setScopeId] = useState('');
   const [ownerType, setOwnerType] = useState<SettingOwnerType>(CreditHolderType.User);
   const [value, setValue] = useState<string | boolean>(setting.type === 'boolean' ? false : '');
+  const floorWarning = useFloorAboveMeasuredWarning(setting.key, value);
 
   if (!settableAt) return null;
 
@@ -101,6 +103,7 @@ const ScopedSettingOverrides = ({ setting }: { setting: AdminSetting }) => {
       // ownerType is attribution, required at the owner rung and refused at every other one.
       ...(level === SettingScopeLevel.Owner ? { ownerType } : {}),
       value: setting.type === 'boolean' ? Boolean(value) : setting.type === 'number' ? Number(value) : String(value),
+      ...(floorWarning ? { confirmAboveMeasuredFloor: true } : {}),
     });
   };
 
@@ -265,7 +268,7 @@ const ScopedSettingOverrides = ({ setting }: { setting: AdminSetting }) => {
       </Box>
 
       <FormHelperText data-testid={`scoped-override-${setting.key}-helper`}>
-        {valueError ?? `Overrides this setting for one scope. ${OVERRIDE_STALENESS_NOTE}`}
+        {valueError ?? floorWarning ?? `Overrides this setting for one scope. ${OVERRIDE_STALENESS_NOTE}`}
       </FormHelperText>
 
       {(writeError ?? clearError) && (

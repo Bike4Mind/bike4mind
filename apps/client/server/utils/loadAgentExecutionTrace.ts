@@ -10,7 +10,7 @@
 import { agentExecutionRepository, sessionRepository, type AgentExecutionStatus } from '@bike4mind/database';
 import type { IAgentStep } from '@bike4mind/common';
 import { isSessionOwnedByUser } from '@server/utils/sessionOwnership';
-import { toUserFacingFailureMessage } from '@server/queueHandlers/agentExecutor.failureMessage';
+import { toUserFacingFailureMessage } from '@bike4mind/server-utils/utils/agentFailureMessage';
 
 export type AgentExecutionTrace = {
   id: string;

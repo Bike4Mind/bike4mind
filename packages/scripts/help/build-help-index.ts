@@ -13,7 +13,7 @@ import * as path from 'path';
 import { createHash } from 'crypto';
 import { fileURLToPath } from 'url';
 import type { HelpIndex, HelpIndexEntry, HelpCategory } from './types.js';
-import { isDirectInvocation } from './isDirectInvocation.js';
+import { isDirectInvocation } from '../utils/isDirectInvocation.js';
 import { DOCS_ROOT, INCLUDED_CATEGORIES, loadHelpArticles, type LoadedHelpArticle } from './loadHelpArticles.js';
 
 // ES module compatibility

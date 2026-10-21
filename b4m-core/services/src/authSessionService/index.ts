@@ -3,3 +3,4 @@ export * from './refreshTokenFormat';
 export * from './issueSession';
 export * from './rotateSession';
 export * from './revokeSessions';
+export * from './endRealtimeConnections';

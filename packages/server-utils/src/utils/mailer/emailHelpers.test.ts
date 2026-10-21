@@ -1,0 +1,46 @@
+import { describe, it, expect, afterEach } from 'vitest';
+import { escapeHtml, buildEmailLogoImg } from './emailHelpers';
+
+describe('escapeHtml', () => {
+  it('escapes ampersands, angle brackets and both quote styles', () => {
+    expect(escapeHtml(`<b>x</b> & "y" 'z'`)).toBe('&lt;b&gt;x&lt;/b&gt; &amp; &quot;y&quot; &#39;z&#39;');
+  });
+
+  it('leaves a plain string untouched', () => {
+    expect(escapeHtml('Acme AI')).toBe('Acme AI');
+  });
+});
+
+describe('buildEmailLogoImg', () => {
+  afterEach(() => {
+    delete process.env.LOGO_URL;
+  });
+
+  it('returns an empty string when no logo URL is configured', () => {
+    delete process.env.LOGO_URL;
+    expect(buildEmailLogoImg('Acme')).toBe('');
+    expect(buildEmailLogoImg('Acme', '')).toBe('');
+  });
+
+  it('builds an img with a branded, escaped alt when brand is set', () => {
+    const html = buildEmailLogoImg('Acme & Co', 'https://cdn.example.com/logo.png');
+    expect(html).toBe('<img src="https://cdn.example.com/logo.png" alt="Acme &amp; Co Logo" class="logo" />');
+  });
+
+  it('falls back to a generic "Logo" alt when brand is empty', () => {
+    const html = buildEmailLogoImg('', 'https://cdn.example.com/logo.png');
+    expect(html).toBe('<img src="https://cdn.example.com/logo.png" alt="Logo" class="logo" />');
+  });
+
+  it('defaults the logo URL to LOGO_URL when not passed', () => {
+    process.env.LOGO_URL = 'https://cdn.example.com/env-logo.png';
+    expect(buildEmailLogoImg('Acme')).toBe(
+      '<img src="https://cdn.example.com/env-logo.png" alt="Acme Logo" class="logo" />'
+    );
+  });
+
+  it('escapes a double-quote in the logo URL so the attribute stays well-formed', () => {
+    const html = buildEmailLogoImg('Acme', 'https://x/logo.png?a="b"');
+    expect(html).toContain('src="https://x/logo.png?a=&quot;b&quot;"');
+  });
+});
