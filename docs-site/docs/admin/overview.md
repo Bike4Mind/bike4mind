@@ -47,7 +47,7 @@ Help icons across the landing page explain client types, events, categories, AI 
 
 The example below uses sample events to show the chart help:
 
-![Top 10 Events chart with help explaining that event frequency does not rank features by distinct users](/img/admin-dashboard-event-help.png)
+![Top 10 Events chart with help explaining that event frequency does not rank features by distinct users](./admin-dashboard-event-help.png)
 
 ## Sidebar Navigation
 
