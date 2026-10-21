@@ -36,9 +36,10 @@ export function isAllowedModalMediaUrl(url: string, policy: ModalMediaUrlPolicy 
   if (url.length > MODAL_MEDIA_URL_MAX_LENGTH) return false;
   if (policy.allowedUrls?.has(url)) return true;
   try {
-    const { protocol, hostname, origin } = new URL(url);
+    const { protocol, hostname, origin, port } = new URL(url);
     if (policy.extraOrigins?.includes(origin)) return true;
-    return protocol === 'https:' && MODAL_MEDIA_HOST_SUFFIXES.some(suffix => hostname.endsWith(suffix));
+    // The CSP source matches the default port only, so a non-default one would never load.
+    return protocol === 'https:' && port === '' && MODAL_MEDIA_HOST_SUFFIXES.some(suffix => hostname.endsWith(suffix));
   } catch {
     return false;
   }

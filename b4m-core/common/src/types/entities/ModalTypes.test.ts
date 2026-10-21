@@ -13,6 +13,8 @@ describe('isAllowedModalMediaUrl', () => {
     'http://bucket.s3.us-east-2.amazonaws.com/a.mp4',
     'https://cdn.example.com/a.mp4',
     'https://amazonaws.com.evil.test/a.mp4',
+    // The CSP source matches port 443 only, so this could never load.
+    'https://d111.cloudfront.net:8443/a.mp4',
     'javascript:alert(1)',
     'data:video/mp4;base64,AAAA',
     'not a url',
