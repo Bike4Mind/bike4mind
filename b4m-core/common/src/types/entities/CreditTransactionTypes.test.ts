@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   GenericCreditDeductTransaction,
   GenericDeductReasons,
@@ -83,14 +83,34 @@ describe('generic deduct reason registry', () => {
     expect(GenericCreditDeductTransaction.safeParse(deduct(reason)).success).toBe(false);
   });
 
-  it('shares one registry across module copies through globalThis', () => {
+  it('names the input and the valid reasons when a parse fails', () => {
+    const unregistered = GenericCreditDeductTransaction.safeParse(deduct('registry_test_never_added'));
+    expect(unregistered.error?.issues[0]?.message).toMatch(
+      /Unregistered generic deduct reason "registry_test_never_added"/
+    );
+    expect(unregistered.error?.issues[0]?.message).toContain(GenericDeductReasons[0]);
+
+    const nonString = GenericCreditDeductTransaction.safeParse(deduct(null));
+    expect(nonString.error?.issues[0]?.message).toBe('Expected a generic deduct reason string, received null');
+  });
+
+  it('shares one registry across module copies', async () => {
+    vi.resetModules();
+    const otherCopy = await import('./CreditTransactionTypes');
+    expect(otherCopy.isGenericDeductReason).not.toBe(isGenericDeductReason);
+
+    otherCopy.registerGenericDeductReason('registry_test_other_copy');
+    expect(isGenericDeductReason('registry_test_other_copy')).toBe(true);
+    expect(GenericCreditDeductTransaction.safeParse(deduct('registry_test_other_copy')).success).toBe(true);
+  });
+
+  it('ignores a malformed reason written straight into the shared set', () => {
     const shared = (globalThis as unknown as Record<symbol, Set<string>>)[
       Symbol.for('b4m.credit.genericDeductReasons')
     ];
-    expect(shared).toBeInstanceOf(Set);
-
-    // A second copy of the module would find this same set; simulate it writing first.
-    shared.add('registry_test_other_copy');
-    expect(isGenericDeductReason('registry_test_other_copy')).toBe(true);
+    shared.add('Registry Test Raw');
+    expect(isGenericDeductReason('Registry Test Raw')).toBe(false);
+    expect(listGenericDeductReasons()).not.toContain('Registry Test Raw');
+    expect(GenericCreditDeductTransaction.safeParse(deduct('Registry Test Raw')).success).toBe(false);
   });
 });

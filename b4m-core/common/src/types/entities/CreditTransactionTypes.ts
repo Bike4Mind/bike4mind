@@ -94,8 +94,8 @@ export const GenericCreditAddTransaction = BaseCreditTransaction.extend({
 
 /**
  * Built-in reasons for generic credit deductions; they seed the registry below.
- * A package that needs its own reason registers it with registerGenericDeductReason
- * instead of adding it here.
+ * A package that needs a new reason registers it with registerGenericDeductReason
+ * rather than extending this list.
  */
 export const GenericDeductReasons = [
   'dispute_clawback',
@@ -122,7 +122,8 @@ export type GenericDeductReason = (typeof GenericDeductReasons)[number] | keyof 
 const GENERIC_DEDUCT_REASON_PATTERN = /^[a-z][a-z0-9_]*$/;
 
 // Kept on globalThis so two loaded copies of this module (CJS and ESM, or two bundles in one
-// process) validate against the same set.
+// process) validate against the same set. Anything in-process can reach the set through the
+// symbol, so reads re-check the pattern rather than trusting what was added.
 const GENERIC_DEDUCT_REASON_REGISTRY_KEY = Symbol.for('b4m.credit.genericDeductReasons');
 
 function genericDeductReasonRegistry(): Set<string> {
@@ -149,11 +150,13 @@ export function registerGenericDeductReason(reason: string): void {
 }
 
 export function isGenericDeductReason(value: unknown): value is GenericDeductReason {
-  return typeof value === 'string' && genericDeductReasonRegistry().has(value);
+  return (
+    typeof value === 'string' && GENERIC_DEDUCT_REASON_PATTERN.test(value) && genericDeductReasonRegistry().has(value)
+  );
 }
 
 export function listGenericDeductReasons(): readonly string[] {
-  return [...genericDeductReasonRegistry()];
+  return [...genericDeductReasonRegistry()].filter(reason => GENERIC_DEDUCT_REASON_PATTERN.test(reason));
 }
 
 /**
@@ -172,7 +175,12 @@ export const GenericCreditDeductTransaction = BaseCreditTransaction.extend({
    * registerGenericDeductReason.
    */
   reason: z
-    .custom<GenericDeductReason>(isGenericDeductReason, { message: 'Unregistered generic deduct reason' })
+    .custom<GenericDeductReason>(isGenericDeductReason, {
+      error: issue =>
+        typeof issue.input === 'string'
+          ? `Unregistered generic deduct reason ${JSON.stringify(issue.input)}; expected one of: ${listGenericDeductReasons().join(', ')}`
+          : `Expected a generic deduct reason string, received ${issue.input === null ? 'null' : typeof issue.input}`,
+    })
     .optional(),
   /**
    * Stripe dispute ID - set for dispute clawback transactions.
