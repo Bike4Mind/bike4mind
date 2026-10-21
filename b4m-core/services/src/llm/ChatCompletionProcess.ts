@@ -216,6 +216,7 @@ import {
   type PromptSourceId,
 } from './systemPromptSources';
 import { buildSystemPromptText, type SystemPromptTextDisclosure } from './systemPromptDisclosure';
+import { buildViewRegistryAdminMessages } from './viewRegistryPrompt';
 import { vetPreauthorizedLakeIds } from '../dataLakeService/vetPreauthorizedLakeIds';
 import { vetReaderConsentDatalakeTags } from './vetReaderConsentDatalakeTags';
 import {
@@ -3581,7 +3582,7 @@ export class ChatCompletionProcess {
       // The built list drops video_generation without a usable config (buildSharedTools), so this is the real offer.
       const videoGenerationAvailable = allTools?.some(t => t.toolSchema.name === 'video_generation') ?? false;
 
-      const toolPromptMessage = await toolBuilder.buildToolPrompt({
+      const toolPromptMessages = await toolBuilder.buildToolPrompt({
         toolPromptId,
         hasContentTransform: hasContentTransform && blogDraftAvailable,
         hasChessEngine: enabledTools.includes('chess_engine'),
@@ -3616,6 +3617,10 @@ export class ChatCompletionProcess {
       const messageBuildingStartTime = Date.now();
       // Generate current date context for the AI.
       // Use user's browser timezone if available, otherwise fall back to server timezone.
+      //
+      // Per timezone-day, so it sits BEHIND the deployment-wide shareable prefix (see
+      // PER_CALLER_AUTHORED_SOURCES); leading the stack, it made that prefix a cache write per
+      // user per day. It is still inside the caller's own cached region, hence:
       //
       // DAY granularity only, deliberately NO clock time. This block sits inside the
       // cached system prefix: the Anthropic caching adapter marks the LAST system block with
@@ -3703,35 +3708,29 @@ export class ChatCompletionProcess {
             content: getSettingsValue('AbstentionPrompt', defaultAdminSettings, ABSTENTION_PROMPT),
           },
         ],
-        // Inject view registry summary when the navigate_view tool reached the model
+        // Inject view registry summary when the navigate_view tool reached the model. The base list
+        // is the same for every user (shareable prefix); the admin views and the current-page
+        // emphasis vary per caller and ride behind it as viewRegistryAdmin.
         viewRegistry: navigateViewAvailable
           ? [
               {
                 role: 'system' as const,
                 // Dropped again if the turn later continues without tools; see stripToolDependentMessages.
                 requiresTool: 'navigate_view',
-                content: (() => {
-                  // Extract current path from extraContextMessages for context-aware prompting
-                  const viewCtx = extraContextMessages.find(
-                    m => typeof m.content === 'string' && m.content.includes('[Current View Context]')
-                  );
-                  const ctxStr = typeof viewCtx?.content === 'string' ? viewCtx.content : '';
-                  const currentPath = ctxStr.match(/Path:\s*(\S+)/)?.[1] || '';
-                  let summary = getViewSummaryForLLM({ isAdmin: this.user?.isAdmin });
-                  // Add path-specific emphasis
-                  if (currentPath.startsWith('/admin')) {
-                    summary +=
-                      '\n\nThe user is currently on the Admin page. When they ask about any admin feature, you MUST call navigate_view with the matching admin.* tab.';
-                  }
-                  return summary;
-                })(),
+                content: getViewSummaryForLLM({ isAdmin: false }),
               },
             ]
+          : [],
+        viewRegistryAdmin: navigateViewAvailable
+          ? buildViewRegistryAdminMessages({ isAdmin: this.user?.isAdmin === true, extraContextMessages })
           : [],
         // Prompt-only, so unlike viewRegistry it needs no tool and runs on every in-app turn;
         // withheld with the other auto-offers - see replyChoicesOffered.
         replyChoices: replyChoicesOffered ? [{ role: 'system' as const, content: REPLY_CHOICES_GUIDANCE }] : [],
-        toolPrompt: toolPromptMessage ? [toolPromptMessage] : [], // Tool prompt, blog draft, MCP guidance, conversation context, agent delegation
+        // Split so the per-user half (timezone, MCP integrations, conversation entities, agent
+        // roster) cannot cut the shareable prefix short; see ToolPromptMessages.
+        toolPrompt: toolPromptMessages.guidance ? [toolPromptMessages.guidance] : [],
+        toolContext: toolPromptMessages.context ? [toolPromptMessages.context] : [],
         agentDetection: featureContextMessages['agentDetection'], // Add agent system prompts
         questMaster: featureContextMessages['questMaster'],
         organizationPrompt: featureContextMessages['organizationPrompt'], // Add team-wide system prompt

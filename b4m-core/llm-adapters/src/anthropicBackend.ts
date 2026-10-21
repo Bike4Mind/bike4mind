@@ -45,6 +45,7 @@ import {
 } from './toolPairingUtils';
 import { capCacheControlMarkers, getCachingAdapter, logCacheStats } from './caching/adapters';
 import { systemContentToText } from './systemContent';
+import { sortToolsForStableCacheKey } from './caching/stableToolOrder';
 import { toAnthropicContent } from './anthropicContent';
 import { anthropicBetaHeader, PROMPT_CACHING_BETA, TOOL_CHANGES_BETA } from './toolChanges';
 import {
@@ -3066,7 +3067,7 @@ export class AnthropicBackend implements ICompletionBackend {
   }
 
   formatTools(tools: ICompletionOptionTools[] = [], providerTools: ToolSearchServerTool[] = []) {
-    const customTools = tools.map(tool => {
+    const customTools = sortToolsForStableCacheKey(tools).map(tool => {
       const { parameters, ...rest } = tool.toolSchema;
       // `strict` is an OpenAI-only tool field. Anthropic rejects it with
       // "tools.N.custom.strict: Extra inputs are not permitted", so strip it from the
