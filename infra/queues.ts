@@ -1493,6 +1493,7 @@ const optihashiRunCompletionQueueSubscription = optihashiRunCompletionQueue.subs
   permissions: [
     { actions: ['cloudwatch:PutMetricData'], resources: ['*'] },
     { actions: ['execute-api:ManageConnections'], resources: ['*'] },
+    { actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'], resources: ['*'] },
   ],
 });
 
