@@ -37,6 +37,7 @@ import { neutralFrame, rewardGreen } from '@client/app/components/common/gearRew
 import { gray } from '@client/app/utils/themes/colors';
 import { useNotebookLayout } from '..';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
+import { claimFirstRunImpression } from '@client/app/utils/firstRunImpression';
 
 const NAV_ROW_HEIGHT = 32;
 const NAV_TAG_HEIGHT = 24;
@@ -142,8 +143,9 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
       return;
     }
     startHereShownRef.current = true;
+    if (!claimFirstRunImpression(FirstRunEvents.START_HERE_CHIP_SHOWN, currentUser?.id)) return;
     logEvent({ type: FirstRunEvents.START_HERE_CHIP_SHOWN });
-  }, [section, gearsSignal.startHere, gearsSignal.claimableCount, logEvent]);
+  }, [section, gearsSignal.startHere, gearsSignal.claimableCount, currentUser?.id, logEvent]);
   // Shown only when a modality's endpoint (GET /api/v1/video-models, /music-models, /api/ai/audio-providers) lists a
   // model or provider this user can run, and it opens on that modality's tab, so it never dead-ends.
   const videoModels = useVideoModels();

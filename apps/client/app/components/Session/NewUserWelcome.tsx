@@ -15,6 +15,7 @@ import { ExternalLinks } from '@client/app/utils/externalLinks';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
 import { STARTER_PROMPTS, shouldShowNewUserWelcome, welcomeCanStart, welcomeCreditsLine } from './newUserWelcomeModel';
 import { isAwaitingEmailVerification } from '@client/app/utils/onboarding';
+import { claimFirstRunImpression } from '@client/app/utils/firstRunImpression';
 
 const dismissKey = (userId: string) => `newUserWelcomeDismissed:${userId}`;
 
@@ -90,9 +91,10 @@ const NewUserWelcome = () => {
   useEffect(() => {
     if (!show || shownRef.current) return;
     shownRef.current = true;
+    if (!claimFirstRunImpression(FirstRunEvents.WELCOME_CARD_SHOWN, userId)) return;
     logEvent({ type: FirstRunEvents.WELCOME_CARD_SHOWN });
     logEvent({ type: FirstRunEvents.ZERO_STATE_SHOWN, metadata: { surface: 'new_chat' } });
-  }, [show, logEvent]);
+  }, [show, userId, logEvent]);
   if (!show) return null;
 
   const awaitingVerification = isAwaitingEmailVerification(currentUser);

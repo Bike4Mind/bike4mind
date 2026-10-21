@@ -46,7 +46,7 @@ const {
   // The real useOptiAccess/useOptiVisible read this store, so the Opti row tests exercise both.
   userState: {
     isAdmin: false,
-    currentUser: undefined as { preferences?: { hiddenSurfaces?: string[] } } | undefined,
+    currentUser: undefined as { id?: string; preferences?: { hiddenSurfaces?: string[] } } | undefined,
   },
   logEvent: vi.fn(),
 }));
@@ -125,6 +125,7 @@ beforeEach(() => {
   entitlements.length = 0;
   userState.isAdmin = false;
   userState.currentUser = undefined;
+  localStorage.clear();
 });
 
 describe('SidenavNav Opti row', () => {
@@ -213,6 +214,16 @@ describe('SidenavNav Gears row tag', () => {
     expect(logEvent).toHaveBeenCalledWith({ type: 'start_here_chip_shown' });
     fireEvent.click(screen.getByTestId('sidenav-nav-gears'));
     expect(logEvent).toHaveBeenCalledWith({ type: 'start_here_chip_clicked' });
+  });
+
+  it('logs Start here once per user, not again when the sidenav remounts', () => {
+    userState.currentUser = { id: 'user-1' };
+    useGearsNavSignalMock.mockReturnValue({ startHere: true, startHereCredits: 6500, claimableCount: 0 });
+    renderNav().unmount();
+    logEvent.mockClear();
+    renderNav();
+    expect(startHere()).toBeInTheDocument();
+    expect(logEvent).not.toHaveBeenCalledWith({ type: 'start_here_chip_shown' });
   });
 
   it('does not log Start here from the pinned nav instance that does not render Gears', () => {

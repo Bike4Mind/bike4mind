@@ -87,6 +87,15 @@ describe('NewUserWelcome', () => {
     expect(logEvent).toHaveBeenCalledWith({ type: 'zero_state_shown', metadata: { surface: 'new_chat' } });
   });
 
+  it('logs the impression once per user, not again on a later mount', () => {
+    renderWelcome().unmount();
+    logEvent.mockClear();
+    renderWelcome();
+    expect(screen.getByTestId('new-user-welcome')).toBeInTheDocument();
+    expect(logEvent).not.toHaveBeenCalledWith({ type: 'welcome_card_shown' });
+    expect(logEvent).not.toHaveBeenCalledWith({ type: 'zero_state_shown', metadata: { surface: 'new_chat' } });
+  });
+
   it('invites a prompt, or typing below, while there are credits to send with', () => {
     renderWelcome();
     expect(screen.getByText(/or type your own below/i)).toBeInTheDocument();
