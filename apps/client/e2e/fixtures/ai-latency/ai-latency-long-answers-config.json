@@ -1,5 +1,5 @@
 {
-  "thresholdSec": 55,
+  "thresholdSec": 45,
   "prompts": [
     {
       "id": "seoul-itinerary",
