@@ -119,4 +119,42 @@ describe('SessionStore imports', () => {
     await store.putImported({ ...imported('cl-f', 'Second'), messages: [] });
     expect((await store.get('cl-f'))!).toMatchObject({ title: 'Second', grantedDirectories: ['/work/granted'] });
   });
+  it('does not recreate a copy deleted after the importer read it', async () => {
+    const store = new SessionStore(await mkdtemp(join(tmpdir(), 'store-import-')), 'default');
+    await store.putImported(imported('cl-race', 'Original'));
+    const snapshot = (await store.getImported('cl-race'))!;
+    await store.delete('cl-race');
+    expect(await store.putImported(snapshot, undefined, { mustExist: true })).toBe('removed');
+    expect(await store.get('cl-race')).toBeNull();
+  });
+
+  it('checks continuation inside the guarded removal instead of trusting an earlier summary', async () => {
+    const store = new SessionStore(await mkdtemp(join(tmpdir(), 'store-import-')), 'default');
+    await store.putImported(imported('cl-remove', 'Original'));
+    const snapshot = (await store.list())[0];
+    expect(snapshot.importOrigin?.forkedAt).toBeUndefined();
+    await store.appendMessage('cl-remove', { id: 'desktop-turn', role: 'user', content: 'keep me', createdAt: 'x' });
+    expect(await store.deleteImported('cl-remove', 'unused-unscoped-key')).toBe('forked');
+    expect((await store.get('cl-remove'))?.messages.at(-1)?.content).toBe('keep me');
+    expect(await store.deleteImported('missing', 'unused-unscoped-key')).toBe('missing');
+    await store.putImported(imported('cl-uncontinued', 'Original'));
+    expect(await store.deleteImported('cl-uncontinued', 'unused-unscoped-key')).toBe('removed');
+    expect(await store.get('cl-uncontinued')).toBeNull();
+  });
+
+  it('refuses guarded removal after the account has changed', async () => {
+    const alice: SessionScope = { environmentUrl: 'http://localhost:3000', accountId: 'account-alice' };
+    const bob: SessionScope = { environmentUrl: 'http://localhost:3000', accountId: 'account-bob' };
+    let current: SessionScope = alice;
+    const store = new SessionStore(await mkdtemp(join(tmpdir(), 'store-import-')), 'default', 'launch', () => current);
+    const aliceKey = sessionScopeKey(alice);
+    await store.putImported(imported('cl-shared', 'Alice'), aliceKey);
+    current = bob;
+    await store.putImported(imported('cl-shared', 'Bob'), sessionScopeKey(bob));
+    await expect(store.deleteImported('cl-shared', aliceKey)).rejects.toBeInstanceOf(ImportScopeChangedError);
+    expect((await store.get('cl-shared'))?.title).toBe('Bob');
+    current = alice;
+    expect((await store.get('cl-shared'))?.title).toBe('Alice');
+  });
+
 });

@@ -31,7 +31,7 @@ export async function* readJsonlLines(path: string, offset: number, maxLineBytes
       for (let index = 0; index < bytesRead; index++) {
         if (buffer[index] !== NEWLINE) continue;
         const end = position + index + 1;
-        if (skipping) {
+        if (skipping || pendingBytes + index - lineStart > maxLineBytes) {
           yield { text: null, end };
         } else {
           const piece = buffer.subarray(lineStart, index);

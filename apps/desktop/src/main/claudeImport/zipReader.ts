@@ -18,6 +18,8 @@ const EOCD_SEARCH = EOCD_MIN + 0xffff;
 const CENTRAL_HEADER = 46;
 const LOCAL_HEADER = 30;
 const ZIP64_MARKER = 0xffffffff;
+/** Even 65,534 short names fit comfortably; never allocate from an untrusted 32-bit size. */
+export const MAX_CENTRAL_DIRECTORY_BYTES = 16 * 1024 * 1024;
 
 export interface ZipMember {
   name: string;
@@ -62,6 +64,8 @@ export async function listZipMembers(path: string): Promise<ZipMember[]> {
       throw new ZipError('zip64 archives are not supported');
     }
     if (centralOffset + centralSize > size) throw new ZipError('zip central directory is out of range');
+    if (centralSize > MAX_CENTRAL_DIRECTORY_BYTES)
+      throw new ZipError('zip central directory is larger than the import limit');
 
     const central = Buffer.alloc(centralSize);
     await handle.read(central, 0, centralSize, centralOffset);

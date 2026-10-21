@@ -235,11 +235,11 @@ export function countsFor(
 }
 
 /**
- * True when the file changed since the cursor read it, and it is still ours to write. Not
+ * True after a failed attempt or a file change, while the copy is still ours to write. Not
  * `offset < size`: a torn last line is never consumed, so that would re-run on every sync.
  */
 export function needsImport(transcript: IndexedTranscript, cursor: FileCursor | undefined): boolean {
-  if (!cursor) return true;
+  if (!cursor || cursor.status === 'failed') return true;
   if (cursor.status === 'forked' || cursor.status === 'removed') return false;
   if (cursor.status === 'imported' && cursor.mapVersion !== CODE_MAP_VERSION) return true;
   return cursor.size !== transcript.size || cursor.mtimeMs !== transcript.mtimeMs;
@@ -399,8 +399,8 @@ export async function importTranscript(
     importOrigin,
     messages: kept,
   };
-  const outcome = await deps.store.putImported(session, deps.scopeKey);
-  return { ...base, status: outcome === 'forked' ? 'forked' : 'imported' };
+  const outcome = await deps.store.putImported(session, deps.scopeKey, { mustExist: !!existing });
+  return { ...base, status: outcome === 'written' ? 'imported' : outcome };
 }
 
 /** Run `work` over `items` at most `limit` at a time. */

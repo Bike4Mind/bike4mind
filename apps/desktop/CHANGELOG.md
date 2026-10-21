@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+- Add account-scoped Claude Code sync and claude.ai export import, with continued sessions protected from later imports and removal.
+- Move Settings to a dedicated page with General, Permissions and Import sections.
 - Add persistent permission rules and optional sharing of Claude Code rules, with deny and ask precedence.
 - Enforce interactive tool denies and check symlink targets and shell file operands before applying standing allows.
 

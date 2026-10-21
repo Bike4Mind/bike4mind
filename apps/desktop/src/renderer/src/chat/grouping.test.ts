@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatProject, ChatSessionSummary } from '@shared/chat';
-import { groupSessions, orderedSessions } from './grouping';
+import { groupSessions, orderedSessions, projectForGroup } from './grouping';
 
 function project(directory: string, name: string): ChatProject {
   return {
@@ -254,5 +254,29 @@ describe('Claude Code worktrees', () => {
       ['/work/repo', 'repo', ['root', 'tree']],
       ['/work/repo/.manifold/worktrees/run', 'run', ['other']],
     ]);
+  });
+});
+
+describe('starting a session from a project group', () => {
+  it('finds a manually selected Claude worktree when no session names its repository root', () => {
+    const worktree = project('/work/repo/.claude/worktrees/wt', 'wt');
+    const sessions = [session({ id: 'tree', mode: 'code', project: worktree })];
+    const group = groupSessions(sessions, 'code').projects[0];
+    expect(group.directory).toBe('/work/repo');
+    expect(projectForGroup(sessions, group.directory)).toBe(worktree);
+  });
+
+  it('uses the most recent matching project without grouping unrelated worktrees', () => {
+    const tree = project('/work/repo/.claude/worktrees/wt', 'wt');
+    const root = project('/work/repo', 'repo');
+    const other = project('/work/repo/.manifold/worktrees/other', 'other');
+    const sessions = [
+      session({ id: 'tree', mode: 'code', project: tree }),
+      session({ id: 'root', mode: 'code', project: root }),
+      session({ id: 'other', mode: 'code', project: other }),
+    ];
+    expect(projectForGroup(sessions, '/work/repo')).toBe(tree);
+    expect(projectForGroup(sessions, other.directory)).toBe(other);
+    expect(projectForGroup(sessions, '/missing')).toBeUndefined();
   });
 });

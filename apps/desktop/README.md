@@ -58,6 +58,23 @@ the switch off or changing models clears the current hint and discards late answ
 previous choice. Ollama completion requests time out after 30 seconds; hosted requests after
 five. Loading the model list can add time before generation starts.
 
+## Import from Claude
+
+Open Settings -> Import to enable Claude Code sync or select a claude.ai data export.
+Code sync reads `~/.claude/projects` by default and imports only sessions run inside a
+repository's `.claude/worktrees/<name>` directory. Use the folder picker to choose another
+transcript source and the project filter to narrow the imported repositories.
+
+For claude.ai, export your data from Claude's settings, then choose the downloaded ZIP or
+its `conversations.json`. You can also select a folder to watch for new exports. Reimporting
+an export updates changed conversations. Sending a message here makes the imported session
+your own copy, which later imports and removal of untouched imports leave alone.
+
+If nothing appears, check that you are signed in, sync is enabled, the selected source is
+readable, and the session ran in a Claude Code worktree. Review the Import page's error and
+failed counts, repair file permissions or select a complete export, then retry. The source
+files remain read-only throughout import.
+
 ## Packaging
 
 `electron-builder` assembles what `electron-vite build` put in `out/`; its config is

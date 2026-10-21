@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { SessionStore } from '../chat/SessionStore';
 import { buildZip } from './__fixtures__/buildZip';
 import { chatSessionId, importChatExport, looksLikeClaudeExport } from './ClaudeChatImport';
@@ -173,6 +173,25 @@ describe('Claude chat export import', () => {
     expect(stored).toHaveLength(1);
     const garden = (await store.get(chatSessionId(GARDEN)))!;
     expect(garden.messages[0].attachments?.map(attachment => attachment.name)).toEqual(['notes.txt']);
+  });
+
+  it('does not recreate a conversation deleted after its update was read', async () => {
+    const { root, store, deps } = await setup();
+    const fixture = JSON.parse(await readFile(join(FIXTURES, 'conversations.json'), 'utf8'));
+    const path = join(root, 'conversations.json');
+    await writeFile(path, JSON.stringify([fixture[0]]));
+    await importChatExport(path, deps);
+    fixture[0].updated_at = '2025-12-09T10:00:00Z';
+    await writeFile(path, JSON.stringify([fixture[0]]));
+    const original = store.putImported.bind(store);
+    vi.spyOn(store, 'putImported').mockImplementationOnce(async (session, scopeKey, options) => {
+      await store.delete(session.id);
+      return original(session, scopeKey, options);
+    });
+    expect((await importChatExport(path, deps)).counts.skipped).toBe(1);
+    expect(await store.get(chatSessionId(GARDEN))).toBeNull();
+    expect((await importChatExport(path, deps)).counts.skipped).toBe(1);
+    expect(await store.get(chatSessionId(GARDEN))).toBeNull();
   });
 
   it('refuses archives with traversal names, with no conversations.json, or past the size limit', async () => {

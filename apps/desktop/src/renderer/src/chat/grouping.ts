@@ -47,7 +47,7 @@ export interface SidebarSections {
 }
 
 /** A Claude import the user has not carried on with; a continued one is ordinary work. */
-export function isUntouchedImport(session: ChatSessionSummary): boolean {
+export function isUntouchedImport(session: Pick<ChatSessionSummary, 'importOrigin'>): boolean {
   return !!session.importOrigin && !session.importOrigin.forkedAt;
 }
 
@@ -121,6 +121,11 @@ function projectGroupOf(project: ChatProject): { directory: string; name: string
   const repository = claudeWorktreeOf(project.directory)?.repository;
   if (!repository) return { directory: project.directory, name: project.name };
   return { directory: repository, name: repository.split(/[\\/]/).filter(Boolean).pop() ?? repository };
+}
+
+/** The most recent session's project for a sidebar group, including grouped Claude worktrees. */
+export function projectForGroup(sessions: readonly ChatSessionSummary[], directory: string): ChatProject | undefined {
+  return sessions.find(session => session.project && projectGroupOf(session.project).directory === directory)?.project;
 }
 
 /** How many rows the modifier-plus-digit shortcut reaches. */

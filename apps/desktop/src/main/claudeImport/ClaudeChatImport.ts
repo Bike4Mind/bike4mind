@@ -162,8 +162,9 @@ async function importOne(
     },
     messages: mapped.messages,
   };
-  const outcome = await deps.store.putImported(session, deps.scopeKey);
-  if (outcome === 'forked') {
+  const outcome = await deps.store.putImported(session, deps.scopeKey, { mustExist: !!existing });
+  if (outcome === 'forked' || outcome === 'removed') {
+    if (outcome === 'removed') deps.seen[mapped.uuid] = mapped.updatedAt;
     counts.skipped++;
     return;
   }

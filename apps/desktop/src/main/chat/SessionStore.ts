@@ -108,8 +108,11 @@ interface SummaryIndexFile {
   entries: Record<string, IndexedSummary>;
 }
 
-/** What `putImported` did: wrote the session, or found it continued here and left it alone. */
-export type PutImportedOutcome = 'written' | 'forked';
+/** Whether an import wrote its copy, preserved a continuation, or respected a concurrent deletion. */
+export type PutImportedOutcome = 'written' | 'forked' | 'removed';
+
+/** The guarded removal result, decided while holding the session's write lock. */
+export type DeleteImportedOutcome = 'removed' | 'forked' | 'missing';
 
 /** An import ran into an account switch: what it holds belongs to the account it started in. */
 export class ImportScopeChangedError extends Error {
@@ -797,10 +800,16 @@ export class SessionStore {
    * here - then it is left exactly as it is and marked forked, so a later sync can never
    * overwrite a desktop turn. Under the same per-session lock as every other write.
    */
-  async putImported(session: ChatSession, scopeKey?: string): Promise<PutImportedOutcome> {
+  async putImported(
+    session: ChatSession,
+    scopeKey?: string,
+    options: { mustExist?: boolean } = {}
+  ): Promise<PutImportedOutcome> {
     return this.serialize(session.id, async () => {
       const directory = await this.importDirectory(scopeKey);
       const existing = await this.read(directory, session.id);
+      // A deletion while the importer was reading wins over its stale snapshot.
+      if (options.mustExist && !existing) return 'removed';
       if (existing && (!existing.importOrigin || isForkedImport(existing))) {
         if (existing.importOrigin && !existing.importOrigin.forkedAt) {
           existing.importOrigin = { ...existing.importOrigin, forkedAt: new Date().toISOString() };
@@ -824,6 +833,18 @@ export class SessionStore {
         : {};
       await this.write(directory, { ...existing, ...session, ...kept });
       return 'written';
+    });
+  }
+
+  /** Recheck ownership and continuation at the delete sink, in the captured account directory. */
+  async deleteImported(id: string, scopeKey: string): Promise<DeleteImportedOutcome> {
+    return this.serialize(id, async () => {
+      const directory = await this.importDirectory(scopeKey);
+      const session = await this.read(directory, id);
+      if (!session || !session.importOrigin) return 'missing';
+      if (isForkedImport(session)) return 'forked';
+      await rm(this.filePath(directory, id), { force: true });
+      return 'removed';
     });
   }
 

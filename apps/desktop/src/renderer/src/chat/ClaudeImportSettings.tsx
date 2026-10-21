@@ -29,22 +29,42 @@ function claudeImportApi() {
 }
 
 /** The import state, kept current from main's pushes; null until the first read lands. */
-export function useClaudeImport(): [ClaudeImportState | null, (state: ClaudeImportState) => void] {
+export function useClaudeImport(): [
+  ClaudeImportState | null,
+  (state: ClaudeImportState) => void,
+  string | null,
+  () => void,
+] {
   const [state, setState] = useState<ClaudeImportState | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     const api = claudeImportApi();
     if (!api) return undefined;
     let live = true;
-    void api.getState().then(next => {
-      if (live) setState(next);
+    let receivedPush = false;
+    setError(null);
+    const load = async () => {
+      try {
+        const next = await api.getState();
+        if (live && !receivedPush) setState(next);
+      } catch (error) {
+        if (live && !receivedPush) setError(error instanceof Error ? error.message : String(error));
+      }
+    };
+    void load();
+    const off = api.onStateChanged(next => {
+      receivedPush = true;
+      setState(next);
+      setError(null);
     });
-    const off = api.onStateChanged(next => setState(next));
     return () => {
       live = false;
       off();
     };
-  }, []);
-  return [state, setState];
+  }, [attempt]);
+  const retry = useCallback(() => setAttempt(previous => previous + 1), []);
+  return [state, setState, error, retry];
 }
 
 export function claudeImportSummary(state: ClaudeImportState | null): string {
@@ -83,9 +103,13 @@ const KIND_LABEL: Record<ClaudeImportKind, string> = { 'claude-code': 'Claude Co
 export function ClaudeImportSettings({
   state,
   onState,
+  loadError,
+  onRetry,
 }: {
   state: ClaudeImportState | null;
   onState: (state: ClaudeImportState) => void;
+  loadError: string | null;
+  onRetry: () => void;
 }) {
   const api = claudeImportApi();
   const [inline, setInline] = useImportedInline();
@@ -116,6 +140,23 @@ export function ClaudeImportSettings({
   );
   // Two quick clicks would each build on the selection drawn before either reply arrived.
   const pendingProjects = useRef<{ selection: Set<string>; inFlight: number } | null>(null);
+
+  if (loadError) {
+    return (
+      <Alert
+        color="danger"
+        variant="soft"
+        data-testid="claude-import-load-error"
+        endDecorator={
+          <Button size="sm" color="danger" variant="soft" onClick={onRetry} data-testid="claude-import-retry-btn">
+            Retry
+          </Button>
+        }
+      >
+        Could not load import settings. {loadError}
+      </Alert>
+    );
+  }
 
   if (!api || !state) {
     return (

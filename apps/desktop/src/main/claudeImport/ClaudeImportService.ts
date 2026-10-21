@@ -57,7 +57,7 @@ export interface ClaudeImportServiceDeps {
   scopeKey: () => string | null;
   pickModel: () => Promise<string | undefined>;
   listSessions: () => Promise<ChatSessionSummary[]>;
-  deleteSession: (id: string) => Promise<void>;
+  deleteImported: (id: string, scopeKey: string) => Promise<'removed' | 'forked' | 'missing'>;
   /** A native dialog; the only way a path reaches the importer from the renderer side. */
   pickPath: (kind: 'folder' | 'export', defaultPath?: string) => Promise<string | null>;
   send: (channel: string, payload: unknown) => void;
@@ -74,6 +74,8 @@ export class ClaudeImportService {
   private codeWatcher: FSWatcher | null = null;
   private codePoll: NodeJS.Timeout | null = null;
   private chatWatcher: FSWatcher | null = null;
+  private chatPoll: NodeJS.Timeout | null = null;
+  private checkingWatch = false;
   private codeTimer: NodeJS.Timeout | null = null;
   private chatTimer: NodeJS.Timeout | null = null;
   private sessionsTimer: NodeJS.Timeout | null = null;
@@ -99,10 +101,10 @@ export class ClaudeImportService {
 
   /** Called once the window is showing. Never awaited by startup. */
   start(): void {
-    void this.applyWatchers();
+    this.runBackground(() => this.applyWatchers());
     this.startTimer = setTimeout(() => {
       this.startTimer = null;
-      void this.autoSync();
+      this.runBackground(() => this.autoSync());
     }, FIRST_SYNC_DELAY_MS);
     this.startTimer.unref?.();
   }
@@ -111,7 +113,7 @@ export class ClaudeImportService {
   onScopeChanged(): void {
     this.transcripts = [];
     // Restoring the saved sign-in lands here moments after launch; the delayed first sync covers it.
-    if (!this.startTimer) void this.autoSync();
+    if (!this.startTimer) this.runBackground(() => this.autoSync());
     this.pushState();
   }
 
@@ -127,6 +129,7 @@ export class ClaudeImportService {
       if (timer) clearTimeout(timer);
     }
     if (this.codePoll) clearInterval(this.codePoll);
+    if (this.chatPoll) clearInterval(this.chatPoll);
     this.codeWatcher?.close();
     this.chatWatcher?.close();
   }
@@ -248,6 +251,7 @@ export class ClaudeImportService {
     }
     const settings = await this.states.readSettings();
     if (settings.code.enabled) await this.syncCode();
+    await this.checkWatchedFolder();
   }
 
   /**
@@ -270,14 +274,15 @@ export class ClaudeImportService {
       const wanted =
         matchesFilter(origin.cwd, settings.code) && (settings.code.includeSubagents || !origin.parentSourceId);
       if (!wanted) {
-        await this.deps.deleteSession(summary.id);
+        const outcome = await this.deps.deleteImported(summary.id, scopeKey);
+        if (outcome === 'forked') continue;
         if (path && cursor) scope.files[path] = pendingCursor(cursor);
         changed = true;
         continue;
       }
       const project = await projectFor(origin.cwd, origin.gitBranch, isDirectory);
       if (!project || summary.project?.directory === project.directory) continue;
-      const session = await this.deps.store.getImported(summary.id, scopeKey).catch(() => null);
+      const session = await this.deps.store.getImported(summary.id, scopeKey);
       if (!session || isForkedImport(session)) continue;
       await this.deps.store.putImported({ ...session, project }, scopeKey);
       changed = true;
@@ -414,12 +419,12 @@ export class ClaudeImportService {
       const cursor = scope.files[transcript.path];
       if (cursor?.status !== 'imported' || matchesFilter(cursor.cwd, settings)) continue;
       if (this.disposed || this.removing || this.deps.scopeKey() !== scopeKey) break;
-      const existing = await this.deps.store.getImported(cursor.sessionId, scopeKey).catch(() => null);
+      const existing = await this.deps.store.getImported(cursor.sessionId, scopeKey);
       if (existing && isForkedImport(existing)) {
         scope.files[transcript.path] = { ...cursor, status: 'forked' };
       } else {
-        if (existing) await this.deps.deleteSession(cursor.sessionId);
-        scope.files[transcript.path] = pendingCursor(cursor);
+        const outcome = await this.deps.deleteImported(cursor.sessionId, scopeKey);
+        scope.files[transcript.path] = outcome === 'forked' ? { ...cursor, status: 'forked' } : pendingCursor(cursor);
         this.sessionsChanged();
       }
       pruned = true;
@@ -488,21 +493,29 @@ export class ClaudeImportService {
       await this.applyWatchers();
       await this.codeRun;
     }
+    if (this.deps.scopeKey() !== scopeKey) throw new ImportScopeChangedError();
     const sessions = (await this.deps.listSessions()).filter(session => session.importOrigin?.kind === kind);
+    if (this.deps.scopeKey() !== scopeKey) throw new ImportScopeChangedError();
     let removed = 0;
     let keptForked = 0;
+    const keptSessionIds = new Set<string>();
     for (const session of sessions) {
       if (session.importOrigin?.forkedAt) {
+        keptSessionIds.add(session.id);
         keptForked++;
         continue;
       }
-      await this.deps.deleteSession(session.id);
-      removed++;
+      const outcome = await this.deps.deleteImported(session.id, scopeKey);
+      if (outcome === 'forked') {
+        keptSessionIds.add(session.id);
+        keptForked++;
+      } else if (outcome === 'removed') removed++;
     }
     const scope = await this.states.scope(scopeKey);
     if (kind === 'claude-code') {
       for (const [path, cursor] of Object.entries(scope.files)) {
-        if (cursor.status !== 'forked') scope.files[path] = pendingCursor(cursor);
+        if (keptSessionIds.has(cursor.sessionId)) scope.files[path] = { ...cursor, status: 'forked' };
+        else if (cursor.status !== 'forked') scope.files[path] = pendingCursor(cursor);
       }
     } else {
       scope.conversations = {};
@@ -533,28 +546,52 @@ export class ClaudeImportService {
   }
 
   private async zipsIn(folder: string): Promise<{ path: string; mtimeMs: number }[]> {
-    const names = await readdir(folder).catch(() => [] as string[]);
+    const names = await readdir(folder);
     const zips: { path: string; mtimeMs: number }[] = [];
     for (const name of names) {
       if (!name.toLowerCase().endsWith('.zip')) continue;
       const path = join(folder, name);
-      const info = await stat(path).catch(() => null);
-      if (info?.isFile()) zips.push({ path, mtimeMs: info.mtimeMs });
+      try {
+        const info = await stat(path);
+        if (info.isFile()) zips.push({ path, mtimeMs: info.mtimeMs });
+      } catch (error) {
+        this.deps.logger.warn(`CLAUDE IMPORT: could not inspect watched export: ${String(error)}`);
+      }
     }
     return zips;
   }
 
   private async checkWatchedFolder(): Promise<void> {
-    const settings = await this.states.readSettings();
-    const scopeKey = this.deps.scopeKey();
-    if (!settings.chatWatchFolder || !scopeKey || this.chatRunning) return;
-    const scope = await this.states.scope(scopeKey);
-    for (const zip of await this.zipsIn(settings.chatWatchFolder)) {
-      if (scope.watchedSeen[zip.path] === zip.mtimeMs || zip.mtimeMs < settings.chatWatchSince) continue;
-      scope.watchedSeen[zip.path] = zip.mtimeMs;
-      await this.states.saveScope(scopeKey);
-      if (await looksLikeClaudeExport(zip.path)) await this.importChatFile(zip.path);
+    if (this.checkingWatch || this.disposed || this.removing) return;
+    this.checkingWatch = true;
+    try {
+      const settings = await this.states.readSettings();
+      const scopeKey = this.deps.scopeKey();
+      if (!settings.chatWatchFolder || !scopeKey || this.chatRunning) return;
+      const scope = await this.states.scope(scopeKey);
+      for (const zip of await this.zipsIn(settings.chatWatchFolder)) {
+        if (this.disposed || this.removing || this.deps.scopeKey() !== scopeKey) break;
+        if (scope.watchedSeen[zip.path] === zip.mtimeMs || zip.mtimeMs < settings.chatWatchSince) continue;
+        try {
+          // A partially downloaded archive or a transient read failure must remain retryable.
+          if (!(await looksLikeClaudeExport(zip.path))) continue;
+          if (this.deps.scopeKey() !== scopeKey) break;
+          const result = await this.importChatFile(zip.path);
+          const summary = scope.lastChatImport;
+          if (!result.ok || !summary || summary.error || summary.counts.failed > 0) continue;
+          scope.watchedSeen[zip.path] = zip.mtimeMs;
+          await this.states.saveScope(scopeKey);
+        } catch (error) {
+          this.deps.logger.warn(`CLAUDE IMPORT: could not import watched export: ${String(error)}`);
+        }
+      }
+    } finally {
+      this.checkingWatch = false;
     }
+  }
+
+  private runBackground(work: () => Promise<unknown>): void {
+    void work().catch(error => this.deps.logger.warn(`CLAUDE IMPORT: background task failed: ${String(error)}`));
   }
 
   /** Brings the watchers in line with the settings; each is throttled and never keeps the app alive. */
@@ -566,7 +603,7 @@ export class ClaudeImportService {
     if (this.codePoll) clearInterval(this.codePoll);
     this.codePoll = null;
     if (settings.code.enabled) {
-      const trigger = () => this.throttle('code', () => void this.autoSync());
+      const trigger = () => this.throttle('code', () => this.runBackground(() => this.autoSync()));
       try {
         this.codeWatcher = watch(this.sourceFolder(settings), { recursive: true, persistent: false }, trigger);
         this.codeWatcher.on('error', () => {
@@ -581,15 +618,21 @@ export class ClaudeImportService {
 
     this.chatWatcher?.close();
     this.chatWatcher = null;
+    if (this.chatPoll) clearInterval(this.chatPoll);
+    this.chatPoll = null;
     if (settings.chatWatchFolder) {
       try {
         this.chatWatcher = watch(settings.chatWatchFolder, { persistent: false }, () =>
-          this.throttle('chat', () => void this.checkWatchedFolder())
+          this.throttle('chat', () => this.runBackground(() => this.checkWatchedFolder()))
         );
-        this.chatWatcher.on('error', () => undefined);
+        this.chatWatcher.on('error', error => {
+          this.deps.logger.warn(`CLAUDE IMPORT: export folder watcher failed: ${String(error)}`);
+        });
       } catch (error) {
         this.deps.logger.warn(`CLAUDE IMPORT: cannot watch the export folder: ${String(error)}`);
       }
+      this.chatPoll = setInterval(() => this.runBackground(() => this.checkWatchedFolder()), POLL_FALLBACK_MS);
+      this.chatPoll.unref?.();
     }
   }
 

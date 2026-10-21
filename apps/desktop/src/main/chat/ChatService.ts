@@ -1269,7 +1269,17 @@ export class ChatService {
    * gone with the conversation, and the model can no longer name their handles. Nothing would
    * be left that could turn a forgotten dev server off.
    */
+  async deleteImportedSession(sessionId: string, scopeKey: string): Promise<'removed' | 'forked' | 'missing'> {
+    const outcome = await this.deps.store.deleteImported(sessionId, scopeKey);
+    if (outcome === 'removed') await this.cleanupDeletedSession(sessionId, false);
+    return outcome;
+  }
+
   async deleteSession(sessionId: string): Promise<void> {
+    await this.cleanupDeletedSession(sessionId, true);
+  }
+
+  private async cleanupDeletedSession(sessionId: string, deleteStoredSession: boolean): Promise<void> {
     this.stop(sessionId);
     this.deps.approvals?.forgetSession(sessionId);
     this.doomLoop.forget(sessionId);
@@ -1284,7 +1294,7 @@ export class ChatService {
     // Video polling stops first, so a download landing afterwards cannot recreate the folder.
     this.deps.videoJobs?.forgetSession(sessionId);
     await this.deps.media?.forgetSession(sessionId);
-    await this.deps.store.delete(sessionId);
+    if (deleteStoredSession) await this.deps.store.delete(sessionId);
     this.deps.activity?.forget(sessionId);
     this.deps.queue?.forget(sessionId);
     await this.deps.sidebarSections?.forgetSession(sessionId).catch((err: unknown) => {

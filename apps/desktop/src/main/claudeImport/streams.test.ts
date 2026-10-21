@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, writeFile, open } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
@@ -56,6 +56,22 @@ describe('readJsonlLines', () => {
     await writeFile(path, `${'x'.repeat(600 * 1024)}\n{"after":1}\n`);
     const lines = await collect(readJsonlLines(path, 0, 1024));
     expect(lines.map(line => line.text)).toEqual([null, '{"after":1}']);
+  });
+
+  it.each([
+    { cap: 10, length: 10, skipped: false },
+    { cap: 10, length: 11, skipped: true },
+    { cap: 10, length: 100, skipped: true },
+    { cap: 256 * 1024, length: 256 * 1024, skipped: false },
+    { cap: 256 * 1024, length: 256 * 1024 + 1, skipped: true },
+  ])('checks the final piece before a newline: $cap bytes, $length characters', async ({ cap, length, skipped }) => {
+    const directory = await mkdtemp(join(tmpdir(), 'jsonl-cap-'));
+    const path = join(directory, 'line.jsonl');
+    await writeFile(path, `${'x'.repeat(length)}\n{}\n`);
+    const lines = await collect(readJsonlLines(path, 0, cap));
+    expect(lines[0].text).toBe(skipped ? null : 'x'.repeat(length));
+    expect(lines[1].text).toBe('{}');
+    expect(lines[0].end).toBe(length + 1);
   });
 
   it('reads only the head and tail for indexing', async () => {
@@ -150,6 +166,22 @@ describe('zip reader', () => {
     const path = join(dir, 'fake.zip');
     await writeFile(path, 'not a zip at all, just text that is long enough');
     await expect(listZipMembers(path)).rejects.toThrow(ZipError);
+  });
+
+  it('rejects an oversized central directory before allocating it', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'zip-'));
+    const path = join(dir, 'large-directory.zip');
+    const size = 20 * 1024 * 1024;
+    const end = Buffer.alloc(22);
+    end.writeUInt32LE(0x06054b50, 0);
+    end.writeUInt32LE(size, 12);
+    const file = await open(path, 'w');
+    try {
+      await file.write(end, 0, end.length, size);
+    } finally {
+      await file.close();
+    }
+    await expect(listZipMembers(path)).rejects.toThrow(/central directory is larger/);
   });
 
   it('flags member names that would escape an extraction folder', () => {

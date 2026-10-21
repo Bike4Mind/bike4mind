@@ -32,7 +32,7 @@ import { PrStatusBar } from './PrStatusBar';
 import { openInSessionBrowser } from './prLinks';
 import { usePrSummaries, usePullRequest } from './usePullRequest';
 import { SessionList } from './SessionList';
-import { isUntouchedImport } from './grouping';
+import { isUntouchedImport, projectForGroup } from './grouping';
 import { useImportedInline } from './importedInline';
 import { TerminalPanel } from './TerminalPanel';
 import {
@@ -510,7 +510,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
    */
   const onCreateInProject = useCallback(
     async (directory: string) => {
-      const sibling = sessions.find(session => session.project?.directory === directory)?.project;
+      const sibling = projectForGroup(sessions, directory);
       if (!sibling) return;
       setScreen('conversation');
       clearCodeError();

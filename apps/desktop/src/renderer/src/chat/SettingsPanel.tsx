@@ -109,13 +109,18 @@ function permissionsEntry(
   };
 }
 
-function claudeImportEntry(state: ClaudeImportState | null, setState: (state: ClaudeImportState) => void): ConfigEntry {
+function claudeImportEntry(
+  state: ClaudeImportState | null,
+  setState: (state: ClaudeImportState) => void,
+  loadError: string | null,
+  onRetry: () => void
+): ConfigEntry {
   return {
     id: 'claude-import',
     icon: <FolderIcon />,
     label: 'Import from Claude',
-    summary: claudeImportSummary(state),
-    control: <ClaudeImportSettings state={state} onState={setState} />,
+    summary: loadError ? 'Could not load import settings' : claudeImportSummary(state),
+    control: <ClaudeImportSettings state={state} onState={setState} loadError={loadError} onRetry={onRetry} />,
   };
 }
 
@@ -199,7 +204,7 @@ function useSettingsEntries(auth: AuthState | null): Record<SettingsSection, Con
   const [suggestions, toggleSuggestions] = usePromptSuggestions();
   const [suggestionModel] = usePromptSuggestionModel();
   const [permissions, setPermissions, permissionsError, retryPermissions] = usePermissions();
-  const [claudeImport, setClaudeImport] = useClaudeImport();
+  const [claudeImport, setClaudeImport, importError, retryImport] = useClaudeImport();
 
   return {
     general: [
@@ -209,7 +214,7 @@ function useSettingsEntries(auth: AuthState | null): Record<SettingsSection, Con
       updatesEntry(update),
     ],
     permissions: [permissionsEntry(permissions, setPermissions, permissionsError, retryPermissions)],
-    import: [claudeImportEntry(claudeImport, setClaudeImport)],
+    import: [claudeImportEntry(claudeImport, setClaudeImport, importError, retryImport)],
   };
 }
 

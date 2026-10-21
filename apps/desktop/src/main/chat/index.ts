@@ -875,9 +875,10 @@ export function registerChat(
     },
     pickModel: () => service.modelForNewSession().catch(() => undefined),
     listSessions: () => store.list(),
-    deleteSession: async sessionId => {
-      await service.deleteSession(sessionId);
-      await pullRequests.forget(sessionId);
+    deleteImported: async (sessionId, scopeKey) => {
+      const outcome = await service.deleteImportedSession(sessionId, scopeKey);
+      if (outcome === 'removed') await pullRequests.forget(sessionId);
+      return outcome;
     },
     send,
     logger,

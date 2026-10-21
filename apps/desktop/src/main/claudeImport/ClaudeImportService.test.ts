@@ -1,10 +1,12 @@
-import { copyFile, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, writeFile, stat, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ChatSession } from '@shared/chat';
 import { IPC_CHANNELS } from '@shared/ipc';
 import { SessionStore } from '../chat/SessionStore';
+import * as chatImport from './ClaudeChatImport';
+import { buildZip } from './__fixtures__/buildZip';
 import { codeSessionId, importScopeTag } from './ClaudeCodeSync';
 import { ClaudeImportService } from './ClaudeImportService';
 
@@ -26,9 +28,17 @@ afterEach(() => {
   for (const service of services) service.dispose();
   services = [];
   dialog.next = null;
+  vi.useRealTimers();
 });
 
-async function setup(options: { signedIn?: boolean } = {}) {
+async function setup(
+  options: {
+    signedIn?: boolean;
+    scopeKey?: () => string | null;
+    beforeList?: () => void;
+    beforeDelete?: () => Promise<void>;
+  } = {}
+) {
   const root = await mkdtemp(join(tmpdir(), 'claude-import-service-'));
   const home = join(root, 'home');
   const project = join(home, '.claude', 'projects', '-work-example-project');
@@ -42,12 +52,17 @@ async function setup(options: { signedIn?: boolean } = {}) {
     home,
     userData: join(root, 'userData'),
     store,
-    scopeKey: () => (options.signedIn === false ? null : 'test-scope'),
+    scopeKey: options.scopeKey ?? (() => (options.signedIn === false ? null : 'test-scope')),
     pickModel: async () => 'picked-model',
-    listSessions: () => store.list(),
-    deleteSession: async id => {
-      deleted.push(id);
-      await store.delete(id);
+    listSessions: async () => {
+      options.beforeList?.();
+      return store.list();
+    },
+    deleteImported: async (id, scopeKey) => {
+      await options.beforeDelete?.();
+      const outcome = await store.deleteImported(id, scopeKey);
+      if (outcome === 'removed') deleted.push(id);
+      return outcome;
     },
     pickPath: async () => picked,
     send: channel => sent.push(channel),
@@ -231,6 +246,114 @@ describe('ClaudeImportService', () => {
     expect((await store.list()).filter(session => session.importOrigin?.kind === 'claude-chat')).toHaveLength(2);
   });
 
+  it('aborts removal when the account changes while listing sessions', async () => {
+    let scope = 'test-scope';
+    let switchOnList = false;
+    const { service, store, deleted } = await setup({
+      scopeKey: () => scope,
+      beforeList: () => {
+        if (switchOnList) scope = 'other-scope';
+      },
+    });
+    await service.syncCode();
+    switchOnList = true;
+    await expect(service.removeImported('claude-code')).rejects.toThrow(/account changed/);
+    expect(deleted).toEqual([]);
+    expect(await store.get(SESSION_ID)).not.toBeNull();
+  });
+
+  it('keeps a session continued after the removal list was captured', async () => {
+    const { service, store, deleted } = await setup({
+      beforeDelete: async () => {
+        await store.appendMessage(SESSION_ID, { id: 'new-turn', role: 'user', content: 'keep me', createdAt: 'x' });
+      },
+    });
+    await service.syncCode();
+    expect(await service.removeImported('claude-code')).toEqual({ removed: 0, keptForked: 1 });
+    expect(deleted).toEqual([]);
+    expect((await store.get(SESSION_ID))?.messages.at(-1)?.content).toBe('keep me');
+    expect((await service.state()).code.forked).toBe(1);
+  });
+
+  it('retries an unchanged watched export after a failed conversation write', async () => {
+    vi.useFakeTimers();
+    const { root, service, store, pick } = await setup();
+    const folder = join(root, 'downloads');
+    await mkdir(folder);
+    pick(folder);
+    await service.setChatWatchFolder(false);
+    const fixture = JSON.parse(await readFile(join(FIXTURES, 'conversations.json'), 'utf8')) as unknown[];
+    const path = join(folder, 'export.zip');
+    await writeFile(
+      path,
+      buildZip([
+        { name: 'users.json', data: Buffer.from('[]') },
+        { name: 'conversations.json', data: Buffer.from(JSON.stringify([fixture[0]])) },
+      ])
+    );
+    const write = vi.spyOn(store, 'putImported').mockRejectedValueOnce(new Error('EIO'));
+    service.start();
+    await vi.advanceTimersByTimeAsync(5000);
+    await vi.waitFor(async () => expect((await service.state()).chat.lastImport?.counts.failed).toBe(1));
+    const original = await stat(path);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.waitFor(async () => expect((await service.state()).chat.lastImport?.counts.imported).toBe(1));
+    expect(write).toHaveBeenCalledTimes(2);
+    expect((await stat(path)).mtimeMs).toBe(original.mtimeMs);
+  });
+
+  it('retries an archive that was unreadable on the initial scan at the same mtime', async () => {
+    vi.useFakeTimers();
+    const { root, service, store, pick } = await setup();
+    const folder = join(root, 'downloads');
+    await mkdir(folder);
+    pick(folder);
+    await service.setChatWatchFolder(false);
+    const path = join(folder, 'export.zip');
+    await writeFile(path, 'not a complete zip archive yet');
+    const original = await stat(path);
+    service.start();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect((await service.state()).chat.lastImport).toBeNull();
+    const fixture = JSON.parse(await readFile(join(FIXTURES, 'conversations.json'), 'utf8')) as unknown[];
+    await writeFile(
+      path,
+      buildZip([
+        { name: 'users.json', data: Buffer.from('[]') },
+        { name: 'conversations.json', data: Buffer.from(JSON.stringify([fixture[0]])) },
+      ])
+    );
+    await utimes(path, original.atime, original.mtime);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.waitFor(async () =>
+      expect((await store.list()).filter(session => session.importOrigin?.kind === 'claude-chat')).toHaveLength(1)
+    );
+  });
+
+  it('does not import a watched export after its account signs out during recognition', async () => {
+    vi.useFakeTimers();
+    let scope: string | null = 'test-scope';
+    const { root, service, store, pick } = await setup({ scopeKey: () => scope });
+    const folder = join(root, 'downloads');
+    await mkdir(folder);
+    pick(folder);
+    await service.setChatWatchFolder(false);
+    await writeFile(join(folder, 'export.zip'), 'recognition is stubbed');
+    const recognition = vi.spyOn(chatImport, 'looksLikeClaudeExport').mockImplementationOnce(async () => {
+      scope = null;
+      return true;
+    });
+    try {
+      service.start();
+      await vi.advanceTimersByTimeAsync(5000);
+      await vi.waitFor(() => expect(recognition).toHaveBeenCalled());
+      expect((await service.state()).chat.lastImport).toBeNull();
+      expect(await store.list()).toEqual([]);
+    } finally {
+      recognition.mockRestore();
+    }
+  });
+
   it('reports a picked folder that is not there', async () => {
     const { root, service, pick } = await setup();
     pick(join(root, 'missing'));
@@ -261,7 +384,7 @@ describe('registerClaudeImport', () => {
         scopeKey: () => 'test-scope',
         pickModel: async () => undefined,
         listSessions: () => store.list(),
-        deleteSession: async () => {},
+        deleteImported: async () => 'missing',
         send: () => {},
         logger: { warn: () => {} },
       }

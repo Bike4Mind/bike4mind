@@ -383,4 +383,42 @@ describe('Claude Code import', () => {
     expect(mapToolCall('mcp__server__tool', { q: 1 })).toEqual({ name: 'mcp__server__tool', input: { q: 1 } });
     expect(mapToolCall('Agent', 'not an object')).toEqual({ name: 'Agent', input: {} });
   });
+  it('keeps a deletion made while an import is waiting on project resolution', async () => {
+    const { transcriptPath, store, deps } = await setup();
+    const first = await importTranscript(await indexed(transcriptPath), undefined, deps);
+    await completeAndAppend(transcriptPath);
+    const id = codeSessionId(SOURCE_ID);
+    let resolveReached!: () => void;
+    const reached = new Promise<void>(resolve => { resolveReached = resolve; });
+    let releaseProject!: () => void;
+    const projectReady = new Promise<void>(resolve => { releaseProject = resolve; });
+    const running = importTranscript(await indexed(transcriptPath), first, {
+      ...deps,
+      directoryExists: async () => {
+        resolveReached();
+        await projectReady;
+        return false;
+      },
+    });
+    await reached;
+    await store.delete(id);
+    releaseProject();
+    expect((await running).status).toBe('removed');
+    expect(await store.get(id)).toBeNull();
+  });
+
+  it('retries an unchanged transcript after a failed import', async () => {
+    const { transcriptPath } = await setup();
+    const transcript = await indexed(transcriptPath);
+    const failed: FileCursor = {
+      sessionId: transcript.sessionId,
+      size: transcript.size,
+      mtimeMs: transcript.mtimeMs,
+      offset: 0,
+      status: 'failed',
+      error: 'Temporary I/O error',
+    };
+    expect(needsImport(transcript, failed)).toBe(true);
+  });
+
 });
