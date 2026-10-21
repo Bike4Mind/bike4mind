@@ -434,12 +434,25 @@ export function resolveForcedRetrieval(mode: PromptMode | undefined, sessionFlag
  * `server__tool` id (via `session.enabledTools`) keeps it while its unnamed siblings are withheld.
  *
  * Siblings below/above resolve the other promptMode-derived axes. Several more are still spelled out
- * inline in ChatCompletionProcess (`skipAdminPromptTemplates`, `excludeCurrentPrompt`,
- * `omitIdentityReminder`) - each has the same miss-a-site failure mode, and each should get a named
+ * inline in ChatCompletionProcess (`skipAdminPromptTemplates`, `excludeCurrentPrompt`) - each has the same miss-a-site failure mode, and each should get a named
  * resolver here rather than a second inline derivation when a caller needs it on its own.
  */
 export function resolveSkipAutoOffers(body: { promptMode?: PromptMode; skipAutoOffers?: boolean }): boolean {
   return Boolean(body.promptMode) || body.skipAutoOffers === true;
+}
+
+/**
+ * Whether the adapters leave out their model-identity line. `raw` promises an empty system
+ * parameter; otherwise the line is only the fallback for turns the `current_model_details` tool
+ * cannot reach. Read the FINAL offered list (after deny-list and the Ollama / non-tool-model
+ * trims), never the requested one, or a turn whose tool was stripped would have neither.
+ * `current_model_details` must stay in AUTO_ADDED_TOOL_NAMES (ChatCompletionProcess).
+ */
+export function resolveOmitIdentityReminder(input: {
+  promptMode?: PromptMode;
+  offeredToolNames: readonly string[];
+}): boolean {
+  return input.promptMode === 'raw' || input.offeredToolNames.includes('current_model_details');
 }
 
 /**

@@ -209,6 +209,7 @@ import {
   resolveForcedRetrieval,
   SYSTEM_PROMPT_PRIORITY,
   relocatePerTurnContext,
+  resolveOmitIdentityReminder,
   resolveSkipAutoOffers,
   lakeContentTokens,
   toPromptDetails,
@@ -808,6 +809,7 @@ export const AUTO_ADDED_TOOL_NAMES = [
   'blog_publish',
   'blog_edit',
   'navigate_view',
+  'current_model_details',
   'skill',
   ...DATA_LAKE_TOOL_NAMES,
 ];
@@ -1717,6 +1719,7 @@ export class ChatCompletionProcess {
       if (!enabledTools.includes('navigate_view') && shouldAutoEnableNavigateView(parsedBody.extraContextMessages)) {
         finalEnabledTools.push('navigate_view');
       }
+      if (!finalEnabledTools.includes('current_model_details')) finalEnabledTools.push('current_model_details');
     }
 
     // Auto-add Lattice tools when Lattice feature is enabled
@@ -2417,6 +2420,7 @@ export class ChatCompletionProcess {
       if (!modelInfo || !llm) {
         throw new Error('Invalid LLM backend specified');
       }
+      const servingModel = { current: modelInfo };
       // Queue and agent runs skip ChatCompletionInvoke, so the redirect is first seen here. Record it
       // with the same convention Invoke uses: model.name is what answers, redirectedFrom what was asked.
       if (quest.promptMeta && resolvedModelId !== model) {
@@ -3290,6 +3294,7 @@ export class ChatCompletionProcess {
 
       let allTools = toolBuilder.buildTools({
         enabledTools,
+        servingModel,
         // Auto-offers are OUR additions, not the caller's, and MCP tools are merged past the
         // `enabledTools` filter without ever being named - so a caller that suppressed our
         // additions gets them suppressed here too. This is what makes an empty tool profile
@@ -3372,6 +3377,11 @@ export class ChatCompletionProcess {
             `🔧 [Tools] Trimmed ${before - allTools.length} auto-added tool(s) for local model ${modelInfo.id}`
           );
         }
+      }
+
+      // A model that cannot call tools cannot call this one either, so it keeps its identity line.
+      if (modelInfo.supportsTools === false && allTools) {
+        allTools = allTools.filter(t => t.toolSchema.name !== 'current_model_details');
       }
 
       const offeredToolNames = allTools?.map(t => t.toolSchema.name) ?? [];
@@ -4600,9 +4610,8 @@ export class ChatCompletionProcess {
               }
             : undefined,
         tools: allTools,
-        // raw promises an empty system parameter; the adapters append a model-identity
-        // line on their own, so the promise has to be threaded down to them.
-        ...(promptMode === 'raw' ? { omitIdentityReminder: true } : {}),
+        // The adapters append a model-identity line on their own; see resolveOmitIdentityReminder.
+        omitIdentityReminder: resolveOmitIdentityReminder({ promptMode, offeredToolNames }),
       };
 
       // Create an AbortController to allow cancelling the request. Set up before the Research
@@ -5358,6 +5367,7 @@ export class ChatCompletionProcess {
               // Update to the fallback model
               currentModel = fallbackResult.model;
               currentLlm = fallbackResult.backend;
+              servingModel.current = currentModel;
               if (this.reservationBasis) this.reservationBasis.modelInfo = currentModel;
               primaryFailureReason ??= sanitizeTelemetryError(lastError);
               fallbackAttempt++;

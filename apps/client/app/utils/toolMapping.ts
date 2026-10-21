@@ -61,6 +61,8 @@ export type PublicTools = Exclude<
   | 'describe_knowledge_base'
   | 'list_my_data_lakes'
   | 'create_data_lake'
+  // Offered server-side on every tool-capable turn; there is nothing to toggle.
+  | 'current_model_details'
   | SlackLlmTools
 >;
 

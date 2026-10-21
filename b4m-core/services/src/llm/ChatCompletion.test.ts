@@ -3468,6 +3468,71 @@ describe('ChatCompletionProcess', () => {
         expect(completeOpts.omitIdentityReminder).toBe(true);
       });
 
+      describe('current_model_details and the identity line', () => {
+        const turnBody = (extra: Record<string, unknown> = {}) => ({
+          ...startQuestParams,
+          tools: [],
+          projectId: undefined,
+          organizationId: undefined,
+          ...extra,
+        });
+        const lastCompleteOpts = () => vi.mocked(mockedGetLlmByModel.mock.results[0].value.complete).mock.calls[0][2];
+        const offered = () =>
+          (lastCompleteOpts().tools ?? []).map((t: { toolSchema: { name: string } }) => t.toolSchema.name);
+        const setModel = (extra: Record<string, unknown>) => {
+          mockTextModel();
+          mockedGetAvailableModels.mockResolvedValue([
+            {
+              id: ChatModels.GPT4,
+              type: 'text',
+              name: 'GPT-4',
+              backend: ModelBackend.OpenAI,
+              max_tokens: 100,
+              contextWindow: 1000,
+              can_stream: false,
+              pricing: {},
+              supportsImageVariation: false,
+              ...extra,
+            },
+          ]);
+        };
+
+        it('offers the tool unselected and drops the identity line', async () => {
+          setModel({ supportsTools: true });
+          await service.process({ body: turnBody(), logger: mockLogger });
+          expect(offered()).toContain('current_model_details');
+          expect(lastCompleteOpts().omitIdentityReminder).toBe(true);
+        });
+
+        it.each(['grounded', 'surface'] as const)('keeps the identity line under promptMode %s', async promptMode => {
+          setModel({ supportsTools: true });
+          await service.process({ body: turnBody({ promptMode }), logger: mockLogger });
+          expect(offered()).not.toContain('current_model_details');
+          expect(lastCompleteOpts().omitIdentityReminder).toBe(false);
+        });
+
+        it('keeps the identity line on an Ollama model', async () => {
+          setModel({ supportsTools: true, backend: ModelBackend.Ollama });
+          await service.process({ body: turnBody(), logger: mockLogger });
+          expect(offered()).not.toContain('current_model_details');
+          expect(lastCompleteOpts().omitIdentityReminder).toBe(false);
+        });
+
+        it('keeps the identity line when the tool is deny-listed', async () => {
+          setModel({ supportsTools: true });
+          await service.process({ body: turnBody({ deniedTools: ['current_model_details'] }), logger: mockLogger });
+          expect(offered()).not.toContain('current_model_details');
+          expect(lastCompleteOpts().omitIdentityReminder).toBe(false);
+        });
+
+        it('keeps the identity line on a model that cannot call tools', async () => {
+          setModel({ supportsTools: false });
+          await service.process({ body: turnBody(), logger: mockLogger });
+          expect(offered()).not.toContain('current_model_details');
+          expect(lastCompleteOpts().omitIdentityReminder).toBe(false);
+        });
+      });
+
       // A session's first turn used to keep the in-flight quest in history, so the caller's message
       // reached the model twice: once as history, once as the current user prompt. The pair
       // discriminates on the mode alone - only raw asks history to exclude the current turn.
@@ -4150,7 +4215,13 @@ describe('ChatCompletionProcess', () => {
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
       const logger = mockLogger;
-      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      const body = {
+        ...startQuestParams,
+        tools: [],
+        skipAutoOffers: true,
+        projectId: undefined,
+        organizationId: undefined,
+      };
 
       await service.process({ body, logger });
 
@@ -4682,6 +4753,53 @@ describe('ChatCompletionProcess', () => {
         'text_generation_usage',
         expect.objectContaining({ model: 'claude-opus-4-8' })
       );
+    });
+
+    // The tool is built once, before the fallback loop; it must report the hop that is answering.
+    it('current_model_details reports the fallback model after a failover', async () => {
+      reservationOrgSetup({ supportsTools: true });
+      fundedOrg();
+      mockQuest.sessionId = 'session1';
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };
+      mockedShouldTriggerFallback.mockReturnValue(true);
+      mockedIsOverloadedError.mockReturnValue(false);
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockRejectedValue(new Error('ServiceUnavailableException: try again')),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      const fallbackModel = {
+        id: 'claude-opus-4-8',
+        type: 'text' as const,
+        name: 'Claude Opus 4.8',
+        backend: ModelBackend.Anthropic,
+        max_tokens: 128_000,
+        contextWindow: 200_000,
+        can_stream: true,
+        supportsTools: true,
+        pricing: { 200000: { input: 0, output: 60 / 1_000_000 } },
+        supportsImageVariation: false,
+      };
+      let reported: string | undefined;
+      mockedGetLlmWithFallback.mockResolvedValue({
+        model: fallbackModel,
+        backend: {
+          complete: vi.fn().mockImplementation(async (_model, _messages, opts, cb) => {
+            const tool = opts.tools.find(
+              (t: { toolSchema: { name: string } }) => t.toolSchema.name === 'current_model_details'
+            );
+            reported = await tool.toolFn({});
+            await cb(['x'], { inputTokens: 1, outputTokens: 1 });
+          }),
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: fallbackModel.id,
+        },
+        attempt: 1,
+      } as any);
+
+      await service.process({ body: { ...reservationBody(), tools: [] }, logger: mockLogger });
+
+      expect(JSON.parse(reported ?? '{}')).toMatchObject({ id: 'claude-opus-4-8', served_via: 'direct Anthropic API' });
     });
 
     // Cache reads and writes are priced at their own rates, as the main settlement prices them, not
@@ -6136,7 +6254,7 @@ describe('ChatCompletionProcess', () => {
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
       await service.process({
-        body: { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined },
+        body: { ...startQuestParams, tools: [], skipAutoOffers: true, projectId: undefined, organizationId: undefined },
         logger: mockLogger,
       });
 
@@ -6181,6 +6299,7 @@ describe('ChatCompletionProcess', () => {
       ...startQuestParams,
       params: { ...startQuestParams.params, model: ChatModels.CLAUDE_5_SONNET_BEDROCK },
       tools: [],
+      skipAutoOffers: true,
       projectId: undefined,
       organizationId: undefined,
     };
@@ -6296,7 +6415,7 @@ describe('ChatCompletionProcess', () => {
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
       await service.process({
-        body: { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined },
+        body: { ...startQuestParams, tools: [], skipAutoOffers: true, projectId: undefined, organizationId: undefined },
         logger: mockLogger,
       });
 
@@ -6348,7 +6467,7 @@ describe('ChatCompletionProcess', () => {
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
       await service.process({
-        body: { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined },
+        body: { ...startQuestParams, tools: [], skipAutoOffers: true, projectId: undefined, organizationId: undefined },
         logger: mockLogger,
       });
 
@@ -6560,7 +6679,13 @@ describe('ChatCompletionProcess', () => {
         mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
         await service.process({
-          body: { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined },
+          body: {
+            ...startQuestParams,
+            tools: [],
+            skipAutoOffers: true,
+            projectId: undefined,
+            organizationId: undefined,
+          },
           logger: mockLogger,
         });
         const updateCall = mockDb.quests.update.mock.calls.find(

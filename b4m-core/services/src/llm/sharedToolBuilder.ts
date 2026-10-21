@@ -96,6 +96,8 @@ export interface ToolBuilderDeps {
   imageProcessorLambdaName?: string;
   llm: ICompletionBackend;
   model?: string;
+  /** See `ToolContext.servingModel`. */
+  servingModel?: ToolContext['servingModel'];
   precomputed?: {
     adminSettingsEnforceCredits: boolean;
     models: ModelInfo[];
@@ -425,7 +427,8 @@ export function buildSharedTools(
     callbacks.sessionId,
     undefined, // codeMinifier - CLI-only (web-tree-sitter); server path has no minifier
     deps.precomputed?.models,
-    deps.onToolLlmUsage
+    deps.onToolLlmUsage,
+    deps.servingModel
   );
 
   // The tool is inert without a usable config, so the config itself is the availability signal.

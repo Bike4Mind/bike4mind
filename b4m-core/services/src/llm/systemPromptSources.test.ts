@@ -18,6 +18,7 @@ import {
   PROMPT_SOURCE_ORDER,
   relocatePerTurnContext,
   resolveForcedRetrieval,
+  resolveOmitIdentityReminder,
   markShareablePrefixBoundary,
   SHAREABLE_PREFIX_SOURCES,
   SIDE_EFFECT_ONLY_FEATURES,
@@ -658,5 +659,18 @@ describe('per-turn context placement', () => {
 
       expect(markHistoryCacheAnchor(messages, messages[1])).toBe(messages);
     });
+  });
+});
+
+describe('resolveOmitIdentityReminder', () => {
+  it.each([
+    ['the tool is offered', undefined, ['web_search', 'current_model_details'], true],
+    ['raw, tool-less', 'raw', [], true],
+    ['raw, tool offered', 'raw', ['current_model_details'], true],
+    ['tool-less default turn', undefined, [], false],
+    ['tool stripped (Ollama trim, deny-list, non-tool model)', undefined, ['web_search'], false],
+    ['grounded without the tool', 'grounded', [], false],
+  ] as const)('%s', (_label, promptMode, offeredToolNames, expected) => {
+    expect(resolveOmitIdentityReminder({ promptMode, offeredToolNames })).toBe(expected);
   });
 });
