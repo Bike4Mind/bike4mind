@@ -81,14 +81,10 @@ describe('runDeterministicScan - malicious corpus is rejected', () => {
     );
   });
 
-  it('holds high-risk tools for a human at every visibility (never auto-publishes them)', () => {
-    for (const visibility of ['public', 'organization', 'unlisted'] as const) {
-      const findings = scan(skill('Fetch the page and summarize it.', { allowedTools: ['web_fetch'] }));
-      expect(findings.map(f => f.rule)).toContain('high_risk_tools');
-      const tier = computeTier(findings, { verdict: 'pass', confidence: 1, descriptionMatches: true }, 0.8);
-      expect(tier).toBe('high');
-      expect(reviewStatusFor(tier as 'high', visibility)).toBe('pending');
-    }
+  it('flags high-risk tools as the high tier', () => {
+    const findings = scan(skill('Fetch the page and summarize it.', { allowedTools: ['web_fetch'] }));
+    expect(findings.map(f => f.rule)).toContain('high_risk_tools');
+    expect(computeTier(findings, { verdict: 'pass', confidence: 1, descriptionMatches: true }, 0.8)).toBe('high');
   });
 
   it('treats tools outside the built-in catalog (MCP/overlay) as high-risk', () => {
@@ -140,14 +136,13 @@ describe('runDeterministicScan - benign fixtures pass', () => {
     expect(computeTier(findings, { verdict: 'pass', confidence: 0.95, descriptionMatches: true }, 0.8)).toBe('clean');
   });
 
-  it('flags a non-allowlisted URL as medium: held on Public, auto-checked on Org/Unlisted', () => {
+  it('flags a non-allowlisted URL as medium: held for a human at every visibility', () => {
     const findings = scan(skill('Use the template at https://example.org/template.'));
     expect(findings).toEqual([expect.objectContaining({ rule: 'external_url', severity: 'medium' })]);
     const tier = computeTier(findings, { verdict: 'pass', confidence: 1, descriptionMatches: true }, 0.8);
     expect(tier).toBe('review');
-    expect(reviewStatusFor('review', 'public')).toBe('pending');
-    expect(reviewStatusFor('review', 'organization')).toBe('auto_approved');
-    expect(reviewStatusFor('review', 'unlisted')).toBe('auto_approved');
+    for (const visibility of ['public', 'organization', 'unlisted'] as const)
+      expect(reviewStatusFor(tier as 'review', visibility)).toBe('pending');
   });
 });
 
@@ -340,10 +335,18 @@ describe('computeTier', () => {
     expect(computeTier([], { ...ok, confidence: 0.5 }, 0.8)).toBe('review');
     expect(computeTier([], { ...ok, descriptionMatches: false }, 0.8)).toBe('review');
   });
+});
 
-  it('maps clean to auto-approved at every visibility', () => {
-    for (const v of ['public', 'organization', 'unlisted'] as const)
-      expect(reviewStatusFor('clean', v)).toBe('auto_approved');
+describe('reviewStatusFor', () => {
+  // Only `clean` publishes without a human; review and high are held at every visibility.
+  const tiers = ['clean', 'review', 'high'] as const;
+  const visibilities = ['public', 'organization', 'unlisted'] as const;
+  const cases = tiers.flatMap(tier =>
+    visibilities.map(visibility => [tier, visibility, tier === 'clean' ? 'auto_approved' : 'pending'] as const)
+  );
+
+  it.each(cases)('maps %s at %s visibility to %s', (tier, visibility, expected) => {
+    expect(reviewStatusFor(tier, visibility)).toBe(expected);
   });
 });
 

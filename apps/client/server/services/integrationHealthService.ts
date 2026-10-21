@@ -159,10 +159,10 @@ export async function runAllProbes(logger: Logger): Promise<IIntegrationHealthCh
     }
   }
 
-  // Publish CloudWatch metrics (fire-and-forget - don't block on metric failures)
-  publishMetrics(recorded, logger).catch(err => {
-    logger.error('Failed to publish CloudWatch metrics', { error: err });
-  });
+  // Awaited: the Lambda freezes once its handler returns, so an un-awaited PutMetricData is either
+  // lost or sent on a later thaw, past its signature window ("Signature expired").
+  // emitMetrics logs and swallows its own failures, so this never fails the run.
+  await publishMetrics(recorded);
 
   return recorded;
 }
@@ -208,28 +208,17 @@ export async function getHealthSummary(logger: Logger): Promise<HealthSummary[]>
 /**
  * Publish CloudWatch custom metrics for each probe result.
  * Latency is published as Milliseconds so CloudWatch can compute P50/P95/P99 natively.
+ * Latency and Success are also published without a dimension: CloudWatch does not aggregate
+ * across dimensions, and the high-latency and all-down alarms in infra/alarms.ts read that series.
  */
-async function publishMetrics(checks: IIntegrationHealthCheckDocument[], logger: Logger): Promise<void> {
-  const metrics = checks.flatMap(check => [
-    {
-      name: 'Latency',
-      value: check.latencyMs,
-      dimensions: { Integration: check.integration },
-      unit: StandardUnit.Milliseconds,
-    },
-    {
-      name: 'Success',
-      value: check.status === 'healthy' ? 1 : 0,
-      dimensions: { Integration: check.integration },
-      unit: StandardUnit.Count,
-    },
-    {
-      name: 'Failure',
-      value: check.status === 'unhealthy' ? 1 : 0,
-      dimensions: { Integration: check.integration },
-      unit: StandardUnit.Count,
-    },
-  ]);
+async function publishMetrics(checks: IIntegrationHealthCheckDocument[]): Promise<void> {
+  const metrics = checks.flatMap(check => {
+    const dimensions = { Integration: check.integration };
+    const latency = { name: 'Latency', value: check.latencyMs, unit: StandardUnit.Milliseconds };
+    const success = { name: 'Success', value: check.status === 'healthy' ? 1 : 0, unit: StandardUnit.Count };
+    const failure = { name: 'Failure', value: check.status === 'unhealthy' ? 1 : 0, unit: StandardUnit.Count };
+    return [{ ...latency, dimensions }, { ...success, dimensions }, { ...failure, dimensions }, latency, success];
+  });
 
   await emitMetrics(INTEGRATION_HEALTH_NAMESPACE, metrics);
 }

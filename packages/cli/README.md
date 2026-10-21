@@ -141,7 +141,30 @@ b4m mcp enable <name> | disable <name>    # Toggle a server on/off
 b4m mcp serve [--http] [--port <n>]       # Expose Bike4Mind itself as an MCP server
 b4m update                                # Check for and install CLI updates
 b4m doctor                                # Diagnose the CLI installation (Node, registry, ripgrep, native modules)
+b4m skills push <path>                    # Create a skill from a folder, SKILL.md, or commands/*.md
+b4m skills push <path> --update           # Update your skill with the same name without a prompt
 ```
+
+### Pushing a local skill
+
+Log in with `b4m /login`, then run `b4m skills push ~/.claude/skills/my-skill`.
+Only the Markdown instructions are uploaded; supporting files and unsupported
+frontmatter (including `allowed-tools`) are reported and skipped. If no description
+is present, the first non-empty body line supplies it.
+
+An existing skill prompts before updating. For scripts without a terminal, pass
+`--update` explicitly. Removing `argument-hint` from the file clears the stored hint
+on update. A Skill Market import cannot be overwritten; rename the local skill or
+delete the import first.
+
+An export from another Skill Market author requires separate consent because the
+copy becomes your own trusted skill. Prefer importing it from the market to retain
+attribution and updates; `--yes` acknowledges this warning when pushing a copy.
+
+If push reports missing or expired authentication, run `b4m /login` again. If a
+non-interactive push stops at a name conflict, use `--update` only when you intend
+to replace that skill. Server validation errors are printed without creating or
+updating the skill.
 
 ### Switching environments (`--dev` / `--prod`)
 
