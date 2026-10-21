@@ -116,6 +116,14 @@ export type GenerationJobPayloads = {
   music: MusicJobPayload;
 };
 
+/** Where a finished job is posted besides the websocket update: the Slack thread that requested it. */
+export type GenerationJobDelivery = {
+  kind: 'slack';
+  workspaceId: string;
+  channelId: string;
+  threadTs: string;
+};
+
 type GenerationJobFields = {
   ownerType: CreditHolderType.User | CreditHolderType.Organization;
   ownerId: string;
@@ -138,6 +146,7 @@ type GenerationJobFields = {
   terminalHandlingClaimedAt?: Date | null;
   terminalHandledAt?: Date | null;
   questId?: string;
+  delivery?: GenerationJobDelivery;
   createdAt?: Date;
   updatedAt?: Date;
 };
