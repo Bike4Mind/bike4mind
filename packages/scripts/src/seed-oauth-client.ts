@@ -103,7 +103,13 @@ export function readOptInScopesEnv(env: NodeJS.ProcessEnv = process.env): string
 }
 
 export type SeedResult =
-  | { status: 'created'; client: Awaited<ReturnType<typeof createOAuthClient>>['client']; clientSecret: string }
+  | {
+      status: 'created';
+      client: Awaited<ReturnType<typeof createOAuthClient>>['client'];
+      clientSecret: string;
+      /** Set when the opt-in grant failed after the client was created; the secret above is still valid. */
+      grantError?: Error;
+    }
   | { status: 'exists'; name: string; clientId?: string }
   | { status: 'scopes-granted'; client: Awaited<ReturnType<typeof addOAuthClientOptInScopes>> };
 
@@ -157,10 +163,21 @@ export async function runSeed(env: NodeJS.ProcessEnv = process.env): Promise<See
       clientType,
       federatedIdp: federatedIdpInput,
     });
-    const client = optInScopes.length
-      ? await addOAuthClientOptInScopes(created.client.clientId, optInScopes)
-      : created.client;
-    return { status: 'created', client, clientSecret: created.clientSecret };
+    if (!optInScopes.length) {
+      return { status: 'created', client: created.client, clientSecret: created.clientSecret };
+    }
+    try {
+      const client = await addOAuthClientOptInScopes(created.client.clientId, optInScopes);
+      return { status: 'created', client, clientSecret: created.clientSecret };
+    } catch (grantError) {
+      // The secret is shown once and only this path holds it, so report it anyway; TARGET_CLIENT_ID finishes the grant.
+      return {
+        status: 'created',
+        client: created.client,
+        clientSecret: created.clientSecret,
+        grantError: grantError instanceof Error ? grantError : new Error(String(grantError)),
+      };
+    }
   } catch (error) {
     if (!(error instanceof ConflictError)) throw error;
     if (optInScopes.length) {
@@ -211,7 +228,7 @@ export async function main(): Promise<void> {
     return;
   }
 
-  const { client, clientSecret } = result;
+  const { client, clientSecret, grantError } = result;
   const federatedIdp = client.federatedIdp;
   console.log('\n✅ OAuth client registered!\n');
   console.log('  client_id    :', client.clientId);
@@ -231,7 +248,12 @@ export async function main(): Promise<void> {
   console.log(`\nSet these SST secrets in ${client.name}:`);
   console.log(`  sst secret set B4mOAuthClientId "${client.clientId}"`);
   console.log('  sst secret set B4mOAuthClientSecret "<the client_secret above>"');
+  if (grantError) {
+    console.error(`\nGranting opt-in scopes failed: ${grantError.message}`);
+    console.error(`The client exists. Rerun with TARGET_CLIENT_ID="${client.clientId}" and OPT_IN_SCOPES to finish.`);
+  }
   console.log('\n⚠️  The client_secret will NOT be shown again.\n');
+  if (grantError) process.exit(1);
 }
 
 // Run only when executed directly (npx tsx ...), not when a test imports main.

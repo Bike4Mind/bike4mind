@@ -3,6 +3,7 @@ import {
   ConflictError,
   createOAuthClientSchema,
   FEDERATED_ADMIN_STATUS_SCOPE,
+  NotFoundError,
   resolveOAuthFederatedIdp,
 } from '@bike4mind/common';
 
@@ -161,6 +162,21 @@ describe('runSeed', () => {
       });
     });
 
+    it('returns the created client and its still-valid secret when the grant fails, instead of losing it', async () => {
+      db.createOAuthClient.mockResolvedValue({
+        client: { clientId: 'cid', allowedScopes: ['openid'] },
+        clientSecret: 's',
+      });
+      db.addOAuthClientOptInScopes.mockRejectedValue(new Error('mongo gone'));
+
+      const result = await runSeed(federatedEnv);
+
+      expect(result).toMatchObject({ status: 'created', clientSecret: 's', client: { clientId: 'cid' } });
+      expect(result.status === 'created' && result.grantError?.message).toBe('mongo gone');
+      expect(db.OAuthClientModel.findOne).not.toHaveBeenCalled();
+      expect(db.mongoose.disconnect).toHaveBeenCalled();
+    });
+
     it('refuses to grant by name on a duplicate-name rerun, so an arbitrary duplicate is never targeted', async () => {
       db.createOAuthClient.mockRejectedValue(new ConflictError('exists'));
       await expect(runSeed(federatedEnv)).rejects.toThrow(/TARGET_CLIENT_ID/);
@@ -190,6 +206,20 @@ describe('runSeed', () => {
         /OPT_IN_SCOPES/
       );
       expect(db.mongoose.connect).not.toHaveBeenCalled();
+    });
+
+    it('propagates a rejected grant in TARGET_CLIENT_ID mode and still disconnects', async () => {
+      db.addOAuthClientOptInScopes.mockRejectedValue(new NotFoundError('OAuth client not found'));
+
+      await expect(
+        runSeed({
+          MONGODB_URI: env.MONGODB_URI,
+          TARGET_CLIENT_ID: 'b4m_missing_0a1b2c3d',
+          OPT_IN_SCOPES: FEDERATED_ADMIN_STATUS_SCOPE,
+        })
+      ).rejects.toThrow(NotFoundError);
+      expect(db.createOAuthClient).not.toHaveBeenCalled();
+      expect(db.mongoose.disconnect).toHaveBeenCalled();
     });
 
     it('does not call the helper when unset', async () => {
@@ -291,6 +321,27 @@ describe('main', () => {
     expect(printed(log)).toContain(`openid ${FEDERATED_ADMIN_STATUS_SCOPE}`);
     expect(db.createOAuthClient).not.toHaveBeenCalled();
     expect(exit).toHaveBeenCalledWith(0);
+  });
+
+  it('still prints the one-time secret and exits 1 when the grant fails after creating the client', async () => {
+    process.env.FEDERATED_ISSUER = 'https://b4m.example.test';
+    process.env.OPT_IN_SCOPES = FEDERATED_ADMIN_STATUS_SCOPE;
+    db.createOAuthClient.mockResolvedValue({
+      client: { clientId: 'cid', clientType: 'relying-party', name: 'My App', allowedScopes: ['openid'] },
+      clientSecret: 'one-time-s3cret',
+    });
+    db.addOAuthClientOptInScopes.mockRejectedValue(new Error('mongo gone'));
+    try {
+      await main();
+    } finally {
+      delete process.env.FEDERATED_ISSUER;
+      delete process.env.OPT_IN_SCOPES;
+    }
+
+    expect(printed(log)).toContain('one-time-s3cret');
+    expect(printed(error)).toContain('mongo gone');
+    expect(printed(error)).toContain('TARGET_CLIENT_ID="cid"');
+    expect(exit).toHaveBeenCalledWith(1);
   });
 
   it('prints a readable Invalid input list and exits 1 on a ZodError', async () => {
