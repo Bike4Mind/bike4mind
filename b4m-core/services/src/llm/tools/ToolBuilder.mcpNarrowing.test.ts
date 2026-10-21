@@ -110,7 +110,11 @@ describe('ToolBuilder native confirmation wiring', () => {
       },
     });
     await tools?.find(tool => tool.toolSchema.name === 'confirmation_probe')?.toolFn({});
-    expect(quest.pendingAction).toEqual({ tool: 'share_curated_file', ts: 123, params: slackNotification });
+    expect(quest.pendingAction).toEqual({
+      tool: 'share_curated_file',
+      ts: 123,
+      params: { workspaceId: 'installation-1', channelId: 'C123', threadTs: '123.456' },
+    });
     expect(saveQuest).toHaveBeenCalled();
     expect(saveQuest.mock.calls.at(-1)?.[0]).toBe(quest);
     await tools?.find(tool => tool.toolSchema.name === 'confirmation_probe')?.toolFn({});
