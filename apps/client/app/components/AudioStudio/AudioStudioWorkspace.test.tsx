@@ -145,6 +145,12 @@ describe('AudioStudioWorkspace payer note', () => {
     expect(screen.getByTestId('audio-form-payer-note')).toHaveTextContent('Paid from Acme credits');
   });
 
+  it('names personal credits when no organization is selected', () => {
+    select('Me', true);
+    renderWithTheme(<SpeechStudioWorkspace testId="speech-studio" />);
+    expect(screen.getByTestId('audio-form-payer-note')).toHaveTextContent('Paid from your personal credits');
+  });
+
   it('is hidden with no selection or when credits are not enforced', () => {
     renderWithTheme(<SpeechStudioWorkspace testId="speech-studio" />);
     expect(screen.queryByTestId('audio-form-payer-note')).not.toBeInTheDocument();

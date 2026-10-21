@@ -497,6 +497,15 @@ describe('useGenerateAudio billing account', () => {
     expect(mocks.toastError).toHaveBeenCalledWith(GENERATION_ACCOUNT_CANNOT_PAY_MESSAGE);
   });
 
+  it('tells the user to switch accounts on a 403 in sound-effects mode too', async () => {
+    mocks.selectedAccount.mockReturnValue({ id: 'org1', name: 'Acme', personal: false });
+    mocks.post.mockRejectedValue(axiosFailure(403, { error: 'Forbidden' }));
+
+    await generate('boom', 'sound-effects');
+
+    expect(mocks.toastError).toHaveBeenCalledWith(GENERATION_ACCOUNT_CANNOT_PAY_MESSAGE);
+  });
+
   it('leaves a 403 alone when the personal account is selected', async () => {
     mocks.selectedAccount.mockReturnValue({ id: 'u1', name: 'Me', personal: true });
     mocks.post.mockRejectedValue(axiosFailure(403, { error: 'Forbidden' }));
