@@ -205,6 +205,27 @@ const OrganizationListPage: FC = () => {
         </Tooltip>
       </Box>
 
+      <Card variant="soft" sx={{ mb: 3 }}>
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ sm: 'center' }}>
+          <Box sx={{ flex: 1 }}>
+            <Typography level="title-md">Explore Team administration before subscribing</Typography>
+            <Typography level="body-sm">
+              See sample members, monthly credit limits and usage, plus which controls each role can access.
+            </Typography>
+          </Box>
+          <Button
+            component="a"
+            href="https://docs.bike4mind.com/features/team-admin-preview"
+            target="_blank"
+            rel="noopener noreferrer"
+            variant="outlined"
+            data-testid="organizations-admin-preview-link"
+          >
+            Preview Team administration
+          </Button>
+        </Stack>
+      </Card>
+
       <Box sx={{ position: 'relative', mb: 4 }}>
         <Input
           startDecorator={<SearchIcon />}

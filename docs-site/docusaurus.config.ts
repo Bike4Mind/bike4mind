@@ -38,7 +38,7 @@ const config: Config = {
             '**/*.test.{js,jsx,ts,tsx}',
             '**/__tests__/**',
             'security/**',
-            'developers/**',
+            'developers/fleet-usage-export.md',
             'admin/liveops-triage.md',
             'admin/data-lake-cost-governance.md',
             'features/optihashi.md',

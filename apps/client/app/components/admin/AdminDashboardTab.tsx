@@ -1,5 +1,4 @@
-import { useMemo, useState } from 'react';
-import dayjs from 'dayjs';
+import { useMemo } from 'react';
 import { Link } from '@tanstack/react-router';
 import { Alert, Box, Button, Card, Grid, LinearProgress, Stack, Typography } from '@mui/joy';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
@@ -8,9 +7,7 @@ import { AdminTab } from './adminSidebarConfig';
 import { UsageBySourceCard } from './EventMetrics/components/UsageBySourceCard';
 import { AnalyticsTermHelp } from './EventMetrics/components/AnalyticsTermHelp';
 import { OverviewTab } from './EventMetrics/components/OverviewTab';
-import { useEventMetrics } from './EventMetrics/hooks/useEventMetrics';
-import type { EventMetric } from './EventMetrics/types';
-import { processChartData } from './EventMetrics/utils/chartDataProcessor';
+import { useAdminActivitySummary } from './useAdminActivitySummary';
 
 const DASHBOARD_SHORTCUTS = [
   {
@@ -48,30 +45,12 @@ type AdminDashboardTabProps = {
   onNavigate: (tab: AdminTab) => void;
 };
 
-const NO_METRICS: EventMetric[] = [];
-
-const getActivityWindow = () => ({
-  dateFrom: dayjs().startOf('day').subtract(6, 'day').toISOString(),
-  dateTo: dayjs().endOf('day').toISOString(),
-});
-
 export default function AdminDashboardTab({ onNavigate }: AdminDashboardTabProps) {
   const additionalDashboards = useMemo(
     () => premiumRoutes.flatMap(route => (route.adminDashboard ? [{ path: route.path, ...route.adminDashboard }] : [])),
     []
   );
-  const [filters, setFilters] = useState(getActivityWindow);
-  const { data: metrics = NO_METRICS, isLoading, isFetching, isError, forceRefresh } = useEventMetrics(filters);
-
-  const chartData = useMemo(() => processChartData(metrics), [metrics]);
-
-  const refreshActivity = () => {
-    const nextWindow = getActivityWindow();
-    if (nextWindow.dateFrom !== filters.dateFrom || nextWindow.dateTo !== filters.dateTo) {
-      setFilters(nextWindow);
-    }
-    forceRefresh(nextWindow);
-  };
+  const { data: activity, isLoading, isFetching, isError, refetch } = useAdminActivitySummary();
 
   return (
     <Stack spacing={3} sx={{ p: { xs: 0, sm: 2 }, maxWidth: 1440, mx: 'auto' }} data-testid="admin-dashboard">
@@ -175,24 +154,23 @@ export default function AdminDashboardTab({ onNavigate }: AdminDashboardTabProps
               Recent activity
               <AnalyticsTermHelp
                 term="Recent activity"
-                description="A snapshot of up to the latest 1,000 recorded events in the last seven calendar days, using your browser's time zone. Today is still in progress. Busy periods may fill the limit, so these charts cannot establish overall feature popularity or adoption. Refresh activity reloads this snapshot only."
+                description="Counts all recorded events in the last seven UTC calendar days, including today. Today is still in progress. One person can generate many events, so these charts cannot establish overall feature adoption. Refresh activity reloads this summary only."
               />
             </Typography>
-            <Typography level="body-sm">Last 7 days, including today</Typography>
+            <Typography level="body-sm">Last 7 calendar days (UTC), including today</Typography>
           </Box>
           <Button
             variant="outlined"
             loading={isFetching}
-            onClick={refreshActivity}
+            onClick={() => void refetch()}
             data-testid="admin-dashboard-refresh"
           >
             Refresh activity
           </Button>
         </Stack>
         <Alert variant="soft" color="neutral">
-          This snapshot shows up to the latest 1,000 matching events. It does not tell you how many people use each
-          feature overall. Client usage above has its own time range and includes all events with a recorded source in
-          that range.
+          These charts count all recorded events in this window, not distinct people or overall feature adoption. Today
+          is still in progress. Client usage above has its own time range.
         </Alert>
         {isLoading && <LinearProgress aria-label="Loading recent activity" />}
         {isError && (
@@ -200,13 +178,13 @@ export default function AdminDashboardTab({ onNavigate }: AdminDashboardTabProps
             Recent activity could not be loaded. Use Refresh activity to try again.
           </Alert>
         )}
-        {!isLoading && !isError && metrics.length === 0 && (
+        {!isLoading && !isError && activity?.totalEvents === 0 && (
           <Typography level="body-md" data-testid="admin-dashboard-activity-empty">
-            No tracked activity in the last 7 days.
+            No tracked activity in the last 7 calendar days (UTC).
           </Typography>
         )}
-        {!isLoading && metrics.length > 0 && (
-          <OverviewTab metrics={metrics} chartData={chartData} showUsageBySource={false} />
+        {!isLoading && activity && activity.totalEvents > 0 && (
+          <OverviewTab chartData={activity} showUsageBySource={false} isCompleteWindow />
         )}
       </Stack>
     </Stack>

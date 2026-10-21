@@ -2,15 +2,14 @@ import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
-import dayjs from 'dayjs';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { AdminTab } from './adminSidebarConfig';
-import type { EventMetric } from './EventMetrics/types';
+import type { AdminActivitySummary } from '@client/shared/adminActivitySummary';
 import type { PremiumRouteDescriptor } from '@client/app/premiumContract';
 
-const { useEventMetrics, forceRefresh, overviewSpy, premiumRoutes } = vi.hoisted(() => ({
-  useEventMetrics: vi.fn(),
-  forceRefresh: vi.fn(),
+const { useAdminActivitySummary, refetch, overviewSpy, premiumRoutes } = vi.hoisted(() => ({
+  useAdminActivitySummary: vi.fn(),
+  refetch: vi.fn(),
   overviewSpy: vi.fn(),
   premiumRoutes: [] as PremiumRouteDescriptor[],
 }));
@@ -23,7 +22,7 @@ vi.mock('@tanstack/react-router', () => ({
     }
   ),
 }));
-vi.mock('./EventMetrics/hooks/useEventMetrics', () => ({ useEventMetrics }));
+vi.mock('./useAdminActivitySummary', () => ({ useAdminActivitySummary }));
 vi.mock('./EventMetrics/components/UsageBySourceCard', () => ({
   UsageBySourceCard: () => <div data-testid="usage-by-source-card" />,
 }));
@@ -41,25 +40,28 @@ const Wrapper = ({ children }: { children: React.ReactNode }) => (
   <CssVarsProvider theme={theme}>{children}</CssVarsProvider>
 );
 
-const event: EventMetric = {
-  id: 'event-1',
-  timestamp: '2026-10-20T10:00:00.000Z',
-  eventName: 'Session Created',
-  eventCategory: 'Session',
-  counterValue: 1,
-  user: { userId: 'user-1', userName: 'Example', userLevel: 'user' },
+const activity: AdminActivitySummary = {
+  windowStart: '2026-10-14T00:00:00.000Z',
+  windowEnd: '2026-10-20T10:00:00.000Z',
+  totalEvents: 2001,
+  timeSeriesData: [
+    { date: '2026-10-14', count: 1000 },
+    { date: '2026-10-20', count: 1001 },
+  ],
+  categoryBreakdown: [{ category: 'Session', count: 2001, percentage: 100 }],
+  topEvents: [{ eventName: 'Session Created', category: 'Session', count: 2001 }],
 };
 
 describe('AdminDashboardTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     premiumRoutes.length = 0;
-    useEventMetrics.mockReturnValue({
-      data: [event],
+    useAdminActivitySummary.mockReturnValue({
+      data: activity,
       isLoading: false,
       isFetching: false,
       isError: false,
-      forceRefresh,
+      refetch,
     });
   });
 
@@ -107,50 +109,29 @@ describe('AdminDashboardTab', () => {
     vi.useRealTimers();
   });
 
-  it('requests the last seven calendar days, including all of today', () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-10-20T10:00:00.000Z'));
-    render(<AdminDashboardTab onNavigate={vi.fn()} />, { wrapper: Wrapper });
-
-    expect(useEventMetrics).toHaveBeenLastCalledWith({
-      dateFrom: dayjs().startOf('day').subtract(6, 'day').toISOString(),
-      dateTo: dayjs().endOf('day').toISOString(),
-    });
-  });
-
   it('shows client usage and activity charts with their coverage limits', () => {
     render(<AdminDashboardTab onNavigate={vi.fn()} />, { wrapper: Wrapper });
 
     expect(screen.getAllByTestId('usage-by-source-card')).toHaveLength(1);
     expect(screen.getByTestId('activity-charts')).toBeInTheDocument();
-    expect(screen.getByText(/latest 1,000 matching events/)).toBeInTheDocument();
+    expect(screen.getByText(/count all recorded events/)).toBeInTheDocument();
+    expect(screen.getByText(/UTC/)).toBeInTheDocument();
     expect(overviewSpy).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        metrics: [event],
         showUsageBySource: false,
+        isCompleteWindow: true,
         chartData: expect.objectContaining({
-          topEvents: [{ eventName: 'Session Created', category: 'Session', count: 1 }],
+          topEvents: activity.topEvents,
+          timeSeriesData: activity.timeSeriesData,
         }),
       })
     );
   });
 
-  it('moves the activity window forward when refreshed after midnight', () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date(2026, 9, 20, 23, 59));
+  it('requests a fresh server summary when activity is refreshed', () => {
     render(<AdminDashboardTab onNavigate={vi.fn()} />, { wrapper: Wrapper });
-
-    vi.setSystemTime(new Date(2026, 9, 21, 0, 1));
     fireEvent.click(screen.getByTestId('admin-dashboard-refresh'));
-
-    expect(useEventMetrics).toHaveBeenLastCalledWith({
-      dateFrom: dayjs().startOf('day').subtract(6, 'day').toISOString(),
-      dateTo: dayjs().endOf('day').toISOString(),
-    });
-    expect(forceRefresh).toHaveBeenCalledExactlyOnceWith({
-      dateFrom: dayjs().startOf('day').subtract(6, 'day').toISOString(),
-      dateTo: dayjs().endOf('day').toISOString(),
-    });
+    expect(refetch).toHaveBeenCalledExactlyOnceWith();
   });
 
   it.each([
@@ -171,7 +152,7 @@ describe('AdminDashboardTab', () => {
   });
 
   it('keeps client usage and shortcuts available while activity loads', () => {
-    useEventMetrics.mockReturnValue({ isLoading: true, isFetching: true, isError: false, forceRefresh });
+    useAdminActivitySummary.mockReturnValue({ isLoading: true, isFetching: true, isError: false, refetch });
     render(<AdminDashboardTab onNavigate={vi.fn()} />, { wrapper: Wrapper });
 
     expect(screen.getByLabelText('Loading recent activity')).toBeInTheDocument();
@@ -182,12 +163,12 @@ describe('AdminDashboardTab', () => {
   });
 
   it('keeps cached activity visible beside the error when a refresh fails and allows retry', () => {
-    useEventMetrics.mockReturnValue({
-      data: [event],
+    useAdminActivitySummary.mockReturnValue({
+      data: activity,
       isLoading: false,
       isFetching: false,
       isError: true,
-      forceRefresh,
+      refetch,
     });
     render(<AdminDashboardTab onNavigate={vi.fn()} />, { wrapper: Wrapper });
 
@@ -196,11 +177,17 @@ describe('AdminDashboardTab', () => {
     expect(screen.getByTestId('activity-charts')).toBeInTheDocument();
     expect(screen.getByTestId('usage-by-source-card')).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('admin-dashboard-refresh'));
-    expect(forceRefresh).toHaveBeenCalledOnce();
+    expect(refetch).toHaveBeenCalledOnce();
   });
 
   it('shows only the error when a failed request has no cached activity', () => {
-    useEventMetrics.mockReturnValue({ data: [], isLoading: false, isFetching: false, isError: true, forceRefresh });
+    useAdminActivitySummary.mockReturnValue({
+      data: { ...activity, totalEvents: 0 },
+      isLoading: false,
+      isFetching: false,
+      isError: true,
+      refetch,
+    });
     render(<AdminDashboardTab onNavigate={vi.fn()} />, { wrapper: Wrapper });
 
     expect(screen.getByTestId('admin-dashboard-activity-error')).toBeInTheDocument();
@@ -209,7 +196,13 @@ describe('AdminDashboardTab', () => {
   });
 
   it('shows an empty state when the window has no activity', () => {
-    useEventMetrics.mockReturnValue({ data: [], isLoading: false, isFetching: false, isError: false, forceRefresh });
+    useAdminActivitySummary.mockReturnValue({
+      data: { ...activity, totalEvents: 0 },
+      isLoading: false,
+      isFetching: false,
+      isError: false,
+      refetch,
+    });
     render(<AdminDashboardTab onNavigate={vi.fn()} />, { wrapper: Wrapper });
 
     expect(screen.getByTestId('admin-dashboard-activity-empty')).toBeInTheDocument();
