@@ -300,8 +300,7 @@ export function ArtifactLibraryPanel({ onClose }: { onClose: () => void }) {
   // cards and so cannot close over the state itself.
   const bodiesRef = useRef(bodies);
   const grid = useRef<HTMLDivElement>(null);
-  // Where the grid was scrolled, and which card was opened, so closing lands back on that card.
-  const returnTo = useRef<{ id: string; scrollTop: number } | null>(null);
+  const lastOpened = useRef<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -376,7 +375,6 @@ export function ArtifactLibraryPanel({ onClose }: { onClose: () => void }) {
 
   const openArtifact = useCallback(
     (id: string) => {
-      returnTo.current = { id, scrollTop: grid.current?.scrollTop ?? 0 };
       setOpenId(id);
       loader.now(id);
     },
@@ -385,25 +383,26 @@ export function ArtifactLibraryPanel({ onClose }: { onClose: () => void }) {
 
   const closeArtifact = useCallback(() => setOpenId(null), []);
 
-  // Before paint, so the grid never shows a frame scrolled to the top on the way back.
+  const opened = openId === null ? undefined : summaries?.find(summary => summary.id === openId);
+  const openedId = opened?.id ?? null;
+
   useLayoutEffect(() => {
-    const target = returnTo.current;
-    if (openId !== null || !target) return;
-    returnTo.current = null;
-    if (grid.current) grid.current.scrollTop = target.scrollTop;
+    const previous = lastOpened.current;
+    lastOpened.current = openedId;
+    if (openedId !== null || previous === null) return;
     [...(grid.current?.querySelectorAll<HTMLElement>('[data-artifact-id]') ?? [])]
-      .find(card => card.dataset.artifactId === target.id)
+      .find(card => card.dataset.artifactId === previous)
       ?.focus({ preventScroll: true });
-  }, [openId]);
+  }, [openedId]);
 
   useEffect(() => {
-    if (openId === null) return;
+    if (openedId === null) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && !event.defaultPrevented) closeArtifact();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [openId, closeArtifact]);
+  }, [openedId, closeArtifact]);
 
   // Deferred so a keystroke paints the input first and the list catches up, which keeps typing
   // smooth at a full page of rows without a debounce timer to manage.
@@ -430,214 +429,220 @@ export function ArtifactLibraryPanel({ onClose }: { onClose: () => void }) {
     setType(null);
   };
 
-  const opened = openId === null ? undefined : summaries?.find(summary => summary.id === openId);
-  if (opened) {
-    return (
-      <Stack sx={{ flex: 1, minWidth: 0, minHeight: 0 }} data-testid="artifact-library">
-        <ArtifactDetail
-          summary={opened}
-          body={bodies[opened.id]}
-          onBack={closeArtifact}
-          onClose={onClose}
-          onRetry={() => loader.now(opened.id)}
-        />
-      </Stack>
-    );
-  }
-
   return (
-    <Stack sx={{ flex: 1, minWidth: 0, ...columnStackSx }} data-testid="artifact-library">
-      <Box sx={{ borderBottom: '1px solid', borderColor: 'divider', position: 'relative' }}>
-        <Box sx={{ ...libraryColumnSx, pt: 1.25, pb: 1.5 }}>
-          <Stack direction="row" alignItems="center" spacing={1}>
-            <Typography level="title-md" sx={{ flex: 1 }}>
-              Artifacts
+    <Stack sx={{ flex: 1, minWidth: 0, ...columnStackSx, position: 'relative' }} data-testid="artifact-library">
+      {opened && (
+        <Stack sx={{ position: 'absolute', inset: 0, zIndex: 1, bgcolor: 'background.body' }}>
+          <ArtifactDetail
+            summary={opened}
+            body={bodies[opened.id]}
+            onBack={closeArtifact}
+            onClose={onClose}
+            onRetry={() => loader.now(opened.id)}
+          />
+        </Stack>
+      )}
+      {/* Hidden rather than unmounted under an opened artifact: going back then costs nothing, keeps
+          its scroll, and does not reload every live page thumbnail. `visibility` and not `display`,
+          which would read as off screen to the observers and drop those thumbnails anyway. */}
+      <Stack
+        inert={Boolean(opened)}
+        sx={{ flex: 1, minHeight: 0, visibility: opened ? 'hidden' : undefined }}
+        data-testid="artifact-library-browse"
+      >
+        <Box sx={{ borderBottom: '1px solid', borderColor: 'divider', position: 'relative' }}>
+          <Box sx={{ ...libraryColumnSx, pt: 1.25, pb: 1.5 }}>
+            <Stack direction="row" alignItems="center" spacing={1}>
+              <Typography level="title-md" sx={{ flex: 1 }}>
+                Artifacts
+              </Typography>
+              <Button
+                size="sm"
+                variant="plain"
+                color="neutral"
+                onClick={() => void load()}
+                disabled={loading}
+                data-testid="artifact-library-refresh-btn"
+              >
+                Refresh
+              </Button>
+              <IconButton
+                size="sm"
+                variant="plain"
+                color="neutral"
+                aria-label="Close artifacts"
+                onClick={onClose}
+                data-testid="artifact-library-close-btn"
+              >
+                <CloseIcon />
+              </IconButton>
+            </Stack>
+            <Typography level="body-sm" sx={{ mt: 0.5, opacity: 0.8 }}>
+              Everything you have made in this app, across your machines. Open one to view it or share it as a live
+              link.
             </Typography>
-            <Button
-              size="sm"
-              variant="plain"
-              color="neutral"
-              onClick={() => void load()}
-              disabled={loading}
-              data-testid="artifact-library-refresh-btn"
-            >
-              Refresh
-            </Button>
-            <IconButton
-              size="sm"
-              variant="plain"
-              color="neutral"
-              aria-label="Close artifacts"
-              onClick={onClose}
-              data-testid="artifact-library-close-btn"
-            >
-              <CloseIcon />
-            </IconButton>
-          </Stack>
-          <Typography level="body-sm" sx={{ mt: 0.5, opacity: 0.8 }}>
-            Everything you have made in this app, across your machines. Open one to view it or share it as a live link.
-          </Typography>
 
-          {/* Shown while there is something to narrow OR a filter is on, so the way out of a
+            {/* Shown while there is something to narrow OR a filter is on, so the way out of a
               no-matches state is always on screen. */}
-          {(loaded > 0 || filtering) && (
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, mt: 1.5 }}>
-              <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-                <Input
-                  size="sm"
-                  value={query}
-                  onChange={event => setQuery(event.target.value)}
-                  placeholder="Search titles and descriptions"
-                  startDecorator={<SearchIcon />}
-                  slotProps={{
-                    input: { 'data-testid': 'artifact-library-search-input', 'aria-label': 'Search artifacts' },
-                  }}
-                  sx={{ flex: 1, minWidth: 0 }}
-                />
-                <Select
-                  size="sm"
-                  value={sort}
-                  onChange={(_event, value) => value && setSort(value)}
-                  aria-label="Sort artifacts"
-                  slotProps={{ button: { 'data-testid': 'artifact-library-sort-select' } }}
-                  sx={{ minWidth: 140 }}
-                >
-                  {ARTIFACT_SORTS.map(option => (
-                    <Option
-                      key={option.value}
-                      value={option.value}
-                      data-testid={`artifact-library-sort-${option.value}`}
-                    >
-                      {option.label}
-                    </Option>
-                  ))}
-                </Select>
-                {filtering && (
-                  <Button
+            {(loaded > 0 || filtering) && (
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, mt: 1.5 }}>
+                <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                  <Input
                     size="sm"
-                    variant="plain"
-                    color="neutral"
-                    onClick={clearFilters}
-                    data-testid="artifact-library-clear-btn"
+                    value={query}
+                    onChange={event => setQuery(event.target.value)}
+                    placeholder="Search titles and descriptions"
+                    startDecorator={<SearchIcon />}
+                    slotProps={{
+                      input: { 'data-testid': 'artifact-library-search-input', 'aria-label': 'Search artifacts' },
+                    }}
+                    sx={{ flex: 1, minWidth: 0 }}
+                  />
+                  <Select
+                    size="sm"
+                    value={sort}
+                    onChange={(_event, value) => value && setSort(value)}
+                    aria-label="Sort artifacts"
+                    slotProps={{ button: { 'data-testid': 'artifact-library-sort-select' } }}
+                    sx={{ minWidth: 140 }}
                   >
-                    Clear
-                  </Button>
+                    {ARTIFACT_SORTS.map(option => (
+                      <Option
+                        key={option.value}
+                        value={option.value}
+                        data-testid={`artifact-library-sort-${option.value}`}
+                      >
+                        {option.label}
+                      </Option>
+                    ))}
+                  </Select>
+                  {filtering && (
+                    <Button
+                      size="sm"
+                      variant="plain"
+                      color="neutral"
+                      onClick={clearFilters}
+                      data-testid="artifact-library-clear-btn"
+                    >
+                      Clear
+                    </Button>
+                  )}
+                </Box>
+
+                {typeCounts.length > 0 && (
+                  <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', alignItems: 'center' }}>
+                    {typeCounts.map(({ type: chipType, label, count }) => {
+                      const selected = type === chipType;
+                      return (
+                        <Chip
+                          key={chipType}
+                          size="sm"
+                          variant={selected ? 'solid' : 'outlined'}
+                          color={selected ? 'primary' : 'neutral'}
+                          onClick={() => setType(selected ? null : chipType)}
+                          slotProps={{
+                            action: {
+                              'aria-pressed': selected,
+                              'data-testid': `artifact-library-filter-${chipType}-chip`,
+                            },
+                          }}
+                        >
+                          {label} {count}
+                        </Chip>
+                      );
+                    })}
+                  </Box>
                 )}
               </Box>
-
-              {typeCounts.length > 0 && (
-                <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', alignItems: 'center' }}>
-                  {typeCounts.map(({ type: chipType, label, count }) => {
-                    const selected = type === chipType;
-                    return (
-                      <Chip
-                        key={chipType}
-                        size="sm"
-                        variant={selected ? 'solid' : 'outlined'}
-                        color={selected ? 'primary' : 'neutral'}
-                        onClick={() => setType(selected ? null : chipType)}
-                        slotProps={{
-                          action: {
-                            'aria-pressed': selected,
-                            'data-testid': `artifact-library-filter-${chipType}-chip`,
-                          },
-                        }}
-                      >
-                        {label} {count}
-                      </Chip>
-                    );
-                  })}
-                </Box>
-              )}
-            </Box>
-          )}
-        </Box>
-        {loading && summaries && (
-          <LinearProgress
-            size="sm"
-            thickness={2}
-            sx={{ position: 'absolute', left: 0, right: 0, bottom: 0 }}
-            data-testid="artifact-library-refreshing"
-          />
-        )}
-      </Box>
-
-      <Box ref={grid} sx={{ flex: 1, ...scrollingColumnHostSx }} data-testid="artifact-library-grid-scroller">
-        <Box sx={{ ...libraryColumnSx, py: 2 }}>
-          {/* An error and a stale list can be on screen together: a refresh that fails leaves
-              the rows it already had, which are still worth reading. */}
-          {error && (
-            <Alert
+            )}
+          </Box>
+          {loading && summaries && (
+            <LinearProgress
               size="sm"
-              color="warning"
-              variant="soft"
-              sx={{ mb: 1.5 }}
-              endDecorator={
-                <Button
-                  size="sm"
-                  variant="soft"
-                  color="warning"
-                  onClick={() => void load()}
-                  disabled={loading}
-                  data-testid="artifact-library-retry-btn"
-                >
-                  Try again
-                </Button>
-              }
-              data-testid="artifact-library-error"
-            >
-              {error}
-            </Alert>
-          )}
-
-          {loading && !summaries && (
-            <Box data-testid="artifact-library-loading">
-              <LinearProgress size="sm" sx={{ mb: 1 }} />
-              <Typography level="body-sm" sx={{ opacity: 0.7 }}>
-                Loading artifacts...
-              </Typography>
-            </Box>
-          )}
-
-          {empty && (
-            <Typography level="body-sm" sx={{ opacity: 0.7 }} data-testid="artifact-library-empty">
-              No artifacts yet. Ask for a page, a diagram or a file and it will appear here.
-            </Typography>
-          )}
-
-          {loaded > 0 && visible.length === 0 && (
-            <Typography level="body-sm" sx={{ opacity: 0.7 }} data-testid="artifact-library-no-matches">
-              Nothing matches those filters. Clear them to see every artifact.
-            </Typography>
-          )}
-
-          {visible.length > 0 && (
-            <Box
-              sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 1.5 }}
-              data-testid="artifact-library-grid"
-            >
-              {visible.map(summary => (
-                <ArtifactTile
-                  key={summary.id}
-                  summary={summary}
-                  body={bodies[summary.id]}
-                  mode={mode}
-                  onOpen={openArtifact}
-                  onNear={loader.near}
-                />
-              ))}
-            </Box>
-          )}
-
-          {/* The list route returns one page, so say so rather than let search and the counts
-              read as covering rows that were never fetched. */}
-          {total > loaded && loaded > 0 && (
-            <Typography level="body-xs" sx={{ mt: 1.5, opacity: 0.7 }} data-testid="artifact-library-truncated">
-              Showing your newest {loaded} of {total} artifacts. Search, filters and counts cover these {loaded}.
-            </Typography>
+              thickness={2}
+              sx={{ position: 'absolute', left: 0, right: 0, bottom: 0 }}
+              data-testid="artifact-library-refreshing"
+            />
           )}
         </Box>
-      </Box>
+
+        <Box ref={grid} sx={{ flex: 1, ...scrollingColumnHostSx }} data-testid="artifact-library-grid-scroller">
+          <Box sx={{ ...libraryColumnSx, py: 2 }}>
+            {/* An error and a stale list can be on screen together: a refresh that fails leaves
+              the rows it already had, which are still worth reading. */}
+            {error && (
+              <Alert
+                size="sm"
+                color="warning"
+                variant="soft"
+                sx={{ mb: 1.5 }}
+                endDecorator={
+                  <Button
+                    size="sm"
+                    variant="soft"
+                    color="warning"
+                    onClick={() => void load()}
+                    disabled={loading}
+                    data-testid="artifact-library-retry-btn"
+                  >
+                    Try again
+                  </Button>
+                }
+                data-testid="artifact-library-error"
+              >
+                {error}
+              </Alert>
+            )}
+
+            {loading && !summaries && (
+              <Box data-testid="artifact-library-loading">
+                <LinearProgress size="sm" sx={{ mb: 1 }} />
+                <Typography level="body-sm" sx={{ opacity: 0.7 }}>
+                  Loading artifacts...
+                </Typography>
+              </Box>
+            )}
+
+            {empty && (
+              <Typography level="body-sm" sx={{ opacity: 0.7 }} data-testid="artifact-library-empty">
+                No artifacts yet. Ask for a page, a diagram or a file and it will appear here.
+              </Typography>
+            )}
+
+            {loaded > 0 && visible.length === 0 && (
+              <Typography level="body-sm" sx={{ opacity: 0.7 }} data-testid="artifact-library-no-matches">
+                Nothing matches those filters. Clear them to see every artifact.
+              </Typography>
+            )}
+
+            {visible.length > 0 && (
+              <Box
+                sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 1.5 }}
+                data-testid="artifact-library-grid"
+              >
+                {visible.map(summary => (
+                  <ArtifactTile
+                    key={summary.id}
+                    summary={summary}
+                    body={bodies[summary.id]}
+                    mode={mode}
+                    onOpen={openArtifact}
+                    onNear={loader.near}
+                  />
+                ))}
+              </Box>
+            )}
+
+            {/* The list route returns one page, so say so rather than let search and the counts
+              read as covering rows that were never fetched. */}
+            {total > loaded && loaded > 0 && (
+              <Typography level="body-xs" sx={{ mt: 1.5, opacity: 0.7 }} data-testid="artifact-library-truncated">
+                Showing your newest {loaded} of {total} artifacts. Search, filters and counts cover these {loaded}.
+              </Typography>
+            )}
+          </Box>
+        </Box>
+      </Stack>
     </Stack>
   );
 }

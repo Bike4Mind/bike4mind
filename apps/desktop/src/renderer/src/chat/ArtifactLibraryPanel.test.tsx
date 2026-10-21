@@ -264,13 +264,14 @@ describe('ArtifactLibraryPanel list', () => {
     expect(readArtifact).toHaveBeenCalledTimes(5);
   });
 
-  it('opens a card to fill the panel, and goes back to the grid on the cards it left', async () => {
+  it('opens a card over the grid, and goes back to the same, never-remounted cards', async () => {
     readArtifact.mockResolvedValue({ artifact: { id: 'a2', type: 'code', title: 'Alpha flow', content: 'body' } });
     await mount();
-    await click(allByTestId('artifact-library-card')[1] ?? null);
+    const card = allByTestId('artifact-library-card')[1] ?? null;
+    await click(card);
 
     expect(readArtifact).toHaveBeenCalledWith('a2');
-    expect(byTestId('artifact-library-grid')).toBeNull();
+    expect(byTestId('artifact-library-browse')?.hasAttribute('inert')).toBe(true);
     expect(byTestId('artifact-library-detail-title')?.textContent).toBe('Alpha flow');
     expect(byTestId('artifact-library-detail-description')?.textContent).toBe('Login steps');
     expect(byTestId('chat-artifact-card')).not.toBeNull();
@@ -278,8 +279,10 @@ describe('ArtifactLibraryPanel list', () => {
 
     await click(byTestId('artifact-library-detail-back-btn'));
     expect(byTestId('artifact-library-detail')).toBeNull();
+    expect(byTestId('artifact-library-browse')?.hasAttribute('inert')).toBe(false);
     expect(titles()).toHaveLength(3);
-    expect(document.activeElement?.getAttribute('data-artifact-id')).toBe('a2');
+    expect(allByTestId('artifact-library-card')[1]).toBe(card);
+    expect(document.activeElement).toBe(card);
 
     // Opened again from what it already fetched.
     await click(allByTestId('artifact-library-card')[1] ?? null);
