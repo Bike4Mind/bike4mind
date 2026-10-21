@@ -220,6 +220,185 @@ describe('billIteration (#657 context-window guard)', () => {
     expect(counters).toMatchObject({ cumulativeCost: 100, inputTokens: 100 });
   });
 
+  it('zero-priced model: records a zero-cost usage event and billing record, and advances counters', async () => {
+    const counters = makeCounters();
+    const { effects, spies } = makeEffects();
+
+    await billIteration({
+      iterationIndex: 1,
+      checkpoint: checkpoint(100, { output: 20 }),
+      counters,
+      modelInfo: makeModelInfo(1000, 0),
+      model: 'test-model',
+      startTime: 0,
+      effects,
+    });
+
+    expect(spies.deductCredits).not.toHaveBeenCalled();
+    expect(spies.recordUsageEvent).toHaveBeenCalledTimes(1);
+    expect(spies.recordUsageEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'ok', costUsd: 0, creditsCharged: 0, inputTokens: 100, outputTokens: 20 })
+    );
+    expect(spies.addIterationBilling).toHaveBeenCalledWith(
+      expect.objectContaining({ iteration: 1, inputTokens: 100, outputTokens: 20, credits: 0 })
+    );
+    expect(spies.sendProgress).toHaveBeenCalledWith(0, 1);
+    expect(counters).toMatchObject({ cumulativeCost: 0, inputTokens: 100, outputTokens: 20 });
+  });
+
+  it('zero-priced model: the next iteration records only its own tokens', async () => {
+    const counters = makeCounters();
+    const { effects, spies } = makeEffects();
+    const bill = (iterationIndex: number, totals: ReturnType<typeof checkpoint>) =>
+      billIteration({
+        iterationIndex,
+        checkpoint: totals,
+        counters,
+        modelInfo: makeModelInfo(1000, 0),
+        model: 'test-model',
+        startTime: 0,
+        effects,
+      });
+
+    await bill(1, checkpoint(100, { output: 20 }));
+    await bill(2, checkpoint(150, { output: 30 }));
+
+    expect(spies.recordUsageEvent).toHaveBeenCalledTimes(2);
+    expect(spies.recordUsageEvent).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ inputTokens: 50, outputTokens: 10 })
+    );
+    expect(spies.addIterationBilling).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ iteration: 2, inputTokens: 50, outputTokens: 10, credits: 0 })
+    );
+    expect(counters).toMatchObject({ inputTokens: 150, outputTokens: 30 });
+  });
+
+  it.each([{ output: 20 }, { cacheRead: 30 }, { cacheWrite: 40 }])(
+    'zero-priced model: settles an isolated token delta %j',
+    async totals => {
+      const counters = makeCounters();
+      const { effects, spies } = makeEffects();
+      const nextCheckpoint = checkpoint(0, totals);
+
+      await billIteration({
+        iterationIndex: 1,
+        checkpoint: nextCheckpoint,
+        counters,
+        modelInfo: makeModelInfo(1000, 0),
+        model: 'test-model',
+        startTime: 0,
+        effects,
+      });
+
+      expect(spies.deductCredits).not.toHaveBeenCalled();
+      expect(spies.recordUsageEvent).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          inputTokens: 0,
+          outputTokens: nextCheckpoint.totalOutputTokens,
+          cachedInputTokens: nextCheckpoint.totalCacheReadTokens,
+          cacheWriteTokens: nextCheckpoint.totalCacheWriteTokens,
+          costUsd: 0,
+          creditsCharged: 0,
+        })
+      );
+      expect(spies.addIterationBilling).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          inputTokens: 0,
+          outputTokens: nextCheckpoint.totalOutputTokens,
+          cacheReadTokens: nextCheckpoint.totalCacheReadTokens,
+          cacheWriteTokens: nextCheckpoint.totalCacheWriteTokens,
+          credits: 0,
+        })
+      );
+      expect(counters).toEqual({
+        cumulativeCost: 0,
+        inputTokens: 0,
+        outputTokens: nextCheckpoint.totalOutputTokens,
+        cacheReadTokens: nextCheckpoint.totalCacheReadTokens,
+        cacheWriteTokens: nextCheckpoint.totalCacheWriteTokens,
+      });
+    }
+  );
+
+  it.each([
+    checkpoint(100, { output: 20, cacheRead: 30, cacheWrite: 40 }),
+    checkpoint(99, { output: 21, cacheRead: 30, cacheWrite: 40 }),
+    checkpoint(101, { output: 19, cacheRead: 30, cacheWrite: 40 }),
+    checkpoint(101, { output: 20, cacheRead: 29, cacheWrite: 40 }),
+    checkpoint(101, { output: 20, cacheRead: 30, cacheWrite: 39 }),
+  ])('zero-priced model: ignores unchanged or regressing totals %j', async nextCheckpoint => {
+    const counters = makeCounters({ inputTokens: 100, outputTokens: 20, cacheReadTokens: 30, cacheWriteTokens: 40 });
+    const initialCounters = { ...counters };
+    const { effects, spies } = makeEffects();
+
+    await billIteration({
+      iterationIndex: 2,
+      checkpoint: nextCheckpoint,
+      counters,
+      modelInfo: makeModelInfo(1000, 0),
+      model: 'test-model',
+      startTime: 0,
+      effects,
+    });
+
+    expect(spies.deductCredits).not.toHaveBeenCalled();
+    expect(spies.recordUsageEvent).not.toHaveBeenCalled();
+    expect(spies.addIterationBilling).not.toHaveBeenCalled();
+    expect(spies.sendProgress).not.toHaveBeenCalled();
+    expect(counters).toEqual(initialCounters);
+  });
+
+  it('zero-priced model: resumes from persisted billing without recounting tokens', async () => {
+    const modelInfo = makeModelInfo(1000, 0);
+    const records: Parameters<typeof reseedCounters>[0][number][] = [];
+    const { effects, spies } = makeEffects();
+    effects.addIterationBilling = async record => {
+      records.push(record);
+    };
+    const bill = (counters: BillingCounters, iterationIndex: number, totals: ReturnType<typeof checkpoint>) =>
+      billIteration({
+        iterationIndex,
+        checkpoint: totals,
+        counters,
+        modelInfo,
+        model: 'test-model',
+        startTime: 0,
+        effects,
+      });
+
+    await bill(makeCounters(), 1, checkpoint(100, { output: 20, cacheRead: 30, cacheWrite: 40 }));
+    const resumedCounters = reseedCounters(records, modelInfo);
+    await bill(resumedCounters, 2, checkpoint(150, { output: 30, cacheRead: 35, cacheWrite: 45 }));
+
+    expect(spies.deductCredits).not.toHaveBeenCalled();
+    expect(spies.recordUsageEvent).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        inputTokens: 50,
+        outputTokens: 10,
+        cachedInputTokens: 5,
+        cacheWriteTokens: 5,
+        creditsCharged: 0,
+      })
+    );
+    expect(records[1]).toMatchObject({
+      inputTokens: 50,
+      outputTokens: 10,
+      cacheReadTokens: 5,
+      cacheWriteTokens: 5,
+      credits: 0,
+    });
+    expect(resumedCounters).toEqual({
+      cumulativeCost: 0,
+      inputTokens: 150,
+      outputTokens: 30,
+      cacheReadTokens: 35,
+      cacheWriteTokens: 45,
+    });
+  });
+
   it('sub-credit settlement: skips the ledger deduction but still records COGS + billing', async () => {
     const counters = makeCounters();
     // usdToCredits rounds a small delta to 0 credits.
@@ -282,6 +461,41 @@ describe('billIteration (#630 tool-internal spend fold)', () => {
     cacheReadTokens: 0,
     cacheWriteTokens: 0,
     ...overrides,
+  });
+
+  it.each([{ inputTokens: 10 }, { outputTokens: 5 }])('records zero-cost tool-only usage %j', async usage => {
+    const counters = makeCounters();
+    const { effects, spies } = makeEffects();
+
+    await billIteration({
+      iterationIndex: 1,
+      checkpoint: checkpoint(0),
+      counters,
+      modelInfo: makeModelInfo(1000),
+      model: 'test-model',
+      startTime: 0,
+      toolUsage: tool(usage),
+      effects,
+    });
+
+    expect(spies.deductCredits).not.toHaveBeenCalled();
+    expect(spies.recordUsageEvent).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        ...usage,
+        costUsd: 0,
+        creditsCharged: 0,
+      })
+    );
+    expect(spies.addIterationBilling).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        credits: 0,
+      })
+    );
+    expect(counters).toEqual(makeCounters());
   });
 
   it('folds tool USD into the charge; charge + usage event carry agent+tool tokens, billing record stays agent-only', async () => {
