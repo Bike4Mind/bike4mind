@@ -4,8 +4,9 @@ import { basename } from 'node:path';
 import { setImmediate as yieldToLoop } from 'node:timers/promises';
 import type { ChatMessage, ChatSession } from '@shared/chat';
 import type { ClaudeChatImportSummary } from '@shared/claudeImport';
-import { deriveTitle, isForkedImport, type SessionStore } from '../chat/SessionStore';
+import { deriveTitle, ImportScopeChangedError, isForkedImport, type SessionStore } from '../chat/SessionStore';
 import type { PendingAttachment } from './claudeCodeMapper';
+import { carryAttachments, importScopeTag } from './ClaudeCodeSync';
 import { mapConversation } from './claudeChatMapper';
 import { streamJsonArray } from './jsonArrayStream';
 import { isUnsafeMemberName, listZipMembers, readZipMember, ZipError, type ZipMember } from './zipReader';
@@ -17,7 +18,9 @@ export const MAX_CONVERSATION_BYTES = 64 * 1024 * 1024;
 const CONVERSATIONS = 'conversations.json';
 
 export interface ChatImportDeps {
-  store: Pick<SessionStore, 'get' | 'putImported'>;
+  store: Pick<SessionStore, 'getImported' | 'putImported'>;
+  /** The account the import started under; see CodeSyncDeps.scopeKey. */
+  scopeKey?: string;
   storeAttachments?: (
     sessionId: string,
     pending: PendingAttachment[]
@@ -30,8 +33,8 @@ export interface ChatImportDeps {
   now?: () => Date;
 }
 
-export function chatSessionId(uuid: string): string {
-  return `cl-${uuid}`;
+export function chatSessionId(uuid: string, scopeTag?: string): string {
+  return scopeTag ? `cl-${scopeTag}-${uuid}` : `cl-${uuid}`;
 }
 
 /**
@@ -86,7 +89,8 @@ export async function importChatExport(path: string, deps: ChatImportDeps): Prom
       counts.found++;
       try {
         await importOne(element, deps, counts, now, model);
-      } catch {
+      } catch (error) {
+        if (error instanceof ImportScopeChangedError) throw error;
         counts.failed++;
       }
       if (counts.found % 25 === 0) {
@@ -116,8 +120,8 @@ async function importOne(
     counts.skipped++;
     return;
   }
-  const id = chatSessionId(mapped.uuid);
-  const existing = await deps.store.get(id);
+  const id = chatSessionId(mapped.uuid, deps.scopeKey ? importScopeTag(deps.scopeKey) : undefined);
+  const existing = await deps.store.getImported(id, deps.scopeKey);
   if (existing && isForkedImport(existing)) {
     counts.skipped++;
     return;
@@ -126,9 +130,16 @@ async function importOne(
     counts.unchanged++;
     return;
   }
+  // Imported before and deleted here since: a later export, watched folder included, must not
+  // bring it back. Removing all imported chats clears `seen`.
+  if (!existing && deps.seen[mapped.uuid] !== undefined) {
+    counts.skipped++;
+    return;
+  }
 
-  if (mapped.attachments.length > 0 && deps.storeAttachments) {
-    const stored = await deps.storeAttachments(id, mapped.attachments);
+  const toStore = carryAttachments(mapped.messages, existing, mapped.attachments);
+  if (toStore.length > 0 && deps.storeAttachments) {
+    const stored = await deps.storeAttachments(id, toStore);
     for (const message of mapped.messages) {
       const attachments = stored.get(message.id);
       if (attachments?.length) message.attachments = attachments;
@@ -151,7 +162,7 @@ async function importOne(
     },
     messages: mapped.messages,
   };
-  const outcome = await deps.store.putImported(session);
+  const outcome = await deps.store.putImported(session, deps.scopeKey);
   if (outcome === 'forked') {
     counts.skipped++;
     return;

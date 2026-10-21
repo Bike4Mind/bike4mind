@@ -123,4 +123,4 @@ export interface ClaudeRemoveResult {
 
 /** Where the claude.ai export lives, for the Settings link. */
 export const CLAUDE_EXPORT_HELP_URL =
-  'https://support.anthropic.com/en/articles/9450526-how-can-i-export-my-claude-ai-data';
+  'https://support.claude.com/en/articles/9450526-how-can-i-export-my-claude-ai-data';

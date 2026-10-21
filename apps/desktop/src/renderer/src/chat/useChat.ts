@@ -68,10 +68,22 @@ export function useSessions(): SessionsController {
   const [codeError, setCodeError] = useState<string | null>(null);
   const [renameError, setRenameError] = useState<string | null>(null);
 
-  const reload = useCallback(async () => {
+  const latestReload = useRef(0);
+  const localEdits = useRef(0);
+  // A listing that resolves after a newer listing, or after a local edit (create, pin, rename),
+  // would put back the rows it read before them. Import syncs re-list often enough to hit this.
+  const reload = useCallback(async (): Promise<void> => {
+    const ticket = ++latestReload.current;
+    const editsBefore = localEdits.current;
     const next = await window.b4m.chat.listSessions();
+    if (ticket !== latestReload.current) return;
+    if (editsBefore !== localEdits.current) return reload();
     setSessions(next);
     setLoading(false);
+  }, []);
+  const editSessions = useCallback((update: (current: ChatSessionSummary[]) => ChatSessionSummary[]) => {
+    localEdits.current++;
+    setSessions(update);
   }, []);
 
   useEffect(() => {
@@ -87,7 +99,7 @@ export function useSessions(): SessionsController {
   // not listed that session yet.
   useEffect(() => {
     return window.b4m.chat.onSessionSummary(summary => {
-      setSessions(current => current.map(entry => (entry.id === summary.id ? summary : entry)));
+      editSessions(current => current.map(entry => (entry.id === summary.id ? summary : entry)));
     });
   }, []);
 
@@ -96,7 +108,7 @@ export function useSessions(): SessionsController {
   const list = useCallback((created: CreatedSession, placement: SessionPlacement | undefined) => {
     if (created.sidebarSections) placement?.placed(created.sidebarSections);
     else if (created.placementFailed) placement?.failed();
-    setSessions(current => [created.session, ...current]);
+    editSessions(current => [created.session, ...current]);
   }, []);
 
   const create = useCallback(
@@ -131,11 +143,11 @@ export function useSessions(): SessionsController {
 
   const remove = useCallback(async (sessionId: string) => {
     await window.b4m.chat.deleteSession(sessionId);
-    setSessions(current => current.filter(session => session.id !== sessionId));
+    editSessions(current => current.filter(session => session.id !== sessionId));
   }, []);
 
   const apply = useCallback((summary: ChatSessionSummary) => {
-    setSessions(current => [summary, ...current.filter(session => session.id !== summary.id)]);
+    editSessions(current => [summary, ...current.filter(session => session.id !== summary.id)]);
   }, []);
 
   // Patched in place rather than moved to the front: pinning does not touch `updatedAt`, so
@@ -143,7 +155,7 @@ export function useSessions(): SessionsController {
   const togglePin = useCallback(async (session: ChatSessionSummary) => {
     const updated = await window.b4m.chat.setSessionPinned(session.id, !session.pinned);
     if (!updated) return;
-    setSessions(current => current.map(entry => (entry.id === updated.id ? updated : entry)));
+    editSessions(current => current.map(entry => (entry.id === updated.id ? updated : entry)));
   }, []);
 
   // Patched in place rather than moved, for the same reason pinning is: archiving does not
@@ -151,7 +163,7 @@ export function useSessions(): SessionsController {
   const toggleArchived = useCallback(async (session: ChatSessionSummary) => {
     const updated = await window.b4m.chat.setSessionArchived(session.id, !session.archived);
     if (!updated) return;
-    setSessions(current => current.map(entry => (entry.id === updated.id ? updated : entry)));
+    editSessions(current => current.map(entry => (entry.id === updated.id ? updated : entry)));
   }, []);
 
   const rename = useCallback(
@@ -160,7 +172,7 @@ export function useSessions(): SessionsController {
       if (!next || next === session.title) return;
       setRenameError(null);
       const retitle = (from: string, to: string) =>
-        setSessions(current =>
+        editSessions(current =>
           current.map(entry => (entry.id === session.id && entry.title === from ? { ...entry, title: to } : entry))
         );
       retitle(session.title, next);

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { IPC_CHANNELS } from '@shared/ipc';
 import { SessionStore } from '../chat/SessionStore';
+import { codeSessionId, importScopeTag } from './ClaudeCodeSync';
 import { ClaudeImportService } from './ClaudeImportService';
 
 const dialog = vi.hoisted(() => ({ next: null as string | null }));
@@ -17,6 +18,7 @@ vi.mock('electron', () => ({
 
 const FIXTURES = join(__dirname, '__fixtures__');
 const SOURCE_ID = '11111111-2222-4333-8444-555555555555';
+const SESSION_ID = codeSessionId(SOURCE_ID, undefined, importScopeTag('test-scope'));
 
 let services: ClaudeImportService[] = [];
 afterEach(() => {
@@ -62,7 +64,7 @@ describe('ClaudeImportService', () => {
     expect(state.code.counts).toEqual({ found: 1, imported: 1, skipped: 0, failed: 0 });
     expect(state.code.projects).toEqual([{ cwd: '/work/example-project', name: 'example-project', sessions: 1 }]);
     expect(state.code.lastSyncAt).not.toBeNull();
-    expect((await store.get(`cc-${SOURCE_ID}`))?.title).toBe('Sample listing session');
+    expect((await store.get(SESSION_ID))?.title).toBe('Sample listing session');
     await vi.waitUntil(() => sent.includes(IPC_CHANNELS.claudeImportedSessionsChanged), { timeout: 3000 });
     expect(sent.filter(channel => channel === IPC_CHANNELS.claudeImportedSessionsChanged)).toHaveLength(1);
   });
@@ -95,6 +97,14 @@ describe('ClaudeImportService', () => {
     expect(state.code.settings.projects).toBe('all');
   });
 
+  it('does not import on a filter change while sync is off', async () => {
+    const { service, store } = await setup();
+    await service.setCodeSettings({ includeSubagents: true });
+    await service.setCodeSettings({ projects: 'all' });
+    expect((await service.state()).code.running).toBe(false);
+    expect(await store.list()).toEqual([]);
+  });
+
   it('filters by project', async () => {
     const { service, store } = await setup();
     await service.syncCode();
@@ -103,7 +113,7 @@ describe('ClaudeImportService', () => {
     await service.syncCode();
     const state = await service.state();
     expect(state.code.counts.found).toBe(0);
-    expect(await store.get(`cc-${SOURCE_ID}`)).toBeNull();
+    expect(await store.get(SESSION_ID)).toBeNull();
   });
 
   it('removes only desktop copies that were not continued, and turns sync off', async () => {
@@ -128,7 +138,7 @@ describe('ClaudeImportService', () => {
 
     const result = await service.removeImported('claude-code');
     expect(result).toEqual({ removed: 1, keptForked: 1 });
-    expect(deleted).toEqual([`cc-${SOURCE_ID}`]);
+    expect(deleted).toEqual([SESSION_ID]);
     expect(await store.get('cc-other')).not.toBeNull();
     expect((await service.state()).code.settings.enabled).toBe(false);
   });

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Alert from '@mui/joy/Alert';
 import Button from '@mui/joy/Button';
 import Checkbox from '@mui/joy/Checkbox';
@@ -93,14 +93,19 @@ export function ClaudeImportSettings({
   const [confirming, setConfirming] = useState<ClaudeImportKind | null>(null);
   const [removing, setRemoving] = useState(false);
 
-  const enabled = state?.code.settings.enabled ?? false;
-  // Opening Settings re-scans, so the counts describe the folder as it is now.
+  // Opening Settings re-scans, so the counts describe the folder as it is now. Once only:
+  // switching sync on starts its own pass in main.
+  const scanned = useRef(false);
+  const loaded = state !== null;
   useEffect(() => {
-    if (enabled) void api?.syncCode();
-  }, [api, enabled]);
+    if (!loaded || scanned.current) return;
+    scanned.current = true;
+    if (state?.code.settings.enabled) api?.syncCode().catch(() => undefined);
+  }, [api, loaded, state]);
 
   const run = useCallback(
     async (work: () => Promise<ClaudeImportState>) => {
+      setMessage(null);
       try {
         onState(await work());
       } catch (error) {
@@ -109,6 +114,8 @@ export function ClaudeImportSettings({
     },
     [onState]
   );
+  // Two quick clicks would each build on the selection drawn before either reply arrived.
+  const pendingProjects = useRef<{ selection: Set<string>; inFlight: number } | null>(null);
 
   if (!api || !state) {
     return (
@@ -119,6 +126,7 @@ export function ClaudeImportSettings({
   }
 
   const { code, chat } = state;
+  const enabled = code.settings.enabled;
   const projects = code.settings.projects;
   const selected = new Set(projects === 'all' ? [] : projects);
 
@@ -254,10 +262,15 @@ export function ClaudeImportSettings({
                   label={`${project.name} (${project.sessions})`}
                   title={project.cwd}
                   onChange={event => {
-                    const next = new Set(selected);
+                    const pending = pendingProjects.current ?? { selection: selected, inFlight: 0 };
+                    const next = new Set(pending.selection);
                     if (event.target.checked) next.add(project.cwd);
                     else next.delete(project.cwd);
-                    void run(() => api.setCodeSettings({ projects: [...next] }));
+                    pendingProjects.current = { selection: next, inFlight: pending.inFlight + 1 };
+                    void run(() => api.setCodeSettings({ projects: [...next] })).finally(() => {
+                      const current = pendingProjects.current;
+                      if (current && --current.inFlight === 0) pendingProjects.current = null;
+                    });
                   }}
                   slotProps={{ input: { 'data-testid': 'claude-import-code-project-checkbox' } }}
                 />
@@ -319,11 +332,13 @@ export function ClaudeImportSettings({
             variant="outlined"
             loading={chat.running}
             disabled={!state.signedIn}
-            onClick={async () => {
-              const result = await api.importChatExport();
-              if (result.ok) onState(result.state);
-              else setMessage({ tone: 'danger', text: result.error });
-            }}
+            onClick={() =>
+              void run(async () => {
+                const result = await api.importChatExport();
+                if (!result.ok) throw new Error(result.error);
+                return result.state;
+              })
+            }
             data-testid="claude-import-chat-import-btn"
           >
             Import export...

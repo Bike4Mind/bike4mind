@@ -111,6 +111,13 @@ interface SummaryIndexFile {
 /** What `putImported` did: wrote the session, or found it continued here and left it alone. */
 export type PutImportedOutcome = 'written' | 'forked';
 
+/** An import ran into an account switch: what it holds belongs to the account it started in. */
+export class ImportScopeChangedError extends Error {
+  constructor() {
+    super('the signed-in account changed during the import');
+  }
+}
+
 /** True once anything other than the importer has written a message into an imported session. */
 export function isForkedImport(session: ChatSession): boolean {
   if (!session.importOrigin) return false;
@@ -369,6 +376,26 @@ export class SessionStore {
   }
 
   /**
+   * The directory an import started under `scopeKey` may use: that account's, and only while it
+   * is still the one signed in. Unlike a turn's tail, an import has no claim on the folder last
+   * resolved; it would file one account's history under another.
+   */
+  private async importDirectory(scopeKey: string | undefined): Promise<string> {
+    if (this.scope && scopeKey !== undefined) {
+      const current = this.scope();
+      if (!current || sessionScopeKey(current) !== scopeKey) throw new ImportScopeChangedError();
+    }
+    const directory = await this.directoryFor(false);
+    if (!directory) throw new Error('cannot import while no account is signed in');
+    return directory;
+  }
+
+  /** `get` for the importer; see importDirectory. */
+  async getImported(id: string, scopeKey?: string): Promise<ChatSession | null> {
+    return this.read(await this.importDirectory(scopeKey), id);
+  }
+
+  /**
    * Newest first. A file that no longer parses is skipped, not fatal - one bad file must not hide the rest.
    *
    * Only files whose size or mtime changed since the last listing are read; see SUMMARY_INDEX.
@@ -466,11 +493,14 @@ export class SessionStore {
       entries: Object.fromEntries(index),
     };
     const path = join(directory, SUMMARY_INDEX);
+    // Two listings can save at once; a shared temp name would let one rename the other's half-write.
+    const temporary = `${path}.${randomUUID()}.tmp`;
     try {
-      await writeFile(`${path}.tmp`, JSON.stringify(file), 'utf8');
-      await rename(`${path}.tmp`, path);
+      await writeFile(temporary, JSON.stringify(file), 'utf8');
+      await rename(temporary, path);
     } catch {
       // A cache: failing to save it costs the next listing a re-read, nothing more.
+      await rm(temporary, { force: true }).catch(() => undefined);
     }
   }
 
@@ -767,10 +797,9 @@ export class SessionStore {
    * here - then it is left exactly as it is and marked forked, so a later sync can never
    * overwrite a desktop turn. Under the same per-session lock as every other write.
    */
-  async putImported(session: ChatSession): Promise<PutImportedOutcome> {
+  async putImported(session: ChatSession, scopeKey?: string): Promise<PutImportedOutcome> {
     return this.serialize(session.id, async () => {
-      const directory = await this.directoryFor(false);
-      if (!directory) throw new Error('cannot import while no account is signed in');
+      const directory = await this.importDirectory(scopeKey);
       const existing = await this.read(directory, session.id);
       if (existing && (!existing.importOrigin || isForkedImport(existing))) {
         if (existing.importOrigin && !existing.importOrigin.forkedAt) {
@@ -779,18 +808,18 @@ export class SessionStore {
         }
         return 'forked';
       }
-      // The user's own choices on the row outlive a re-sync of its content.
+      // The user's own choices on the row outlive a re-sync of its content: anything the import
+      // does not set (granted folders, a remote link) rides along, and these it does set lose.
       const kept: Partial<ChatSession> = existing
         ? {
-            ...(existing.pinned ? { pinned: true } : {}),
-            ...(existing.archived ? { archived: true } : {}),
             ...(existing.titleLocked ? { title: existing.title, titleLocked: true } : {}),
+            ...(existing.project ? { project: existing.project } : {}),
             model: existing.model,
             approvalMode: existing.approvalMode,
             reasoningEffort: existing.reasoningEffort,
           }
         : {};
-      await this.write(directory, { ...session, ...kept });
+      await this.write(directory, { ...existing, ...session, ...kept });
       return 'written';
     });
   }

@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ChatSession } from '@shared/chat';
 import { describe, expect, it } from 'vitest';
-import { SessionStore } from './SessionStore';
+import { ImportScopeChangedError, SessionStore } from './SessionStore';
+import { sessionScopeKey, type SessionScope } from './sessionScope';
 
 function imported(id: string, title: string): ChatSession {
   const at = '2026-01-01T00:00:00.000Z';
@@ -87,5 +88,35 @@ describe('SessionStore imports', () => {
     expect((await first.list())[0].model).toBe('model-one');
     const second = new SessionStore(directory, 'model-two');
     expect((await second.list())[0].model).toBe('model-two');
+  });
+
+  it('refuses an import whose account is no longer the one signed in', async () => {
+    const alice: SessionScope = { environmentUrl: 'http://localhost:3000', accountId: 'account-alice' };
+    const bob: SessionScope = { environmentUrl: 'http://localhost:3000', accountId: 'account-bob' };
+    let current: SessionScope | null = alice;
+    const store = new SessionStore(await mkdtemp(join(tmpdir(), 'store-import-')), 'default', 'launch', () => current);
+    const started = sessionScopeKey(alice);
+    expect(await store.putImported(imported('cl-d', 'Hers'), started)).toBe('written');
+
+    current = bob;
+    await expect(store.putImported(imported('cl-e', 'Also hers'), started)).rejects.toBeInstanceOf(
+      ImportScopeChangedError
+    );
+    await expect(store.getImported('cl-d', started)).rejects.toBeInstanceOf(ImportScopeChangedError);
+    expect(await store.list()).toEqual([]);
+    current = null;
+    await expect(store.putImported(imported('cl-e', 'Also hers'), started)).rejects.toBeInstanceOf(
+      ImportScopeChangedError
+    );
+    current = alice;
+    expect((await store.list()).map(session => session.id)).toEqual(['cl-d']);
+  });
+
+  it('keeps what the user set on an imported session that the import does not', async () => {
+    const store = new SessionStore(await mkdtemp(join(tmpdir(), 'store-import-')), 'default');
+    await store.putImported(imported('cl-f', 'First'));
+    await store.addGrantedDirectory('cl-f', '/work/granted');
+    await store.putImported({ ...imported('cl-f', 'Second'), messages: [] });
+    expect((await store.get('cl-f'))!).toMatchObject({ title: 'Second', grantedDirectories: ['/work/granted'] });
   });
 });

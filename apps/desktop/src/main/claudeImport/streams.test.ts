@@ -1,10 +1,29 @@
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { Readable } from 'node:stream';
+import { describe, expect, it, vi } from 'vitest';
 import { buildZip } from './__fixtures__/buildZip';
 import { streamJsonArray } from './jsonArrayStream';
 import { readHeadAndTail, readJsonlLines } from './jsonlLines';
+
+const readFailure = vi.hoisted(() => ({ next: null as Error | null }));
+vi.mock('node:fs', async original => {
+  const fs = await original<typeof import('node:fs')>();
+  return {
+    ...fs,
+    createReadStream: (...args: Parameters<typeof fs.createReadStream>) => {
+      const error = readFailure.next;
+      if (!error) return fs.createReadStream(...args);
+      readFailure.next = null;
+      return new Readable({
+        read() {
+          this.destroy(error);
+        },
+      });
+    },
+  };
+});
 import { isUnsafeMemberName, listZipMembers, readZipMember, ZipError } from './zipReader';
 
 async function collect<T>(source: AsyncIterable<T>): Promise<T[]> {
@@ -115,6 +134,15 @@ describe('zip reader', () => {
     const [encrypted, big] = await listZipMembers(path);
     await expect(collect(readZipMember(path, encrypted, 1024))).rejects.toThrow(/encrypted/);
     await expect(collect(readZipMember(path, big, 1024))).rejects.toThrow(/limit/);
+  });
+
+  it('fails the read, rather than hanging, when the disk errors under an inflating member', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'zip-'));
+    const path = join(dir, 'export.zip');
+    await writeFile(path, buildZip([{ name: 'conversations.json', data: Buffer.from('[{"a":1}]') }]));
+    const [member] = await listZipMembers(path);
+    readFailure.next = Object.assign(new Error('EIO: i/o error'), { code: 'EIO' });
+    await expect(collect(readZipMember(path, member, 1024))).rejects.toThrow(/EIO/);
   });
 
   it('rejects a file that is not a zip', async () => {

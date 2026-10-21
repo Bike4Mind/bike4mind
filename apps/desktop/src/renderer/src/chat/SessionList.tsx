@@ -719,7 +719,12 @@ export function SessionList({
     sections.archived.length === 0 &&
     sections.imported.length === 0;
 
-  const ordered = useMemo(() => orderedSessions(sections), [sections]);
+  // Also open while it holds the open session, so clearing a search does not hide the selection.
+  const importedShown = importedOpen || !!query.trim() || sections.imported.some(session => session.id === activeId);
+  const ordered = useMemo(
+    () => (importedShown ? [...orderedSessions(sections), ...sections.imported] : orderedSessions(sections)),
+    [sections, importedShown]
+  );
 
   // Read inside the key handler so the listener is bound once rather than rebuilt on every
   // keystroke in the search box, which re-orders this list. The row actions read it for the
@@ -1125,13 +1130,13 @@ export function SessionList({
                   variant="plain"
                   color="neutral"
                   onClick={() => setImportedOpen(open => !open)}
-                  endDecorator={<ChevronIcon open={importedOpen || !!query.trim()} />}
+                  endDecorator={<ChevronIcon open={importedShown} />}
                   sx={{ justifyContent: 'flex-start', mt: 1, fontWeight: 'md' }}
                   data-testid="sidebar-imported-toggle-btn"
                 >
                   <Box sx={{ flex: 1, textAlign: 'left' }}>Imported from Claude ({sections.imported.length})</Box>
                 </Button>
-                {(importedOpen || !!query.trim()) && (
+                {importedShown && (
                   <List size="sm" sx={SESSION_LIST_SX}>
                     {sections.imported.map(row)}
                   </List>

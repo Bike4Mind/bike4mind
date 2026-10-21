@@ -156,6 +156,25 @@ describe('Claude chat export import', () => {
     expect(garden.messages.at(-1)!.content).toBe('My own follow-up');
   });
 
+  it('does not bring back a conversation deleted here, and does not re-store kept attachments', async () => {
+    const { root, store, deps, stored } = await setup();
+    const fixture = JSON.parse(await readFile(join(FIXTURES, 'conversations.json'), 'utf8'));
+    const path = join(root, 'conversations.json');
+    await writeFile(path, JSON.stringify(fixture));
+    await importChatExport(path, deps);
+    await store.delete(chatSessionId(UNTITLED));
+
+    fixture[0].updated_at = '2025-12-05T10:00:00.000000Z';
+    fixture[0].name = 'Planning a bigger garden';
+    await writeFile(path, JSON.stringify(fixture));
+    const second = await importChatExport(path, deps);
+    expect(second.counts).toMatchObject({ updated: 1, skipped: 2 });
+    expect(await store.get(chatSessionId(UNTITLED))).toBeNull();
+    expect(stored).toHaveLength(1);
+    const garden = (await store.get(chatSessionId(GARDEN)))!;
+    expect(garden.messages[0].attachments?.map(attachment => attachment.name)).toEqual(['notes.txt']);
+  });
+
   it('refuses archives with traversal names, with no conversations.json, or past the size limit', async () => {
     const { root, deps } = await setup();
     const traversal = join(root, 'traversal.zip');

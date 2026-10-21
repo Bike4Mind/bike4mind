@@ -32,6 +32,8 @@ import { PrStatusBar } from './PrStatusBar';
 import { openInSessionBrowser } from './prLinks';
 import { usePrSummaries, usePullRequest } from './usePullRequest';
 import { SessionList } from './SessionList';
+import { isUntouchedImport } from './grouping';
+import { useImportedInline } from './importedInline';
 import { SettingsScreen } from './SettingsPanel';
 import { TerminalPanel } from './TerminalPanel';
 import {
@@ -183,6 +185,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   // Until this is false the shell does not know which conversation it will show, so it draws
   // none of the empty-state copy that would otherwise flash up before the real one.
   const settling = loading || restoring;
+  const [importedInline] = useImportedInline();
 
   const conversation = useConversation(activeId, apply);
   // The header follows the sidebar's copy of the title, so a rename from any row - including
@@ -427,8 +430,12 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
     if (settling) return;
     const open = sessions.find(session => session.id === activeId);
     if (open?.mode === mode) return;
-    setActiveId(sessions.find(session => session.mode === mode)?.id ?? null);
-  }, [settling, activeId, sessions, mode]);
+    // A live Claude Code CLI session is always the newest import; landing on it would select a
+    // row hidden in the shut "Imported from Claude" section instead of the user's own work.
+    const candidate = (session: ChatSessionSummary) =>
+      session.mode === mode && (importedInline || !isUntouchedImport(session));
+    setActiveId(sessions.find(candidate)?.id ?? null);
+  }, [settling, activeId, sessions, mode, importedInline]);
 
   /**
    * Make a session, without touching what the pane is showing. The two callers differ on that:

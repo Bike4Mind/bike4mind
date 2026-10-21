@@ -124,7 +124,8 @@ export const QUICK_SWITCH_LIMIT = 9;
  */
 export function orderedSessions(sections: SidebarSections): ChatSessionSummary[] {
   // Archived and imported rows are left out: the shortcut counts what the sidebar draws, and
-  // those sit behind disclosures that are shut by default.
+  // those sit behind disclosures that are shut by default. SessionList appends the imported
+  // rows while their section is open.
   return [
     ...sections.pinned,
     ...sections.custom.flatMap(group => group.sessions),

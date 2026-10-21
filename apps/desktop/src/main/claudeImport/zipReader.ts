@@ -122,7 +122,11 @@ export async function* readZipMember(path: string, member: ZipMember, maxBytes: 
 
   if (member.compressedSize === 0) return;
   const raw = createReadStream(path, { start: dataStart, end: dataStart + member.compressedSize - 1 });
-  const source = member.method === 8 ? raw.pipe(createInflateRaw()) : raw;
+  const inflate = member.method === 8 ? createInflateRaw() : null;
+  // pipe() does not carry a read error across: unforwarded, it is an uncaught exception in main
+  // and the loop below never settles.
+  if (inflate) raw.on('error', error => inflate.destroy(error));
+  const source = inflate ? raw.pipe(inflate) : raw;
   let total = 0;
   try {
     for await (const chunk of source as AsyncIterable<Buffer>) {
@@ -132,6 +136,6 @@ export async function* readZipMember(path: string, member: ZipMember, maxBytes: 
     }
   } finally {
     raw.destroy();
-    if (source !== raw) (source as NodeJS.ReadableStream & { destroy(): void }).destroy();
+    inflate?.destroy();
   }
 }

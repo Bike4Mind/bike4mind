@@ -12,10 +12,11 @@ import type {
 import { IPC_CHANNELS } from '@shared/ipc';
 import type { AttachmentStore } from '../chat/AttachmentStore';
 import { MAX_ATTACHMENTS_PER_TURN } from '../chat/attachments';
-import type { SessionStore } from '../chat/SessionStore';
+import { ImportScopeChangedError, type SessionStore } from '../chat/SessionStore';
 import { importChatExport, looksLikeClaudeExport } from './ClaudeChatImport';
 import {
   countsFor,
+  importScopeTag,
   importTranscript,
   listTranscripts,
   matchesFilter,
@@ -44,7 +45,7 @@ export interface ClaudeImportLogger {
 export interface ClaudeImportServiceDeps {
   home: string;
   userData: string;
-  store: Pick<SessionStore, 'get' | 'putImported'>;
+  store: Pick<SessionStore, 'getImported' | 'putImported'>;
   attachments?: Pick<AttachmentStore, 'add'>;
   /** The signed-in account's session scope, or null while signed out. */
   scopeKey: () => string | null;
@@ -72,6 +73,9 @@ export class ClaudeImportService {
   private sessionsTimer: NodeJS.Timeout | null = null;
   private startTimer: NodeJS.Timeout | null = null;
   private disposed = false;
+  private removing = false;
+  /** Settings writes are read-modify-write; two quick clicks must not lose one of them. */
+  private settingsChain: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly deps: ClaudeImportServiceDeps) {
     this.states = new ImportStateStore(join(deps.userData, 'claude-import.json'), join(deps.userData, 'claude-import'));
@@ -88,15 +92,25 @@ export class ClaudeImportService {
   /** Called once the window is showing. Never awaited by startup. */
   start(): void {
     void this.applyWatchers();
-    this.startTimer = setTimeout(() => void this.autoSync(), FIRST_SYNC_DELAY_MS);
+    this.startTimer = setTimeout(() => {
+      this.startTimer = null;
+      void this.autoSync();
+    }, FIRST_SYNC_DELAY_MS);
     this.startTimer.unref?.();
   }
 
   /** The account changed: its imports live in its own scope, so sync that scope. */
   onScopeChanged(): void {
     this.transcripts = [];
-    void this.autoSync();
+    // Restoring the saved sign-in lands here moments after launch; the delayed first sync covers it.
+    if (!this.startTimer) void this.autoSync();
     this.pushState();
+  }
+
+  private serializeSettings<T>(work: () => Promise<T>): Promise<T> {
+    const run = this.settingsChain.then(work, work);
+    this.settingsChain = run.catch(() => undefined);
+    return run;
   }
 
   dispose(): void {
@@ -157,7 +171,11 @@ export class ClaudeImportService {
    * Accepts only what Settings can actually offer: booleans, and project cwds the index has
    * seen or the filter already held. Never a path to read.
    */
-  async setCodeSettings(patch: unknown): Promise<ClaudeImportState> {
+  setCodeSettings(patch: unknown): Promise<ClaudeImportState> {
+    return this.serializeSettings(() => this.applyCodeSettings(patch));
+  }
+
+  private async applyCodeSettings(patch: unknown): Promise<ClaudeImportState> {
     const current = await this.states.readSettings();
     const input = (patch && typeof patch === 'object' ? patch : {}) as Partial<ClaudeCodeImportSettings>;
     const next = { ...current.code };
@@ -175,39 +193,38 @@ export class ClaudeImportService {
     const turnedOn = next.enabled && !current.code.enabled;
     await this.states.writeSettings({ ...current, code: next });
     await this.applyWatchers();
-    if (
-      turnedOn ||
-      next.includeSubagents !== current.code.includeSubagents ||
-      (patch && 'projects' in (patch as object))
-    ) {
-      void this.syncCode();
-    }
+    // With sync off a filter change only waits for the next Sync now: after a Remove, ticking a
+    // box must not bring back everything that was just removed.
+    const refilter =
+      next.includeSubagents !== current.code.includeSubagents || (patch && 'projects' in (patch as object));
+    if (turnedOn || (next.enabled && refilter)) void this.syncCode();
     return this.state();
   }
 
   async pickCodeFolder(reset: boolean): Promise<ClaudeImportState> {
-    const current = await this.states.readSettings();
-    const folder = reset ? null : await this.deps.pickPath('folder', this.sourceFolder(current));
+    const before = await this.states.readSettings();
+    const folder = reset ? null : await this.deps.pickPath('folder', this.sourceFolder(before));
     if (!reset && !folder) return this.state();
-    await this.states.writeSettings({ ...current, code: { ...current.code, sourceFolder: folder, projects: 'all' } });
+    const enabled = await this.serializeSettings(async () => {
+      const current = await this.states.readSettings();
+      await this.states.writeSettings({ ...current, code: { ...current.code, sourceFolder: folder, projects: 'all' } });
+      return current.code.enabled;
+    });
     this.transcripts = [];
     await this.applyWatchers();
-    void this.syncCode();
+    if (enabled) void this.syncCode();
     return this.state();
   }
 
   async setChatWatchFolder(clear: boolean): Promise<ClaudeImportState> {
-    const current = await this.states.readSettings();
     const folder = clear ? null : await this.deps.pickPath('folder', join(this.deps.home, 'Downloads'));
     if (!clear && !folder) return this.state();
-    const scopeKey = this.deps.scopeKey();
-    if (folder && scopeKey) {
-      // Only exports that arrive from now on: whatever is already there was the user's to import.
-      const scope = await this.states.scope(scopeKey);
-      for (const zip of await this.zipsIn(folder)) scope.watchedSeen[zip.path] = zip.mtimeMs;
-      await this.states.saveScope(scopeKey);
-    }
-    await this.states.writeSettings({ ...current, chatWatchFolder: folder });
+    // Only exports that arrive from now on, in every account: whatever is already there was the
+    // user's to import by hand.
+    await this.serializeSettings(async () => {
+      const current = await this.states.readSettings();
+      await this.states.writeSettings({ ...current, chatWatchFolder: folder, chatWatchSince: Date.now() });
+    });
     await this.applyWatchers();
     return this.state();
   }
@@ -219,6 +236,7 @@ export class ClaudeImportService {
 
   /** Coalesces: a sync asked for while one runs makes that one go round again once. */
   syncCode(): Promise<void> {
+    if (this.removing) return Promise.resolve();
     if (this.codeRun) {
       this.codeRerun = true;
       return this.codeRun;
@@ -226,7 +244,13 @@ export class ClaudeImportService {
     this.codeRun = (async () => {
       do {
         this.codeRerun = false;
-        await this.runCodeSync();
+        try {
+          await this.runCodeSync();
+        } catch (error) {
+          // Usually the state file failing to save; the next pass retries from the cursors.
+          this.lastError = error instanceof Error ? error.message : String(error);
+          this.deps.logger.warn(`CLAUDE IMPORT: sync failed: ${this.lastError}`);
+        }
       } while (this.codeRerun && !this.disposed);
     })().finally(() => {
       this.codeRun = null;
@@ -249,23 +273,25 @@ export class ClaudeImportService {
       return;
     }
     try {
-      this.transcripts = await listTranscripts(root, settings.code.includeSubagents);
+      this.transcripts = await listTranscripts(root, settings.code.includeSubagents, importScopeTag(scopeKey));
       this.lastError = undefined;
     } catch (error) {
       this.lastError = error instanceof Error ? error.message : String(error);
       return;
     }
 
+    let changed = false;
     for (const transcript of this.transcripts) {
       const cursor = scope.files[transcript.path];
-      if (cursor?.cwd || cursor?.status === 'removed') continue;
+      if (cursor?.cwd || cursor?.status === 'removed' || cursor?.peekedSize === transcript.size) continue;
       const peeked = await peekTranscript(transcript).catch(() => null);
       scope.files[transcript.path] = {
         ...(cursor ?? { sessionId: transcript.sessionId, size: 0, mtimeMs: 0, offset: 0, status: 'pending' as const }),
-        ...(peeked?.cwd ? { cwd: peeked.cwd } : {}),
+        ...(peeked?.cwd ? { cwd: peeked.cwd } : { peekedSize: transcript.size }),
       };
+      changed = true;
     }
-    this.pushState();
+    if (changed) this.pushState();
 
     const queue = this.transcripts
       .filter(transcript => {
@@ -275,19 +301,27 @@ export class ClaudeImportService {
       .sort((a, b) => b.mtimeMs - a.mtimeMs);
 
     let done = 0;
+    const pickModel = once(this.deps.pickModel);
     await runQueue(queue, IMPORT_CONCURRENCY, async transcript => {
-      if (this.disposed || this.deps.scopeKey() !== scopeKey) return;
+      if (this.disposed || this.removing || this.deps.scopeKey() !== scopeKey) return;
       const previous = scope.files[transcript.path];
       try {
         const cursor = await importTranscript(transcript, previous?.status === 'pending' ? undefined : previous, {
           store: this.deps.store,
+          scopeKey,
           storeAttachments: (sessionId, pending) => this.storeAttachments(sessionId, pending),
-          pickModel: this.deps.pickModel,
+          pickModel,
           directoryExists: isDirectory,
         });
         scope.files[transcript.path] = { ...cursor, cwd: cursor.cwd ?? previous?.cwd };
-        if (cursor.status === 'imported') this.sessionsChanged();
+        if (cursor.status === 'imported' && (previous?.status !== 'imported' || cursor.offset !== previous.offset)) {
+          this.sessionsChanged();
+        }
+        changed = true;
       } catch (error) {
+        // Left as it was: the account it belongs to picks it up on its next sync.
+        if (error instanceof ImportScopeChangedError) return;
+        changed = true;
         scope.files[transcript.path] = {
           ...(previous ?? { sessionId: transcript.sessionId, offset: 0 }),
           size: transcript.size,
@@ -305,7 +339,8 @@ export class ClaudeImportService {
 
     scope.lastSyncAt = new Date().toISOString();
     scope.lastSyncMs = Date.now() - started;
-    await this.states.saveScope(scopeKey);
+    // A live Claude Code session wakes this every few seconds; most passes find nothing new.
+    if (changed || queue.length > 0) await this.states.saveScope(scopeKey);
   }
 
   async importChatExport(): Promise<ClaudeImportResult> {
@@ -319,12 +354,14 @@ export class ClaudeImportService {
     if (!scopeKey)
       return { ok: false, error: 'Sign in before importing: imports are saved to your account on this machine.' };
     if (this.chatRunning) return { ok: false, error: 'An import is already running.' };
+    if (this.removing) return { ok: false, error: 'Imported sessions are being removed. Try again in a moment.' };
     this.chatRunning = true;
     this.pushState();
     try {
       const scope = await this.states.scope(scopeKey);
       const summary = await importChatExport(path, {
         store: this.deps.store,
+        scopeKey,
         storeAttachments: (sessionId, pending) => this.storeAttachments(sessionId, pending),
         pickModel: this.deps.pickModel,
         seen: scope.conversations,
@@ -347,16 +384,27 @@ export class ClaudeImportService {
     if (kind !== 'claude-code' && kind !== 'claude-chat') throw new Error('unknown import source');
     const scopeKey = this.deps.scopeKey();
     if (!scopeKey) return { removed: 0, keptForked: 0 };
+    if (this.removing) throw new Error('Imported sessions are already being removed.');
+    if (kind === 'claude-chat' && this.chatRunning) throw new Error('Wait for the running import to finish first.');
+    this.removing = true;
+    try {
+      return await this.removeIn(kind, scopeKey);
+    } finally {
+      this.removing = false;
+    }
+  }
+
+  private async removeIn(kind: ClaudeImportKind, scopeKey: string): Promise<ClaudeRemoveResult> {
     if (kind === 'claude-code') {
-      const settings = await this.states.readSettings();
       // Otherwise the next sync would bring every one of them straight back.
-      await this.states.writeSettings({ ...settings, code: { ...settings.code, enabled: false } });
+      await this.serializeSettings(async () => {
+        const settings = await this.states.readSettings();
+        await this.states.writeSettings({ ...settings, code: { ...settings.code, enabled: false } });
+      });
       await this.applyWatchers();
       await this.codeRun;
     }
-    const sessions = (await this.deps.listSessions()).filter(
-      session => session.importOrigin?.kind === (kind as ClaudeImportKind)
-    );
+    const sessions = (await this.deps.listSessions()).filter(session => session.importOrigin?.kind === kind);
     let removed = 0;
     let keptForked = 0;
     for (const session of sessions) {
@@ -426,7 +474,7 @@ export class ClaudeImportService {
     if (!settings.chatWatchFolder || !scopeKey || this.chatRunning) return;
     const scope = await this.states.scope(scopeKey);
     for (const zip of await this.zipsIn(settings.chatWatchFolder)) {
-      if (scope.watchedSeen[zip.path] === zip.mtimeMs) continue;
+      if (scope.watchedSeen[zip.path] === zip.mtimeMs || zip.mtimeMs < settings.chatWatchSince) continue;
       scope.watchedSeen[zip.path] = zip.mtimeMs;
       await this.states.saveScope(scopeKey);
       if (await looksLikeClaudeExport(zip.path)) await this.importChatFile(zip.path);
@@ -488,6 +536,12 @@ export class ClaudeImportService {
     if (which === 'code') this.codeTimer = timer;
     else this.chatTimer = timer;
   }
+}
+
+/** One lookup per run: a sync while offline would otherwise wait out a timeout per transcript. */
+function once<T>(load: () => Promise<T>): () => Promise<T> {
+  let loading: Promise<T> | null = null;
+  return () => (loading ??= load());
 }
 
 async function isDirectory(path: string): Promise<boolean> {

@@ -1,7 +1,7 @@
-import { copyFile, mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { appendFile, copyFile, mkdir, mkdtemp, readFile, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { AttachmentStore } from '../chat/AttachmentStore';
 import { SessionStore } from '../chat/SessionStore';
 import {
@@ -165,6 +165,64 @@ describe('Claude Code import', () => {
     expect(needsImport(transcript, second)).toBe(false);
   });
 
+  it('leaves a torn last line alone until the file changes, and then writes nothing new for it', async () => {
+    const { transcriptPath, store, deps } = await setup();
+    const first = await importTranscript(await indexed(transcriptPath), undefined, deps);
+    expect(needsImport(await indexed(transcriptPath), first)).toBe(false);
+
+    const later = new Date('2026-02-01T00:00:00.000Z');
+    await utimes(transcriptPath, later, later);
+    const put = vi.spyOn(store, 'putImported');
+    const touched = await importTranscript(await indexed(transcriptPath), first, deps);
+    expect(put).not.toHaveBeenCalled();
+    expect(touched).toMatchObject({ offset: first.offset, mtimeMs: later.getTime(), status: 'imported' });
+  });
+
+  it('gives the same rounds whether a sync lands between two lines of one API message or not', async () => {
+    const { projectDir, store, deps } = await setup();
+    const event = (uuid: string, type: string, message: unknown) =>
+      JSON.stringify({ type, uuid, sessionId: SOURCE_ID, timestamp: '2026-01-02T10:00:00.000Z', message }) + '\n';
+    const head =
+      event('u1', 'user', { role: 'user', content: 'Run it.' }) +
+      event('a1', 'assistant', {
+        id: 'm1',
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } }],
+      }) +
+      event('u2', 'user', { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'a.txt' }] }) +
+      event('a2', 'assistant', {
+        id: 'm2',
+        role: 'assistant',
+        content: [{ type: 'thinking', thinking: '', signature: 's' }],
+      });
+    const tail = event('a3', 'assistant', { id: 'm2', role: 'assistant', content: [{ type: 'text', text: 'Done.' }] });
+
+    const path = join(projectDir, `${SOURCE_ID}.jsonl`);
+    await writeFile(path, head);
+    const first = await importTranscript(await indexed(path), undefined, deps);
+    await appendFile(path, tail);
+    await importTranscript(await indexed(path), first, deps);
+    const incremental = (await store.get(codeSessionId(SOURCE_ID)))!.messages.at(-1)!.rounds;
+
+    await store.delete(codeSessionId(SOURCE_ID));
+    await importTranscript(await indexed(path), undefined, deps);
+    const fresh = (await store.get(codeSessionId(SOURCE_ID)))!.messages.at(-1)!.rounds;
+    expect(incremental).toEqual(fresh);
+    expect(fresh!.map(round => round.text)).toEqual(['', 'Done.']);
+  });
+
+  it('rebuilds rather than resumes a file rewritten under the cursor', async () => {
+    const { transcriptPath, store, deps } = await setup();
+    const first = await importTranscript(await indexed(transcriptPath), undefined, deps);
+    const original = await readFile(transcriptPath, 'utf8');
+    // Same bytes shifted by one: the cursor now points mid-line.
+    await writeFile(transcriptPath, ' ' + original);
+    const second = await importTranscript(await indexed(transcriptPath), first, deps);
+    expect(second.status).toBe('imported');
+    const ids = (await store.get(codeSessionId(SOURCE_ID)))!.messages.map(message => message.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
   it('stops syncing a session once it is continued here, and never overwrites the desktop turn', async () => {
     const { transcriptPath, store, deps } = await setup();
     const first = await importTranscript(await indexed(transcriptPath), undefined, deps);
@@ -222,6 +280,7 @@ describe('Claude Code import', () => {
     const agentId = `cca-${SOURCE_ID}-abc123`;
     expect(withAgents.map(entry => entry.sessionId).sort()).toEqual([`cc-${SOURCE_ID}`, agentId]);
     expect(withAgents.find(entry => entry.sessionId === agentId)!.parentSourceId).toBe(SOURCE_ID);
+    expect(codeSessionId('a'.repeat(40), SOURCE_ID)).toMatch(/^cca-[0-9a-f]{40}$/);
 
     // A resumed session carries a copy of its parent's subagent files under its own id.
     const resumed = '99999999-2222-4333-8444-555555555555';

@@ -7,11 +7,14 @@ import type { CodeMapState } from './claudeCodeMapper';
 export interface ClaudeImportSettings {
   code: ClaudeCodeImportSettings;
   chatWatchFolder: string | null;
+  /** When the folder was chosen (ms). Exports older than this were already there, in every account. */
+  chatWatchSince: number;
 }
 
 export const DEFAULT_SETTINGS: ClaudeImportSettings = {
   code: { enabled: false, sourceFolder: null, projects: 'all', includeSubagents: false },
   chatWatchFolder: null,
+  chatWatchSince: 0,
 };
 
 /** 'pending' is indexed but not read yet; 'removed' was deleted by the user and stays gone. */
@@ -26,6 +29,8 @@ export interface FileCursor {
   offset: number;
   status: FileStatus;
   cwd?: string;
+  /** Size when the head was last read for `cwd`, so a file with none is not re-read every pass. */
+  peekedSize?: number;
   state?: CodeMapState;
   error?: string;
 }
@@ -72,6 +77,8 @@ export function sanitizeSettings(raw: unknown): ClaudeImportSettings {
       includeSubagents: code.includeSubagents === true,
     },
     chatWatchFolder: absoluteOrNull(value.chatWatchFolder),
+    chatWatchSince:
+      typeof value.chatWatchSince === 'number' && Number.isFinite(value.chatWatchSince) ? value.chatWatchSince : 0,
   };
 }
 

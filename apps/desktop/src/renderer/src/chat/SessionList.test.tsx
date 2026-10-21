@@ -393,6 +393,16 @@ describe('sessions imported from Claude', () => {
     expect(titles()).toEqual(['Imported work']);
   });
 
+  it('lets the Cmd shortcuts reach imported rows a search has put on screen', async () => {
+    await mount([summary('own', 'My own chat'), summary('cc-1', 'Imported work', { importOrigin: origin })]);
+    typeSearch('imported');
+    onSelect.mockClear();
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: '1', code: 'Digit1', metaKey: true, bubbles: true }));
+    });
+    expect(onSelect).toHaveBeenCalledWith('cc-1');
+  });
+
   it('re-lists once when main says imported sessions changed', async () => {
     let listener: (() => void) | null = null;
     let sessions = [summary('own', 'Mine')];

@@ -216,7 +216,8 @@ function applyUser(
   const system = !command && APP_TAG.test(text);
   const content = capOutput(command ?? text, MAX_IMPORTED_TEXT_CHARS);
   messages.push({ id, role: 'user', content, createdAt, ...(system ? { system: true } : {}) });
-  if (!system && !state.firstPrompt && content) state.firstPrompt = content;
+  // Only ever a fallback title, and the state is saved per transcript: no need for all of it.
+  if (!system && !state.firstPrompt && content) state.firstPrompt = content.slice(0, 200);
 
   imageBlocks.forEach((block, index) => {
     const source = block.source as Record<string, unknown> | undefined;

@@ -1,4 +1,5 @@
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { lstat, open, readdir, readFile, stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { setImmediate as yieldToLoop } from 'node:timers/promises';
 import type { ChatMessage, ChatProject, ChatSession } from '@shared/chat';
@@ -23,6 +24,10 @@ const HEAD_TAIL_BYTES = 64 * 1024;
 /** Lines larger than this are skipped: a single event that size is a pasted binary, not a turn. */
 export const MAX_LINE_BYTES = 8 * 1024 * 1024;
 const LINES_PER_YIELD = 200;
+/** Decoded images are handed to the attachment store once this many bytes are waiting. */
+const PENDING_ATTACHMENT_BYTES = 32 * 1024 * 1024;
+/** SessionStore's id limit. */
+const MAX_SESSION_ID = 64;
 const SESSION_FILE = /^[0-9a-f-]{36}\.jsonl$/i;
 const SUBAGENT_FILE = /^agent-([A-Za-z0-9_-]{1,40})\.jsonl$/;
 
@@ -37,7 +42,9 @@ export interface IndexedTranscript {
 }
 
 export interface CodeSyncDeps {
-  store: Pick<SessionStore, 'get' | 'putImported'>;
+  store: Pick<SessionStore, 'getImported' | 'putImported'>;
+  /** The account the run started under; a switch mid-run makes the store refuse the write. */
+  scopeKey?: string;
   storeAttachments?: (
     sessionId: string,
     pending: PendingAttachment[]
@@ -47,16 +54,33 @@ export interface CodeSyncDeps {
   now?: () => Date;
 }
 
+/**
+ * Imported ids carry the account, because attachments live in one folder per session id shared
+ * by every account on the machine: two accounts importing one transcript would delete and
+ * prune each other's files.
+ */
+export function importScopeTag(scopeKey: string): string {
+  return createHash('sha256').update(scopeKey).digest('hex').slice(0, 8);
+}
+
 /** A resumed session copies its parent's subagent files, so an agent id is unique only per parent. */
-export function codeSessionId(sourceId: string, parentSourceId?: string): string {
-  return parentSourceId ? `cca-${parentSourceId}-${sourceId}` : `cc-${sourceId}`;
+export function codeSessionId(sourceId: string, parentSourceId?: string, scopeTag?: string): string {
+  const tag = scopeTag ? `${scopeTag}-` : '';
+  if (!parentSourceId) return `cc-${tag}${sourceId}`;
+  const readable = `cca-${tag}${parentSourceId}-${sourceId}`;
+  if (readable.length <= MAX_SESSION_ID) return readable;
+  return `cca-${createHash('sha256').update(`${tag}${parentSourceId}/${sourceId}`).digest('hex').slice(0, 40)}`;
 }
 
 /**
  * Every transcript under `root`, by name and stat alone. Never follows anything outside the
  * folder: project folders are read one level down, subagent files one level below a session.
  */
-export async function listTranscripts(root: string, includeSubagents: boolean): Promise<IndexedTranscript[]> {
+export async function listTranscripts(
+  root: string,
+  includeSubagents: boolean,
+  scopeTag?: string
+): Promise<IndexedTranscript[]> {
   const found: IndexedTranscript[] = [];
   let projects: import('node:fs').Dirent[];
   try {
@@ -84,10 +108,12 @@ export async function listTranscripts(root: string, includeSubagents: boolean): 
             size: info.size,
             mtimeMs: info.mtimeMs,
             sourceId,
-            sessionId: codeSessionId(sourceId),
+            sessionId: codeSessionId(sourceId, undefined, scopeTag),
           });
       } else if (includeSubagents && entry.isDirectory() && /^[0-9a-f-]{36}$/i.test(entry.name)) {
         const folder = join(projectPath, entry.name, 'subagents');
+        // lstat: a symlinked folder would lead outside the source folder.
+        if (!(await lstat(folder).catch(() => null))?.isDirectory()) continue;
         const agents = await readdir(folder, { withFileTypes: true }).catch(() => []);
         for (const agent of agents) {
           const match = agent.isFile() ? SUBAGENT_FILE.exec(agent.name) : null;
@@ -100,7 +126,7 @@ export async function listTranscripts(root: string, includeSubagents: boolean): 
               size: info.size,
               mtimeMs: info.mtimeMs,
               sourceId: match[1],
-              sessionId: codeSessionId(match[1], entry.name),
+              sessionId: codeSessionId(match[1], entry.name, scopeTag),
               parentSourceId: entry.name,
             });
           }
@@ -176,17 +202,56 @@ export function countsFor(
   return counts;
 }
 
-/** True when the file has bytes the cursor has not read, and it is still ours to write. */
+/**
+ * True when the file changed since the cursor read it, and it is still ours to write. Not
+ * `offset < size`: a torn last line is never consumed, so that would re-run on every sync.
+ */
 export function needsImport(transcript: IndexedTranscript, cursor: FileCursor | undefined): boolean {
   if (!cursor) return true;
   if (cursor.status === 'forked' || cursor.status === 'removed') return false;
-  if (cursor.status === 'failed') return cursor.size !== transcript.size || cursor.mtimeMs !== transcript.mtimeMs;
-  return cursor.size !== transcript.size || cursor.mtimeMs !== transcript.mtimeMs || cursor.offset < transcript.size;
+  return cursor.size !== transcript.size || cursor.mtimeMs !== transcript.mtimeMs;
+}
+
+/** A resume point sits just past a newline; anything else means the file was rewritten. */
+async function startsLineAt(path: string, offset: number): Promise<boolean> {
+  if (offset === 0) return true;
+  const handle = await open(path, 'r').catch(() => null);
+  if (!handle) return false;
+  try {
+    const byte = Buffer.alloc(1);
+    const { bytesRead } = await handle.read(byte, 0, 1, offset - 1);
+    return bytesRead === 1 && byte[0] === 0x0a;
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * Narrows `pending` to what still needs storing. A message the desktop copy already holds keeps
+ * its files: AttachmentStore writes a new file per add, so re-storing on a rebuild or a
+ * re-import would orphan the old ones.
+ */
+export function carryAttachments(
+  messages: ChatMessage[],
+  existing: ChatSession | null,
+  pending: PendingAttachment[]
+): PendingAttachment[] {
+  const held = new Map<string, ChatMessage['attachments']>();
+  for (const message of existing?.messages ?? [])
+    if (message.attachments?.length) held.set(message.id, message.attachments);
+  if (held.size === 0) return pending;
+  for (const message of messages) {
+    const kept = held.get(message.id);
+    if (kept && !message.attachments) message.attachments = kept;
+  }
+  return pending.filter(item => !held.has(item.messageId));
 }
 
 async function readSubagentTitle(path: string): Promise<string | undefined> {
+  const metaPath = path.replace(/\.jsonl$/, '.meta.json');
   try {
-    const meta = JSON.parse(await readFile(path.replace(/\.jsonl$/, '.meta.json'), 'utf8')) as {
+    if (!(await lstat(metaPath)).isFile()) return undefined;
+    const meta = JSON.parse(await readFile(metaPath, 'utf8')) as {
       description?: unknown;
     };
     return typeof meta.description === 'string' && meta.description.trim() ? meta.description.trim() : undefined;
@@ -205,7 +270,7 @@ export async function importTranscript(
   deps: CodeSyncDeps
 ): Promise<FileCursor> {
   const now = (deps.now ?? (() => new Date()))().toISOString();
-  const existing = await deps.store.get(transcript.sessionId);
+  const existing = await deps.store.getImported(transcript.sessionId, deps.scopeKey);
   if (existing && isForkedImport(existing)) {
     return {
       ...(previous ?? { sessionId: transcript.sessionId, offset: 0 }),
@@ -218,12 +283,25 @@ export async function importTranscript(
   if (previous?.status === 'imported' && !existing) return { ...previous, status: 'removed' };
   // Appending needs the copy the cursor describes; anything else (a truncated or rewritten
   // file, lost bookkeeping) is rebuilt from the top and replaces it.
-  const resume = previous?.status === 'imported' && !!existing && previous.offset <= transcript.size;
+  const resume =
+    previous?.status === 'imported' &&
+    !!existing &&
+    previous.offset <= transcript.size &&
+    (await startsLineAt(transcript.path, previous.offset));
   let offset = resume ? previous.offset : 0;
   const state: CodeMapState = resume ? { ...(previous.state ?? {}) } : {};
 
   const messages: ChatMessage[] = resume && existing ? existing.messages : [];
   const pending: PendingAttachment[] = [];
+  const flushAttachments = async () => {
+    const toStore = carryAttachments(messages, existing, pending.splice(0));
+    if (toStore.length === 0 || !deps.storeAttachments) return;
+    const stored = await deps.storeAttachments(transcript.sessionId, toStore);
+    for (const message of messages) {
+      const attachments = stored.get(message.id);
+      if (attachments?.length) message.attachments = attachments;
+    }
+  };
   const subagent = !!transcript.parentSourceId;
   let lines = 0;
   for await (const line of readJsonlLines(transcript.path, offset, MAX_LINE_BYTES)) {
@@ -234,11 +312,18 @@ export async function importTranscript(
       } catch {
         // An unparseable line is skipped like an unknown event; the rest of the file still counts.
       }
+      if (pending.reduce((sum, item) => sum + item.data.length, 0) > PENDING_ATTACHMENT_BYTES) await flushAttachments();
     }
     if (++lines % LINES_PER_YIELD === 0) await yieldToLoop();
   }
+  // Only the metadata moved (a torn line still being written): nothing to rewrite.
+  if (resume && lines === 0) return { ...previous, size: transcript.size, mtimeMs: transcript.mtimeMs };
 
+  // Tidying drops a round that has nothing in it yet; the next line of that API message must
+  // then open a fresh round rather than land in the one before it.
+  const openRound = messages.at(-1)?.rounds?.at(-1);
   const kept = tidyMessages(messages);
+  if (openRound && kept.at(-1)?.rounds?.at(-1) !== openRound) state.lastApiMessageId = undefined;
   const base: FileCursor = {
     sessionId: transcript.sessionId,
     size: transcript.size,
@@ -250,13 +335,7 @@ export async function importTranscript(
   };
   if (!kept.some(message => !message.system)) return base;
 
-  if (pending.length > 0 && deps.storeAttachments) {
-    const stored = await deps.storeAttachments(transcript.sessionId, pending);
-    for (const message of kept) {
-      const attachments = stored.get(message.id);
-      if (attachments?.length) message.attachments = attachments;
-    }
-  }
+  await flushAttachments();
 
   const title =
     (subagent ? await readSubagentTitle(transcript.path) : undefined) ?? displayTitle(state) ?? 'Claude Code session';
@@ -295,7 +374,7 @@ export async function importTranscript(
     importOrigin,
     messages: kept,
   };
-  const outcome = await deps.store.putImported(session);
+  const outcome = await deps.store.putImported(session, deps.scopeKey);
   return { ...base, status: outcome === 'forked' ? 'forked' : 'imported' };
 }
 
