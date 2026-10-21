@@ -418,7 +418,7 @@ export const NON_MINTABLE_API_KEY_SCOPES: ReadonlySet<ApiKeyScope> = new Set([
 
 /**
  * Scopes that are provisioned by admins only and must never appear in the user-facing
- * key creation UI. The ingest scope is excluded from USER_API_KEY_SCOPES by design.
+ * key creation UI. The ingest and automation scopes are excluded from USER_API_KEY_SCOPES by design.
  */
 export const ADMIN_ONLY_API_KEY_SCOPES: ApiKeyScopeOption[] = [
   {
@@ -432,5 +432,16 @@ export const ADMIN_ONLY_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     label: 'QA: Ingest',
     description: 'CI ingest of end-to-end test runs for the admin status page',
     endpoints: ['POST /api/qa/uploads', 'POST /api/qa/runs'],
+  },
+  {
+    value: ApiKeyScope.RELEASE_NOTES_WRITE,
+    label: 'Release Notes: Write',
+    description:
+      "Release-note automation: find a release note and set its video, and upload its What's New media. The key's user must be a platform admin",
+    endpoints: [
+      'GET /api/admin/release-notes',
+      'PATCH /api/admin/release-notes/:id (video only)',
+      'POST /api/files/createFabFile (purpose: modal-media only)',
+    ],
   },
 ];

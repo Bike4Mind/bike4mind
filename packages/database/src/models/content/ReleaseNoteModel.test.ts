@@ -96,6 +96,24 @@ describe('ReleaseNoteRepository.upsertGenerated', () => {
     expect(cleared.kind === 'ok' && cleared.note.video).toBeNull();
   });
 
+  it('attachVideo sets the video without marking the note edited, so it still regenerates', async () => {
+    const { note: stored } = await releaseNoteRepository.upsertGenerated(makeNote());
+    const video = { landscapeUrl: 'https://d111.cloudfront.net/wide.mp4' };
+    const attached = await releaseNoteRepository.attachVideo(stored.id, video);
+    expect(attached.kind === 'ok' && attached.note.editedAt).toBeNull();
+    expect(attached.kind === 'ok' && attached.note.video?.landscapeUrl).toBe(video.landscapeUrl);
+
+    const { note, preserved } = await releaseNoteRepository.upsertGenerated(makeNote({ headline: 'Regenerated' }));
+    expect(preserved).toBe(false);
+    expect(note.headline).toBe('Regenerated');
+    expect(note.video?.landscapeUrl).toBe(video.landscapeUrl);
+  });
+
+  it('attachVideo reports notFound for a missing note', async () => {
+    const result = await releaseNoteRepository.attachVideo(new mongoose.Types.ObjectId().toString(), null);
+    expect(result.kind).toBe('notFound');
+  });
+
   it('treats a duplicate key from a concurrent unedited insert as a race, not an edit', async () => {
     await ReleaseNote.create({ ...makeNote(), editedAt: null });
     const spy = vi
