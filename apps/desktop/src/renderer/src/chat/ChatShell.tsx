@@ -689,6 +689,8 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
           ) : (
             <VideoJobsContext.Provider value={videoJobs}>
               <WebLinkContext.Provider value={openInBrowserPane}>
+                {/* Keyed so an open menu can never carry an image into another conversation,
+                    should a switch ever skip the `opening` gate that unmounts this today. */}
                 <ImageMenuProvider key={activeId ?? 'none'} onAttach={activeId ? draft.attachImage : undefined}>
                   <MessageThread
                     // Remounted per conversation, so its window and scroll start over and nothing it

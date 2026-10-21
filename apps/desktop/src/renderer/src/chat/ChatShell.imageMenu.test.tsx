@@ -196,6 +196,9 @@ describe('the image menu in a conversation', () => {
     expect(el('image-context-menu')).toBeNull();
   });
 
+  // Closed by the `opening` gate, which unmounts the provider for the render before the new
+  // transcript arrives. The provider's `key` is a backstop this test cannot reach: no switch
+  // skips that gate today.
   it('closes the image menu when another conversation is selected', async () => {
     await openAssistantSession();
     const image = el('chat-media-view-btn');
