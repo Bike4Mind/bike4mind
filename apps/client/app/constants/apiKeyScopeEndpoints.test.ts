@@ -16,8 +16,10 @@ vi.mock('@server/auth/turnAuth', () => ({}));
 /**
  * Every endpoint a scope CLAIMS must be gated by a check that admits it and nothing that makes the
  * claim misleading; routes a scope opens without listing them are not checked. Who else claims a
- * route is counted per verb, but in-handler checks are read per FILE from source, so a narrow check
- * on one verb's branch still vouches for that scope on every verb the file serves.
+ * route is counted per verb, and so are in-handler checks where the file chains its handlers
+ * (`.get(..).post(..)`): a check inside one verb's link vouches for that verb only. Anything outside
+ * the links (the door, a local function a link calls) counts for every verb, and a file with no
+ * links (a `req.method` branch) is read whole, so a check on one branch still vouches for them all.
  */
 
 const CLIENT_DIR = path.resolve(__dirname, '../..');
@@ -193,17 +195,49 @@ function parseEndpoint(endpoint: string): { methods: string[]; path: string } | 
 const PAGE_EXTENSIONS = ['.ts', '.tsx'];
 
 /**
- * Whether `source` serves `method`: a handler chain link (`).post(`, `}).get<T>(`), a `req.method`
- * check (`req.method !== 'POST'`, `case 'POST'` under `switch (req.method)`, `[..].includes(req.method)`),
- * or a handler bound to a variable (`const api = baseApi(...); api.get(`). Chain links anchor on the
- * `)` they follow, so `Promise.all(` and `headers.get(` do not, and a bare `'POST'` (an outbound
- * fetch's `method`) is not a check.
+ * The handler chain links in `source` (`).post(`, `}).get<T>(`, or `api.get(` on a handler bound to
+ * a variable), each running from its `.` to the next link or the end of its statement (the next
+ * line starting in column 0 with anything but a closing bracket). Links anchor on the `)` they
+ * follow, so `Promise.all(` and `headers.get(` are not links.
+ */
+function chainLinks(source: string): { verb: string; start: number; end: number }[] {
+  const bound = [...source.matchAll(/\bconst (\w+)\s*=\s*baseApi\(/g)].map(m => String.raw`\b${m[1]}\s*`);
+  const link = new RegExp(
+    String.raw`(?:${[String.raw`\)\s*`, ...bound].join('|')})(\.(get|post|put|patch|delete|all)\s*[<(])`,
+    'g'
+  );
+  const starts = [...source.matchAll(link)].map(m => ({ verb: m[2], start: m.index + m[0].length - m[1].length }));
+  return starts.map(({ verb, start }, i) => {
+    const next = starts[i + 1]?.start ?? source.length;
+    const statementEnd = /\n(?=[^\s})\]])/g;
+    statementEnd.lastIndex = start;
+    const endMatch = statementEnd.exec(source);
+    return { verb, start, end: Math.min(next, endMatch ? endMatch.index : source.length) };
+  });
+}
+
+/** The part of `source` that can gate `method`: its own chain links plus everything outside any link. */
+function verbSource(source: string, method: string): string {
+  const lower = method.toLowerCase();
+  const parts: string[] = [];
+  let at = 0;
+  for (const { verb, start, end } of chainLinks(source)) {
+    parts.push(source.slice(at, start));
+    if (verb === lower || verb === 'all') parts.push(source.slice(start, end));
+    at = end;
+  }
+  parts.push(source.slice(at));
+  return parts.join('\n');
+}
+
+/**
+ * Whether `source` serves `method`: a handler chain link (see chainLinks), or a `req.method` check
+ * (`req.method !== 'POST'`, `case 'POST'` under `switch (req.method)`, `[..].includes(req.method)`).
+ * A bare `'POST'` (an outbound fetch's `method`) is not a check.
  */
 function servesVerb(source: string, method: string): boolean {
   const lower = method.toLowerCase();
-  const bound = [...source.matchAll(/\bconst (\w+)\s*=\s*baseApi\(/g)].map(
-    m => `\\b${m[1]}\\s*\\.(${lower}|all)\\s*[<(]`
-  );
+  if (chainLinks(source).some(l => l.verb === lower || l.verb === 'all')) return true;
   const verb = `['"]${method}['"]`;
   const methodChecks = [
     String.raw`\breq\.method\s*[!=]==?\s*${verb}`,
@@ -211,7 +245,7 @@ function servesVerb(source: string, method: string): boolean {
     String.raw`\bswitch\s*\(\s*req\.method\s*\)[\s\S]*?\bcase\s+${verb}`,
     String.raw`\[[^[\]]*${verb}[^[\]]*\]\.includes\(\s*req\.method\b`,
   ];
-  return new RegExp([`\\)\\s*\\.(${lower}|all)\\s*[<(]`, ...methodChecks, ...bound].join('|')).test(source);
+  return new RegExp(methodChecks.join('|')).test(source);
 }
 
 /** The pages/ file that serves `routePath`, preferring a literal segment over a dynamic one. */
@@ -241,7 +275,7 @@ function resolvePageFile(routePath: string): string | undefined {
 
 type Claim = { scope: ApiKeyScope; endpoint: string; method: string; path: string };
 
-/** Where a claim is checked: one contract (one method), or one source file (every method it serves). */
+/** Where a claim is checked: one contract (one method), or one source file read for that method (see verbSource). */
 type Route = { key: string; doors: Gate[]; gates: Gate[] } | { key?: undefined; problem: string };
 
 function routeOf(claim: Claim): Route {
@@ -251,7 +285,7 @@ function routeOf(claim: Claim): Route {
   const offPages = OFF_PAGES_ROUTES[claim.path];
   const file = offPages ? path.join(CLIENT_DIR, offPages) : resolvePageFile(claim.path);
   const source = file ? stripComments(readFileSync(file, 'utf8')) : '';
-  const fileGates = file ? gatesIn(source, HELPERS) : [];
+  const fileGates = file ? gatesIn(verbSource(source, claim.method), HELPERS) : [];
   // A contract's scopes are the door; the handler behind it may add an enforcing check of its own,
   // which counts too. (A `holdsApiKeyScope` probe plus a hand-thrown 403 does not.)
   if (contract) {
@@ -433,6 +467,23 @@ describe('the gate rule itself', () => {
       path: '/api/agents',
     };
     expect(routeOf(claim)).toMatchObject({ problem: expect.stringMatching(/does not serve this method/) });
+  });
+
+  it('reads an in-handler check only for the verb whose chain link holds it', () => {
+    const code = [
+      'const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })',
+      '  .get(async (req, res) => {',
+      '    assertProjectsWriteScope(req);',
+      '  })',
+      '  .put(async (req, res) => {',
+      '    res.end();',
+      '  });',
+      '',
+      'export default handler;',
+    ].join('\n');
+    const door = new Set([ApiKeyScope.READ_PROJECTS, ApiKeyScope.WRITE_PROJECTS]);
+    expect(gatesIn(verbSource(code, 'GET'), HELPERS)).toEqual([door, new Set([ApiKeyScope.WRITE_PROJECTS])]);
+    expect(gatesIn(verbSource(code, 'PUT'), HELPERS)).toEqual([door]);
   });
 
   it('accepts a broad door backed by the narrow check', () => {
