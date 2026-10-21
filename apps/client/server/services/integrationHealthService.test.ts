@@ -66,12 +66,17 @@ describe('integrationHealthService probes', () => {
     expect(settled).toBe(true);
   });
 
-  it('still returns the recorded checks when publishing metrics fails', async () => {
+  it('publishes an aggregate Latency and Success series for the dimensionless alarms', async () => {
     respondWith(200);
-    h.emitMetrics.mockRejectedValue(new Error('Signature expired'));
 
-    await expect(runAllProbes(logger)).resolves.toHaveLength(4);
-    expect(logger.error).toHaveBeenCalledWith('Failed to publish CloudWatch metrics', expect.anything());
+    await runAllProbes(logger);
+
+    const [, metrics] = h.emitMetrics.mock.calls[0] as [string, Array<{ name: string; dimensions?: object }>];
+    const aggregate = metrics.filter(metric => metric.dimensions === undefined).map(metric => metric.name);
+    expect(aggregate.filter(name => name === 'Latency')).toHaveLength(4);
+    expect(aggregate.filter(name => name === 'Success')).toHaveLength(4);
+    expect(aggregate).not.toContain('Failure');
+    expect(metrics.filter(metric => metric.dimensions !== undefined)).toHaveLength(12);
   });
 
   it.each([401, 403, 404, 429])('treats HTTP %d as reachable, since the provider answered', async status => {
