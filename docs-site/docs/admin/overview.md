@@ -108,7 +108,6 @@ The admin panel uses a vertical tab system where clicking a sidebar button activ
 ## Default Tab Behavior
 
 - The default active tab is **Dashboard** when the admin panel first opens. Selecting another tab keeps it active during the current app session and updates the URL.
-- If the `enableUserMigration` feature flag is active and the current tab is Users, the panel automatically switches to the **Migration** tab instead.
 
 ## Notification Badges
 

@@ -22,10 +22,9 @@ test.describe('Admin - Navigation', () => {
 
     await adminPage.navigateToAdmin();
 
-    // Verify we landed on the admin page with Users tab active
+    // A fresh admin session opens on Dashboard.
     await expect(page).toHaveURL(/.*\/admin.*/);
-    await expect(adminPage.page.getByTestId('admin-search-users-input')).toBeVisible();
-    await expect(adminPage.page.getByTestId('admin-sort-order-btn')).toBeEnabled();
+    await expect(adminPage.page.getByTestId('admin-dashboard')).toBeVisible();
   });
 
   test('should load admin panel on cold URL (no 403 from CloudFront)', async ({ page, basePage, adminPage }) => {
@@ -36,7 +35,7 @@ test.describe('Admin - Navigation', () => {
     await basePage.dismissModals();
 
     await expect(page).not.toHaveURL(/login/);
-    await expect(adminPage.page.getByTestId('admin-search-users-input')).toBeVisible({
+    await expect(adminPage.page.getByTestId('admin-dashboard')).toBeVisible({
       timeout: TIMEOUTS.NAVIGATION,
     });
   });
@@ -46,6 +45,7 @@ test.describe('Admin - Navigation', () => {
 test.describe('Admin - User Search & Sort', () => {
   test('should search users', async ({ adminPage }) => {
     await adminPage.gotoAdmin();
+    await adminPage.navigateToUsersTab();
 
     // Search by admin email (strip the +alias part since backend search doesn't handle '+')
     const { admin } = getTestUsers();
@@ -60,6 +60,7 @@ test.describe('Admin - User Search & Sort', () => {
 
   test('should sort user list', async ({ adminPage }) => {
     await adminPage.gotoAdmin();
+    await adminPage.navigateToUsersTab();
 
     // Sort by name
     await adminPage.setSortBy('name');
@@ -85,6 +86,7 @@ test.describe('Admin - User CRUD', () => {
 
     await test.step('create a new user', async () => {
       await adminPage.gotoAdmin();
+      await adminPage.navigateToUsersTab();
       await adminPage.openCreateUserModal();
 
       await adminPage.fillCreateUserForm({
@@ -99,6 +101,7 @@ test.describe('Admin - User CRUD', () => {
 
     await test.step('edit user profile', async () => {
       await adminPage.gotoAdmin();
+      await adminPage.navigateToUsersTab();
       await adminPage.searchUser(TEST_USER.name);
       await adminPage.waitForUserVisible(TEST_USER.name);
 
@@ -114,6 +117,7 @@ test.describe('Admin - User CRUD', () => {
 
     await test.step('delete user', async () => {
       await adminPage.gotoAdmin();
+      await adminPage.navigateToUsersTab();
       await adminPage.searchUser(EDITED_NAME);
       await adminPage.waitForUserVisible(EDITED_NAME);
 

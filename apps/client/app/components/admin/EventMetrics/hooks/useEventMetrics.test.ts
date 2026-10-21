@@ -80,8 +80,9 @@ describe('useEventMetrics forceRefresh', () => {
         });
       return Promise.resolve({ data: staleMetrics });
     });
+    const client = makeClient();
     const { result, rerender } = renderHook(({ filters }) => useEventMetrics(filters), {
-      wrapper: makeWrapper(),
+      wrapper: makeWrapper(client),
       initialProps: { filters: oldWindow },
     });
     await waitFor(() => expect(result.current.data).toEqual(staleMetrics));
@@ -103,6 +104,7 @@ describe('useEventMetrics forceRefresh', () => {
     await act(async () => {
       resolveRead?.({ data: staleMetrics });
     });
+    expect(client.getQueryData(['event-metrics', newWindow])).toEqual(freshMetrics);
     expect(result.current.data).toEqual(freshMetrics);
     expect(result.current.isError).toBe(false);
   });
