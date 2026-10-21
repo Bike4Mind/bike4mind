@@ -34,7 +34,6 @@ import { usePrSummaries, usePullRequest } from './usePullRequest';
 import { SessionList } from './SessionList';
 import { isUntouchedImport } from './grouping';
 import { useImportedInline } from './importedInline';
-import { SettingsScreen } from './SettingsPanel';
 import { TerminalPanel } from './TerminalPanel';
 import {
   isTerminalToggle,
@@ -134,19 +133,16 @@ function WorkingDirectoryLine({ project }: { project: ChatProject }) {
  * What the main pane is showing. One value rather than a flag per screen, so the screens
  * cannot both be up and nothing has to remember to shut the other one.
  */
-type ChatScreen = 'conversation' | 'artifacts' | 'customize' | 'settings' | 'skill-market';
+type ChatScreen = 'conversation' | 'artifacts' | 'customize' | 'skill-market';
 
 /**
- * The sidebar's account strip, given the dot that says whether a reply is running and the way
- * to open Settings.
+ * The sidebar's account strip, given the dot that says whether a reply is running.
  *
  * A function rather than a node because the two halves are owned in different places: this
  * component knows the turn state, and the account strip knows where a glyph goes in its own
- * row. Handing the finished dot down keeps both where they belong - see TurnDot. The opener
- * rides along for the same reason: Settings is a screen in this pane, and the account menu is
- * where a user who knew the server lived under their name will still go looking for it.
+ * row. Handing the finished dot down keeps both where they belong - see TurnDot.
  */
-export type AccountStrip = (status: ReactNode, openSettings: () => void) => ReactNode;
+export type AccountStrip = (status: ReactNode) => ReactNode;
 
 export function ChatShell({ auth, account }: { auth?: AuthState | null; account?: AccountStrip }) {
   const {
@@ -221,9 +217,6 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   // What the browser pane trades width with; see BrowserPane.
   const conversationColumn = useRef<HTMLDivElement | null>(null);
 
-  // Stable, because the account strip is rebuilt on every turn of the conversation and this is
-  // the one thing in it that has no reason to change.
-  const openSettings = useCallback(() => setScreen('settings'), []);
   // The listing the market opens onto, when it was opened for one (an update badge).
   const [marketListing, setMarketListing] = useState<SkillMarketListingRef | null>(null);
   const openSkillMarket = useCallback((listing?: SkillMarketListingRef) => {
@@ -590,10 +583,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
         onDismissSectionError={dismissSectionError}
         customize={<CustomizeNavItem onOpen={() => setScreen('customize')} />}
         footer={account?.(
-          <TurnDot
-            state={turnState({ streaming: turnOpen, disabled: !activeId || creatingCode, notReady: unbound })}
-          />,
-          openSettings
+          <TurnDot state={turnState({ streaming: turnOpen, disabled: !activeId || creatingCode, notReady: unbound })} />
         )}
       />
 
@@ -607,8 +597,6 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
           onClose={() => setScreen('conversation')}
           onOpenSkillMarket={openSkillMarket}
         />
-      ) : screen === 'settings' ? (
-        <SettingsScreen auth={auth ?? null} onClose={() => setScreen('conversation')} />
       ) : (
         <Stack ref={conversationColumn} sx={{ flex: 1, minWidth: 0, ...columnStackSx }}>
           <Box sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>

@@ -1,6 +1,12 @@
+import type { ReactNode } from 'react';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import IconButton from '@mui/joy/IconButton';
+import List from '@mui/joy/List';
+import ListItem from '@mui/joy/ListItem';
+import ListItemButton from '@mui/joy/ListItemButton';
+import ListItemContent from '@mui/joy/ListItemContent';
+import ListItemDecorator from '@mui/joy/ListItemDecorator';
 import Stack from '@mui/joy/Stack';
 import Switch from '@mui/joy/Switch';
 import ToggleButtonGroup from '@mui/joy/ToggleButtonGroup';
@@ -12,9 +18,18 @@ import { updateAttention, updateSummary } from '@shared/update';
 import { EnvironmentPicker } from '../auth/EnvironmentPicker';
 import type { ClaudeImportState } from '@shared/claudeImport';
 import { ClaudeImportSettings, claudeImportSummary, useClaudeImport } from './ClaudeImportSettings';
-import { EntrySection, type ConfigEntry } from './ConfigEntry';
-import { CloseIcon, ContrastIcon, DownloadIcon, FolderIcon, ServerIcon, ShieldIcon, SparkIcon } from './icons';
-import { columnStackSx, contentColumnSx, scrollingColumnHostSx } from './layout';
+import { EntrySection, entryAttentionChip, type ConfigEntry } from './ConfigEntry';
+import {
+  ArrowLeftIcon,
+  ContrastIcon,
+  DownloadIcon,
+  FolderIcon,
+  ServerIcon,
+  ShieldIcon,
+  SlidersIcon,
+  SparkIcon,
+} from './icons';
+import { contentColumnSx, thinScrollbarSx } from './layout';
 import { PermissionsSettings, permissionsSummary, usePermissions } from './PermissionsSettings';
 import { promptSuggestionsSummary, usePromptSuggestionModel, usePromptSuggestions } from './promptSuggestions';
 import { SuggestionModelPicker } from './SuggestionModelPicker';
@@ -22,7 +37,7 @@ import { THEME_MODES, currentThemeMode, themeModeSummary, type ResolvedThemeMode
 import { UpdateSettings } from './UpdateSettings';
 import { useAppUpdate, type AppUpdateController } from './useAppUpdate';
 
-/** What this screen is for, said on the screen so it does not have to be inferred from a name. */
+/** What the General page is for, said on the page so it does not have to be inferred from a name. */
 const SETTINGS_INTRO = 'How the app looks, behaves, connects, and keeps itself up to date.';
 
 const THEME_MODE_LABEL: Record<ThemeMode, string> = { system: 'System', light: 'Light', dark: 'Dark' };
@@ -145,16 +160,36 @@ function updatesEntry(controller: AppUpdateController): ConfigEntry {
   };
 }
 
+/** The pages of Settings, in the order the side nav lists them. */
+export const SETTINGS_SECTIONS = ['general', 'permissions', 'import'] as const;
+export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
+
+export function isSettingsSection(value: unknown): value is SettingsSection {
+  return SETTINGS_SECTIONS.includes(value as SettingsSection);
+}
+
+const SECTION_LABEL: Record<SettingsSection, string> = {
+  general: 'General',
+  permissions: 'Permissions',
+  import: 'Import',
+};
+
+const SECTION_ICON: Record<SettingsSection, ReactNode> = {
+  general: <SlidersIcon />,
+  permissions: <ShieldIcon />,
+  import: <FolderIcon />,
+};
+
 /**
- * Both Settings entries, built when the screen is open and not before.
+ * Every Settings entry, grouped by the page that shows it.
  *
  * What the app talks to comes before how it maintains itself: the server is the setting a user
  * arrives here to change, and an update is the one that arrives on its own.
  *
- * Nothing stays mounted while the screen is shut. What an unopened Settings still has to report
+ * Nothing stays mounted while the page is shut. What an unopened Settings still has to report
  * is one string, which the account strip reads for itself - see `useSettingsAttention`.
  */
-function useSettingsEntries(auth: AuthState | null): ConfigEntry[] {
+function useSettingsEntries(auth: AuthState | null): Record<SettingsSection, ConfigEntry[]> {
   const update = useAppUpdate();
   const { mode, setMode } = useColorScheme();
   const theme = useTheme();
@@ -163,58 +198,130 @@ function useSettingsEntries(auth: AuthState | null): ConfigEntry[] {
   const [permissions, setPermissions, permissionsError, retryPermissions] = usePermissions();
   const [claudeImport, setClaudeImport] = useClaudeImport();
 
-  const preferences = [
-    appearanceEntry(mode, setMode, theme.palette.mode),
-    suggestionsEntry(suggestions, toggleSuggestions, suggestionModel),
-    permissionsEntry(permissions, setPermissions, permissionsError, retryPermissions),
-    claudeImportEntry(claudeImport, setClaudeImport),
-  ];
-  return auth ? [...preferences, serverEntry(auth), updatesEntry(update)] : [...preferences, updatesEntry(update)];
+  return {
+    general: [
+      appearanceEntry(mode, setMode, theme.palette.mode),
+      suggestionsEntry(suggestions, toggleSuggestions, suggestionModel),
+      ...(auth ? [serverEntry(auth)] : []),
+      updatesEntry(update),
+    ],
+    permissions: [permissionsEntry(permissions, setPermissions, permissionsError, retryPermissions)],
+    import: [claudeImportEntry(claudeImport, setClaudeImport)],
+  };
+}
+
+/** A page that is one setting needs no box around it: the page heading is its label. */
+function SingleEntryPage({ entry }: { entry: ConfigEntry }) {
+  return (
+    <Stack spacing={2} data-testid="config-section" data-entry={entry.id}>
+      <Stack>
+        <Typography level="title-lg">{entry.label}</Typography>
+        <Typography level="body-sm" textColor="text.tertiary" data-testid="config-entry-summary">
+          {entry.summary}
+        </Typography>
+      </Stack>
+      {entry.control}
+    </Stack>
+  );
+}
+
+function SectionPage({ section, entries }: { section: SettingsSection; entries: ConfigEntry[] }) {
+  if (entries.length === 1) return <SingleEntryPage entry={entries[0]} />;
+  return (
+    <Stack spacing={2}>
+      <Stack>
+        <Typography level="title-lg">{SECTION_LABEL[section]}</Typography>
+        <Typography level="body-sm" textColor="text.tertiary">
+          {SETTINGS_INTRO}
+        </Typography>
+      </Stack>
+      <Box>
+        {entries.map(entry => (
+          <EntrySection key={entry.id} entry={entry} />
+        ))}
+      </Box>
+    </Stack>
+  );
 }
 
 /**
- * "Settings": app preferences, connections and maintenance, as a screen beside Customize.
+ * "Settings": app preferences, permissions, connections and maintenance, as a page of its own
+ * beside Profile rather than a screen in the conversation pane.
  *
- * Customize owns tool connections. Settings owns app-wide preferences, the deployment a reply
- * comes from, and updates. Each screen says which half it owns under its title.
- *
- * Customize is a nav row and this is not. Two config rows stacked in the nav list read as one
- * thing split in half; Settings is reached from the account menu, where the server it owns used
- * to live, and the strip above that menu carries whatever it needs to say meanwhile.
+ * Customize owns tool connections. Settings owns app-wide preferences, what the agent may do,
+ * the deployment a reply comes from, imports, and updates. The side nav splits those into pages
+ * so no one page carries all of them.
  */
-export function SettingsScreen({ auth, onClose }: { auth: AuthState | null; onClose: () => void }) {
+export function SettingsScreen({
+  auth,
+  section = 'general',
+  onSection,
+  onClose,
+}: {
+  auth: AuthState | null;
+  section?: SettingsSection;
+  onSection?: (section: SettingsSection) => void;
+  onClose: () => void;
+}) {
   const entries = useSettingsEntries(auth);
 
   return (
-    <Stack sx={{ flex: 1, minWidth: 0, ...columnStackSx }} data-testid="settings-panel">
-      <Box sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>
-        <Stack direction="row" alignItems="center" spacing={1} sx={{ ...contentColumnSx, py: 1.25 }}>
-          <Stack sx={{ flex: 1, minWidth: 0 }}>
-            <Typography level="title-sm">Settings</Typography>
-            <Typography level="body-xs" textColor="text.tertiary">
-              {SETTINGS_INTRO}
-            </Typography>
-          </Stack>
-          <IconButton
-            size="sm"
-            variant="plain"
-            color="neutral"
-            aria-label="Close settings"
-            onClick={onClose}
-            data-testid="settings-close-btn"
-          >
-            <CloseIcon />
-          </IconButton>
-        </Stack>
-      </Box>
+    <Stack sx={{ height: '100vh', bgcolor: 'background.body' }} data-testid="settings-panel">
+      <Stack
+        direction="row"
+        alignItems="center"
+        spacing={1}
+        sx={{ px: 1.5, py: 1.25, borderBottom: '1px solid', borderColor: 'divider' }}
+      >
+        <IconButton
+          size="sm"
+          variant="plain"
+          color="neutral"
+          aria-label="Back"
+          onClick={onClose}
+          data-testid="settings-close-btn"
+        >
+          <ArrowLeftIcon />
+        </IconButton>
+        <Typography level="title-md">Settings</Typography>
+      </Stack>
 
-      <Box sx={{ flex: 1, ...scrollingColumnHostSx }}>
-        <Box sx={{ ...contentColumnSx, py: 2 }}>
-          {entries.map(entry => (
-            <EntrySection key={entry.id} entry={entry} />
+      <Stack direction="row" sx={{ flex: 1, minHeight: 0 }}>
+        <List
+          size="sm"
+          aria-label="Settings sections"
+          sx={{
+            flex: 'none',
+            width: 200,
+            p: 1,
+            gap: 0.25,
+            borderRight: '1px solid',
+            borderColor: 'divider',
+            '--ListItem-radius': 'var(--joy-radius-sm)',
+          }}
+          data-testid="settings-nav"
+        >
+          {SETTINGS_SECTIONS.map(id => (
+            <ListItem key={id}>
+              <ListItemButton
+                selected={id === section}
+                onClick={() => onSection?.(id)}
+                data-testid={`settings-nav-${id}-btn`}
+              >
+                <ListItemDecorator>{SECTION_ICON[id]}</ListItemDecorator>
+                <ListItemContent>{SECTION_LABEL[id]}</ListItemContent>
+                {entryAttentionChip(entries[id], `settings-nav-${id}-attention`)}
+              </ListItemButton>
+            </ListItem>
           ))}
+        </List>
+
+        <Box sx={{ flex: 1, minWidth: 0, overflowY: 'auto', scrollbarGutter: 'stable', ...thinScrollbarSx }}>
+          <Box sx={{ ...contentColumnSx, py: 3 }} data-testid={`settings-page-${section}`}>
+            <SectionPage section={section} entries={entries[section]} />
+          </Box>
         </Box>
-      </Box>
+      </Stack>
     </Stack>
   );
 }
