@@ -125,7 +125,7 @@ Some built-in tools (weather, web search, deep research) need provider keys, and
 
 ## Serve Bike4Mind as an MCP server (`b4m mcp serve`)
 
-`b4m mcp serve` turns your Bike4Mind backend into a [Model Context Protocol](https://modelcontextprotocol.io) server, so any MCP client (Claude Desktop, editors, other agents) can drive your notebooks, chat, and files, and use your Briefcase prompts. This is the opposite direction from `b4m mcp add`, which attaches external MCP servers _into_ the CLI.
+`b4m mcp serve` turns your Bike4Mind backend into a [Model Context Protocol](https://modelcontextprotocol.io) server, so any MCP client (Claude Desktop, editors, other agents) can drive your notebooks, chat, and files, use your Briefcase prompts, and read websites with Bob. This is the opposite direction from `b4m mcp add`, which attaches external MCP servers _into_ the CLI.
 
 ### Tools, resources and prompts
 
@@ -150,6 +150,13 @@ Some built-in tools (weather, web search, deep research) need provider keys, and
 | `text_to_speech`        | Synthesize speech from text; return a saved file URL or inline audio                                                                                                                                             | `ai:generate`     |
 | `create_artifact`       | Create a private artifact (`type`, `title`, `content` required; optional `description`, `notebookId`, `projectId`, `tags`); a written document goes in `type: 'html'`                                            | `notebooks:write` |
 | `publish_artifact`      | Publish an artifact you own to a shareable `/p/...` link; republishing updates the existing page and keeps its visibility unless `visibility` (`public` or `private`) is passed, and a first publish is `public` | `files:write`     |
+| `bob_read_site`         | Have Bob read a site and wait for the report (Markdown, in-app and published links); spends the key owner's credits and publishes the report                                                                     | `bob:run`         |
+| `bob_compare_sites`     | Have Bob read your site and another side by side; returns the summary and each side's links (`includeReports` adds both reports). Spends two runs' credits                                                       | `bob:run`         |
+| `bob_recheck`           | Re-check one check of a Bob report (`runId`, `checkId`) against the live site and return the new reading                                                                                                         | `bob:run`         |
+| `get_bob_report`        | Fetch one Bob run: its status, its progress while reading, and the report once it is ready                                                                                                                       | `bob:read`        |
+| `get_bob_comparison`    | Fetch one Bob comparison: its status, the summary and each side's status and links                                                                                                                               | `bob:read`        |
+| `list_bob_reports`      | List your recent finished Bob reports, newest first                                                                                                                                                              | `bob:read`        |
+| `bob_runs_left`         | The Bob runs you can start now, when the next one frees up, and whether credits cover a full read                                                                                                                | `bob:read`        |
 
 `text_to_speech` accepts `text` and optional provider, voice, model, format, and voice settings. It uses the scoped `/api/ai/tts` route and spends generation credits. Set `preview: true` to skip saving a copy. The result takes one of three shapes:
 
@@ -162,6 +169,13 @@ Some built-in tools (weather, web search, deep research) need provider keys, and
 `create_artifact` returns `{ id, type, title, version, notebookId, projectId, createdAt }`; pass the `id` to `publish_artifact` to share it.
 
 `publish_artifact` uploads the artifact's raw content and the server renders the page, so the result matches a publish from the app's Share flow. An artifact you already published, from the app or from this tool, is updated in place at its existing link. It returns `{ publicId, url, visibility }`, where `url` is absolute. The publish routes require no API-key scope today, so `files:write` is advisory.
+
+The `bob_*` tools read websites with Bob, where a panel of synthetic personas reads a site and reports where visitors get lost. The instance must serve Bob. Unlike most tools here, Bob's routes enforce their scopes: `bob:read` reads the key owner's runs, comparisons, recent reports and runs left, and `bob:run` starts a read, a comparison or a re-check and can read them back too. A 403 names the scope to grant.
+
+- **Spending and publishing** - `bob_read_site` and `bob_compare_sites` bill the key owner, as a run started in the app does, and publish each report as them. `organizationId` picks the account that pays: an organization id, or `null` for the personal account; omit it for the home organization. A comparison counts as two runs.
+- **Waiting** - both wait up to `waitSeconds` (default 600, at most 900; a read takes about 1 to 5 minutes). For a `progressToken` they send progress as Bob's count of done and total rises. When the wait runs out, the result is not an error: it carries the `runId` (or `comparisonId`) and a note, and `get_bob_report` (or `get_bob_comparison`) reads it back later. Cancelling the call stops the waiting, not Bob's read.
+- **Results** - the result is a JSON summary (`status`, `appUrl`, `publishedUrl`, `visibility`, and the run's `error` when it failed) followed by the report as its own Markdown text block. Links are the API base URL plus the paths Bob returns. A failed read is an error carrying Bob's reason; a comparison fails only when neither site could be read.
+- **Refusals** - a refused start (the daily limit, credits) is an error in Bob's own words. `bob_recheck` is rate-limited per run and per check, and a refusal says how long to wait. `checkId` is the id the report shows in backticks beside each check.
 
 It also exposes four resource templates, each with a working `list` and `read` that return `application/json`:
 
@@ -180,7 +194,7 @@ Resource _listing_ is capped at 100 entries per template and takes no paging arg
 
 It also serves your **Briefcase** prompt catalog as MCP prompts, so a client's prompt picker (for example Claude Desktop's) offers the same one-click prompts as the in-app launcher. Each prompt is named by its id and titled by its display name. A `prompts/get` resolves the template's `{{placeholders}}`: the clock keys (`currentDate`, `currentTime`, `currentDateTime`, `currentYear`) are filled in automatically, and `userName`, `userEmail`, `userRole` and `organization` are optional arguments you supply. A placeholder left unsupplied stays as written. The instance must have the **Enable Briefcase** admin setting on (off by default). With it off, or on any other listing failure, the prompt list comes back empty and the error goes to stderr, the same as resources do. An API key sees the shared system prompts only. Your personal prompts are listed only under `b4m login`. Because a login caller's catalog fetch is a CSRF-protected POST, the origin of the endpoint the CLI resolves (see Auth and endpoint below) must equal the instance's `APP_URL`; if they differ (a split-origin deployment), a login caller's prompt list comes back empty, while API-key callers are CSRF-exempt and unaffected. A prompt that the app runs with specific tools (web search, say) arrives as plain text; your MCP client runs it with whatever tools it has.
 
-The **Scope** column in both tables is the _recommended_ key configuration for that tool or resource, not a per-route hard gate: most of these routes do not enforce scopes, so a real 403 can also mean a CASL authorization denial or a suspended account, not just a missing scope.
+The **Scope** column in both tables is the _recommended_ key configuration for that tool or resource, not a per-route hard gate: most of these routes do not enforce scopes, so a real 403 can also mean a CASL authorization denial or a suspended account, not just a missing scope. The Bob tools and the data-lake routes are the exceptions: they do enforce theirs.
 
 ### Auth and endpoint
 
