@@ -716,6 +716,52 @@ describe('BrowserManager when a page outlives its hidden host', () => {
       warn.mockRestore();
     }
   });
+
+  it.each(['hide', 'switch'] as const)('retries parking after a failed pane %s', async action => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      manager.setPane(window, 's', bounds);
+      await search('a search');
+      const page = await context().page();
+      const park = vi.spyOn(page as unknown as { park: () => void }, 'park').mockImplementationOnce(() => {
+        throw new Error('placement failed');
+      });
+
+      const hide = () => manager.setPane(window, action === 'hide' ? null : 'other', bounds);
+      expect(hide).not.toThrow();
+      expect(window.children.has(parts(page).view)).toBe(true);
+
+      expect(hide).not.toThrow();
+      expect(park).toHaveBeenCalledTimes(2);
+      expect(window.children.has(parts(page).view)).toBe(false);
+      expect(shown(manager)).toBeUndefined();
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('parks a partially placed page when the next request switches conversations', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await search('a search');
+      const page = await context().page();
+      const view = parts(page).view as { visible: boolean; setBounds: (bounds: unknown) => void };
+      vi.spyOn(view, 'setBounds').mockImplementationOnce(() => {
+        throw new Error('bounds failed after attaching');
+      });
+
+      expect(() => manager.setPane(window, 's', bounds)).not.toThrow();
+      expect(window.children.has(view)).toBe(true);
+
+      manager.setPane(window, 'other', bounds);
+      expect(window.children.has(view)).toBe(false);
+      expect(shown(manager)).toBeUndefined();
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
 });
 
 describe('BrowserManager holding the pane for an overlay', () => {

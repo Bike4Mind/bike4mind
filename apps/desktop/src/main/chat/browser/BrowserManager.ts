@@ -762,15 +762,16 @@ export class BrowserManager implements BrowserProvider {
 
   private hidePane(): void {
     this.pane = undefined;
-    const shown = this.shown;
-    this.shown = undefined;
-    this.contain(() => shown?.park());
+    this.contain(() => {
+      this.shown?.park();
+      this.shown = undefined;
+    });
   }
 
   /**
    * apply() runs from webContents listeners and IPC handlers, where a throw is an Uncaught
-   * Exception dialog or a pane that fails every request after it. On a failure nothing is
-   * taken to be on screen, so the next apply starts clean.
+   * Exception dialog or a pane that fails every request after it. Keep tracking a possibly
+   * attached page on failure, so the next update can retry parking it.
    */
   private apply(): void {
     this.contain(() => this.place());
@@ -780,7 +781,6 @@ export class BrowserManager implements BrowserProvider {
     try {
       work();
     } catch (err) {
-      this.shown = undefined;
       const message = err instanceof Error ? err.message : String(err);
       if (this.warned.has(message)) return;
       this.warned.add(message);
