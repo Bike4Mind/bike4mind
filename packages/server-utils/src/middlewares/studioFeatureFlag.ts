@@ -1,18 +1,20 @@
-import { STUDIO_FEATURE_FLAGS, isStudioFeatureOpen, type StudioFeature } from '@bike4mind/common';
+import { isStudioFeatureOpen, studioFeatureSettingKeys, type StudioFeature } from '@bike4mind/common';
 import type { RequestHandler } from 'express';
 import { isFeatureEnabled, requireFeature } from './featureFlag';
 
 type StudioViewer = { isAdmin?: boolean } | null | undefined;
 
 /**
- * Whether a Studio rebuild feature is open to this user: the admin flag is on and the user is an admin.
+ * Whether a Studio rebuild feature is open to this user: the admin flag (and its parent's) is on and the
+ * user is an admin.
  * The non-admin case returns before the settings read. A read error propagates, so callers fail closed.
  * Mirrors the client's useStudioFeature (both apply isStudioFeatureOpen from @bike4mind/common).
  */
 export async function isStudioFeatureEnabled(feature: StudioFeature, user: StudioViewer): Promise<boolean> {
   const isAdmin = user?.isAdmin === true;
   if (!isAdmin) return false;
-  return isStudioFeatureOpen({ isAdmin, flagEnabled: await isFeatureEnabled(STUDIO_FEATURE_FLAGS[feature]) });
+  const settingsOn = await Promise.all(studioFeatureSettingKeys(feature).map(key => isFeatureEnabled(key)));
+  return isStudioFeatureOpen({ isAdmin, flagEnabled: settingsOn.every(Boolean) });
 }
 
 /**
