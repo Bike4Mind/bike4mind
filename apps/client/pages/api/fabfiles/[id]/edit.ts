@@ -39,6 +39,7 @@ import {
   completionCeilingUsd,
   completionUsd,
   createModelAdmission,
+  hasReportedUsage,
   latchUsage,
   reserveCompletionCredits,
   settleCompletion,
@@ -311,7 +312,19 @@ Return only the edited content without any markdown code blocks or explanations.
             }
           );
         } catch (error) {
-          await reservation.refund();
+          if (hasReportedUsage(usage)) {
+            await settleCompletion(reservation, req, {
+              model: modelInfo.id,
+              provider: modelInfo.backend,
+              usd: completionUsd(modelInfo, usage),
+              inputTokens: usage.inputTokens ?? 0,
+              outputTokens: usage.outputTokens ?? 0,
+              cacheReadInputTokens: usage.cacheReadInputTokens,
+              cacheCreationInputTokens: usage.cacheCreationInputTokens,
+            });
+          } else {
+            await reservation.refund();
+          }
           throw error;
         }
 
@@ -321,7 +334,7 @@ Return only the edited content without any markdown code blocks or explanations.
 
         // The provider billed the input even when the answer is empty, so settle before failing.
         // An adapter that reports no usage is charged the reservation ceiling rather than nothing.
-        const reported = Boolean(usage.inputTokens || usage.outputTokens || usage.turnUsage?.length);
+        const reported = hasReportedUsage(usage);
         if (!reported)
           req.logger.warn(`[Edit API] ${modelInfo.id} reported no usage; charging the reservation ceiling`);
         await settleCompletion(reservation, req, {
@@ -330,6 +343,8 @@ Return only the edited content without any markdown code blocks or explanations.
           usd: reported ? completionUsd(modelInfo, usage) : ceilingUsd,
           inputTokens: usage.inputTokens ?? 0,
           outputTokens: usage.outputTokens ?? 0,
+          cacheReadInputTokens: usage.cacheReadInputTokens,
+          cacheCreationInputTokens: usage.cacheCreationInputTokens,
         });
 
         if (!editedContent) {

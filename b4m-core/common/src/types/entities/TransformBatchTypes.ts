@@ -68,7 +68,8 @@ export interface ITransformBatch extends IMongoDocument {
   creditHold?: PersistedCreditHold | null;
   /**
    * Stamped in the write that clears the hold after settlement. A completed row that still has a hold
-   * and no creditSettledAt was claimed but never settled (settlement is not idempotent; never redo one).
+   * and no creditSettledAt needs settlement recovery when its hold has a durable pendingHoldId.
+   * Legacy holds without that receipt cannot safely be retried.
    */
   creditSettledAt?: Date;
   /** The API key that submitted the batch, for the settlement ledger row. */
@@ -81,14 +82,18 @@ export interface ITransformBatchRepository extends IBaseRepository<ITransformBat
   findByAnthropicBatchId: (anthropicBatchId: ITransformBatch['anthropicBatchId']) => Promise<ITransformBatch | null>;
   /**
    * Atomically mark an in-progress batch completed, leaving its credit hold on the row. Returns the
-   * row as it was before the update to exactly one caller (the one that settles the hold); null to the rest.
+   * row as it was before the update to exactly one caller; null to the rest. Durable pending holds
+   * may be retried later without claiming completion again.
    */
   claimCompletion: (
     id: string,
     update: Pick<ITransformBatch, 'succeededCount' | 'erroredCount'>
   ) => Promise<ITransformBatch | null>;
-  /** Clear the settled hold and stamp creditSettledAt in one write; a no-op once stamped. */
-  markCreditSettled: (id: string) => Promise<void>;
+  /**
+   * Clear the settled hold and stamp creditSettledAt; false when another caller already stamped it.
+   * Legacy adapters may return void, which callers treat as a successful stamp.
+   */
+  markCreditSettled: (id: string) => Promise<boolean | void>;
   /** Cache the per-request results; kept out of the claim so an oversized payload cannot block it. */
   saveResults: (id: string, results: NonNullable<ITransformBatch['results']>) => Promise<void>;
 }

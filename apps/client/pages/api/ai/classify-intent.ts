@@ -16,6 +16,8 @@ import { IntentClassifierConfigSchema } from '@bike4mind/common';
 import {
   completionCeilingUsd,
   completionUsd,
+  createModelAdmission,
+  hasReportedUsage,
   reserveCompletionCredits,
   settleCompletion,
 } from '@server/billing/meterPlatformCompletion';
@@ -97,6 +99,20 @@ const handler = baseApi()
       return res.status(200).json({ decision, shadowMode: classifierConfig.shadowMode });
     }
 
+    const cascade = [classifierConfig.primaryModel, ...classifierConfig.fallbackModels];
+    // The platform chooses the cascade, so picker entitlements do not apply. Catalog availability
+    // and pricing still do: an unpriced model would otherwise bypass the hold with a $0 ceiling.
+    const admission = await createModelAdmission(req.user, availableModels, true);
+    const presentCascade = cascade.filter(modelId => availableModels.some(model => model.id === modelId));
+    const admittedCascade: string[] = [];
+    for (const modelId of presentCascade) {
+      if (await admission.admits(modelId)) admittedCascade.push(modelId);
+    }
+    // A refused candidate must not prevent a valid fallback from answering. When every present
+    // candidate is refused, retain the admission error rather than reporting a provider outage.
+    if (presentCascade.length > 0 && admittedCascade.length === 0) await admission.assert(presentCascade[0]);
+    const runnableCascade = presentCascade.length > 0 ? admittedCascade : cascade;
+
     // Hold the worst case: every cascade model runs, each with its best-effort retry.
     const messages = buildIntentClassifierMessages(input);
     const modelCeilingUsd = (modelId: string) => {
@@ -108,10 +124,7 @@ const handler = baseApi()
         : INTENT_CLASSIFIER_MAX_TOKENS;
       return completionCeilingUsd(modelInfo, messages, heldMaxTokens) * INTENT_CLASSIFIER_CALLS_PER_MODEL;
     };
-    const ceilingUsd = [classifierConfig.primaryModel, ...classifierConfig.fallbackModels].reduce(
-      (sum, modelId) => sum + modelCeilingUsd(modelId),
-      0
-    );
+    const ceilingUsd = runnableCascade.reduce((sum, modelId) => sum + modelCeilingUsd(modelId), 0);
     const reservation = await reserveCompletionCredits(req, ceilingUsd, 'intent classification');
 
     // A call with no reported usage (an early-exit abort drops it) is charged its own ceiling.
@@ -119,7 +132,7 @@ const handler = baseApi()
       const usd = usage.reduce((sum, call) => {
         const modelInfo = availableModels.find(m => m.id === call.modelId);
         if (!modelInfo) return sum;
-        return call.inputTokens || call.outputTokens
+        return hasReportedUsage(call)
           ? sum + completionUsd(modelInfo, call)
           : sum + modelCeilingUsd(call.modelId) / INTENT_CLASSIFIER_CALLS_PER_MODEL;
       }, 0);
@@ -133,6 +146,8 @@ const handler = baseApi()
         usd,
         inputTokens: usage.reduce((sum, call) => sum + (call.inputTokens ?? 0), 0),
         outputTokens: usage.reduce((sum, call) => sum + (call.outputTokens ?? 0), 0),
+        cacheReadInputTokens: usage.reduce((sum, call) => sum + (call.cacheReadInputTokens ?? 0), 0),
+        cacheCreationInputTokens: usage.reduce((sum, call) => sum + (call.cacheCreationInputTokens ?? 0), 0),
       });
     };
 
@@ -143,6 +158,7 @@ const handler = baseApi()
         availableModels,
         logger: req.logger,
         config: classifierConfig,
+        resolveCascade: () => runnableCascade,
       });
     } catch (err) {
       if (err instanceof CascadeExhaustedError) {

@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ModelInfo } from '@bike4mind/common';
-import { meterCompletionBackend, type CompletionMeter } from './completionMeter';
+import {
+  hasReportedUsage,
+  meterCompletionBackend,
+  type CompletionMeter,
+  type CompletionUsage,
+} from './completionMeter';
 
 const modelInfo = { id: 'm', backend: 'anthropic' } as ModelInfo;
 
@@ -164,5 +169,17 @@ describe('meterCompletionBackend', () => {
     const { metered } = setup(async () => {});
     expect(metered.other()).toBe('m');
     expect(metered.currentModel).toBe('m');
+  });
+});
+
+describe('hasReportedUsage', () => {
+  it.each<[CompletionUsage, boolean]>([
+    [{}, false],
+    [{ inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 }, false],
+    [{ cacheReadInputTokens: 1 }, true],
+    [{ cacheCreationInputTokens: 1 }, true],
+    [{ turnUsage: [{ inputTokens: 1, outputTokens: 0 }] }, true],
+  ])('classifies %j as reported=%s', (usage, reported) => {
+    expect(hasReportedUsage(usage)).toBe(reported);
   });
 });

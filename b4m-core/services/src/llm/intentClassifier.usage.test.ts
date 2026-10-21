@@ -69,6 +69,23 @@ describe('classifyIntent usage reporting', () => {
     expect(err.usage).toEqual([{ modelId: 'model-a', inputTokens: 40 }]);
   });
 
+  it('preserves cache-only usage from a provider that later throws', async () => {
+    backends.set(
+      'cache-only',
+      backend(async callback => {
+        await callback([''], { cacheReadInputTokens: 100, cacheCreationInputTokens: 20 });
+        throw new Error('stream disconnected');
+      })
+    );
+
+    const error = await classifyIntent({ userId: 'u1', message: 'cache' }, adapters(['cache-only'])).catch(
+      error => error
+    );
+
+    expect(error).toBeInstanceOf(CascadeExhaustedError);
+    expect(error.usage).toEqual([{ modelId: 'cache-only', cacheReadInputTokens: 100, cacheCreationInputTokens: 20 }]);
+  });
+
   it('reports no usage on a cache hit', async () => {
     backends.set(
       'model-a',

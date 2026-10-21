@@ -32,7 +32,10 @@ const handler = baseApi().get(async (req, res) => {
   // poll. The consumer typically polls completed once, but this also makes the
   // poll idempotent + cheap if it retries. An empty array is a stored zero-result batch; only an
   // absent field means the results were never written.
-  if (batch.status === 'completed' && Array.isArray(batch.results)) {
+  // Durable pending holds can safely retry settlement after a poll dies: their receipt prevents
+  // duplicate charges. Legacy holds have no such receipt and remain first-claim-only.
+  const canRetrySettlement = Boolean(batch.creditHold?.pendingHoldId);
+  if (batch.status === 'completed' && Array.isArray(batch.results) && !canRetrySettlement) {
     return res.json({
       batch_id: anthropicBatchId,
       status: 'completed',
@@ -78,22 +81,23 @@ const handler = baseApi().get(async (req, res) => {
       req.logger.error(`[transforms/batch] Failed to persist results for batch ${anthropicBatchId}`, error);
     });
 
-  // Completed but no results stored: the write failed or the claiming poll has not reached it.
-  // Settlement belongs to the claim winner alone, so never settle here.
-  if (batch.status === 'completed') {
+  // Legacy holds cannot safely retry, but modern pending holds settle idempotently below.
+  if (batch.status === 'completed' && !canRetrySettlement) {
     await saveResults();
     return res.json({ batch_id: anthropicBatchId, status: 'completed', counts: status.counts, results });
   }
 
-  // Fetched before the claim: once the claim lands, a throw here could never be retried.
+  // Load prices before claiming completion so a catalog outage leaves new work unclaimed.
   const catalog = batch.creditHold ? await getAvailableModels({ anthropic: apiKey }) : [];
-  // Only the poll that wins the in_progress -> completed transition sees the hold, so a retried or
-  // concurrent poll never settles twice. The hold stays on the row until markCreditSettled, so a
-  // crash before then leaves a record of the unsettled hold.
-  const claimed = await transformBatchRepository.claimCompletion(batch.id, {
-    succeededCount: status.counts.succeeded,
-    erroredCount: status.counts.errored + status.counts.canceled + status.counts.expired,
-  });
+  // The first poll claims completion; later polls resume any durable unsettled hold. Concurrent
+  // retries are safe because settlement's pending-hold transaction moves the balance only once.
+  const claimed =
+    batch.status === 'completed'
+      ? batch
+      : await transformBatchRepository.claimCompletion(batch.id, {
+          succeededCount: status.counts.succeeded,
+          erroredCount: status.counts.errored + status.counts.canceled + status.counts.expired,
+        });
   if (claimed?.creditHold) {
     // Failed items are free. Standard rate, as reserved at submit (no Batches discount in pricing).
     const modelByCustomId = new Map(claimed.customIdMap.map(m => [m.customId, m.model]));
@@ -138,31 +142,35 @@ const handler = baseApi().get(async (req, res) => {
         inputTokens,
         outputTokens,
       },
-      { featureLabel: 'batch transforms', logger: req.logger }
+      { featureLabel: 'batch transforms', logger: req.logger, throwOnUnconfirmed: true }
     );
     // Stamped even when the sweep already refunded the hold (charged 0): either way it is resolved.
-    await transformBatchRepository.markCreditSettled(batch.id);
-    await usageEventRepository
-      .record({
-        requestId: anthropicBatchId,
-        userId: claimed.ownerUserId,
-        ownerId: claimed.creditHold.ownerId,
-        ownerType: claimed.creditHold.ownerType,
-        feature: 'completion_api',
-        provider: 'anthropic',
-        model,
-        inputTokens,
-        outputTokens,
-        cachedInputTokens: cacheReadTokens,
-        cacheWriteTokens,
-        settledBasis: 'local',
-        costUsd: usd,
-        creditsCharged,
-        status: 'ok',
-        source: claimed.usageSource,
-        apiKeyId: claimed.apiKeyId,
-      })
-      .catch(err => req.logger.warn('[transforms/batch] usage event failed', err));
+    // Only the caller that clears the durable hold emits analytics; a concurrent receipt replay
+    // must not count the same batch twice.
+    const stamped = await transformBatchRepository.markCreditSettled(batch.id);
+    if (stamped !== false) {
+      await usageEventRepository
+        .record({
+          requestId: anthropicBatchId,
+          userId: claimed.ownerUserId,
+          ownerId: claimed.creditHold.ownerId,
+          ownerType: claimed.creditHold.ownerType,
+          feature: 'completion_api',
+          provider: 'anthropic',
+          model,
+          inputTokens,
+          outputTokens,
+          cachedInputTokens: cacheReadTokens,
+          cacheWriteTokens,
+          settledBasis: 'local',
+          costUsd: usd,
+          creditsCharged,
+          status: 'ok',
+          source: claimed.usageSource,
+          apiKeyId: claimed.apiKeyId,
+        })
+        .catch(err => req.logger.warn('[transforms/batch] usage event failed', err));
+    }
   }
   if (claimed) await saveResults();
 

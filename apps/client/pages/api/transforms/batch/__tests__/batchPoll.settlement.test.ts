@@ -77,7 +77,7 @@ beforeEach(() => {
     counts: { processing: 0, succeeded: 2, errored: 1, canceled: 0, expired: 0 },
     results: batchResults.items,
   }));
-  m.markSettled.mockResolvedValue(undefined);
+  m.markSettled.mockResolvedValue(true);
   m.saveResults.mockResolvedValue(undefined);
   m.catalog.mockResolvedValue([{ id: 'm1', pricing: { 200_000: { input: 1e-3, output: 2e-3 } } }]);
   m.batch = {
@@ -130,7 +130,7 @@ describe('GET /api/transforms/batch/:id settlement', () => {
       counts: { processing: 0, succeeded: 2, errored: 1, canceled: 0, expired: 0 },
       results: batchResults.items,
     }));
-    m.markSettled.mockResolvedValue(undefined);
+    m.markSettled.mockResolvedValue(true);
     m.saveResults.mockResolvedValue(undefined);
     m.catalog.mockResolvedValue([
       { id: 'm1', pricing: { 200_000: { input: 1e-3, output: 2e-3 } } },
@@ -222,7 +222,10 @@ describe('GET /api/transforms/batch/:id settlement', () => {
     const order: string[] = [];
     m.claim.mockImplementation(async () => (order.push('claim'), m.batch));
     m.settle.mockImplementation(async () => (order.push('settle'), 0));
-    m.markSettled.mockImplementation(async () => void order.push('markSettled'));
+    m.markSettled.mockImplementation(async () => {
+      order.push('markSettled');
+      return true;
+    });
     m.saveResults.mockImplementation(async () => void order.push('save'));
 
     await poll();
@@ -238,6 +241,72 @@ describe('GET /api/transforms/batch/:id settlement', () => {
 
     await expect(poll()).rejects.toThrow('crash');
     expect(m.markSettled).not.toHaveBeenCalled();
+  });
+
+  it('retries settlement after a prior poll claimed completion and then failed', async () => {
+    const durableHold = { ...hold, pendingHoldId: 'pending-1' };
+    m.batch = { ...m.batch, creditHold: durableHold };
+    m.claim.mockImplementation(async () => {
+      const claimed = m.batch;
+      m.batch = { ...m.batch, status: 'completed' };
+      return claimed;
+    });
+    m.settle.mockRejectedValueOnce(new Error('settlement unconfirmed')).mockResolvedValueOnce(220);
+
+    await expect(poll()).rejects.toThrow('settlement unconfirmed');
+    expect(m.markSettled).not.toHaveBeenCalled();
+    const body = await poll();
+
+    expect(m.claim).toHaveBeenCalledTimes(1);
+    expect(m.settle).toHaveBeenCalledTimes(2);
+    expect(m.settle).toHaveBeenLastCalledWith(
+      durableHold,
+      220,
+      expect.anything(),
+      expect.objectContaining({ throwOnUnconfirmed: true })
+    );
+    expect(m.markSettled).toHaveBeenCalledExactlyOnceWith('row1');
+    expect(body.status).toBe('completed');
+  });
+
+  it('resumes a durable hold even when another poll already cached the completed results', async () => {
+    m.batch = {
+      ...m.batch,
+      status: 'completed',
+      creditHold: { ...hold, pendingHoldId: 'pending-1' },
+      results: [{ client_ref: 'a', status: 'done', reply: 'x' }],
+    };
+    m.settle.mockResolvedValue(220);
+
+    await poll();
+
+    expect(m.claim).not.toHaveBeenCalled();
+    expect(m.settle).toHaveBeenCalledTimes(1);
+    expect(m.markSettled).toHaveBeenCalledExactlyOnceWith('row1');
+  });
+
+  it('recovers after settlement committed but marking the batch settled failed', async () => {
+    m.batch = { ...m.batch, status: 'completed', creditHold: { ...hold, pendingHoldId: 'pending-1' } };
+    m.settle.mockResolvedValue(220);
+    m.markSettled.mockRejectedValueOnce(new Error('write failed')).mockResolvedValueOnce(true);
+
+    await expect(poll()).rejects.toThrow('write failed');
+    expect(m.record).not.toHaveBeenCalled();
+    await poll();
+
+    expect(m.settle).toHaveBeenCalledTimes(2);
+    expect(m.record).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not duplicate usage events when another retry already marked the hold settled', async () => {
+    m.batch = { ...m.batch, status: 'completed', creditHold: { ...hold, pendingHoldId: 'pending-1' } };
+    m.settle.mockResolvedValue(220);
+    m.markSettled.mockResolvedValue(false);
+
+    await poll();
+
+    expect(m.settle).toHaveBeenCalledTimes(1);
+    expect(m.record).not.toHaveBeenCalled();
   });
 
   it('still marks the hold settled when the sweep already refunded it', async () => {

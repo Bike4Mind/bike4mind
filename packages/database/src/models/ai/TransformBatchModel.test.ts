@@ -68,14 +68,17 @@ describe('TransformBatchRepository.claimCompletion', () => {
     expect(claimedRow?.results).toBeUndefined();
     expect(claimedRow?.creditSettledAt).toBeUndefined();
 
-    await transformBatchRepository.markCreditSettled(row.id);
+    const settlementStamps = await Promise.all(
+      Array.from({ length: 3 }, () => transformBatchRepository.markCreditSettled(row.id))
+    );
+    expect(settlementStamps.filter(Boolean)).toHaveLength(1);
     await transformBatchRepository.saveResults(row.id, [{ client_ref: 'a', status: 'failed', error: 'x' }]);
     const done = await transformBatchRepository.findByAnthropicBatchId('msgbatch_twophase');
     expect(done).toMatchObject({ creditHold: null, results: [{ client_ref: 'a' }] });
     const settledAt = done?.creditSettledAt;
     expect(settledAt).toBeInstanceOf(Date);
 
-    await transformBatchRepository.markCreditSettled(row.id);
+    expect(await transformBatchRepository.markCreditSettled(row.id)).toBe(false);
     const again = await transformBatchRepository.findByAnthropicBatchId('msgbatch_twophase');
     expect(again?.creditSettledAt).toEqual(settledAt);
   });

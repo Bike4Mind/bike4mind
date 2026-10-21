@@ -1,3 +1,4 @@
+import { latchUsage, type CompletionUsage } from '../billing/completionMeter';
 import { z } from 'zod';
 import type { Logger } from '@bike4mind/observability';
 import type { IntentClassifierConfig, ModelInfo, ResponseFormat } from '@bike4mind/common';
@@ -58,11 +59,7 @@ export const IntentDecisionSchema = z.object({
 export type IntentDecisionPayload = z.infer<typeof IntentDecisionSchema>;
 
 /** Token usage of one provider call; fields are undefined when the backend reported none (e.g. an aborted stream). */
-export interface IntentClassifierCallUsage {
-  modelId: string;
-  inputTokens?: number;
-  outputTokens?: number;
-}
+export type IntentClassifierCallUsage = CompletionUsage & { modelId: string };
 
 export interface IntentDecision extends IntentDecisionPayload {
   /** Model id that produced the decision (after cascade resolution). */
@@ -328,8 +325,7 @@ async function runOnce(
       if (completionInfo?.responseFormatMode) {
         responseFormatMode = completionInfo.responseFormatMode;
       }
-      if (completionInfo?.inputTokens) callUsage.inputTokens = completionInfo.inputTokens;
-      if (completionInfo?.outputTokens) callUsage.outputTokens = completionInfo.outputTokens;
+      latchUsage(callUsage, completionInfo);
       // Streaming early-exit with a small grace window:
       //  - If the full JSON is already parseable, abort immediately (fast path).
       //  - Otherwise, once `useAgent` resolves, schedule the abort

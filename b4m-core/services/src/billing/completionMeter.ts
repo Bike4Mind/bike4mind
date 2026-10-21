@@ -48,7 +48,7 @@ export function latchUsage(usage: CompletionUsage, info?: CompletionInfo): void 
   if (info?.turnUsage?.length) usage.turnUsage = info.turnUsage;
 }
 
-function hasReportedUsage(usage: CompletionUsage): boolean {
+export function hasReportedUsage(usage: CompletionUsage): boolean {
   return Boolean(
     usage.inputTokens ||
     usage.outputTokens ||

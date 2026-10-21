@@ -79,10 +79,11 @@ class TransformBatchRepository extends BaseRepository<ITransformBatch> implement
   }
 
   async markCreditSettled(id: string) {
-    await this.model.updateOne(
+    const result = await this.model.updateOne(
       { _id: id, creditSettledAt: { $exists: false } },
       { $set: { creditHold: null, creditSettledAt: new Date() } }
     );
+    return result.modifiedCount === 1;
   }
 
   async saveResults(id: string, results: NonNullable<ITransformBatch['results']>) {

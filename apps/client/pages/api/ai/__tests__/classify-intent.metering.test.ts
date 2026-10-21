@@ -18,6 +18,11 @@ const m = vi.hoisted(() => ({
   complete: vi.fn(),
   cached: vi.fn(),
   canThink: false,
+  fallbackModels: [] as string[],
+  unpricedModelIds: [] as string[],
+  freeModelIds: [] as string[],
+  zeroPricedModelIds: [] as string[],
+  disabledModelIds: [] as string[],
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -46,7 +51,12 @@ vi.mock('@bike4mind/database', async () => ({
   ...(await import('@server/__tests__/pendingCreditHoldFake')).pendingCreditHoldFake,
   adminSettingsRepository: {
     getSettingsValue: async () => ({
-      intentClassifier: { enabled: true, shadowMode: true, primaryModel: 'ops-model', fallbackModels: [] },
+      intentClassifier: {
+        enabled: true,
+        shadowMode: true,
+        primaryModel: 'ops-model',
+        fallbackModels: m.fallbackModels,
+      },
     }),
   },
   apiKeyRepository: {},
@@ -69,10 +79,6 @@ vi.mock('@bike4mind/services', () => ({
     if (info?.outputTokens) u.outputTokens = info.outputTokens;
   },
 }));
-vi.mock('@bike4mind/services/llm/modelAdmission', () => ({
-  loadModelConfigurations: async () => [],
-  createModelAdmission: () => ({ admits: async () => true, assert: async () => undefined }),
-}));
 vi.mock('@bike4mind/services/cliCompletions', () => ({ estimateInputTokens: () => 1000 }));
 vi.mock('@server/entitlements', () => ({ getUserEntitlements: vi.fn() }));
 vi.mock('@server/billing/meterPlatformCompletion', async importOriginal => {
@@ -86,16 +92,25 @@ vi.mock('@server/billing/meterPlatformCompletion', async importOriginal => {
   };
 });
 
-const MODEL = { id: 'ops-model', backend: 'openai', pricing: { 200_000: { input: 1e-6, output: 2e-6 } } };
+const MODEL = { id: 'ops-model', type: 'text', backend: 'openai', pricing: { 200_000: { input: 1e-6, output: 2e-6 } } };
 vi.mock('@bike4mind/llm-adapters', async () => {
   const { geminiThinkingOutputCap, usesGeminiThinkingOutputCap } =
     await import('../../../../../../b4m-core/llm-adapters/src/thinkingParams');
   return {
     geminiThinkingOutputCap,
     usesGeminiThinkingOutputCap,
-    getAvailableModels: async () => [
-      m.canThink ? { ...MODEL, backend: 'gemini', can_think: true, max_tokens: 20000 } : MODEL,
-    ],
+    getAvailableModels: async () =>
+      ['ops-model', ...m.fallbackModels].map(id => ({
+        ...(m.canThink ? { ...MODEL, backend: 'gemini', can_think: true, max_tokens: 20000 } : MODEL),
+        id,
+        pricing: m.unpricedModelIds.includes(id)
+          ? {}
+          : m.zeroPricedModelIds.includes(id)
+            ? { 200_000: { input: 0, output: 0 } }
+            : MODEL.pricing,
+        freeToRun: m.freeModelIds.includes(id),
+        disabled: m.disabledModelIds.includes(id),
+      })),
   };
 });
 // The classifier is the provider seam here: m.complete stands in for the whole cascade.
@@ -108,7 +123,15 @@ vi.mock('@bike4mind/services/llm/intentClassifier', () => ({
   INTENT_CLASSIFIER_CALLS_PER_MODEL: 2,
   CascadeExhaustedError: class extends Error {
     attempts = [];
-    constructor(public usage: Array<{ modelId: string; inputTokens?: number; outputTokens?: number }> = []) {
+    constructor(
+      public usage: Array<{
+        modelId: string;
+        inputTokens?: number;
+        outputTokens?: number;
+        cacheReadInputTokens?: number;
+        cacheCreationInputTokens?: number;
+      }> = []
+    ) {
       super('cascade exhausted');
     }
   },
@@ -129,29 +152,130 @@ beforeEach(() => {
   vi.clearAllMocks();
   m.enforce = true;
   m.canThink = false;
+  m.fallbackModels = [];
+  m.unpricedModelIds = [];
+  m.freeModelIds = [];
+  m.zeroPricedModelIds = [];
+  m.disabledModelIds = [];
   m.hold.mockResolvedValue({ ownerId: 'u1', ownerType: 'user', reservedCredits: 50 });
   m.settleHold.mockImplementation(async (_hold, credits: number) => credits);
   m.cached.mockRejectedValue(new Error('intentClassifier: cascade is empty'));
-  m.complete.mockResolvedValue({
-    useAgent: true,
-    confidence: 0.9,
-    reason: 'needs live data',
-    signals: [],
-    classifierModel: 'ops-model',
-    latencyMs: 5,
-    cacheHit: false,
-    earlyExited: false,
-    usage: [{ modelId: 'ops-model', inputTokens: 200, outputTokens: 10 }],
+  m.complete.mockImplementation(async (_input: unknown, adapters: { resolveCascade: () => string[] }) => {
+    const modelId = adapters.resolveCascade()[0];
+    return {
+      useAgent: true,
+      confidence: 0.9,
+      reason: 'needs live data',
+      signals: [],
+      classifierModel: modelId,
+      latencyMs: 5,
+      cacheHit: false,
+      earlyExited: false,
+      usage: [{ modelId, inputTokens: 200, outputTokens: 10 }],
+    };
   });
 });
 
 describe('POST /api/ai/classify-intent metering', () => {
+  it.each(['ops-model', 'fallback-model'])(
+    'skips unpriced %s while retaining the priced candidate and its hold',
+    async modelId => {
+      m.fallbackModels = ['fallback-model'];
+      m.unpricedModelIds = [modelId];
+      const runnable = modelId === 'ops-model' ? 'fallback-model' : 'ops-model';
+
+      expect((await call())._getStatusCode()).toBe(200);
+
+      const classifierAdapters = m.complete.mock.calls[0][1] as { resolveCascade: () => string[] };
+      expect(classifierAdapters.resolveCascade()).toEqual([runnable]);
+      expect(m.settle).toHaveBeenCalledWith(expect.objectContaining({ model: runnable }));
+      expect(m.hold.mock.calls[0][0].requiredCredits).toBe(usdToCredits((1000 * 1e-6 + 300 * 2e-6) * 2));
+    }
+  );
+
+  it('refuses an entirely unpriced cascade before any hold or provider call', async () => {
+    m.fallbackModels = ['fallback-model'];
+    m.unpricedModelIds = ['ops-model', 'fallback-model'];
+
+    await expect(call()).rejects.toMatchObject({ statusCode: 403 });
+    expect(m.hold).not.toHaveBeenCalled();
+    expect(m.complete).not.toHaveBeenCalled();
+  });
+
+  it('keeps a priced primary when a disabled fallback cannot run', async () => {
+    m.fallbackModels = ['fallback-model'];
+    m.disabledModelIds = ['fallback-model'];
+
+    expect((await call())._getStatusCode()).toBe(200);
+
+    const classifierAdapters = m.complete.mock.calls[0][1] as { resolveCascade: () => string[] };
+    expect(classifierAdapters.resolveCascade()).toEqual(['ops-model']);
+  });
+
+  it('refuses a catalog-disabled classifier model before reserving or calling the provider', async () => {
+    m.disabledModelIds = ['ops-model'];
+
+    await expect(call()).rejects.toMatchObject({ statusCode: 400 });
+    expect(m.hold).not.toHaveBeenCalled();
+    expect(m.complete).not.toHaveBeenCalled();
+  });
+
+  it('admits an unpriced model when credits are not enforced', async () => {
+    m.enforce = false;
+    m.unpricedModelIds = ['ops-model'];
+
+    expect((await call())._getStatusCode()).toBe(200);
+    expect(m.complete).toHaveBeenCalledOnce();
+    expect(m.hold).not.toHaveBeenCalled();
+  });
+
+  it('admits an explicitly free unpriced model without a hold', async () => {
+    m.unpricedModelIds = ['ops-model'];
+    m.freeModelIds = ['ops-model'];
+
+    expect((await call())._getStatusCode()).toBe(200);
+    expect(m.complete).toHaveBeenCalledOnce();
+    expect(m.hold).not.toHaveBeenCalled();
+  });
+
+  it('admits an explicitly free zero-priced model without a hold', async () => {
+    m.zeroPricedModelIds = ['ops-model'];
+    m.freeModelIds = ['ops-model'];
+
+    expect((await call())._getStatusCode()).toBe(200);
+    expect(m.complete).toHaveBeenCalledOnce();
+    expect(m.hold).not.toHaveBeenCalled();
+  });
+
+  it('refuses zero prices unless the model is explicitly free', async () => {
+    m.zeroPricedModelIds = ['ops-model'];
+
+    await expect(call()).rejects.toMatchObject({ statusCode: 403 });
+    expect(m.hold).not.toHaveBeenCalled();
+    expect(m.complete).not.toHaveBeenCalled();
+  });
+
   it('refuses a zero-credit caller with 422 and never calls the provider', async () => {
     m.hold.mockRejectedValue(insufficientCreditsError('You do not have enough credits.'));
 
     await expect(call()).rejects.toMatchObject({ statusCode: 422 });
     expect(m.complete).not.toHaveBeenCalled();
   });
+
+  it.each(['cacheReadInputTokens', 'cacheCreationInputTokens'] as const)(
+    'prices cache-only %s from a failed cascade instead of the ceiling',
+    async field => {
+      m.complete.mockRejectedValue(new CascadeExhaustedError([{ modelId: 'ops-model', [field]: 100 }]));
+
+      expect((await call())._getStatusCode()).toBe(503);
+
+      const usd = 100 * (field === 'cacheReadInputTokens' ? 1e-7 : 1.25e-6);
+      expect(m.settle).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ usd: expect.closeTo(usd, 12), [field]: 100 })
+      );
+      expect(m.release).not.toHaveBeenCalled();
+    }
+  );
 
   it('charges a funded caller the priced usage once', async () => {
     const res = await call();
@@ -165,6 +289,8 @@ describe('POST /api/ai/classify-intent metering', () => {
       usd: expect.closeTo(200 * 1e-6 + 10 * 2e-6, 12),
       inputTokens: 200,
       outputTokens: 10,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
     });
     expect(m.settleHold).toHaveBeenCalledOnce();
     expect(res._getJSONData().decision).not.toHaveProperty('usage');

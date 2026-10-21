@@ -28,6 +28,7 @@ import {
   completionCeilingUsd,
   completionUsd,
   createModelAdmission,
+  hasReportedUsage,
   latchUsage,
   reserveCompletionCredits,
   settleCompletion,
@@ -261,7 +262,7 @@ const handler = baseApi()
         );
       } catch (error) {
         // A stream can report billable usage before a later provider failure.
-        if (usage.inputTokens || usage.outputTokens || usage.turnUsage?.length) {
+        if (hasReportedUsage(usage)) {
           await settleUsage(completionUsd(modelInfo, usage));
         } else {
           await reservation.refund();
@@ -270,7 +271,7 @@ const handler = baseApi()
       }
 
       // An adapter that reports no usage is charged the reservation ceiling rather than nothing.
-      const reported = Boolean(usage.inputTokens || usage.outputTokens || usage.turnUsage?.length);
+      const reported = hasReportedUsage(usage);
       await settleUsage(reported ? completionUsd(modelInfo, usage) : ceilingUsd);
 
       const latency = Date.now() - startTime;

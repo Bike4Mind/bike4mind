@@ -515,7 +515,7 @@ describe('reserveRequestCredits', () => {
       expect(await claimHold('hold-1')).not.toBeNull();
       userIncrement.mockClear();
 
-      expect(await settleHeldCredits(hold!, 2, ledger, context)).toBe(0);
+      expect(await settleHeldCredits(hold!, 2, ledger, { ...context, throwOnUnconfirmed: true })).toBe(0);
 
       expect(userIncrement).not.toHaveBeenCalled();
       expect(deductCredits).not.toHaveBeenCalled();
@@ -529,6 +529,36 @@ describe('reserveRequestCredits', () => {
       expect(markSettled).toHaveBeenCalledExactlyOnceWith('hold-1', 2);
       expect(await findSettlement('hold-1')).toBe(2);
       expect(await claimHold('hold-1')).toBeNull();
+    });
+
+    it('throws an unconfirmed async settlement and lets a later request retry the same hold', async () => {
+      const { hold } = await reserve();
+      markSettled
+        .mockRejectedValueOnce(new Error('db down'))
+        .mockRejectedValueOnce(new Error('db down'))
+        .mockRejectedValueOnce(new Error('db down'));
+
+      await expect(settleHeldCredits(hold!, 2, ledger, { ...context, throwOnUnconfirmed: true })).rejects.toThrow(
+        'db down'
+      );
+      expect(await findSettlement('hold-1')).toBeNull();
+      expect(pendingHolds.has('hold-1')).toBe(true);
+      expect(deductCredits).not.toHaveBeenCalled();
+
+      expect(await settleHeldCredits(hold!, 2, ledger, { ...context, throwOnUnconfirmed: true })).toBe(2);
+      expect(await findSettlement('hold-1')).toBe(2);
+      expect(deductCredits).toHaveBeenCalledTimes(1);
+    });
+
+    it('replays a committed async settlement receipt without charging again', async () => {
+      const { hold } = await reserve();
+      expect(await settleHeldCredits(hold!, 2, ledger, { ...context, throwOnUnconfirmed: true })).toBe(2);
+      userIncrement.mockClear();
+      deductCredits.mockClear();
+
+      expect(await settleHeldCredits(hold!, 2, ledger, { ...context, throwOnUnconfirmed: true })).toBe(2);
+      expect(userIncrement).not.toHaveBeenCalled();
+      expect(deductCredits).not.toHaveBeenCalled();
     });
 
     it('settles a hold persisted before pending rows existed directly', async () => {

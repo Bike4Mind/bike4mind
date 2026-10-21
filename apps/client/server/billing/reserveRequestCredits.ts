@@ -180,7 +180,7 @@ async function settlePendingHold(
   pendingHoldId: string,
   chargedCredits: number,
   entry: CreditLedgerEntry,
-  { featureLabel, logger }: { featureLabel: string; logger: Logger }
+  { featureLabel, logger, throwOnUnconfirmed }: { featureLabel: string; logger: Logger; throwOnUnconfirmed?: boolean }
 ): Promise<number> {
   const logHoldError = holdErrorLogger(logger, featureLabel, hold, pendingHoldId);
   const charged = Number.isFinite(chargedCredits)
@@ -215,6 +215,7 @@ async function settlePendingHold(
       }
       if (attempt >= SETTLEMENT_ATTEMPTS) {
         logHoldError('settle could not confirm outcome - any pending hold remains refundable', err);
+        if (throwOnUnconfirmed) throw err;
         return 0;
       }
     }
@@ -229,7 +230,12 @@ export function settleHeldCredits(
   persisted: PersistedCreditHold,
   chargedCredits: number,
   entry: CreditLedgerEntry,
-  context: { featureLabel: string; logger: Logger }
+  context: {
+    featureLabel: string;
+    logger: Logger;
+    /** Async callers can retry later; keep their durable work unsettled on an unconfirmed outcome. */
+    throwOnUnconfirmed?: boolean;
+  }
 ): Promise<number> {
   const { pendingHoldId, ...hold } = persisted;
   // Held before pending rows existed: nothing for the sweep to refund, so settle directly.

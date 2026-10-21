@@ -78,6 +78,18 @@ describe('meterPlatformCompletion credits', () => {
     expect(balance).toBe(0);
   });
 
+  it('admits a zero-cost call at zero balance without holding or moving credits', async () => {
+    balance = 0;
+
+    const reservation = await reserveCompletionCredits(req(), 0, 'free completion');
+
+    expect(reservation.reservedCredits).toBe(0);
+    expect(reservation.hold).toBeNull();
+    expect(m.userIncrement).not.toHaveBeenCalled();
+    expect(m.deductCredits).not.toHaveBeenCalled();
+    expect(balance).toBe(0);
+  });
+
   it('charges a funded caller exactly the priced usage and writes one completion_api_usage row', async () => {
     const usage = { inputTokens: 1000, outputTokens: 500 };
     const usd = completionUsd(model, usage);
@@ -238,6 +250,21 @@ describe('meterPlatformCompletion credits', () => {
     expect(first.requestId).not.toBe(first.sessionId);
     expect(first.requestId).not.toBe(second.requestId);
   });
+
+  it.each(['cacheReadInputTokens', 'cacheCreationInputTokens'] as const)(
+    'settles cache-only %s usage at its actual price rather than the ceiling',
+    async field => {
+      m.findBySettingName.mockResolvedValue(null);
+      const metered = await createRequestCompletionMeter(req(), 'cached completion')(model, [], 1000, [model]);
+      const usage = { inputTokens: 0, outputTokens: 0, [field]: 1000 };
+
+      await metered.settle(usage);
+
+      expect(m.recordUsageEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ costUsd: completionUsd(model, usage) })
+      );
+    }
+  );
 
   it('holds the ceiling once per provider turn and charges one turn when no usage is reported', async () => {
     m.findBySettingName.mockResolvedValue(null);

@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import { hasReportedUsage } from '@bike4mind/services/billing/completionMeter';
 import type { IncomingHttpHeaders } from 'http';
 import {
   getTextModelCost,
@@ -102,7 +103,8 @@ export async function reserveCompletionCredits(
 ): Promise<CreditReservation> {
   return reserveRequestCredits({
     req,
-    requiredCredits: usdToCredits(usd),
+    // Positive requests keep the minimum one-credit reservation; an explicitly free call needs none.
+    requiredCredits: usd === 0 ? 0 : usdToCredits(usd),
     enforceCredits: await isCreditsEnforced(),
     featureLabel,
     billingOrganizationId: organizationId,
@@ -110,7 +112,7 @@ export async function reserveCompletionCredits(
   });
 }
 
-export { latchUsage, type CompletionUsage };
+export { hasReportedUsage, latchUsage, type CompletionUsage };
 
 /** Same pricing rule as cliCompletions' settledUsdCost. */
 export function completionUsd(modelInfo: ModelInfo, usage: CompletionUsage): number {
@@ -224,10 +226,7 @@ export function createRequestCompletionMeter(
           provider: modelInfo.backend,
           // No reported usage means the adapter could not count it; charge one turn's ceiling rather than
           // nothing (not the whole multi-turn hold, which assumes every tool round-trip ran).
-          usd:
-            usage.inputTokens || usage.outputTokens || usage.turnUsage?.length
-              ? completionUsd(modelInfo, usage)
-              : ceilingUsd,
+          usd: hasReportedUsage(usage) ? completionUsd(modelInfo, usage) : ceilingUsd,
           inputTokens: usage.inputTokens ?? 0,
           outputTokens: usage.outputTokens ?? 0,
           cacheReadInputTokens: usage.cacheReadInputTokens,

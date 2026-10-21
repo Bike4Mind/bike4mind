@@ -70,6 +70,16 @@
         "default": "./dist/apiKeyService/index.cjs"
       }
     },
+    "./billing/completionMeter": {
+      "import": {
+        "types": "./dist/billing/completionMeter.d.mts",
+        "default": "./dist/billing/completionMeter.mjs"
+      },
+      "require": {
+        "types": "./dist/billing/completionMeter.d.cts",
+        "default": "./dist/billing/completionMeter.cjs"
+      }
+    },
     "./creditService": {
       "import": {
         "types": "./dist/creditService/index.d.mts",

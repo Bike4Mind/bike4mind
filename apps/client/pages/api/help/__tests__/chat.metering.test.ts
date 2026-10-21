@@ -56,15 +56,12 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   getSettingsMap: async () => ({}),
   getSettingsValue: (name: string) => (name === 'enforceCredits' ? m.enforce : undefined),
 }));
-vi.mock('@bike4mind/services', () => ({
+vi.mock('@bike4mind/services', async () => ({
+  ...(await import('@bike4mind/services/billing/completionMeter')),
   creditService: { holdCredits: m.hold, releaseCreditHold: m.release, settleCreditHold: m.settleHold },
   organizationService: {},
   apiKeyService: { getEffectiveLLMApiKeys: async () => ({}) },
   recordOperationalUsage: m.recordOperationalUsage,
-  latchUsage: (u: Record<string, number>, info?: Record<string, number>) => {
-    if (info?.inputTokens) u.inputTokens = info.inputTokens;
-    if (info?.outputTokens) u.outputTokens = info.outputTokens;
-  },
 }));
 vi.mock('@bike4mind/services/llm/modelAdmission', () => ({
   loadModelConfigurations: async () => [],
@@ -117,6 +114,38 @@ beforeEach(() => {
 });
 
 describe('POST /api/help/chat metering', () => {
+  it.each(['cacheReadInputTokens', 'cacheCreationInputTokens'] as const)(
+    'prices cache-only %s usage on a successful response',
+    async field => {
+      m.complete.mockImplementation(async (_model, _messages, _options, callback) => {
+        await callback(['answer'], { inputTokens: 0, outputTokens: 0, [field]: 100 });
+      });
+
+      await call();
+
+      const usd = 100 * (field === 'cacheReadInputTokens' ? 1e-7 : 1.25e-6);
+      expect(m.settle).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ usd: expect.closeTo(usd, 12) }));
+      expect(m.release).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['cacheReadInputTokens', 'cacheCreationInputTokens'] as const)(
+    'settles cache-only %s usage when the provider later throws',
+    async field => {
+      m.complete.mockImplementation(async (_model, _messages, _options, callback) => {
+        await callback(['partial'], { inputTokens: 0, outputTokens: 0, [field]: 100 });
+        throw new Error('stream disconnected');
+      });
+
+      const res = await call();
+      expect(res._getStatusCode()).toBe(500);
+
+      const usd = 100 * (field === 'cacheReadInputTokens' ? 1e-7 : 1.25e-6);
+      expect(m.settle).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ usd: expect.closeTo(usd, 12) }));
+      expect(m.release).not.toHaveBeenCalled();
+    }
+  );
+
   it('refuses a zero-credit caller with 422 and never calls the provider', async () => {
     m.hold.mockRejectedValue(insufficientCreditsError('You do not have enough credits.'));
 

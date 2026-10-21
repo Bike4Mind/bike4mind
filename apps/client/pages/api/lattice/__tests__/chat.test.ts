@@ -26,7 +26,8 @@ vi.mock('@bike4mind/llm-adapters', () => ({
   getAvailableModels: async () => m.models,
   getLlmByModel: () => ({ complete: m.complete }),
 }));
-vi.mock('@server/billing/meterPlatformCompletion', () => ({
+vi.mock('@server/billing/meterPlatformCompletion', async () => ({
+  ...(await import('@bike4mind/services/billing/completionMeter')),
   createModelAdmission: async () => ({
     admits: async (id: string) => !m.denied.has(id),
     assert: async (id: string) => {
@@ -35,12 +36,14 @@ vi.mock('@server/billing/meterPlatformCompletion', () => ({
   }),
   completionCeilingUsd: () => 1,
   reserveCompletionCredits: (...args: unknown[]) => m.reserve(...args),
-  latchUsage: (u: Record<string, number>, info?: Record<string, number>) => {
-    if (info?.inputTokens) u.inputTokens = info.inputTokens;
-    if (info?.outputTokens) u.outputTokens = info.outputTokens;
-  },
-  completionUsd: (_model: unknown, u: { inputTokens?: number; outputTokens?: number }) =>
-    (u.inputTokens ?? 0) * 0.001 + (u.outputTokens ?? 0) * 0.002,
+  completionUsd: (
+    _model: unknown,
+    u: { inputTokens?: number; outputTokens?: number; cacheReadInputTokens?: number; cacheCreationInputTokens?: number }
+  ) =>
+    (u.inputTokens ?? 0) * 0.001 +
+    (u.outputTokens ?? 0) * 0.002 +
+    (u.cacheReadInputTokens ?? 0) * 0.0001 +
+    (u.cacheCreationInputTokens ?? 0) * 0.00125,
   settleCompletion: (_reservation: unknown, _req: unknown, charge: unknown) => m.settle(charge),
 }));
 
@@ -68,6 +71,37 @@ beforeEach(() => {
 });
 
 describe('POST /api/lattice/chat metering', () => {
+  it.each(['cacheReadInputTokens', 'cacheCreationInputTokens'] as const)(
+    'prices cache-only %s usage on a successful response',
+    async field => {
+      m.complete.mockImplementation(async (_model, _messages, _options, callback) => {
+        await callback(['answer'], { inputTokens: 0, outputTokens: 0, [field]: 100 });
+      });
+
+      await call();
+
+      const usd = 100 * (field === 'cacheReadInputTokens' ? 0.0001 : 0.00125);
+      expect(m.settle).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ usd: expect.closeTo(usd, 12) }));
+      expect(m.refund).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['cacheReadInputTokens', 'cacheCreationInputTokens'] as const)(
+    'settles cache-only %s usage when the provider later throws',
+    async field => {
+      m.complete.mockImplementation(async (_model, _messages, _options, callback) => {
+        await callback(['partial'], { inputTokens: 0, outputTokens: 0, [field]: 100 });
+        throw new Error('stream disconnected');
+      });
+
+      await expect(call()).rejects.toThrow('stream disconnected');
+
+      const usd = 100 * (field === 'cacheReadInputTokens' ? 0.0001 : 0.00125);
+      expect(m.settle).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ usd: expect.closeTo(usd, 12) }));
+      expect(m.refund).not.toHaveBeenCalled();
+    }
+  );
+
   it('refuses a zero-credit caller with 422 and never calls the provider', async () => {
     m.reserve.mockRejectedValue(insufficientCreditsError('You do not have enough credits for Lattice chat.'));
 

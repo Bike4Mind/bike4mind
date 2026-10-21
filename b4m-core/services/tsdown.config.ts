@@ -14,6 +14,7 @@ export default defineConfig({
     'src/llm/evals/toolCalling/index.ts',
     'src/apiKeyService/index.ts',
     'src/creditService/index.ts',
+    'src/billing/completionMeter.ts',
     'src/generationJobs/index.ts',
     'src/videoJobs/index.ts',
     'src/musicJobs/index.ts',
