@@ -219,6 +219,8 @@ export const createMockSessionRepository = (): MockedObject<ISessionRepository> 
     findAllByIds: vi.fn(),
     findSessionIdsByUserId: vi.fn(),
     attachAgent: vi.fn(),
+    // Returns a promise so the caller's `.catch(...)` on the auto-add write works in every test.
+    addAutoAddedTools: vi.fn().mockResolvedValue(undefined),
     detachAgent: vi.fn(),
     getAttachedAgents: vi.fn(),
     addArtifact: vi.fn(),

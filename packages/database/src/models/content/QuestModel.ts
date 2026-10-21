@@ -1088,6 +1088,12 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
       .map(doc => ({ ...doc, id: doc._id.toString() }) as IChatHistoryItemDocument);
   }
 
+  async countBySessionId(sessionId: string) {
+    // Explicit deletedAt, like getMostRecentChatHistory, so the window math counts exactly the quests
+    // that query can return. Covered by deletedAt_sessionId_timestamp_desc: an index-only count.
+    return this.model.countDocuments({ sessionId, deletedAt: null });
+  }
+
   async findByIdWithStatus(id: string) {
     const result = await this.model.findById(id).select('_id status');
     if (!result) return null;
