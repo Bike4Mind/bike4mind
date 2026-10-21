@@ -198,6 +198,8 @@ const handler = baseApi().post(
     const emailOutcomes = await Promise.all(emailPromises.map(delivery => delivery.outcome));
     await Promise.all(notificationPromises);
 
+    // Log the repair payload before reporting deliveries: a settle failure still has to leave
+    // behind which emails failed, and it is rethrown only after that report is out.
     if (settlement.status === 'rejected') {
       // The refund and invite ids never reached the user document; record them for repair.
       console.error('Referral settlement failed', {
@@ -206,7 +208,6 @@ const handler = baseApi().post(
         newInviteIds,
         error: settlement.reason,
       });
-      throw settlement.reason;
     }
 
     emailPromises.forEach((delivery, index) => {
@@ -225,6 +226,10 @@ const handler = baseApi().post(
     if (slackErrorMessages.length > 0) {
       const slackMessage = slackErrorMessages.join('\n');
       await postMessageToSlack(slackMessage);
+    }
+
+    if (settlement.status === 'rejected') {
+      throw settlement.reason;
     }
 
     // Everything that was not a hard processing failure is reported to the caller as sent,

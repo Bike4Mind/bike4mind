@@ -276,6 +276,26 @@ describe('/api/reg-invites/refer - quota reservation', () => {
     expect(rejected).toHaveBeenCalledWith(dbError);
   });
 
+  it('reports a delivery failure before failing the request on a settle failure', async () => {
+    vi.mocked(getSettingsValue).mockImplementation(key => key === 'EnableReferralToEmail');
+    mockEmailPublish.mockRejectedValueOnce(new Error('publish failed'));
+    const dbError = new Error('settle failed');
+    mockSettleReferrals.mockRejectedValueOnce(dbError);
+    const { req, res } = makeReqRes({ id: 'user-1', emailVerified: true });
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      await expect(invokeHandler(req, res)).rejects.toBe(dbError);
+      // The repair path needs to know which deliveries failed, so that report is logged
+      // before the settle failure is rethrown.
+      expect(consoleError).toHaveBeenCalledWith(
+        expect.stringContaining('Failed to deliver referral email to friend@example.com')
+      );
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   it('retains quota if publication throws synchronously after minting', async () => {
     vi.mocked(getSettingsValue).mockImplementation(key => key === 'EnableReferralToEmail');
     mockEmailPublish.mockImplementationOnce(() => {
