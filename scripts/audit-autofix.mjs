@@ -166,6 +166,7 @@ export function computeOverrideFixes(report, allowlist, currentOverrides = {}, i
       const value = String(currentOverrides[k]);
       if (!m || !VERSION.test(m[2])) return null;
       if (m[1] !== undefined && m[1] !== lineStart(m[2])) return null;
+      if (m[1] !== undefined && m[1] === m[2]) return null; // an empty `>=X <X` range
       if (!value.startsWith('^') || !VERSION.test(value.slice(1))) return null;
       return compareVersions(value.slice(1), m[2]) >= 0 ? m[2] : null;
     };
@@ -193,6 +194,15 @@ export function computeOverrideFixes(report, allowlist, currentOverrides = {}, i
     // Raising an unscoped `name@<X` keeps it unscoped: narrowing it would release a
     // dependent of an older major that it forces up today, which the lockfile cannot show.
     const keepsUnscoped = lowerFloors.some(k => parseOverrideKey(k).range.startsWith('<'));
+    // A scoped floor that starts its own line would be an empty `>=X <X` range.
+    if (!keepsUnscoped && compareVersions(lineStart(floor), floor) === 0) {
+      for (const a of advisories)
+        skipped.push({
+          ...a,
+          reason: `\`${floor}\` starts its semver line, so a scoped floor would match nothing (needs a human)`,
+        });
+      continue;
+    }
     const newKey = keepsUnscoped ? `${pkg}@<${floor}` : `${pkg}@>=${lineStart(floor)} <${floor}`;
     const newValue = `^${floor}`;
     const from = lowerFloors.map(k => `\`${k}: ${currentOverrides[k]}\``).join(', ') || '(none)';

@@ -70,6 +70,35 @@ describe('computeOverrideFixes', () => {
     expect(result.skipped[0].reason).toMatch(/already reaches the patched version/);
   });
 
+  it('leaves a floor that starts its own semver line to a human', () => {
+    const startOfLine = advisory({ patched_versions: '>=2.0.0', findings: [] });
+    const installed = new Map([['some-pkg', ['2.1.0']]]);
+    const result = computeOverrideFixes(report(startOfLine), ALLOWLIST, {}, installed);
+    expect(result.changed).toBe(false);
+    expect(result.overrides).toEqual({});
+    expect(result.skipped[0].reason).toMatch(/starts its semver line/);
+  });
+
+  it('does not treat an empty scoped range as a floor', () => {
+    const current = { 'some-pkg@>=2.0.0 <2.0.0': '^2.0.0' };
+    const installed = new Map([['some-pkg', ['2.0.5']]]);
+    const result = computeOverrideFixes(
+      report(advisory({ patched_versions: '>=2.1.0', findings: [] })),
+      ALLOWLIST,
+      current,
+      installed
+    );
+    expect(result.changed).toBe(false);
+    expect(result.skipped[0].reason).toMatch(/not a floor/);
+  });
+
+  it('does not treat a scoped key that misses the line start as a floor', () => {
+    const current = { 'some-pkg@>=1.2.0 <1.9.0': '^1.9.0' };
+    const result = computeOverrideFixes(report(advisory()), ALLOWLIST, current);
+    expect(result.changed).toBe(false);
+    expect(result.skipped[0].reason).toMatch(/not a floor/);
+  });
+
   it('(3) ignores allowlisted and medium advisories', () => {
     const result = computeOverrideFixes(
       report(
