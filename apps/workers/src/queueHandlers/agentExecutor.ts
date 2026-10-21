@@ -205,6 +205,7 @@ import {
   type SubagentDispatchPayload,
 } from './agentExecutor.schemas';
 import { enforceCheckpointDepth } from './agentExecutor.checkpointDepth';
+import { createInflightStepPersister } from './agentExecutor.inflightSteps';
 import { runIterationWithDeadlineGuard } from './agentExecutor.iterationDeadline';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
@@ -914,6 +915,14 @@ async function processExecution(
     sendWs,
   });
   if (terminated) return;
+
+  // Drained in the `finally` below so no in-flight write outlives this invocation.
+  const inflightSteps = createInflightStepPersister({
+    executionId,
+    persistSteps: agentExecutionRepository.updateInflightSteps.bind(agentExecutionRepository),
+    logger,
+    emitMetric,
+  });
 
   try {
     // Load execution document
@@ -2148,13 +2157,7 @@ async function processExecution(
       // boundary write and overwrite `checkpoint.steps` with a stale
       // snapshot.
       if (step.type !== 'final_answer') {
-        void agentExecutionRepository.updateInflightSteps(executionId, agent.getSteps()).catch(err => {
-          logger.warn('[Stream] Failed to persist in-flight steps', {
-            executionId,
-            error: err instanceof Error ? err.message : String(err),
-          });
-          void emitMetric('Lumina5/AgentExecutor', 'InflightStepsPersistFailed', 1);
-        });
+        inflightSteps.persist(agent.getSteps());
       }
     };
     agent.on('thought', streamStep);
@@ -3203,6 +3206,8 @@ async function processExecution(
         error: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr),
       });
     }
+  } finally {
+    await inflightSteps.drain();
   }
 }
 

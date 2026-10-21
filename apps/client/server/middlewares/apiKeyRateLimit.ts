@@ -83,13 +83,14 @@ export const apiKeyRateLimit =
         // Emit per-product RateLimitHit metric for ingest keys so the Overwatch ops dashboard
         // can surface per-product rate pressure without a separate Lambda.
         if (req.apiKeyInfo?.scopes?.includes(ApiKeyScope.OVERWATCH_INGEST_WRITE) && req.apiKeyInfo.productId) {
-          emitMetric(
+          // Awaited: the 429 ends the invocation, and a frozen Lambda loses a pending emit.
+          await emitMetric(
             'Lumina5/OverwatchIngest',
             'RateLimitHit',
             1,
             { productId: req.apiKeyInfo.productId },
             StandardUnit.Count
-          ).catch(() => {});
+          );
         }
         throw new TooManyRequestsError(result.error || 'Rate limit exceeded');
       }

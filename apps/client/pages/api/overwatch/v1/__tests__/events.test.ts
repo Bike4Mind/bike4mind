@@ -256,4 +256,49 @@ describe('POST /api/overwatch/v1/events', () => {
       expect(total?.dimensions).toBeUndefined();
     });
   });
+
+  // The Lambda can freeze once the response is sent, so a pending emit would be lost or sent later
+  // with an expired SigV4 signature.
+  describe('metric delivery', () => {
+    const holdEmit = (mock: typeof mockEmitMetrics) => {
+      let release: () => void = () => {};
+      mock.mockReturnValueOnce(
+        new Promise<void>(resolve => {
+          release = resolve;
+        })
+      );
+      return () => release();
+    };
+
+    it.each([
+      ['the IngestRequest metric', mockEmitMetrics],
+      ['the IngestLatency metric', mockEmitMetric],
+    ])('does not respond while %s is still pending', async (_metric, mock) => {
+      const releaseEmit = holdEmit(mock);
+      const { req, res } = createReq();
+
+      const handled = handler(req, res);
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(res._isEndCalled()).toBe(false);
+
+      releaseEmit();
+      await handled;
+      expect(res._getStatusCode()).toBe(200);
+    });
+
+    it('does not respond to a failed ingest while the IngestError metric is still pending', async () => {
+      mockSendBatch.mockRejectedValue(new Error('SQS down'));
+      mockEmitMetrics.mockResolvedValueOnce(undefined);
+      const releaseEmit = holdEmit(mockEmitMetrics);
+      const { req, res } = createReq();
+
+      const handled = handler(req, res);
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(res._isEndCalled()).toBe(false);
+
+      releaseEmit();
+      await handled;
+      expect(res._getStatusCode()).toBe(500);
+    });
+  });
 });
