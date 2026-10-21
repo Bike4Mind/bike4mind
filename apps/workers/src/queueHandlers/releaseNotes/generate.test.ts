@@ -285,6 +285,22 @@ describe('copy accuracy', () => {
     expect(draft.items[0].text).toHaveLength(161);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('over 160 chars'));
   });
+
+  it.each([
+    ['is malformed', (c: ReturnType<typeof vi.fn>) => c.mockResolvedValueOnce('sorry, here you go: {')],
+    ['times out', (c: ReturnType<typeof vi.fn>) => c.mockRejectedValueOnce(new Error('timed out'))],
+  ])('keeps the over-long first draft when the repair %s', async (_, secondReply) => {
+    const warn = vi.fn();
+    const complete = secondReply(vi.fn().mockResolvedValueOnce(overLongReply));
+
+    const { draft } = await writeReleaseNotes(overstatedRelease, new Map([[4938, 'n']]), complete, {
+      logger: { warn },
+    });
+
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(draft.items[0].text).toHaveLength(161);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('keeping the first draft'));
+  });
 });
 
 describe('extractJson', () => {
