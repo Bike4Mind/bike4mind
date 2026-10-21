@@ -263,7 +263,7 @@ describe('Skill Market (real mongod)', () => {
     async visibility => {
       orgs.members.set(AUTHOR, [ORG]);
       orgs.members.set(OTHER, [ORG]);
-      orgs.admins.set('org-admin', [ORG]);
+      if (visibility === 'organization') orgs.admins.set('org-admin', [ORG]);
       const { listing, version } = await publish(
         await makeSkill(AUTHOR, 'MISMATCH formatter'),
         visibility,
@@ -291,6 +291,12 @@ describe('Skill Market (real mongod)', () => {
         await expect(call(byTokenHandler, 'GET', OTHER, { token: listing.shareToken })).rejects.toMatchObject({
           statusCode: 404,
         });
+
+      // An org admin must be refused outright, not merely be absent from the queue that lists it.
+      if (visibility === 'unlisted')
+        await expect(
+          decideVersion(version.id, { id: 'org-admin' }, [ORG], { action: 'approve', ackMismatch: true })
+        ).rejects.toMatchObject({ statusCode: 403 });
 
       const reviewer = visibility === 'organization' ? { id: 'org-admin' } : { id: ADMIN, isAdmin: true };
       await decideVersion(version.id, reviewer, visibility === 'organization' ? [ORG] : [], {
