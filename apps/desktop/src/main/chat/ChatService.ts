@@ -79,7 +79,7 @@ import type { DependencyInstaller } from './project/dependencyInstall';
 import { defaultUserInstructionsRoot } from './project/instructions';
 import { type MemoryStore, memoryStoreFor } from './project/memory';
 import { ProjectContextCache } from './project/projectContext';
-import { prefetchBase, resolveWorkspace, type WorkspaceOutcome } from './project/workspace';
+import { prefetchBase, resolveWorkspace, type SpareWorktrees, type WorkspaceOutcome } from './project/workspace';
 import { MAX_ATTACHMENTS_PER_TURN, textAttachmentBlock } from './attachments';
 import type { AttachmentStore } from './AttachmentStore';
 import type { SidebarSectionStore } from './SidebarSectionStore';
@@ -358,6 +358,8 @@ export interface ChatServiceDeps {
   foreground?: ForegroundCommandRegistry;
   /** Installs a new worktree's dependencies. Absent in tests, which then never install. */
   dependencies?: DependencyInstaller;
+  /** A checkout kept ready per recently used project, so cutting a worktree is a switch. */
+  spareWorktrees?: SpareWorktrees;
   /** Where generated images and audio land. Absent in tests, which then have no generation tools. */
   media?: MediaStore;
   /**
@@ -1021,6 +1023,7 @@ export class ChatService {
         // A branch already named - a spawn's, as the user approved it - is cut as named.
         ...(project.workspaceBranch ? { branch: project.workspaceBranch } : { name }),
         timer,
+        spares: this.deps.spareWorktrees,
         onBranch: branch => {
           this.preparing.set(sessionId, { since: this.preparing.get(sessionId)?.since ?? Date.now(), base, branch });
           this.emit({ type: 'workspace', sessionId, running: true, base, branch });

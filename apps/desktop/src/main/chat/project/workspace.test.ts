@@ -1,7 +1,8 @@
 import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { PhaseTimer } from '../PhaseTimer';
 import {
   containerDirectory,
   currentBranch,
@@ -12,7 +13,7 @@ import {
   projectDisplayName,
   unusableProjectReason,
 } from './git';
-import { appWorktreeRoot, resolveWorkspace, worktreeFolderName } from './workspace';
+import { appWorktreeRoot, resolveWorkspace, SpareWorktrees, worktreeFolderName } from './workspace';
 
 /**
  * Real git repositories in a temp directory rather than a mocked child_process: the whole
@@ -496,5 +497,72 @@ describe('resolveWorkspace in an ordinary clone', () => {
     expect(await readFile(join(repo, '.b4m', '.gitignore'), 'utf8')).toBe('*\n');
     expect((await git(repo, ['status', '--porcelain'])).trim()).toBe('');
     await expect(stat(join(repo, '.gitignore'))).rejects.toThrow();
+  });
+});
+
+describe('SpareWorktrees', () => {
+  const spareAt = (container: string) => join(container, '.b4m', 'spare');
+
+  async function spareReady(main: string, container: string): Promise<void> {
+    await vi.waitUntil(async () => (await listWorktrees(main)).some(entry => entry.path === spareAt(container)), {
+      timeout: 10000,
+      interval: 20,
+    });
+  }
+
+  it('makes a spare only after a cut, then hands it to the next session on its own branch', async () => {
+    const { container, main } = await bareLayoutRepository();
+    const spares = new SpareWorktrees(0);
+    try {
+      await resolveWorkspace(main, { base: 'main', branch: 'b4m/first', spares });
+      await spareReady(main, container);
+      await writeFile(join(main, 'later.txt'), 'later\n', 'utf8');
+      await git(main, ['add', 'later.txt']);
+      await git(main, ['commit', '--quiet', '-m', 'later']);
+      const tip = (await git(main, ['rev-parse', 'HEAD'])).trim();
+
+      const timer = new PhaseTimer();
+      const second = await resolveWorkspace(main, { base: 'main', branch: 'b4m/second', spares, timer });
+
+      expect(timer.summary()).toContain('spareSwitch=');
+      expect(second.workingDirectory).toBe(join(appWorktreeRoot(container), 'b4m+second'));
+      expect((await git(second.workingDirectory, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim()).toBe('b4m/second');
+      expect((await git(second.workingDirectory, ['rev-parse', 'HEAD'])).trim()).toBe(tip);
+      expect((await stat(join(second.workingDirectory, 'later.txt'))).isFile()).toBe(true);
+      // Taken, then made again for the session after this one.
+      await spareReady(main, container);
+    } finally {
+      await spares.dispose();
+    }
+    expect((await listWorktrees(main)).some(entry => entry.path === spareAt(container))).toBe(false);
+  });
+
+  it('makes none for a repository nothing was cut in, and none after dispose', async () => {
+    const { container, main } = await bareLayoutRepository();
+    const spares = new SpareWorktrees(0);
+    await spares.dispose();
+
+    await resolveWorkspace(main, { base: 'main', branch: 'b4m/late', spares });
+    await new Promise(resolve => setTimeout(resolve, 200));
+
+    expect((await listWorktrees(main)).some(entry => entry.path === spareAt(container))).toBe(false);
+  });
+
+  it('leaves a folder it did not make where the spare would go', async () => {
+    const { container, main } = await bareLayoutRepository();
+    await mkdir(spareAt(container), { recursive: true });
+    await writeFile(join(spareAt(container), 'mine.txt'), 'keep\n', 'utf8');
+    const spares = new SpareWorktrees(0);
+    try {
+      await resolveWorkspace(main, { base: 'main', branch: 'b4m/one', spares });
+      await new Promise(resolve => setTimeout(resolve, 300));
+      const timer = new PhaseTimer();
+      await resolveWorkspace(main, { base: 'main', branch: 'b4m/two', spares, timer });
+
+      expect(timer.summary()).toContain('worktreeAdd=');
+      expect(await readFile(join(spareAt(container), 'mine.txt'), 'utf8')).toBe('keep\n');
+    } finally {
+      await spares.dispose();
+    }
   });
 });

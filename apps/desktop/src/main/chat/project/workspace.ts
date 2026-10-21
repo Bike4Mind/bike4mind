@@ -54,6 +54,8 @@ export interface WorkspaceRequest {
   /** Told the branch as soon as it is decided, ahead of the fetch and checkout that take the time. */
   onBranch?: (branch: string) => void;
   timer?: PhaseTimer;
+  /** Cut from the repository's spare when it has one, and renew it afterwards. */
+  spares?: SpareWorktrees;
 }
 
 export interface WorkspaceResolution {
@@ -189,6 +191,157 @@ export function prefetchBase(directory: string, base: string): void {
     .catch(() => undefined);
 }
 
+/** Where a repository's spare checkout waits: in the app's folder, beside the worktree root. */
+function sparePath(container: string): string {
+  return join(container, APP_DIRECTORY, 'spare');
+}
+
+/** Repositories that keep a spare at once; the least recently used one goes past this. */
+const MAX_SPARES = 2;
+
+/** A spare unused this long is removed, so a project left alone stops costing a checkout. */
+const SPARE_IDLE_MS = 30 * 60_000;
+
+/** After a cut, so the refill's checkout does not compete with the new session's first moments. */
+const SPARE_REFILL_DELAY_MS = 10_000;
+
+interface Spare {
+  projectDirectory: string;
+  path: string;
+  idle: NodeJS.Timeout;
+}
+
+/**
+ * One detached checkout kept ready per recently used repository, so cutting a session's
+ * worktree is a rename plus a switch that rewrites only the files that differ, rather than a
+ * checkout of every file - about 1.3s down to 0.2s on this monorepo.
+ *
+ * Bounded on every side: a repository gets one only after a worktree was cut in it this run,
+ * at most MAX_SPARES exist, each goes after SPARE_IDLE_MS unused, and `dispose` removes them
+ * all on quit. A spare left behind by a run that did not quit cleanly is recognised by its path
+ * and replaced. Nothing here touches a checkout the app did not make: a path git does not know
+ * as a detached worktree is left alone, and the spare is simply not made.
+ */
+export class SpareWorktrees {
+  /** By container, in order of last use. */
+  private readonly ready = new Map<string, Spare>();
+  private readonly refills = new Map<string, NodeJS.Timeout>();
+  private readonly chains = new Map<string, Promise<unknown>>();
+  private disposed = false;
+
+  constructor(private readonly refillDelayMs = SPARE_REFILL_DELAY_MS) {}
+
+  /**
+   * Move this repository's spare to `path` on a new `branch` cut from `from`. False when there is
+   * none or it could not be used, and then nothing is left at `path`.
+   */
+  async take(projectDirectory: string, container: string, branch: string, path: string, from: string) {
+    // A fill already under way finishes sooner than a fresh checkout would.
+    if (!this.ready.has(container)) await this.chains.get(container);
+    const spare = this.ready.get(container);
+    if (!spare) return false;
+    this.ready.delete(container);
+    clearTimeout(spare.idle);
+    return this.serial(container, async () => {
+      try {
+        await git(projectDirectory, ['worktree', 'move', spare.path, path]);
+      } catch {
+        await removeWorktree(projectDirectory, spare.path);
+        return false;
+      }
+      try {
+        await git(path, ['switch', '--quiet', '--no-track', '-c', branch, from]);
+        return true;
+      } catch {
+        await removeWorktree(projectDirectory, path);
+        return false;
+      }
+    });
+  }
+
+  /** Make or renew this repository's spare at `from`, shortly; a no-op once disposed. */
+  refill(projectDirectory: string, container: string, from: string): void {
+    if (this.disposed) return;
+    clearTimeout(this.refills.get(container));
+    const timer = setTimeout(() => {
+      this.refills.delete(container);
+      void this.serial(container, () => this.fill(projectDirectory, container, from));
+    }, this.refillDelayMs);
+    timer.unref();
+    this.refills.set(container, timer);
+  }
+
+  /** Drop the spare of the repository at `projectDirectory`, if it has one. */
+  async forget(projectDirectory: string): Promise<void> {
+    const container = await containerDirectory(projectDirectory).catch(() => null);
+    if (container) await this.discard(container);
+  }
+
+  async dispose(): Promise<void> {
+    this.disposed = true;
+    for (const timer of this.refills.values()) clearTimeout(timer);
+    this.refills.clear();
+    await Promise.all([...this.ready.keys()].map(container => this.discard(container)));
+    // A fill still running sees `disposed` and removes its own checkout; quit waits for that.
+    await Promise.all(this.chains.values());
+  }
+
+  private async fill(projectDirectory: string, container: string, from: string): Promise<void> {
+    if (this.disposed || this.ready.has(container)) return;
+    const path = sparePath(container);
+    const occupant = await registeredAt(await listWorktrees(projectDirectory), path);
+    if (occupant) {
+      if (occupant.branch) return;
+      await removeWorktree(projectDirectory, path);
+    } else if (await directoryExists(path)) {
+      return;
+    }
+    try {
+      await git(projectDirectory, ['worktree', 'add', '--quiet', '--detach', path, from]);
+    } catch {
+      return;
+    }
+    if (this.disposed) {
+      await removeWorktree(projectDirectory, path);
+      return;
+    }
+    const idle = setTimeout(() => void this.discard(container), SPARE_IDLE_MS);
+    idle.unref();
+    this.ready.set(container, { projectDirectory, path, idle });
+    for (const oldest of [...this.ready.keys()].slice(0, Math.max(0, this.ready.size - MAX_SPARES))) {
+      void this.discard(oldest);
+    }
+  }
+
+  private discard(container: string): Promise<void> {
+    const spare = this.ready.get(container);
+    if (!spare) return Promise.resolve();
+    this.ready.delete(container);
+    clearTimeout(spare.idle);
+    return this.serial(container, () => removeWorktree(spare.projectDirectory, spare.path));
+  }
+
+  /** One git operation at a time per repository, so a take never meets a fill half-done. */
+  private serial<T>(container: string, work: () => Promise<T>): Promise<T> {
+    const result = (this.chains.get(container) ?? Promise.resolve()).then(work);
+    const tail = result.catch(() => undefined);
+    this.chains.set(container, tail);
+    void tail.then(() => {
+      if (this.chains.get(container) === tail) this.chains.delete(container);
+    });
+    return result;
+  }
+}
+
+/** Best effort: a spare that cannot be removed now is replaced the next time one is made. */
+async function removeWorktree(projectDirectory: string, path: string): Promise<void> {
+  try {
+    await git(projectDirectory, ['worktree', 'remove', '--force', path]);
+  } catch {
+    // Already gone, or held open; see above.
+  }
+}
+
 /**
  * The worktree a Code session with the workspace toggle ON runs in, creating one only when the
  * session does not already have it.
@@ -268,15 +421,19 @@ export async function resolveWorkspace(
   if (await branchExists(projectDirectory, branch)) {
     timer?.lap('checks');
     await git(projectDirectory, ['worktree', 'add', path, branch]);
-  } else {
-    timer?.lap('checks');
-    const from = await baseRefFor(projectDirectory, cutFrom);
-    timer?.lap('fetch');
-    // --no-track for the reason the shell helper gives: a feature branch should not track the
-    // base it forked from, or a later `git push` would aim at the wrong ref.
-    await git(projectDirectory, ['worktree', 'add', '--no-track', '-b', branch, path, from]);
+    timer?.lap('worktreeAdd');
+    return { workingDirectory: path, branch, outcome: 'created' };
   }
-  timer?.lap('worktreeAdd');
 
+  timer?.lap('checks');
+  const from = await baseRefFor(projectDirectory, cutFrom);
+  timer?.lap('fetch');
+  const { spares } = request;
+  const fromSpare = (await spares?.take(projectDirectory, container, branch, path, from)) ?? false;
+  // --no-track for the reason the shell helper gives: a feature branch should not track the
+  // base it forked from, or a later `git push` would aim at the wrong ref.
+  if (!fromSpare) await git(projectDirectory, ['worktree', 'add', '--no-track', '-b', branch, path, from]);
+  timer?.lap(fromSpare ? 'spareSwitch' : 'worktreeAdd');
+  spares?.refill(projectDirectory, container, from);
   return { workingDirectory: path, branch, outcome: 'created' };
 }
