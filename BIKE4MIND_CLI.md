@@ -184,7 +184,7 @@ The **Scope** column in both tables is the *recommended* key configuration for t
 
 ### Auth and endpoint
 
-Over stdio only, when your account is entitled to OptiHashi and the key carries `optihashi:read` and `optihashi:compute`, the server also offers `optihashi_solvers` (the runnable families, solvers and limits) and `optihashi_solve` (a free, bounded classical solver race). Their schemas are fetched from your instance once at startup (a 5 second budget; any failure just leaves them unlisted), so they always match its roster. No paid compute is exposed, and HTTP mode never offers them.
+Over stdio only, when your account is entitled to OptiHashi and the key carries `optihashi:read` and `optihashi:compute`, the server also offers `optihashi_solvers` (the runnable families, solvers and limits) and `optihashi_solve` (a free, bounded classical solver race). With an API key, the CLI first reads that key's own scopes (it can list its owner's keys) and offers the tools only when it holds both, since the server route accepts either one; a failed lookup also leaves them unlisted. Their schemas are fetched from your instance once at startup (a 5 second budget; any failure just leaves them unlisted), so they always match its roster. No paid compute is exposed, and HTTP mode never offers them.
 
 Listing the tools above needs no credentials; tool *calls* hit the API and authenticate. Precedence:
 
