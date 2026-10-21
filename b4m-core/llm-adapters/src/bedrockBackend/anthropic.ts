@@ -26,6 +26,7 @@ import { Logger } from '@bike4mind/observability';
 import { BaseBedrockBackend } from './base';
 import { capCacheControlMarkers, getCachingAdapter } from '../caching/adapters';
 import { systemContentToText } from '../systemContent';
+import { sortToolsForStableCacheKey } from '../caching/stableToolOrder';
 import { DispatchModel } from '../dispatchModel';
 import {
   buildThinkingParams,
@@ -1449,7 +1450,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
   }
 
   formatTools(tools: ICompletionOptionTools[] = []) {
-    return tools.map(tool => {
+    return sortToolsForStableCacheKey(tools).map(tool => {
       const { parameters, ...rest } = tool.toolSchema;
       // `strict` is an OpenAI-only tool field. Anthropic rejects it with
       // "tools.N.custom.strict: Extra inputs are not permitted", so strip it from the

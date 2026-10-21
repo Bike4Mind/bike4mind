@@ -499,6 +499,15 @@ const GATED_TOOL_NAMES = new Set(['image_generation', 'edit_image', 'audio_gener
 // Reuse one async context store for the process; each tool invocation gets a unique token.
 const gatedToolInvocation = new AsyncLocalStorage<symbol>();
 
+/**
+ * The tool prompt, split by who shares it. `guidance` depends only on which tools are offered and
+ * on admin settings, so it is identical across users and belongs in the shareable cached prefix
+ * (source `toolPrompt`); `context` carries the user's timezone, their MCP integrations, the
+ * session's conversation entities and the agent roster (source `toolContext`), and must sit
+ * behind that prefix - see PER_CALLER_AUTHORED_SOURCES in systemPromptSources.ts.
+ */
+export type ToolPromptMessages = { guidance: IMessage | null; context: IMessage | null };
+
 export class ToolBuilder {
   constructor(private readonly deps: ToolBuilderConfig) {}
 
@@ -1177,9 +1186,9 @@ export class ToolBuilder {
   }
 
   /**
-   * Build a single tool-related system prompt combining: tool prompt from DB, blog draft workflow,
-   * MCP integration guidance, conversation context, and agent delegation guidance.
-   * Returns a single IMessage or null if there's nothing to add.
+   * Build the tool-related system prompts: tool prompt from DB, blog draft workflow, MCP integration
+   * guidance, conversation context, and agent delegation guidance, split into the shareable
+   * `guidance` and the per-caller `context` (see ToolPromptMessages). Either is null when empty.
    *
    * NOTE: not pure. Every invocation writes to the session via
    * `extractAndSaveEntitiesFromUserMessage` to persist entities for later reference resolution
@@ -1203,8 +1212,9 @@ export class ToolBuilder {
     processStartTime,
     agentStore,
     extraContextMessages,
-  }: BuildToolPromptArgs): Promise<IMessage | null> {
+  }: BuildToolPromptArgs): Promise<ToolPromptMessages> {
     const sections: string[] = [];
+    const contextSections: string[] = [];
 
     // 1. Tool prompt from DB (custom prompt attached to tool)
     if (toolPromptId) {
@@ -1308,14 +1318,17 @@ Both calls happen in the same response — do NOT ask the user to repeat their m
     // it deliberately omits the time of day, so the model must call the tool for
     // anything clock-level.
     if (hasCurrentDateTime) {
-      const timezoneHint = userTimezone
-        ? ` The user's timezone is \`${userTimezone}\` — pass it as the \`timezone\` parameter.`
-        : '';
       sections.push(
         `# CURRENT TIME\n\n` +
           `For the current time of day, or to timestamp an action at the moment it executes, ` +
-          `call the \`current_datetime\` tool — never guess or invent the time.${timezoneHint}`
+          `call the \`current_datetime\` tool \u2014 never guess or invent the time.`
       );
+      // Per user, so it lives in the context half rather than in the shared guidance above.
+      if (userTimezone) {
+        contextSections.push(
+          `The user's timezone is \`${userTimezone}\` - pass it as the \`timezone\` parameter to \`current_datetime\`.`
+        );
+      }
     }
 
     // 3c. Web-search freshness nudge. Gated on the tool actually being enabled: the ambient
@@ -1361,7 +1374,7 @@ Both calls happen in the same response — do NOT ask the user to repeat their m
         })
         .join('\n');
 
-      sections.push(`## Connected Integrations
+      contextSections.push(`## Connected Integrations
 
 You have access to the following external integrations:
 
@@ -1391,7 +1404,7 @@ ${integrationList}
 
       const contextMessage = await getConversationContextSystemMessage(sessionId, this.deps.db.sessions);
       if (contextMessage) {
-        sections.push(contextMessage.content);
+        contextSections.push(contextMessage.content);
         logger.info('🧠 [ConversationContext] Added context to tool prompt');
       }
     } catch (contextErr) {
@@ -1414,7 +1427,7 @@ ${integrationList}
       const agents = agentStore.getAllAgents();
       const agentList = agents.map(a => `- **${a.name}**: ${a.description}`).join('\n');
 
-      sections.push(`## Agent Delegation
+      contextSections.push(`## Agent Delegation
 
 You have the \`delegate_to_agent\` tool which lets you delegate tasks to specialized autonomous agents. Each agent runs independently with its own reasoning loop and tools.
 
@@ -1432,10 +1445,8 @@ ${agentList}
       });
     }
 
-    if (sections.length === 0) {
-      return null;
-    }
-
-    return { role: 'system', content: sections.join('\n\n') };
+    const toMessage = (parts: string[]): IMessage | null =>
+      parts.length === 0 ? null : { role: 'system', content: parts.join('\n\n') };
+    return { guidance: toMessage(sections), context: toMessage(contextSections) };
   }
 }
