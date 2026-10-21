@@ -30,7 +30,11 @@ export function EmptyThread({ children }: { children: ReactNode }) {
       sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', ...scrollingColumnHostSx }}
       data-testid="chat-thread-blank"
     >
-      <Box sx={{ ...contentColumnSx, my: 'auto', py: 4 }}>{children}</Box>
+      <Box
+        sx={{ ...contentColumnSx, my: 'auto', py: 4, display: 'flex', flexDirection: 'column', alignItems: 'center' }}
+      >
+        {children}
+      </Box>
     </Box>
   );
 }
@@ -39,14 +43,19 @@ export function BlankChatGreeting({ line, children }: { line: string; children?:
   return (
     <Box
       sx={{
+        width: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        textAlign: 'center',
         animation: `${arrive} 220ms ease-out both`,
         '@media (prefers-reduced-motion: reduce)': { animation: 'none' },
       }}
     >
-      <Typography level="h3" component="h2" sx={{ letterSpacing: '-0.01em' }} data-testid="chat-empty-greeting">
+      <Typography level="h4" component="h2" sx={{ letterSpacing: '-0.01em' }} data-testid="chat-empty-greeting">
         What do you want to make?
       </Typography>
-      <Typography level="body-md" textColor="text.tertiary" sx={{ mt: 0.5 }} data-testid="chat-empty-subline">
+      <Typography level="body-sm" textColor="text.tertiary" sx={{ mt: 0.5 }} data-testid="chat-empty-subline">
         {line}
       </Typography>
       {children}
@@ -81,10 +90,12 @@ export const BlankChat = memo(function BlankChat({
         role="list"
         aria-label="Suggestions"
         sx={{
-          mt: 3,
+          mt: 2.5,
+          width: '100%',
+          maxWidth: 600,
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-          gap: 1.25,
+          gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))',
+          gap: 1,
         }}
         data-testid="chat-empty-suggestions"
       >
@@ -104,52 +115,49 @@ export const BlankChat = memo(function BlankChat({
                   flex: 1,
                   display: 'flex',
                   flexDirection: 'column',
-                  gap: 1,
-                  p: 1.5,
+                  gap: 0.5,
+                  px: 1.25,
+                  py: 1,
                   m: 0,
                   textAlign: 'left',
                   font: 'inherit',
                   color: 'inherit',
                   cursor: 'pointer',
-                  borderRadius: 'md',
-                  border: '1px solid',
-                  borderColor: 'neutral.outlinedBorder',
-                  bgcolor: 'background.surface',
+                  borderRadius: 'sm',
+                  border: '1px solid transparent',
+                  bgcolor: 'background.level1',
                   transition: 'border-color 120ms, background-color 120ms',
-                  '&:hover': { borderColor: 'neutral.outlinedHoverBorder', bgcolor: 'background.level1' },
-                  '&:active': { bgcolor: 'background.level2' },
+                  '&:hover': { bgcolor: 'background.level2' },
                   [theme.focus.selector]: theme.focus.default,
                 })}
               >
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, width: '100%' }}>
-                  <Box
-                    aria-hidden
-                    sx={{
-                      display: 'grid',
-                      placeItems: 'center',
-                      width: 26,
-                      height: 26,
-                      flexShrink: 0,
-                      borderRadius: 'sm',
-                      bgcolor: media ? 'primary.softBg' : 'neutral.softBg',
-                      color: media ? 'primary.softColor' : 'neutral.softColor',
-                    }}
-                  >
-                    <Icon />
-                  </Box>
-                  <Typography level="title-sm" sx={{ flex: 1, minWidth: 0 }} noWrap>
+                <Box
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 0.75,
+                    width: '100%',
+                    color: media ? 'primary.plainColor' : 'text.secondary',
+                  }}
+                >
+                  <Icon />
+                  <Typography level="body-sm" fontWeight="md" textColor="text.primary" noWrap sx={{ minWidth: 0 }}>
                     {suggestion.label}
                   </Typography>
                 </Box>
-                <Typography level="body-sm" textColor="text.secondary">
+                <Typography
+                  level="body-xs"
+                  textColor="text.secondary"
+                  sx={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
+                  data-testid="chat-empty-suggestion-prompt"
+                >
                   {suggestion.prompt}
                 </Typography>
-                {/* At the foot rather than beside the label, which it squeezed into an ellipsis. */}
                 {suggestion.spendsCredits && (
                   <Typography
                     level="body-xs"
                     textColor="text.tertiary"
-                    sx={{ mt: 'auto' }}
+                    sx={{ mt: 'auto', fontSize: '0.6875rem' }}
                     data-testid="chat-empty-credits-hint"
                   >
                     Uses credits

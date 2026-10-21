@@ -220,11 +220,11 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
       ? activeId
       : null;
   const creationTools = useCreationTools(`${auth?.status ?? 'none'}:${auth?.environment.url ?? ''}`, blankChatId);
+  // Cleared once the composer takes it, or a composer remounted by another screen would take it again.
   const [composerFill, setComposerFill] = useState<{ id: number; text: string } | null>(null);
-  const fillComposer = useCallback(
-    (text: string) => setComposerFill(current => ({ id: (current?.id ?? 0) + 1, text })),
-    []
-  );
+  const fillSeq = useRef(0);
+  const fillComposer = useCallback((text: string) => setComposerFill({ id: ++fillSeq.current, text }), []);
+  const clearComposerFill = useCallback(() => setComposerFill(null), []);
   // Only the conversation screen counts as showing one: main polls what is on screen faster.
   const pullRequest = usePullRequest(screen === 'conversation' ? activeId : null);
   // What the browser pane trades width with; see BrowserPane.
@@ -714,7 +714,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
                   // says what to do about it, and the composer's placeholder names the same step.
                   noSession={
                     mode === 'code' ? (
-                      <Stack spacing={1.5} alignItems="flex-start">
+                      <Stack spacing={1.5} alignItems="center">
                         <Typography level="body-sm" textColor="text.tertiary" data-testid="chat-thread-no-session">
                           Start a Code session to run a task here.
                         </Typography>
@@ -895,6 +895,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
             returned={conversation.returned}
             onReturnedConsumed={conversation.clearReturned}
             fill={composerFill}
+            onFillConsumed={clearComposerFill}
             skills={skills}
             leading={
               <ApprovalModePill

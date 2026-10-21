@@ -152,7 +152,9 @@ describe('the blank chat', () => {
     expect(cards().map(card => card.dataset.category)).toEqual(['image', 'video', 'voice', 'sound', 'music', 'write']);
     expect(document.querySelectorAll('[data-testid="chat-empty-credits-hint"]')).toHaveLength(5);
     for (const card of cards()) {
-      expect(card.getAttribute('aria-label')).toContain(card.querySelector('.MuiTypography-body-sm')?.textContent);
+      expect(card.getAttribute('aria-label')).toContain(
+        card.querySelector('[data-testid="chat-empty-suggestion-prompt"]')?.textContent
+      );
     }
   });
 
@@ -169,7 +171,7 @@ describe('the blank chat', () => {
     await openBlankSession();
 
     const music = cards().find(card => card.dataset.category === 'music');
-    const prompt = music?.querySelector('.MuiTypography-body-sm')?.textContent ?? '';
+    const prompt = music?.querySelector('[data-testid="chat-empty-suggestion-prompt"]')?.textContent ?? '';
     await act(async () => music?.click());
 
     const input = composer();
@@ -178,6 +180,27 @@ describe('the blank chat', () => {
     expect(input?.selectionStart).toBe(prompt.length);
     expect(input?.selectionEnd).toBe(prompt.length);
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('does not put a used suggestion back when the composer remounts', async () => {
+    stubBridge({ tools: ALL_TOOLS });
+    await openBlankSession();
+
+    await act(async () => cards()[0].click());
+    const input = composer();
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+    act(() => {
+      setter?.call(input, '');
+      input?.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+
+    // The Artifacts screen replaces the conversation, composer included.
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="chat-artifacts-btn"]')?.click());
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="artifact-library-close-btn"]')?.click());
+    await act(async () => undefined);
+
+    expect(composer()).not.toBeNull();
+    expect(composer()?.value).toBe('');
   });
 
   // jsdom does not synthesize a native button's Enter/Space activation, so this pins what makes
@@ -195,7 +218,7 @@ describe('the blank chat', () => {
     act(() => card.focus());
     expect(document.activeElement).toBe(card);
 
-    const prompt = card.querySelector('.MuiTypography-body-sm')?.textContent ?? '';
+    const prompt = card.querySelector('[data-testid="chat-empty-suggestion-prompt"]')?.textContent ?? '';
     await act(async () => card.click());
     expect(composer()?.value).toBe(prompt);
     expect(sendMessage).not.toHaveBeenCalled();
