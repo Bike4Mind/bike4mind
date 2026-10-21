@@ -35,6 +35,10 @@ describe('generateAndSendProactiveMessage tool deps', () => {
     expect(source).toMatch(/authOrigin: 'internal',/);
   });
 
+  it('keeps a prompt stopped before any reply out of the conversation context', () => {
+    expect(source).toMatch(/if \(isStoppedBeforeReply\(msg\)\) continue;/);
+  });
+
   it('does not hand the tools the whole session repository', () => {
     // The whole repo would enable incrementImageCount for images no quest of this run holds.
     expect(source).not.toMatch(/sessions: db\.sessions,/);
