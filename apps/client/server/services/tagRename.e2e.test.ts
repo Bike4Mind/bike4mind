@@ -4,7 +4,14 @@ import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { KnowledgeType } from '@bike4mind/common';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
-import { DataLakeModel, dataLakeRepository, FabFile, fabFileRepository, fileTagRepository } from '@bike4mind/database';
+import {
+  DataLakeModel,
+  dataLakeRepository,
+  FabFile,
+  fabFileRepository,
+  fileTagRepository,
+  memoryLedgerRepository,
+} from '@bike4mind/database';
 import { tagService } from '@bike4mind/services';
 
 // Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
@@ -31,7 +38,12 @@ const SCOPE = { userGroups: [], dataLakeTags: [] };
 // (SCOPE, unnarrowed) and the WORKSPACES aggregate no longer share one scope, so this test needs both.
 const WORKSPACE_SCOPE = { ...SCOPE, excludePersonalShares: true };
 
-const db = { tags: fileTagRepository, fabFiles: fabFileRepository, dataLakes: dataLakeRepository };
+const db = {
+  tags: fileTagRepository,
+  fabFiles: fabFileRepository,
+  dataLakes: dataLakeRepository,
+  memoryLedger: memoryLedgerRepository,
+};
 
 // The Tag model is registered by importing @bike4mind/database but is not exported from it.
 const TagModel = () => mongoose.model('Tag');
