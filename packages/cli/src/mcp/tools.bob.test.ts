@@ -817,18 +817,72 @@ describe('Bob read-back tools', () => {
     expect(result.content.map(c => (c as { text: string }).text).slice(1)).toEqual(['## Who passes what']);
   });
 
-  it('list_bob_reports asks for the recent list and passes the rows through compact', async () => {
-    mockGet.mockResolvedValue({
-      ok: true,
-      runs: [{ runId: RUN_ID, url: 'acme.io', createdAt: '2026-10-21T10:00:00.000Z', extra: 'dropped' }],
-    });
+  const AT = '2026-10-21T10:00:00.000Z';
+  const RUN_ROW = { kind: 'run', runId: RUN_ID, url: 'acme.io', createdAt: AT };
+  const COMPARISON_ROW = {
+    kind: 'comparison',
+    comparisonId: COMPARISON_ID,
+    you: 'acme.io',
+    them: 'rival.io',
+    createdAt: AT,
+  };
+  const RUN_REPORT = { kind: 'run', runId: RUN_ID, url: 'acme.io', createdAt: AT, appUrl: `${BASE}/bob?run=${RUN_ID}` };
+  const COMPARISON_REPORT = {
+    kind: 'comparison',
+    comparisonId: COMPARISON_ID,
+    you: 'acme.io',
+    them: 'rival.io',
+    createdAt: AT,
+    appUrl: `${BASE}/bob?compare=${COMPARISON_ID}`,
+  };
+
+  it('list_bob_reports asks for the recent list and passes a run row through compact', async () => {
+    mockGet.mockResolvedValue({ ok: true, runs: [{ ...RUN_ROW, extra: 'dropped' }] });
 
     const result = await tools().call('list_bob_reports', { limit: 5 });
 
     expect(mockGet).toHaveBeenCalledWith(RUN_ROUTE, { params: { list: 'recent', limit: 5 } });
-    expect(result.structuredContent).toEqual({
-      reports: [{ runId: RUN_ID, url: 'acme.io', createdAt: '2026-10-21T10:00:00.000Z' }],
+    expect(result.structuredContent).toEqual({ reports: [RUN_REPORT] });
+  });
+
+  it('list_bob_reports passes a comparison row through with its own link, in list order', async () => {
+    mockGet.mockResolvedValue({ ok: true, runs: [{ ...COMPARISON_ROW, extra: 'dropped' }, RUN_ROW] });
+
+    const result = await tools().call('list_bob_reports', {});
+
+    expect(result.structuredContent).toEqual({ reports: [COMPARISON_REPORT, RUN_REPORT] });
+  });
+
+  it('list_bob_reports reads a row with no kind, from a server that predates comparisons, as a run', async () => {
+    mockGet.mockResolvedValue({ ok: true, runs: [{ runId: RUN_ID, url: 'acme.io', createdAt: AT }] });
+
+    const result = await tools().call('list_bob_reports', {});
+
+    expect(result.structuredContent).toEqual({ reports: [RUN_REPORT] });
+  });
+
+  it('list_bob_reports drops a row of a kind it does not know and keeps the rest', async () => {
+    mockGet.mockResolvedValue({
+      ok: true,
+      runs: [
+        { kind: 'folder', folderId: 'f1', createdAt: AT },
+        COMPARISON_ROW,
+        { kind: 'run', url: 'no-id.io' },
+        RUN_ROW,
+      ],
     });
+
+    const result = await tools().call('list_bob_reports', {});
+
+    expect(result.isError).toBeUndefined();
+    expect(result.structuredContent).toEqual({ reports: [COMPARISON_REPORT, RUN_REPORT] });
+  });
+
+  it('list_bob_reports says which tool reads each kind of row', () => {
+    const { description } = TOOL_META.find(t => t.name === 'list_bob_reports')!;
+    expect(description).toContain("comparisons (kind 'comparison')");
+    expect(description).toContain('get_bob_report');
+    expect(description).toContain('get_bob_comparison');
   });
 
   it('list_bob_reports leaves the limit to the server when omitted', async () => {

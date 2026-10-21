@@ -80,9 +80,29 @@ const bobAgentComparisonSchema = z.looseObject({
 
 export type BobAgentComparison = z.infer<typeof bobAgentComparisonSchema>;
 
-const bobRecentListSchema = z.object({
-  runs: z.array(z.looseObject({ runId: z.string(), url: z.string(), createdAt: z.string().nullish() })),
-});
+/**
+ * One row of `GET bob-run?list=recent`: a single-site run or a two-site comparison (`you` and
+ * `them` are the two URLs). A server that predates comparison rows sends runs with no `kind`.
+ */
+const bobRecentRowSchema = z.union([
+  z.looseObject({
+    kind: z.literal('run').optional(),
+    runId: z.string(),
+    url: z.string(),
+    createdAt: z.string().nullish(),
+  }),
+  z.looseObject({
+    kind: z.literal('comparison'),
+    comparisonId: z.string(),
+    you: z.string(),
+    them: z.string(),
+    createdAt: z.string().nullish(),
+  }),
+]);
+
+export type BobRecentRow = z.infer<typeof bobRecentRowSchema>;
+
+const bobRecentListSchema = z.object({ runs: z.array(z.unknown()) });
 
 /** A start's 200 refusal: the daily cap or a credits refusal, in Bob's words. */
 const bobRefusalSchema = z.object({ ok: z.literal(false), error: z.string() });
@@ -705,12 +725,18 @@ export class B4mApiClient {
     return result.recheck;
   }
 
-  /** GET bob-run?list=recent: the caller's finished reports, newest first. The server caps `limit`. */
-  async listBobReports(limit?: number): Promise<z.infer<typeof bobRecentListSchema>['runs']> {
+  /**
+   * GET bob-run?list=recent: the caller's finished runs and comparisons, newest first. The server caps
+   * `limit`. A row of a kind this CLI does not know is dropped, so a newer server cannot break the list.
+   */
+  async listBobReports(limit?: number): Promise<BobRecentRow[]> {
     const result = await this.client.get<unknown>(`${BOB_ROUTE}/bob-run`, {
       params: { list: 'recent', ...(limit !== undefined ? { limit } : {}) },
     });
-    return bobRecentListSchema.parse(result).runs;
+    return bobRecentListSchema.parse(result).runs.flatMap(row => {
+      const parsed = bobRecentRowSchema.safeParse(row);
+      return parsed.success ? [parsed.data] : [];
+    });
   }
 
   /** GET bob-run?quota: runs left under the daily cap, for the account a start would bill. */

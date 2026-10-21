@@ -30,6 +30,7 @@ import {
   type BobAgentComparison,
   type BobAgentRun,
   type BobOrganizationId,
+  type BobRecentRow,
   type CreateArtifactArgs,
   type QuestResponse,
   type RawDataLake,
@@ -208,7 +209,7 @@ export const TOOL_META: ToolMeta[] = [
     name: 'list_bob_reports',
     title: 'List Bob reports',
     description:
-      "List the key owner's recent finished Bob reports, newest first. Pass a report's runId to get_bob_report to read it.",
+      "List the key owner's recent finished Bob reports, newest first: single-site runs (kind 'run') and two-site comparisons (kind 'comparison'), each with its in-app link. Read a run with get_bob_report and its runId, and a comparison with get_bob_comparison and its comparisonId.",
     scope: 'bob:read',
   },
   {
@@ -1213,9 +1214,20 @@ export async function getBobComparison(client: B4mApiClient, args: { comparisonI
   return bobComparisonResult(await client.getBobComparison(args.comparisonId), client.baseURL, false);
 }
 
+/** A recent-list row in compact form, with the in-app link its kind opens at. */
+function bobReportRow(row: BobRecentRow, baseURL: string) {
+  if (row.kind === 'comparison') {
+    const { comparisonId, you, them } = row;
+    const appUrl = bobLink(baseURL, `/bob?compare=${encodeURIComponent(comparisonId)}`);
+    return { kind: 'comparison' as const, comparisonId, you, them, createdAt: row.createdAt ?? null, appUrl };
+  }
+  const appUrl = bobLink(baseURL, `/bob?run=${encodeURIComponent(row.runId)}`);
+  return { kind: 'run' as const, runId: row.runId, url: row.url, createdAt: row.createdAt ?? null, appUrl };
+}
+
 export async function listBobReports(client: B4mApiClient, args: { limit?: number }) {
-  const runs = await client.listBobReports(args.limit);
-  return toResult({ reports: runs.map(r => ({ runId: r.runId, url: r.url, createdAt: r.createdAt ?? null })) });
+  const rows = await client.listBobReports(args.limit);
+  return toResult({ reports: rows.map(row => bobReportRow(row, client.baseURL)) });
 }
 
 export async function bobRunsLeft(client: B4mApiClient, args: { organizationId?: BobOrganizationId }) {
