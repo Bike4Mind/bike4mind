@@ -68,7 +68,12 @@ export class ProjectRepository extends BaseRepository<IProjectDocument> implemen
     await this.projectModel.updateMany(
       {
         $and: [
-          { $or: [{ userId: { $in: scope.userIds }, deletedAt: null }, { 'users.userId': { $in: scope.userIds } }] },
+          {
+            $or: [
+              { userId: { $in: scope.userIds }, deletedAt: null },
+              { 'users.userId': { $in: scope.userIds }, deletedAt: null },
+            ],
+          },
           holdsAny,
         ],
       },

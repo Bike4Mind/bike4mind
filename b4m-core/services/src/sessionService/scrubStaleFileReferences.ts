@@ -11,7 +11,7 @@ import { classifyUnresolvedFileIds, type UnresolvedFileIdsLookup } from './class
  */
 
 export interface ScrubStaleSystemFilesAdapters {
-  db: { fabFiles: UnresolvedFileIdsLookup; users: Pick<IUserRepository, 'pullSystemFiles'> };
+  db: { fabFiles: UnresolvedFileIdsLookup; users: Pick<IUserRepository, 'pullSystemFilesForUsers'> };
   logger?: Logger;
 }
 
@@ -28,7 +28,7 @@ export const scrubStaleSystemFiles = async (
     const { gone, softDeleted } = await classifyUnresolvedFileIds(systemFileIds, notices, adapters.db.fabFiles);
     const stale = [...gone, ...softDeleted];
     if (stale.length === 0) return [];
-    await adapters.db.users.pullSystemFiles(userId, stale);
+    await adapters.db.users.pullSystemFilesForUsers([userId], stale);
     logger.info('sessionService.scrubStaleSystemFiles: removed system files whose file no longer exists', {
       removed: stale,
     });

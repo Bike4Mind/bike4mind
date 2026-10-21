@@ -698,9 +698,7 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
   addGroupToUser: (userId: string, groupId: string) => Promise<void>;
   /** Merge tags into one user's `tags[]` (idempotent, no duplicates; used by partner signup rules). */
   addTagsToUser: (userId: string, tags: string[]) => Promise<void>;
-  /** Remove the given file ids from one user's `systemFiles[]` (idempotent $pull, enabled or not). */
-  pullSystemFiles: (userId: string, fileIds: string[]) => Promise<void>;
-  /** As `pullSystemFiles`, for each of `userIds` in one write (bounded by `_id`, so index-backed). */
+  /** Remove the given file ids from the named users' `systemFiles[]` (idempotent $pull, enabled or not). */
   pullSystemFilesForUsers: (userIds: string[], fileIds: string[]) => Promise<void>;
   /** Remove a single group id from one user's `groups[]` (used when unassigning a member). */
   removeGroupFromUser: (userId: string, groupId: string) => Promise<void>;

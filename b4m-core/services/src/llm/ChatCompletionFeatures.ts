@@ -191,7 +191,12 @@ interface DatabaseAdapters {
     Partial<Pick<ISessionRepository, 'incrementImageCount'>>;
   users: Pick<
     IUserRepository,
-    'findById' | 'update' | 'incrementCredits' | 'recordModerationHit' | 'setModerationStatus' | 'pullSystemFiles'
+    | 'findById'
+    | 'update'
+    | 'incrementCredits'
+    | 'recordModerationHit'
+    | 'setModerationStatus'
+    | 'pullSystemFilesForUsers'
   >;
   quests: IChatHistoryItemRepository;
   questMasterPlans: IQuestMasterPlanRepository;

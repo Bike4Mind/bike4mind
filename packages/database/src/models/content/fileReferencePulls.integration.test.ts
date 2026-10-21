@@ -69,8 +69,8 @@ const stagesOf = (plan: unknown): string[] => {
   ];
 };
 
-describe('UserRepository.pullSystemFiles', () => {
-  it("removes the ids from that user's system files, enabled or not, and no one else's", async () => {
+describe('UserRepository.pullSystemFilesForUsers', () => {
+  it("removes the ids from one user's system files, enabled or not, and no one else's", async () => {
     const target = await seedUser([
       { fileId: 'f1', enabled: true },
       { fileId: 'f2', enabled: false },
@@ -78,14 +78,12 @@ describe('UserRepository.pullSystemFiles', () => {
     ]);
     const other = await seedUser([{ fileId: 'f1', enabled: true }]);
 
-    await userRepository.pullSystemFiles(target.id, ['f1', 'f2']);
+    await userRepository.pullSystemFilesForUsers([target.id], ['f1', 'f2']);
 
     expect(await systemFileIdsOf(target.id)).toEqual(['keep']);
     expect(await systemFileIdsOf(other.id)).toEqual(['f1']);
   });
-});
 
-describe('UserRepository.pullSystemFilesForUsers', () => {
   it('removes the ids from the named users only, never from a user who merely holds the same id', async () => {
     const owner = await seedUser([
       { fileId: 'f1', enabled: true },
@@ -169,7 +167,7 @@ describe('reference pulls leave file documents alone', () => {
     const user = await seedUser([{ fileId: file.id, enabled: true }]);
     const project = await seedProject([file.id], [file.id]);
 
-    await userRepository.pullSystemFiles(user.id, [file.id]);
+    await userRepository.pullSystemFilesForUsers([user.id], [file.id]);
     await userRepository.pullSystemFilesForUsers([user.id], [file.id]);
     await projectRepository.pullFileReferences([file.id], { projectId: project.id });
     await projectRepository.pullFileReferences([file.id], { userIds: ['owner'] });

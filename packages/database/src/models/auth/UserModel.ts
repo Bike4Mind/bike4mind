@@ -274,14 +274,6 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     await this.model.updateOne({ _id: userId }, { $addToSet: { tags: { $each: tags } } });
   }
 
-  async pullSystemFiles(userId: string, fileIds: string[]): Promise<void> {
-    if (fileIds.length === 0) return;
-    await this.model.updateOne(
-      { _id: userId, 'systemFiles.fileId': { $in: fileIds } },
-      { $pull: { systemFiles: { fileId: { $in: fileIds } } } }
-    );
-  }
-
   async pullSystemFilesForUsers(userIds: string[], fileIds: string[]): Promise<void> {
     const ids = userIds.filter(id => mongoose.isObjectIdOrHexString(id));
     if (ids.length === 0 || fileIds.length === 0) return;

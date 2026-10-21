@@ -299,7 +299,6 @@ export const createMockUserRepository = (): MockedObject<IUserRepository> =>
     atomicEnableMfa: vi.fn(),
     findOrCreateByEmail: vi.fn(),
     recordModerationHit: vi.fn(),
-    pullSystemFiles: vi.fn(),
     pullSystemFilesForUsers: vi.fn(),
     setModerationStatus: vi.fn(),
     recordModerationAppeal: vi.fn(),
