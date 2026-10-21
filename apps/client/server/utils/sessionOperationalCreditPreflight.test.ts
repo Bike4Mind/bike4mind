@@ -438,6 +438,20 @@ describe('filterSessionIdsByOperationalCredits', () => {
     expect(mockFindUserById).toHaveBeenCalledWith(OTHER_USER_ID);
   });
 
+  // The gate is deployment-wide, so one answer covers the whole fan-out. Reading it per owner
+  // would cost a fresh admin-settings query per distinct owner on the same attach request.
+  it('reads the billing gate once for the batch, not once per owner', async () => {
+    billingOn();
+    mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 1000 });
+
+    await filter([
+      { id: 's1', userId: USER_ID },
+      { id: 's2', userId: OTHER_USER_ID },
+    ]);
+
+    expect(mockBillingEnabled).toHaveBeenCalledTimes(1);
+  });
+
   it("drops only the refused owner's sessions, and logs why", async () => {
     billingOn();
     mockFindUserById.mockImplementation(async (id: string) =>
