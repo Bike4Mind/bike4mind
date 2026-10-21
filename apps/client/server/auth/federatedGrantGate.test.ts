@@ -51,8 +51,11 @@ describe('checkFederatedGrant (enforced)', () => {
     expect(await gate()).toMatchObject({ status: 503, error: 'temporarily_unavailable' });
   });
 
-  it('exempts a first-party client without looking up a grant', async () => {
-    expect(await gate({ client: {} })).toBeNull();
+  it.each([
+    ['first-party', { clientType: 'first-party' }],
+    ['legacy (no clientType)', {}],
+  ])('exempts a %s client without looking up a grant', async (_label, client) => {
+    expect(await gate({ client })).toBeNull();
     expect(mockFindGrant).not.toHaveBeenCalled();
   });
 });
