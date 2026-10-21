@@ -16,6 +16,11 @@ const { useEventMetrics, forceRefresh, overviewSpy, premiumRoutes } = vi.hoisted
 }));
 
 vi.mock('@client/app/premium-generated/premiumRoutes.generated', () => ({ premiumRoutes }));
+vi.mock('@tanstack/react-router', () => ({
+  Link: React.forwardRef<HTMLAnchorElement, { to: string } & React.AnchorHTMLAttributes<HTMLAnchorElement>>(
+    ({ to, ...rest }, ref) => <a ref={ref} href={to} {...rest} />
+  ),
+}));
 vi.mock('./EventMetrics/hooks/useEventMetrics', () => ({ useEventMetrics }));
 vi.mock('./EventMetrics/components/UsageBySourceCard', () => ({
   UsageBySourceCard: () => <div data-testid="usage-by-source-card" />,

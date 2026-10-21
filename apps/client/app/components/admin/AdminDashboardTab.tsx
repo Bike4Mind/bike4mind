@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import dayjs from 'dayjs';
+import { Link } from '@tanstack/react-router';
 import { Alert, Box, Button, Card, Grid, LinearProgress, Stack, Typography } from '@mui/joy';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.generated';
@@ -86,8 +87,8 @@ export default function AdminDashboardTab({ onNavigate }: AdminDashboardTabProps
                     {dashboard.description}
                   </Typography>
                   <Button
-                    component="a"
-                    href={dashboard.path}
+                    component={Link}
+                    to={dashboard.path}
                     variant="solid"
                     endDecorator={<ArrowForwardIcon />}
                     sx={{ alignSelf: 'flex-start' }}
