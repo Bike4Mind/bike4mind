@@ -641,6 +641,7 @@ export interface PublicDataLakeSummary {
   name: string;
   description?: string;
   fileTagPrefix: string;
+  origin?: DataLakeOrigin;
   /** name || username of the lake's creator; undefined if the owner could not be resolved. */
   ownerDisplayName?: string;
   /** Cached file count (0 when the lake has no files yet). */

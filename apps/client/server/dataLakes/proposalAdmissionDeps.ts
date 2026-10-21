@@ -3,13 +3,14 @@ import {
   dataLakeAccessGrantRepository,
   dataLakeRepository,
   scopedSettingsRepository,
+  organizationRepository,
 } from '@bike4mind/database';
 import { User } from '@bike4mind/database/auth';
 import { FabFile } from '@bike4mind/database/content';
 import { fabFilesService } from '@bike4mind/services';
 import type { dataLakeService } from '@bike4mind/services';
 import type { AccessContext } from '@bike4mind/common';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 
 /**
  * Binds the acquisition queue's approval step to the ORDINARY URL ingestion door (#1671): the same
@@ -56,6 +57,7 @@ export function admitProposedSource(
         adminSettings: adminSettingsRepository,
         fabFiles: FabFile,
         users: User,
+        organizations: organizationRepository,
         // Required by createFabFile's tag gate: the lake meta-tag we stamp is permission-bearing,
         // so it is gated at the create door as well as at the review gate.
         dataLakes: dataLakeRepository,

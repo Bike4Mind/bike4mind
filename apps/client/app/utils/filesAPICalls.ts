@@ -50,6 +50,22 @@ export const createFabFileOnServer = async (
   return response.data;
 };
 
+/**
+ * Runs the moderation scan for a just-uploaded file now, rather than waiting for the S3 event, so a
+ * caller that uses the file immediately gets it already 'clean'. Never throws: 'pending' means the
+ * scan did not finish here and the normal S3 path (and the server's own wait) will settle it.
+ */
+export const moderateFabFileNow = async (fabFileId: string): Promise<'clean' | 'blocked' | 'pending'> => {
+  try {
+    const response = await api.post<{ moderationStatus: 'clean' | 'blocked' | 'pending' }>(
+      `/api/files/${fabFileId}/moderate`
+    );
+    return response.data.moderationStatus;
+  } catch {
+    return 'pending';
+  }
+};
+
 export const createFabFileOnServerWithUpload = async (
   formData: CreateFabFileRequestInputType,
   file: ActualFileObject | File,
@@ -74,20 +90,17 @@ export const createFabFileOnServerWithUpload = async (
       const newSize = fileToUpload.size / (1024 * 1024);
       console.log(`[Upload] Image resized from ${originalSize.toFixed(2)}MB to ${newSize.toFixed(2)}MB`);
 
-      // Update formData with the resized file's size AND type. This posts to
-      // /api/files/createFabFile; its presigned PUT is not ContentType-bound, but the declared
-      // mimeType is stored on the file record and drives type-based handling, so it must match the
-      // bytes uploadFileToUrl actually sends (fileToUpload.type), which resizing can change (e.g.
-      // webp -> jpeg).
-      formData = {
-        ...formData,
-        fileSize: fileToUpload.size,
-        mimeType: fileToUpload.type,
-      };
+      // Update formData with the resized file's type. This posts to /api/files/createFabFile; its
+      // presigned PUT is not ContentType-bound, but the declared mimeType is stored on the file
+      // record and drives type-based handling, so it must match the bytes uploadFileToUrl actually
+      // sends (fileToUpload.type), which resizing can change (e.g. webp -> jpeg).
+      formData = { ...formData, mimeType: fileToUpload.type };
     }
   }
 
-  const newFabFile = await createFabFileOnServer(formData);
+  // The presigned PUT is bound to the declared byte length, so it is always the size of the bytes
+  // uploaded below, whatever the caller passed.
+  const newFabFile = await createFabFileOnServer({ ...formData, fileSize: fileToUpload.size });
 
   try {
     // Check if already aborted before starting upload

@@ -1,6 +1,6 @@
 import { emailSendAttemptRepository, emailJobRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 const handler = baseApi({ auth: false }).get(async (req, res) => {
   const { token, url } = req.query as { token: string; url?: string };

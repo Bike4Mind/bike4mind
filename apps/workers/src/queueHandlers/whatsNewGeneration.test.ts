@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { dispatch } from './whatsNewGeneration';
 import { ModalModel } from '@bike4mind/database';
 import { logEvent } from '@server/utils/analyticsLog';
-import { WhatsNewConfigService } from '@client/services/whatsNewConfigService';
+import { WhatsNewConfigService } from '@bike4mind/server-utils/services/whatsNewConfigService';
 import { apiKeyService } from '@bike4mind/services';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import {
@@ -29,7 +29,7 @@ vi.mock('@server/utils/analyticsLog', () => ({
   logEvent: vi.fn(),
 }));
 
-vi.mock('@client/services/whatsNewConfigService', () => ({
+vi.mock('@bike4mind/server-utils/services/whatsNewConfigService', () => ({
   WhatsNewConfigService: {
     getConfig: vi.fn(),
   },
@@ -80,7 +80,7 @@ vi.mock('@bike4mind/llm-adapters', async importOriginal => {
   return { ...actual, getAvailableModels: vi.fn(), getLlmByModel: vi.fn() };
 });
 
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   emitModalGenerationMetrics: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -364,6 +364,40 @@ describe('whatsNewGeneration queue handler', () => {
           maxTokens: 2000,
           stream: false,
         }),
+        expect.any(Function)
+      );
+    });
+
+    // any: vitest mock shapes; test files are not typechecked
+    it.each([
+      ['gpt-5.4-mini-2026-03-17', 'gpt-4o-mini'],
+      ['gpt-5.4-mini', 'gpt-5.4-mini'],
+    ])('configured model %s resolves to %s', async (configured, expected) => {
+      (ModalModel.findOne as any).mockResolvedValue(null);
+      (ModalModel.find as any).mockReturnValue({
+        sort: vi.fn().mockReturnThis(),
+        limit: vi.fn().mockReturnThis(),
+        select: vi.fn().mockReturnThis(),
+        lean: vi.fn().mockResolvedValue([]),
+      });
+      const mockLLM = {
+        complete: vi.fn().mockImplementation(async (_modelId, _messages, _options, callback) => {
+          await callback([JSON.stringify(mockLLMResponse)]);
+        }),
+      };
+      setupLLMMocks(mockLLM, configured);
+      // Both ids are listed, so only the servable-model check can send the snapshot to the default.
+      (getAvailableModels as any).mockResolvedValue(
+        [configured, 'gpt-4o-mini'].map(id => ({ id, name: id, backend: 'test', type: 'text', contextWindow: 8000 }))
+      );
+      (ModalModel.create as any).mockResolvedValue([{ _id: 'new-modal-id' }]);
+
+      await dispatch(createMockEvent(createMockPayload()), mockContext);
+
+      expect(mockLLM.complete).toHaveBeenCalledWith(
+        expected,
+        expect.anything(),
+        expect.anything(),
         expect.any(Function)
       );
     });

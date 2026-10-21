@@ -45,3 +45,59 @@ describe('SessionRepository.findAllByIds - includeDeleted', () => {
     expect(withDeleted.map(s => s.id).sort()).toEqual([live.id, removed.id].sort());
   });
 });
+
+describe('SessionRepository.shareable.findAllAccessibleByIds - includeDeleted', () => {
+  const idsOf = (sessions: { id: string }[]) => sessions.map(s => s.id).sort();
+  const reader = { id: 'reader', groups: ['group-a'] };
+
+  it('excludes soft-deleted accessible sessions by default, includes them on opt-in', async () => {
+    const live = await Session.create({ userId: 'reader', name: 'live', ...times });
+    const removed = await Session.create({ userId: 'reader', name: 'removed', ...times });
+    await Session.deleteOne({ _id: removed.id });
+    const ids = [live.id, removed.id];
+
+    expect(idsOf(await sessionRepository.shareable.findAllAccessibleByIds(reader, ids))).toEqual([live.id]);
+    expect(
+      idsOf(await sessionRepository.shareable.findAllAccessibleByIds(reader, ids, { includeDeleted: true }))
+    ).toEqual([live.id, removed.id].sort());
+  });
+
+  it('grants access through a user share and a group share, including soft-deleted', async () => {
+    const userShared = await Session.create({
+      userId: 'owner',
+      name: 'user-shared',
+      users: [{ userId: 'reader', permissions: ['read'] }],
+      ...times,
+    });
+    const groupShared = await Session.create({
+      userId: 'owner',
+      name: 'group-shared',
+      groups: [{ groupId: 'group-a', permissions: ['read'] }],
+      ...times,
+    });
+    await Session.deleteOne({ _id: groupShared.id });
+    const ids = [userShared.id, groupShared.id];
+
+    expect(idsOf(await sessionRepository.shareable.findAllAccessibleByIds(reader, ids))).toEqual([userShared.id]);
+    expect(
+      idsOf(await sessionRepository.shareable.findAllAccessibleByIds(reader, ids, { includeDeleted: true }))
+    ).toEqual(ids.sort());
+  });
+
+  it('never returns an inaccessible session, deleted or not', async () => {
+    const foreign = await Session.create({
+      userId: 'owner',
+      name: 'foreign',
+      groups: [{ groupId: 'group-b', permissions: ['read'] }],
+      ...times,
+    });
+    const foreignRemoved = await Session.create({ userId: 'owner', name: 'foreign-removed', ...times });
+    await Session.deleteOne({ _id: foreignRemoved.id });
+
+    const found = await sessionRepository.shareable.findAllAccessibleByIds(reader, [foreign.id, foreignRemoved.id], {
+      includeDeleted: true,
+    });
+
+    expect(found).toEqual([]);
+  });
+});

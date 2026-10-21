@@ -90,11 +90,12 @@ describe('toolParallelizer (agents package)', () => {
       expect(id).toBe('file_read_undefined');
     });
 
-    it('should ignore the id field (API tool call ID)', () => {
+    it('should use the API tool call id when there is one', () => {
       const tool1: ToolUseInfo = { name: 'file_read', arguments: '{}', id: 'toolu_abc' };
       const tool2: ToolUseInfo = { name: 'file_read', arguments: '{}', id: 'toolu_xyz' };
-      // Same name + args = same tool ID, even with different API IDs
-      expect(getToolId(tool1)).toBe(getToolId(tool2));
+      // Two identical calls in one response are two calls; a frame re-delivering a call keeps its id.
+      expect(getToolId(tool1)).toBe('toolu_abc');
+      expect(getToolId(tool1)).not.toBe(getToolId(tool2));
     });
   });
 

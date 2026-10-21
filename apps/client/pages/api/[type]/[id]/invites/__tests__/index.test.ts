@@ -37,13 +37,14 @@ vi.mock('@server/middlewares/baseApi', () => {
 const listInvitesForDocument = vi.hoisted(() => vi.fn());
 const cancelInvite = vi.hoisted(() => vi.fn());
 const createInvite = vi.hoisted(() => vi.fn());
+const groupFindById = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/services', () => ({
   sharingService: { listInvitesForDocument, createInvite, cancelInvite },
 }));
 
 vi.mock('@bike4mind/database', () => ({
   FabFile: {},
-  Group: {},
+  Group: { findById: groupFindById },
   Session: {},
   Project: {},
   Organization: {},
@@ -56,9 +57,11 @@ vi.mock('@bike4mind/database', () => ({
   inviteRepository: {},
 }));
 
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn().mockResolvedValue(null) }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn() } } }));
 
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import '@pages/api/[type]/[id]/invites/index';
 
 describe('GET /api/[type]/[id]/invites', () => {
@@ -154,6 +157,65 @@ describe('POST /api/[type]/[id]/invites', () => {
     const body = res._getJSONData();
     expect(body.link).toContain(TOKEN);
     expect('token' in body).toBe(false);
+  });
+
+  it('records org.invite.created against the group organization for a group invite', async () => {
+    createInvite.mockResolvedValue({ id: 'i2', token: TOKEN, recipients: { pending: [] } });
+    groupFindById.mockResolvedValue({ id: 'g1', organizationId: 'org-9', name: 'Legal' });
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: 'groups', id: '507f1f77bcf86cd799439011' },
+      body: { permissions: ['read'] },
+    });
+    (req as any).user = { id: 'u1' };
+
+    await mockRefs.postHandler!(req, res);
+
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        action: 'org.invite.created',
+        actorScope: 'organization',
+        target: expect.objectContaining({ kind: 'organization', id: 'org-9' }),
+        details: { groupId: '507f1f77bcf86cd799439011', inviteId: 'i2', recipientCount: 0 },
+      })
+    );
+  });
+
+  it('still returns success and records the entry when the audit-only group lookup rejects', async () => {
+    createInvite.mockResolvedValue({ id: 'i3', token: TOKEN, recipients: { pending: [] } });
+    groupFindById.mockRejectedValue(new Error('db down'));
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: 'groups', id: '507f1f77bcf86cd799439011' },
+      body: { permissions: ['read'] },
+    });
+    (req as any).user = { id: 'u1' };
+
+    await mockRefs.postHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        action: 'org.invite.created',
+        target: expect.objectContaining({ kind: 'system', id: '507f1f77bcf86cd799439011' }),
+      })
+    );
+  });
+
+  it('records no admin audit entry for a non-group invite', async () => {
+    createInvite.mockResolvedValue({ id: 'i1', token: TOKEN, recipients: { pending: [] } });
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: 'files', id: '507f1f77bcf86cd799439011' },
+      body: { permissions: ['read'] },
+    });
+    (req as any).user = { id: 'u1' };
+
+    await mockRefs.postHandler!(req, res);
+
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
   });
 
   it.each([

@@ -1,4 +1,4 @@
-import { withEventContext } from '@server/utils/eventContext';
+import { withEventContext } from '@workers/utils/eventContext';
 import { LLMEvents } from '@server/utils/eventBus';
 import { apiKeyRepository, adminSettingsRepository, Memento } from '@bike4mind/database';
 import { getSettingsByNames } from '@bike4mind/utils';
@@ -14,7 +14,7 @@ import {
 import { apiKeyService, mementoService } from '@bike4mind/services';
 import { MementoEvaluationService } from '@bike4mind/services/llm';
 import { isMementosV2Enabled, writeFactToLedger } from '@server/memory/mementoLedgerMirror';
-import { generateMementoSummaryEmbedding } from '@server/utils/mementoEmbedding';
+import { generateMementoSummaryEmbedding } from '@bike4mind/server-utils/utils/mementoEmbedding';
 
 const { findMostSimilarMemento } = mementoService;
 

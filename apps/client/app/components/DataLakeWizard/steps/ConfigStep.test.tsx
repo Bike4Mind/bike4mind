@@ -204,6 +204,26 @@ describe('ConfigStep - Tag Prefix single editable home', () => {
     expect(prefixInput().disabled).toBe(true);
     expect(prefixInput().value).toBe('niche:');
     expect(screen.getByText(/Inherited from the existing data lake/i)).toBeInTheDocument();
+    expect(screen.getByTestId('config-append-alert')).toHaveTextContent('niche:');
+  });
+
+  it('hides the generated gh- prefix of a GitHub connector lake in append mode', () => {
+    seedConfig({
+      tagPrefix: 'gh-abc123:',
+      targetLake: {
+        id: 'l1',
+        name: 'acme/docs',
+        slug: 'acme-docs',
+        fileTagPrefix: 'gh-abc123:',
+        origin: 'connector-fed',
+      },
+    });
+
+    renderStep();
+
+    expect(screen.queryByTestId('config-tag-prefix-input')).toBeNull();
+    expect(screen.getByTestId('config-append-alert')).not.toHaveTextContent('gh-abc123');
+    expect(screen.getByTestId('config-append-alert')).not.toHaveTextContent(/prefix/i);
   });
 });
 

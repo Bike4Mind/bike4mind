@@ -78,7 +78,7 @@ vi.mock('@bike4mind/llm-adapters', () => ({
   getLlmByModel: vi.fn(() => ({ currentModel: '', complete: vi.fn() })),
 }));
 
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: vi.fn(() => ({})),
   getGeneratedImageStorage: vi.fn(() => ({})),
 }));
@@ -139,7 +139,9 @@ vi.mock('@server/utils/embedSessionRateLimit', () => ({ checkEmbedSessionRateLim
 const mockHydrate = vi.hoisted(() => vi.fn());
 vi.mock('./embedAgentHydration', () => ({ hydrateEmbedAgent: mockHydrate }));
 
-vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
+  Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' },
+}));
 
 const mockEmitProcessingFailed = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('../processingFailedMetric', () => ({ emitProcessingFailed: mockEmitProcessingFailed }));
@@ -628,6 +630,16 @@ describe('POST /api/embed/chat - server-side tools', () => {
   function executeParams() {
     return mockExecuteCompletion.mock.calls[0][0];
   }
+
+  it('builds the tools as an internal-origin caller with no api key', async () => {
+    hydrateWith();
+    const res = await post(CHAT);
+    expect(res.status).toBe(200);
+
+    const deps = mockBuildSharedTools.mock.calls[0][0] as { authOrigin: string; apiKeyId?: string };
+    expect(deps.authOrigin).toBe('internal');
+    expect(deps.apiKeyId).toBeUndefined();
+  });
 
   it('KB is on by default, scoped to the agent project file set, with a capped tool loop', async () => {
     hydrateWith();

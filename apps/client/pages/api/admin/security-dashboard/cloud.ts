@@ -1,12 +1,12 @@
 import type { Request, Response } from 'express';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { securityDashboardSnapshotRepository, type ISecurityDashboardFinding } from '@bike4mind/database';
-import { getCooldownStatus } from '@server/security/cooldown';
-import { resolveStage } from '@server/security/resolveStage';
+import { getCooldownStatus } from '@bike4mind/server-utils/security/cooldown';
+import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
 import { handler as runCloudScan } from '@server/security/cloudScan';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
-import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
+import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { Logger } from '@bike4mind/observability';
 import { ApiKeyScope } from '@bike4mind/common';
 

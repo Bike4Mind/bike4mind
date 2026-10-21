@@ -15,7 +15,7 @@
  * so the server barrel's public API is unchanged.
  */
 import { Logger } from '@bike4mind/observability';
-import { getMcpProviderMetadata } from '@bike4mind/common';
+import { assertAuthOriginMatchesApiKey, getMcpProviderMetadata } from '@bike4mind/common';
 import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { BaseStorage } from '@bike4mind/utils';
 // LlmTools is the union of all tool names; sourced from common (not ./index) so
@@ -46,8 +46,11 @@ export const generateTools = (
     sessionIncludeLibraryFiles,
     sessionPreauthorizedLakeIds,
     organizationId,
+    authOrigin,
     apiKeyId,
     questId,
+    numberCitables,
+    decide,
     getAbortSignal,
   }: {
     db: ToolContext['db'];
@@ -64,8 +67,11 @@ export const generateTools = (
     sessionIncludeLibraryFiles?: ToolContext['sessionIncludeLibraryFiles'];
     sessionPreauthorizedLakeIds?: ToolContext['sessionPreauthorizedLakeIds'];
     organizationId?: ToolContext['organizationId'];
+    authOrigin: ToolContext['authOrigin'];
     apiKeyId?: ToolContext['apiKeyId'];
     questId?: ToolContext['questId'];
+    numberCitables?: ToolContext['numberCitables'];
+    decide?: ToolContext['decide'];
     getAbortSignal?: ToolContext['getAbortSignal'];
   },
   storage: BaseStorage,
@@ -89,6 +95,7 @@ export const generateTools = (
   availableModels?: import('@bike4mind/common').ModelInfo[],
   onToolLlmUsage?: ToolContext['onToolLlmUsage']
 ): Record<string, ICompletionOptionTools> => {
+  assertAuthOriginMatchesApiKey(authOrigin, apiKeyId);
   const context: ToolContext = {
     userId,
     user,
@@ -118,11 +125,14 @@ export const generateTools = (
     sessionIncludeLibraryFiles,
     sessionPreauthorizedLakeIds,
     organizationId,
+    authOrigin,
     apiKeyId,
     codeMinifier,
     availableModels,
     onToolLlmUsage,
+    decide,
     getAbortSignal,
+    numberCitables,
   };
 
   return Object.entries(tools).reduce(

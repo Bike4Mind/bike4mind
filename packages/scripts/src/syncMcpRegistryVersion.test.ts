@@ -64,7 +64,7 @@ function readServer(root: string) {
 }
 
 const entry = (version: string) => ({
-  name: 'io.github.bike4mind/bike4mind',
+  name: 'io.github.Bike4Mind/bike4mind',
   version,
   packages: [{ registryType: 'npm', identifier: '@bike4mind/cli', version }],
 });

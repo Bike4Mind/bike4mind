@@ -93,8 +93,37 @@ describe('handleFeedbackCommand', () => {
     expect(addMessageToSession.mock.calls[0][0].reply).toBe(FEEDBACK_COMMAND_USAGE);
   });
 
-  it('warns rather than thanks when the team was not notified', async () => {
-    h.createFeedbackOnServer.mockResolvedValue({ id: 'fb1', contentStored: true, delivery: { delivered: false } });
+  it('thanks rather than warns when both channels were only skipped', async () => {
+    // See HelpModal: a skipped channel is the expected non-prod default, not a failure.
+    h.createFeedbackOnServer.mockResolvedValue({
+      id: 'fb1',
+      contentStored: true,
+      delivery: {
+        delivered: false,
+        channels: {
+          slack: { outcome: 'skipped', reason: 'nonprod_unconfigured' },
+          email: { outcome: 'skipped', reason: 'nonprod_unconfigured' },
+        },
+      },
+    });
+    const addMessageToSession = vi.fn();
+
+    await run(queryClient, 'something is off', addMessageToSession);
+
+    expect(toast.success).toHaveBeenCalled();
+    expect(toast.warning).not.toHaveBeenCalled();
+    expect(addMessageToSession.mock.calls[0][0].reply).not.toContain('could not notify');
+  });
+
+  it('warns rather than thanks when a delivery channel failed', async () => {
+    h.createFeedbackOnServer.mockResolvedValue({
+      id: 'fb1',
+      contentStored: true,
+      delivery: {
+        delivered: false,
+        channels: { slack: { outcome: 'failed', reason: 'error' }, email: { outcome: 'skipped', reason: 'disabled' } },
+      },
+    });
     const addMessageToSession = vi.fn();
 
     await run(queryClient, 'something is off', addMessageToSession);

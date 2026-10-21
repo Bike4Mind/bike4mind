@@ -1,15 +1,19 @@
+import { randomUUID } from 'crypto';
 import {
   ApiKeyType,
+  isSupportedElevenLabsFormat,
+  UnprocessableEntityError,
   shouldPersistGeneratedAudio,
   generateMusicContract,
   MusicGenerationVendor,
+  usdToCreditsStochastic,
 } from '@bike4mind/common';
 import { adminSettingsRepository, apiKeyRepository, usageEventRepository } from '@bike4mind/database';
 import { apiKeyService, estimateMusicCredits } from '@bike4mind/services';
 import { aiMusicService, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { reserveRequestCredits } from '@server/billing/reserveRequestCredits';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { persistGeneratedAudio } from '@server/utils/persistGeneratedAudio';
+import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
 import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
 
@@ -20,10 +24,16 @@ const PROVIDER_API_KEY_TYPE: Record<MusicGenerationVendor, ApiKeyType> = {
   elevenlabs: ApiKeyType.elevenlabs,
 };
 
+// Each vendor's output-format check. Run before the reservation: an unmapped codec would be generated and
+// billed, then could be neither labelled nor saved.
+const SUPPORTS_OUTPUT_FORMAT: Record<MusicGenerationVendor, (format: string) => boolean> = {
+  elevenlabs: isSupportedElevenLabsFormat,
+};
+
 // Provider-agnostic background-music generation. Meters usage: because the cost
 // is deterministic (the requested length is forced on the provider, so the
-// generated track always matches what we bill), it RESERVES the exact charge
-// before calling the provider and settles it on success / refunds it on failure
+// generated track always matches what we bill), it RESERVES the rounded-up
+// charge before calling the provider and settles the exact cost on success / refunds it on failure
 // - so a charge can never fail after the audio is produced. Bills the
 // organization's shared pool for org-billed API keys and for org-seat members;
 // otherwise the user. All billing is gated on the enforceCredits admin setting,
@@ -37,6 +47,12 @@ const PROVIDER_API_KEY_TYPE: Record<MusicGenerationVendor, ApiKeyType> = {
 const handler = nextRouteForContract(generateMusicContract).post(async (req, res) => {
   const { provider, prompt, lengthMs, forceInstrumental, modelId, format, encoding, preview } = req.validated;
   const userId = req.user?.id;
+
+  // Undefined falls back to the vendor's mp3 default, which every vendor supports. An empty string is
+  // checked too: the generators keep it (`??`), so it would otherwise fail only after the reservation.
+  if (format !== undefined && !SUPPORTS_OUTPUT_FORMAT[provider](format)) {
+    throw new UnprocessableEntityError(`The ${provider} provider does not support the '${format}' output format`);
+  }
 
   const apiKey = await apiKeyService.getEffectiveApiKey(
     userId,
@@ -69,7 +85,7 @@ const handler = nextRouteForContract(generateMusicContract).post(async (req, res
   });
   const { ownerId: creditOwnerId, ownerType: creditOwnerType } = reservation;
 
-  const sessionId = `music-${userId}-${Date.now()}`;
+  const sessionId = `music-${userId}-${randomUUID()}`;
   const source = resolveRequestUsageSource(req);
 
   // Analytics is never part of the billing path: one usage event per provider
@@ -117,8 +133,9 @@ const handler = nextRouteForContract(generateMusicContract).post(async (req, res
     return res.status(502).json({ error: 'Music generation failed' });
   }
 
-  // Settle the full reservation: the provider generates exactly the billed length.
-  const creditsCharged = await reservation.settle(reservation.reservedCredits, {
+  // The provider generates exactly the billed length, so settle that exact cost; the round-up held at
+  // reservation is refunded.
+  const creditsCharged = await reservation.settle(usdToCreditsStochastic(usdCost), {
     type: 'music_generation_usage',
     sessionId,
     model: modelId,
@@ -127,21 +144,19 @@ const handler = nextRouteForContract(generateMusicContract).post(async (req, res
 
   recordUsage('ok', creditsCharged, usdCost);
 
-  // Best-effort browsable copy (on by default; opt out via the saveGeneratedAudio
-  // preference or `preview`): a save failure never blocks returning audio the
-  // caller was already charged for.
+  // Best-effort browsable copy, skipped only for a throwaway `preview` call: a
+  // save failure never blocks returning audio the caller was already charged for.
   const save =
-    userId &&
-    shouldPersistGeneratedAudio({ userId, saveGeneratedAudio: req.user?.preferences?.saveGeneratedAudio, preview })
-      ? await persistGeneratedAudio({
-          userId,
-          audio,
-          contentType,
-          format,
-          source: 'music',
-          text: prompt,
-          logger: req.logger,
-        })
+    userId && shouldPersistGeneratedAudio({ userId, preview })
+      ? await saveGeneratedAssetToFiles(
+          {
+            userId,
+            bytes: audio,
+            contentType,
+            generation: { generator: 'music', provider, modelId, prompt, durationSeconds: lengthMs / 1000 },
+          },
+          req.logger
+        )
       : undefined;
 
   return deliverGeneratedAudio(res, { audio, contentType, encoding: encoding ?? 'binary', save, logger: req.logger });

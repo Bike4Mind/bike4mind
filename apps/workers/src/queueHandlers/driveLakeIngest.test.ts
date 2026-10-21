@@ -1,6 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { BadRequestError } from '@bike4mind/utils';
-import { DATA_LAKE_STATUSES, DocumentDateSource } from '@bike4mind/common';
+import { BadRequestError as ServerBadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { DATA_LAKE_STATUSES, DocumentDateSource, StorageLimitError } from '@bike4mind/common';
+
+const storageRefusal = () =>
+  new StorageLimitError('File size exceeds storage limit', {
+    errorCode: 'storage_limit_exceeded',
+    used_bytes: 0,
+    limit_bytes: 1,
+    requested_bytes: 2,
+    owner: 'user',
+  });
 
 // Passthrough the wrapper so we drive the raw handler directly.
 vi.mock('@server/queueHandlers/utils', () => ({
@@ -10,8 +20,10 @@ vi.mock('@server/queueHandlers/utils', () => ({
 const h = vi.hoisted(() => ({
   // repos + collaborators
   connFindById: vi.fn(),
+  updateHealth: vi.fn(),
   claimForSync: vi.fn(),
   releaseSyncClaim: vi.fn(),
+  probeConnectedFolder: vi.fn(),
   updateSyncCursor: vi.fn(),
   lakeFindById: vi.fn(),
   lakeFind: vi.fn(),
@@ -24,6 +36,10 @@ const h = vi.hoisted(() => ({
   sessionUpdate: vi.fn(),
   deleteFabFile: vi.fn(),
   changeStorageSize: vi.fn(),
+  incrementCurrentStorage: vi.fn(),
+  orgFindById: vi.fn(),
+  // The real owner-aware quota gate, for the tests that pin which counter it reads.
+  actualCheckForOwner: undefined as unknown as (...args: unknown[]) => Promise<void>,
   userSave: vi.fn(),
   removeFileFromLake: vi.fn(),
   recordLakeMembershipChange: vi.fn(),
@@ -36,6 +52,9 @@ const h = vi.hoisted(() => ({
   incrementCounter: vi.fn(),
   setTotalFilesIfActive: vi.fn(),
   recordSkippedDriveFile: vi.fn(),
+  recordSkip: vi.fn(),
+  clearSkipSources: vi.fn(),
+  pruneMissingSkips: vi.fn(),
   findDriveFileIdsByBatchId: vi.fn(),
   markUploaded: vi.fn(),
   adoptSyncClaim: vi.fn(),
@@ -44,6 +63,7 @@ const h = vi.hoisted(() => ({
   upload: vi.fn(),
   walkFolder: vi.fn(),
   disableDriveConnectionForLake: vi.fn(),
+  releaseDriveConnection: vi.fn(async () => true),
   getValidConnectionDriveAccessToken: vi.fn(async () => 'access-token'),
   fetchDriveFileContent: vi.fn(),
   listChanges: vi.fn(),
@@ -66,11 +86,22 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
-  User: { findById: h.userFindById },
+  organizationRepository: {
+    findById: (id: string) => h.orgFindById(id),
+    incrementCurrentStorage: h.incrementCurrentStorage,
+  },
+  // Awaitable directly (the handler's own load) or via .session() (the refund inside a transaction).
+  User: {
+    findById: (id: string) => ({
+      then: (resolve: (v: unknown) => unknown, reject: (e: unknown) => unknown) =>
+        h.userFindById(id).then(resolve, reject),
+      session: () => h.userFindById(id),
+    }),
+  },
   changeStorageSize: h.changeStorageSize,
   // The real one gives the quota read-modify-write conflict-checked isolation; here it just runs the
   // body, so the assertions are about WHICH document gets read and when.
-  withTransaction: async (fn: () => Promise<unknown>) => fn(),
+  withTransaction: async (fn: (session: unknown) => Promise<unknown>) => fn('session'),
   // Backing stores the admission contract's enforcement lever (#1680) resolves from.
   adminSettingsRepository: { findAll: vi.fn(), findBySettingNames: vi.fn() },
   scopedSettingsRepository: { findOverrides: vi.fn() },
@@ -93,6 +124,11 @@ vi.mock('@bike4mind/database', () => ({
   fabFileChunkRepository: {},
   // The membership-audit repo the handler wires into every lake add/remove it drives.
   lakeMembershipChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
+  lakeSkippedFileRepository: {
+    recordSkip: h.recordSkip,
+    clearSources: h.clearSkipSources,
+    pruneMissing: h.pruneMissingSkips,
+  },
   sessionRepository: { findAllWithKnowledgeId: h.sessionsWithKnowledgeId, update: h.sessionUpdate },
   userRepository: { findById: h.userRepoFindById },
   orgGoogleDriveConnectionRepository: {
@@ -102,16 +138,18 @@ vi.mock('@bike4mind/database', () => ({
     renewSyncClaim: h.renewSyncClaim,
     releaseSyncClaim: h.releaseSyncClaim,
     updateSyncCursor: h.updateSyncCursor,
+    updateHealth: h.updateHealth,
   },
 }));
 // Only the two settings/quota reads this door gates on are stubbed; BadRequestError stays the
 // real class so the door's own `instanceof` check still matches what these tests throw.
 vi.mock('@bike4mind/utils', async importOriginal => {
   const actual = await importOriginal<Record<string, unknown>>();
+  h.actualCheckForOwner = actual.checkStorageLimitForOwner as typeof h.actualCheckForOwner;
   return {
     ...actual,
     getSettingsMap: h.getSettingsMap,
-    checkStorageLimit: h.checkStorageLimit,
+    checkStorageLimitForOwner: h.checkStorageLimit,
   };
 });
 vi.mock('@bike4mind/services', () => ({
@@ -141,10 +179,18 @@ vi.mock('@bike4mind/fab-pipeline', async importOriginal => ({
 vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: () => false }));
 vi.mock('@server/managers/fabFileManager', () => ({ createFabFile: h.createFabFile }));
 vi.mock('@server/auth/ability', () => ({ default: () => ({}) }));
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ upload: h.upload }) }));
-vi.mock('@server/integrations/google/drive/common', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({ upload: h.upload }) }));
+// common.ts reads Config at import (needs a real SST Resource), so importOriginal crashes: take the real
+// isTerminalDriveGrantError from its Config-free module instead.
+vi.mock('@server/integrations/google/drive/common', async () => ({
   getValidConnectionDriveAccessToken: h.getValidConnectionDriveAccessToken,
   disableDriveConnectionForLake: h.disableDriveConnectionForLake,
+  releaseDriveConnection: h.releaseDriveConnection,
+  isTerminalDriveGrantError: (
+    await vi.importActual<typeof import('@server/integrations/google/drive/driveGrantErrors')>(
+      '@server/integrations/google/drive/driveGrantErrors'
+    )
+  ).isTerminalDriveGrantError,
 }));
 // isFolder/isValidDriveFolderId etc. stay real (classifyDriveChanges depends on the real isFolder),
 // and so does isDriveRateLimitError - the throttle deferrals below are exactly the behaviour a
@@ -153,10 +199,12 @@ vi.mock('@server/integrations/google/drive/driveClient', async importOriginal =>
   const actual = await importOriginal<typeof import('@server/integrations/google/drive/driveClient')>();
   return {
     ...actual,
-    createDriveClient: () => ({}),
+    // Echoes the token so a test can tell which credential built the client a call received.
+    createDriveClient: (token: string) => ({ token }),
     listChanges: h.listChanges,
     getStartPageToken: h.getStartPageToken,
     isDriveInvalidCursorError: h.isDriveInvalidCursorError,
+    probeConnectedFolder: h.probeConnectedFolder,
   };
 });
 // Mocks only the network-touching calls; keeps the real DriveWalkTimeBudgetExceededError export so
@@ -172,24 +220,27 @@ vi.mock('@server/integrations/google/drive/driveContent', async () => {
     isUnderRoot: h.isUnderRoot,
   };
 });
-vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
+vi.mock('@server/dataLakes/dataLakeBatchProgress', () => ({
   finalizeBatchIfComplete: h.finalizeBatchIfComplete,
 }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('sst', () => ({ Resource: { driveLakeIngestQueue: { url: 'ingest-queue-url' } } }));
 
 import {
   dispatch,
   hasDriveFileChanged,
   classifyDriveChanges,
-  MAX_INGEST_CANDIDATES,
   MAX_INGEST_REDRIVES,
   MAX_INGEST_SLICES,
 } from './driveLakeIngest';
+import { MAX_INGEST_CANDIDATES } from '@bike4mind/server-utils/integrations/google/drive/driveIngestLimits';
 import { DriveWalkTimeBudgetExceededError } from '@server/integrations/google/drive/driveContent';
+import { REJECTED_DRIVE_TOKEN_MESSAGE } from '@server/integrations/google/drive/driveClient';
 
 const logger = { warn: vi.fn(), error: vi.fn(), log: vi.fn(), info: vi.fn(), updateMetadata: vi.fn() } as never;
 const makeEvent = (body: unknown) => ({ Records: [{ body: JSON.stringify(body) }] }) as never;
+let deletedRowStamp: { organizationId?: string } = { organizationId: 'org1' };
+
 const run = (body: Record<string, unknown> = { connectionId: 'conn1' }, context: unknown = {}) =>
   dispatch(makeEvent(body), context as never, logger);
 
@@ -241,6 +292,9 @@ describe('driveLakeIngest consumer', () => {
     h.markUploaded.mockResolvedValue(undefined);
     h.setTotalFilesIfActive.mockResolvedValue(null);
     h.recordSkippedDriveFile.mockResolvedValue(true);
+    h.recordSkip.mockResolvedValue(undefined);
+    h.clearSkipSources.mockResolvedValue(0);
+    h.pruneMissingSkips.mockResolvedValue(0);
     // A successful release returns the healed doc; null means the claim was taken away first.
     h.releaseSyncClaim.mockResolvedValue({ id: 'conn1', status: 'connected' });
     h.lakeFindById.mockResolvedValue({
@@ -270,10 +324,14 @@ describe('driveLakeIngest consumer', () => {
     h.pushTagsByFabFileId.mockImplementation(async () => void h.timeline.push('push-tags'));
     h.userSave.mockResolvedValue(undefined);
     h.changeStorageSize.mockResolvedValue(undefined);
+    h.incrementCurrentStorage.mockResolvedValue(undefined);
+    h.orgFindById.mockImplementation(async (id: string) => ({ id, currentStorageSize: 0 }));
+    deletedRowStamp = { organizationId: 'org1' };
     // The default retire outcome: a full delete that reclaims the stale copy's bytes.
     h.deleteFabFile.mockImplementation(async (_userId, params, adapter) => {
       h.timeline.push(`delete:${params.id}`);
-      await adapter.onDeleteComplete?.({ id: params.id }, 100);
+      // An org lake's rows are stamped with, and refunded to, the lake's org.
+      await adapter.onDeleteComplete?.({ id: params.id, userId: _userId, ...deletedRowStamp }, 100);
       return { action: 'deleted' };
     });
     h.recomputeLakeStats.mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 });
@@ -298,6 +356,7 @@ describe('driveLakeIngest consumer', () => {
     h.getStartPageToken.mockResolvedValue('start-token-1');
     h.isDriveInvalidCursorError.mockReturnValue(false);
     h.isUnderRoot.mockResolvedValue(true);
+    h.probeConnectedFolder.mockResolvedValue({ reachable: true });
     h.updateSyncCursor.mockResolvedValue({ id: 'conn1' });
     // vi.clearAllMocks() (above) clears call history but NOT a standing mockRejectedValue - reset the
     // admission gate to its happy-path default so a later test's own rejection can't leak forward into
@@ -506,14 +565,16 @@ describe('driveLakeIngest consumer', () => {
       { id: 'file-2', name: 'b.txt', mimeType: 'text/plain', relativePath: 'b.txt' },
     ]);
     h.fetchDriveFileContent.mockResolvedValue(okBytes());
-    h.checkStorageLimit
-      .mockRejectedValueOnce(new BadRequestError('storage limit exceeded'))
-      .mockResolvedValueOnce(undefined);
+    h.checkStorageLimit.mockRejectedValueOnce(storageRefusal()).mockResolvedValueOnce(undefined);
 
     await run();
 
-    // Checked against the USER, not an org id/lookup - pins the user-scoped gate from change 1.
-    expect(h.checkStorageLimit).toHaveBeenCalledWith(expect.objectContaining({ id: 'user1' }), 10);
+    // Checked against the lake's org (the file's owner-to-be), with the connecting user as the fallback.
+    expect(h.checkStorageLimit).toHaveBeenCalledWith(
+      expect.objectContaining({ organizationId: 'org1', user: expect.objectContaining({ id: 'user1' }) }),
+      10,
+      expect.any(Function)
+    );
     expect(h.recordSkippedDriveFile).toHaveBeenCalledWith('batch1', 'file-1');
     // The refused file is never uploaded or persisted as a FabFile - only the accepted one is.
     expect(h.upload).toHaveBeenCalledTimes(1);
@@ -530,15 +591,25 @@ describe('driveLakeIngest consumer', () => {
     ]);
     h.fetchDriveFileContent.mockResolvedValueOnce(okBytes(600)).mockResolvedValueOnce(okBytes(500));
     h.checkStorageLimit.mockImplementation(async (_user, size: number) => {
-      if (size > 1000) throw new BadRequestError('storage limit exceeded');
+      if (size > 1000) throw storageRefusal();
     });
 
     await run();
 
-    expect(h.checkStorageLimit).toHaveBeenNthCalledWith(1, expect.objectContaining({ id: 'user1' }), 600);
+    expect(h.checkStorageLimit).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ organizationId: 'org1' }),
+      600,
+      expect.any(Function)
+    );
     // 600 already accepted plus this file's 500 - refused only because of the accumulator, since
     // 500 alone is well under the 1000 quota used by the mock above.
-    expect(h.checkStorageLimit).toHaveBeenNthCalledWith(2, expect.objectContaining({ id: 'user1' }), 1100);
+    expect(h.checkStorageLimit).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ organizationId: 'org1' }),
+      1100,
+      expect.any(Function)
+    );
     expect(h.recordSkippedDriveFile).toHaveBeenCalledWith('batch1', 'file-2');
     expect(h.upload).toHaveBeenCalledTimes(1);
     expect(h.createFabFile).toHaveBeenCalledTimes(1);
@@ -552,6 +623,32 @@ describe('driveLakeIngest consumer', () => {
 
     await expect(run()).rejects.toThrow('connection lost');
     expect(h.recordSkippedDriveFile).not.toHaveBeenCalled();
+  });
+
+  it('rethrows a non-quota error from the org quota check rather than recording a quota skip', async () => {
+    h.walkFolder.mockResolvedValue([{ id: 'file-1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' }]);
+    h.fetchDriveFileContent.mockResolvedValue(okBytes());
+    h.checkStorageLimit.mockRejectedValueOnce(new Error('connection reset'));
+
+    await expect(run()).rejects.toThrow('connection reset');
+    expect(h.recordSkippedDriveFile).not.toHaveBeenCalled();
+    expect(h.createFabFile).not.toHaveBeenCalled();
+  });
+
+  it("refuses a file at the lake's ORG limit, reading the org counter and not the user's", async () => {
+    h.checkStorageLimit.mockImplementation(h.actualCheckForOwner);
+    // A zero-byte org limit refuses everything; the user's own limit is the roomy default, so only an
+    // org-aware gate can refuse.
+    h.orgFindById.mockResolvedValue({ id: 'org1', currentStorageSize: 0, storageLimit: 0 });
+    h.userFindById.mockImplementation(async (id: string) => ({ id, currentStorageSize: 0, save: h.userSave }));
+    h.walkFolder.mockResolvedValue([{ id: 'file-1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' }]);
+    h.fetchDriveFileContent.mockResolvedValue(okBytes(10));
+
+    await run();
+
+    expect(h.orgFindById).toHaveBeenCalledWith('org1');
+    expect(h.recordSkippedDriveFile).toHaveBeenCalledWith('batch1', 'file-1');
+    expect(h.createFabFile).not.toHaveBeenCalled();
   });
 
   it('credits bytes a same-run duplicate retire already reclaimed against a later quota check', async () => {
@@ -580,13 +677,17 @@ describe('driveLakeIngest consumer', () => {
     ]);
     h.fetchDriveFileContent.mockResolvedValue(okBytes(300));
     h.checkStorageLimit.mockImplementation(async (_user, size: number) => {
-      if (size > 250) throw new BadRequestError('storage limit exceeded');
+      if (size > 250) throw storageRefusal();
     });
 
     await run();
 
     // Without the 100-byte credit this would be called with 300, which the mock above refuses.
-    expect(h.checkStorageLimit).toHaveBeenCalledWith(expect.objectContaining({ id: 'user1' }), 200);
+    expect(h.checkStorageLimit).toHaveBeenCalledWith(
+      expect.objectContaining({ organizationId: 'org1' }),
+      200,
+      expect.any(Function)
+    );
     expect(h.recordSkippedDriveFile).not.toHaveBeenCalledWith('batch1', 'd2');
     expect(h.createFabFile).toHaveBeenCalledWith(expect.objectContaining({ driveFileId: 'd2' }), expect.anything());
   });
@@ -654,8 +755,8 @@ describe('driveLakeIngest consumer', () => {
     expect(h.deleteFabFile).toHaveBeenCalledTimes(1);
     expect(h.deleteFabFile).toHaveBeenCalledWith('user1', { id: 'ff-old' }, expect.anything());
     // Reclaimed bytes come off the retired row's own owner.
-    expect(h.changeStorageSize).toHaveBeenCalledWith(expect.objectContaining({ id: 'user1' }), -100);
-    expect(h.userSave).toHaveBeenCalledTimes(1);
+    expect(h.incrementCurrentStorage).toHaveBeenCalledWith('org1', -100, 'session');
+    expect(h.changeStorageSize).not.toHaveBeenCalled();
     expect(h.recomputeLakeStats).toHaveBeenCalledTimes(1);
     expect(h.batchCreate).toHaveBeenCalledWith(expect.objectContaining({ totalFiles: 1 }));
   });
@@ -727,6 +828,7 @@ describe('driveLakeIngest consumer', () => {
     );
     expect(h.deleteFabFile).not.toHaveBeenCalled();
     expect(h.changeStorageSize).not.toHaveBeenCalled();
+    expect(h.incrementCurrentStorage).not.toHaveBeenCalled();
     // Nothing is carried over either: the copy survives holding its own links and tags, so attaching
     // the replacement alongside it would put the same document in a notebook twice.
     expect(h.sessionUpdate).not.toHaveBeenCalled();
@@ -764,6 +866,7 @@ describe('driveLakeIngest consumer', () => {
 
     expect(h.deleteFabFile).not.toHaveBeenCalled();
     expect(h.changeStorageSize).not.toHaveBeenCalled();
+    expect(h.incrementCurrentStorage).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -801,6 +904,7 @@ describe('driveLakeIngest consumer', () => {
     );
     expect(h.deleteFabFile).not.toHaveBeenCalled();
     expect(h.changeStorageSize).not.toHaveBeenCalled();
+    expect(h.incrementCurrentStorage).not.toHaveBeenCalled();
     // Same as the other-lake branch: the copy survives holding its own links and tags, so carrying
     // them onto the replacement would put the same document in a notebook twice.
     expect(h.sessionUpdate).not.toHaveBeenCalled();
@@ -871,7 +975,7 @@ describe('driveLakeIngest consumer', () => {
     // Nothing was edited, so no re-ingest - and the "nothing to ingest" exit still settles what the
     // duplicate retire changed: the reclaimed bytes and the lake's stats.
     expect(h.batchCreate).not.toHaveBeenCalled();
-    expect(h.changeStorageSize).toHaveBeenCalledWith(expect.objectContaining({ id: 'user1' }), -100);
+    expect(h.incrementCurrentStorage).toHaveBeenCalledWith('org1', -100, 'session');
     expect(h.recomputeLakeStats).toHaveBeenCalledTimes(1);
   });
 
@@ -1000,7 +1104,7 @@ describe('driveLakeIngest consumer', () => {
     expect(h.deleteFabFile).toHaveBeenCalledTimes(1);
     expect(h.deleteFabFile).toHaveBeenCalledWith('user1', { id: 'ff-d2' }, expect.anything());
     // Reclaimed bytes come off the removed row's own owner.
-    expect(h.changeStorageSize).toHaveBeenCalledWith(expect.objectContaining({ id: 'user1' }), -100);
+    expect(h.incrementCurrentStorage).toHaveBeenCalledWith('org1', -100, 'session');
     expect(h.recomputeLakeStats).toHaveBeenCalledTimes(1);
     expect(h.batchCreate).not.toHaveBeenCalled();
     expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'token-claim', null);
@@ -1026,6 +1130,7 @@ describe('driveLakeIngest consumer', () => {
     );
     expect(h.deleteFabFile).not.toHaveBeenCalled();
     expect(h.changeStorageSize).not.toHaveBeenCalled();
+    expect(h.incrementCurrentStorage).not.toHaveBeenCalled();
   });
 
   it('only unpicks a removed file that another lake still holds', async () => {
@@ -1100,6 +1205,113 @@ describe('driveLakeIngest consumer', () => {
     expect(h.removeFileFromLake).not.toHaveBeenCalled();
     expect(h.batchCreate).not.toHaveBeenCalled();
     expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'token-claim', null);
+    // Same guard for the not-ingested list: an untrusted empty walk must not wipe it.
+    expect(h.pruneMissingSkips).not.toHaveBeenCalled();
+  });
+
+  describe('not-ingested list', () => {
+    it('records each skipped file on the lake by name, path and reason', async () => {
+      h.walkFolder.mockResolvedValue([
+        {
+          id: 'big',
+          name: 'huge.pdf',
+          mimeType: 'application/pdf',
+          relativePath: 'a/huge.pdf',
+          size: 200 * 1024 * 1024,
+        },
+        { id: 'form', name: 'Survey', mimeType: 'application/vnd.google-apps.form', relativePath: 'a/Survey' },
+        { id: 'full', name: 'b.txt', mimeType: 'text/plain', relativePath: 'b.txt' },
+      ]);
+      h.fetchDriveFileContent
+        .mockResolvedValueOnce({ ok: false, reason: 'unsupported', detail: 'application/vnd.google-apps.form' })
+        .mockResolvedValueOnce(okBytes());
+      h.checkStorageLimit.mockRejectedValueOnce(storageRefusal());
+
+      await run();
+
+      expect(h.recordSkip).toHaveBeenCalledWith({
+        dataLakeId: 'lake1',
+        sourceKind: 'google_drive',
+        sourceId: 'big',
+        name: 'huge.pdf',
+        relativePath: 'a/huge.pdf',
+        relativePathIsPartial: false,
+        mimeType: 'application/pdf',
+        size: 200 * 1024 * 1024,
+        reason: 'oversized',
+      });
+      expect(h.recordSkip).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceId: 'form', name: 'Survey', reason: 'unsupported' })
+      );
+      // The fetched byte count, not the (absent) listed size, is what the quota refused.
+      expect(h.recordSkip).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceId: 'full', reason: 'storage_limit', size: 10 })
+      );
+    });
+
+    it('records the skip on the lake list even when the chain already counted it', async () => {
+      // recordSkippedDriveFile's false is a per-chain de-dup, not "not skipped".
+      h.recordSkippedDriveFile.mockResolvedValue(false);
+      h.walkFolder.mockResolvedValue([
+        { id: 'big', name: 'huge.pdf', mimeType: 'application/pdf', relativePath: 'huge.pdf', size: 200 * 1024 * 1024 },
+      ]);
+
+      await run();
+
+      expect(h.recordSkip).toHaveBeenCalledWith(expect.objectContaining({ sourceId: 'big', reason: 'oversized' }));
+    });
+
+    it('never records a rate-limited fetch, which is deferred rather than skipped', async () => {
+      h.walkFolder.mockResolvedValue([{ id: 'file-1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' }]);
+      h.fetchDriveFileContent.mockResolvedValue({ ok: false, reason: 'rate_limited' });
+
+      await run();
+
+      expect(h.recordSkip).not.toHaveBeenCalled();
+    });
+
+    it("clears a file's row once it ingests", async () => {
+      h.walkFolder.mockResolvedValue([{ id: 'file-1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' }]);
+      h.fetchDriveFileContent.mockResolvedValue(okBytes());
+
+      await run();
+
+      expect(h.upload).toHaveBeenCalledTimes(1);
+      expect(h.clearSkipSources).toHaveBeenCalledWith('lake1', 'google_drive', ['file-1']);
+    });
+
+    it('never prunes on an empty walk, even with no ingested files to protect', async () => {
+      // Every file in the folder was skipped, so the lake holds none of this connection's files.
+      h.walkFolder.mockResolvedValue([]);
+      setExisting([]);
+
+      await run();
+
+      expect(h.pruneMissingSkips).not.toHaveBeenCalled();
+    });
+
+    it('falls back to the Drive id for a file with an empty name', async () => {
+      h.walkFolder.mockResolvedValue([
+        { id: 'big', name: '', mimeType: 'application/pdf', relativePath: '', size: 200 * 1024 * 1024 },
+      ]);
+
+      await run();
+
+      expect(h.recordSkip).toHaveBeenCalledWith(expect.objectContaining({ sourceId: 'big', name: 'big' }));
+    });
+
+    it('prunes rows for files a full walk no longer sees', async () => {
+      h.walkFolder.mockResolvedValue([
+        { id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' },
+        { id: 'd2', name: 'b.txt', mimeType: 'text/plain', relativePath: 'b.txt' },
+        { id: 'big', name: 'big.pdf', mimeType: 'application/pdf', relativePath: 'big.pdf', size: 200 * 1024 * 1024 },
+      ]);
+      h.fetchDriveFileContent.mockResolvedValue(okBytes());
+
+      await run();
+
+      expect(h.pruneMissingSkips).toHaveBeenCalledWith('lake1', 'google_drive', new Set(['d1', 'd2', 'big']));
+    });
   });
 
   it('refuses a folder over the candidate cap before creating any batch or FabFile', async () => {
@@ -1695,10 +1907,11 @@ describe('driveLakeIngest consumer', () => {
     });
 
     it.each([
-      // The connection exit runs BEFORE the claim is taken, so it has nothing to release; the other two
-      // sit after it and must hand the claim back or the connection stays 'syncing' with no owner.
+      // The connection exit runs BEFORE the claim is taken, so it has nothing to release; the user exit
+      // sits after it and must hand the claim back or the connection stays 'syncing' with no owner. The
+      // lake exit deletes the connection outright instead (see the missing-lake tests below).
       ['the connection', () => h.connFindById.mockResolvedValue(null), false],
-      ['the target data lake', () => h.lakeFindById.mockResolvedValue(null), true],
+      ['the target data lake', () => h.lakeFindById.mockResolvedValue(null), false],
       ['the connecting user', () => h.userFindById.mockResolvedValue(null), true],
     ])('settles an adopted batch even when %s cannot be resolved', async (_label, breakLookup, releases) => {
       // These exits sit ABOVE where adoptedBatch is normally resolved, so a continuation reaching one
@@ -1833,8 +2046,50 @@ describe('driveLakeIngest consumer', () => {
       // Heals forward, so a connection whose lake was archived before the write-time disable
       // shipped (or whose best-effort disable was lost) stops being enqueued after one poll.
       expect(h.disableDriveConnectionForLake).toHaveBeenCalledWith('lake1');
+      // A soft-deleted lake can still be restored, so its connection must survive.
+      expect(h.releaseDriveConnection).not.toHaveBeenCalled();
     }
   );
+
+  it('retires the connection and frees its folder claim when the target data lake is gone', async () => {
+    h.lakeFindById.mockResolvedValue(null);
+
+    await run();
+
+    expect(h.releaseDriveConnection).toHaveBeenCalledWith('conn1', { kind: 'organization', organizationId: 'org1' });
+    // Releasing the claim would set the row back to 'connected', and the 6h poll would enqueue it forever.
+    expect(h.releaseSyncClaim).not.toHaveBeenCalled();
+    expect(h.walkFolder).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('hands the claim back for the next poll to retry when retiring a lakeless connection throws', async () => {
+    h.lakeFindById.mockResolvedValue(null);
+    h.releaseDriveConnection.mockRejectedValueOnce(new Error('mongo down'));
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'token-claim', null);
+    expect(h.walkFolder).not.toHaveBeenCalled();
+  });
+
+  it('retires a personal connection under its connecting user when the target data lake is gone', async () => {
+    h.connFindById.mockResolvedValue({ id: 'conn1', targetDataLakeId: 'lake1', connectedBy: 'u1', driveFolderId: 'F' });
+    h.lakeFindById.mockResolvedValue(null);
+
+    await run();
+
+    expect(h.releaseDriveConnection).toHaveBeenCalledWith('conn1', { kind: 'user', userId: 'u1' });
+  });
+
+  it('hands the claim back when retiring a lakeless connection matches no row', async () => {
+    h.lakeFindById.mockResolvedValue(null);
+    h.releaseDriveConnection.mockResolvedValueOnce(false);
+
+    await run();
+
+    expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'token-claim', null);
+  });
 
   it('does not fail the drop when healing the enabled flag throws', async () => {
     h.lakeFindById.mockResolvedValue({
@@ -1904,6 +2159,22 @@ describe('driveLakeIngest consumer', () => {
 
       expect(h.getValidConnectionDriveAccessToken).toHaveBeenCalledWith('conn1', { kind: 'user', userId: 'creator1' });
       expect(h.createFabFile).toHaveBeenCalledWith(expect.objectContaining({ driveFileId: 'd1' }), expect.anything());
+    });
+
+    it("gates a personal lake's files on the connecting user's quota, never an org's", async () => {
+      h.connFindById.mockResolvedValue(personalConnection('creator1'));
+      h.lakeFindById.mockResolvedValue(personalLake('creator1'));
+      h.walkFolder.mockResolvedValue([{ id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' }]);
+      h.fetchDriveFileContent.mockResolvedValue(okBytes());
+
+      await run();
+
+      expect(h.checkStorageLimit).toHaveBeenCalledWith(
+        { user: expect.objectContaining({ id: 'creator1' }), organizationId: undefined },
+        10,
+        expect.any(Function)
+      );
+      expect(h.orgFindById).not.toHaveBeenCalled();
     });
 
     it("drops user A's personal connection bound to user B's personal lake", async () => {
@@ -2001,17 +2272,56 @@ describe('driveLakeIngest consumer', () => {
     expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'token-claim', 's3 blip');
     // The `finally` still deducts what d1's committed delete gave back: the SQS retry re-walks and
     // never sees that copy again, so an un-flushed deduction would bill those bytes forever.
-    expect(h.changeStorageSize).toHaveBeenCalledWith(expect.objectContaining({ id: 'user1' }), -100);
+    expect(h.incrementCurrentStorage).toHaveBeenCalledWith('org1', -100, 'session');
     // ...and still recomputes: the retry sees a folder whose retires are already applied, finds
     // nothing to do, and would skip the recompute too, leaving fileCount overstated indefinitely.
     expect(h.recomputeLakeStats).toHaveBeenCalledTimes(1);
   });
 
-  it('deducts reclaimed storage from a user re-read AFTER the uploads, not the one loaded up front (B2)', async () => {
+  it("refunds an org lake's reclaimed bytes to the org counter atomically, never through a user document", async () => {
+    // The org counter moves by $inc, so unlike a user's absolute save() it cannot clobber the run's
+    // own upload increments, and the refund needs no user load beyond the up-front ability check.
+    h.walkFolder.mockResolvedValue([
+      { id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt', md5Checksum: 'NEW' },
+    ]);
+    setExisting([
+      {
+        id: 'ff-old',
+        driveFileId: 'd1',
+        userId: 'user1',
+        organizationId: 'org1',
+        driveMd5Checksum: 'OLD',
+        tags: [{ name: 'lake-tag' }],
+      },
+    ]);
+    h.fetchDriveFileContent.mockResolvedValue(okBytes());
+
+    await run();
+
+    expect(h.timeline).toEqual(['user-load:user1', 'upload', 'push-tags', 'delete:ff-old']);
+    expect(h.incrementCurrentStorage).toHaveBeenCalledWith('org1', -100, 'session');
+    expect(h.changeStorageSize).not.toHaveBeenCalled();
+  });
+
+  it('deducts a personal lake reclaim from a user re-read AFTER the uploads, not the one loaded up front (B2)', async () => {
     // changeStorageSize mutates in memory and save() writes an ABSOLUTE currentStorageSize. Every
     // storage.upload in the loop fires objectCreated, which loads and saves its OWN copy of the same
     // user, so deducting against the document read at the top of the handler would overwrite the whole
     // run's upload increments with a value computed before any of them happened.
+    deletedRowStamp = {};
+    h.connFindById.mockResolvedValue({
+      id: 'conn1',
+      targetDataLakeId: 'lake1',
+      connectedBy: 'user1',
+      driveFolderId: 'FOLDER',
+    });
+    h.lakeFindById.mockResolvedValue({
+      id: 'lake1',
+      status: 'active',
+      datalakeTag: 'lake-tag',
+      fileTagPrefix: 'demo:',
+      createdByUserId: 'user1',
+    });
     h.walkFolder.mockResolvedValue([
       { id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt', md5Checksum: 'NEW' },
     ]);
@@ -2028,9 +2338,10 @@ describe('driveLakeIngest consumer', () => {
     // ...and it is genuinely the LATER document that gets mutated, not the one from the first load.
     const deducted = h.changeStorageSize.mock.calls[0][0];
     expect(deducted.loadedAt).toBe(5);
+    expect(h.incrementCurrentStorage).not.toHaveBeenCalled();
   });
 
-  it('deletes as the retired row OWN owner and refunds that user, not whoever reconnected (B3)', async () => {
+  it('refunds the retired row OWN owner, not whoever reconnected (B3)', async () => {
     // A reconnect re-stamps connectedBy (drive-sync.ts), after which that user owns none of the rows
     // already ingested. Running the delete as them would either deny - leaving an orphan FabFile plus
     // its chunks and S3 object per edit, with pre-edit content still retrievable - or take
@@ -2054,9 +2365,34 @@ describe('driveLakeIngest consumer', () => {
     await run();
 
     expect(h.deleteFabFile).toHaveBeenCalledWith('alice', { id: 'ff-old' }, expect.anything());
-    // The bytes go back to the owner they were counted against, not to the reconnector.
+    // The bytes go back to the pool they were counted against (the lake's org), not to the reconnector
+    // or the uploader.
+    expect(h.incrementCurrentStorage).toHaveBeenCalledWith('org1', -100, 'session');
+    expect(h.changeStorageSize).not.toHaveBeenCalled();
+  });
+
+  it("refunds a personal-owned retired row to its uploader even when the lake is the reconnector's", async () => {
+    deletedRowStamp = {};
+    h.connFindById.mockResolvedValue({
+      id: 'conn1',
+      targetDataLakeId: 'lake1',
+      connectedBy: 'bob',
+      organizationId: 'org1',
+      driveFolderId: 'FOLDER',
+    });
+    h.walkFolder.mockResolvedValue([
+      { id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt', md5Checksum: 'NEW' },
+    ]);
+    setExisting([
+      { id: 'ff-old', driveFileId: 'd1', userId: 'alice', driveMd5Checksum: 'OLD', tags: [{ name: 'lake-tag' }] },
+    ]);
+    h.fetchDriveFileContent.mockResolvedValue(okBytes());
+
+    await run();
+
     expect(h.changeStorageSize).toHaveBeenCalledWith(expect.objectContaining({ id: 'alice' }), -100);
     expect(h.changeStorageSize).not.toHaveBeenCalledWith(expect.objectContaining({ id: 'bob' }), expect.anything());
+    expect(h.incrementCurrentStorage).not.toHaveBeenCalled();
   });
 
   it('leaves a copy unpicked rather than failing the run when its owner no longer exists', async () => {
@@ -2197,7 +2533,7 @@ describe('driveLakeIngest consumer', () => {
     await expect(run()).rejects.toThrow('mongo blip');
 
     expect(h.deleteFabFile).toHaveBeenCalledTimes(1);
-    expect(h.changeStorageSize).toHaveBeenCalledWith(expect.objectContaining({ id: 'user1' }), -100);
+    expect(h.incrementCurrentStorage).toHaveBeenCalledWith('org1', -100, 'session');
     expect(h.recomputeLakeStats).toHaveBeenCalledTimes(1);
   });
 
@@ -2314,6 +2650,292 @@ describe('driveLakeIngest consumer', () => {
 
     await expect(run()).rejects.toThrow('settings store unreachable');
     expect(h.batchCreate).not.toHaveBeenCalled();
+  });
+
+  describe('connected folder probe', () => {
+    const rateLimited = () => Object.assign(new Error('Rate Limit Exceeded'), { code: 429, response: { status: 429 } });
+    const withCursor = () =>
+      h.connFindById.mockResolvedValue({
+        id: 'conn1',
+        targetDataLakeId: 'lake1',
+        connectedBy: 'user1',
+        organizationId: 'org1',
+        driveFolderId: 'FOLDER',
+        syncCursor: 'cursor-0',
+      });
+
+    it('parks the connection in needs_reconnect when the folder is not found, without walking', async () => {
+      h.probeConnectedFolder.mockResolvedValue({ reachable: false, reason: 'not_found' });
+
+      await expect(run({ connectionId: 'conn1' })).resolves.toBeUndefined();
+
+      expect(h.probeConnectedFolder).toHaveBeenCalledWith(expect.anything(), 'FOLDER');
+      expect(h.releaseSyncClaim).toHaveBeenCalledWith(
+        'conn1',
+        'token-claim',
+        expect.stringContaining('not found'),
+        'needs_reconnect'
+      );
+      expect(h.walkFolder).not.toHaveBeenCalled();
+      expect(h.listChanges).not.toHaveBeenCalled();
+      expect(h.sendToQueue).not.toHaveBeenCalled();
+    });
+
+    it('parks an incremental connection when the folder is trashed, without pulling changes', async () => {
+      withCursor();
+      h.probeConnectedFolder.mockResolvedValue({ reachable: false, reason: 'trashed' });
+
+      await run({ connectionId: 'conn1' });
+
+      expect(h.releaseSyncClaim).toHaveBeenCalledWith(
+        'conn1',
+        'token-claim',
+        expect.stringContaining('trash'),
+        'needs_reconnect'
+      );
+      expect(h.listChanges).not.toHaveBeenCalled();
+      expect(h.walkFolder).not.toHaveBeenCalled();
+    });
+
+    it('parks the connection when Drive denies access to the folder', async () => {
+      h.probeConnectedFolder.mockResolvedValue({ reachable: false, reason: 'forbidden' });
+
+      await run({ connectionId: 'conn1' });
+
+      expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'token-claim', expect.any(String), 'needs_reconnect');
+      expect(h.walkFolder).not.toHaveBeenCalled();
+    });
+
+    it('defers the sync when the probe is rate limited, without marking needs_reconnect', async () => {
+      h.probeConnectedFolder.mockRejectedValue(rateLimited());
+
+      await expect(run({ connectionId: 'conn1' })).resolves.toBeUndefined();
+
+      expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'token-claim', null);
+      expect(h.sendToQueue).toHaveBeenCalledWith(
+        'ingest-queue-url',
+        { connectionId: 'conn1', redriveCount: 1 },
+        expect.any(Number)
+      );
+      expect(h.sendToQueue.mock.calls[0][2]).toBeGreaterThanOrEqual(60);
+      expect(h.walkFolder).not.toHaveBeenCalled();
+    });
+
+    it('rethrows a non-throttle probe failure and records it without needs_reconnect', async () => {
+      h.probeConnectedFolder.mockRejectedValue(Object.assign(new Error('Backend Error'), { code: 500 }));
+
+      await expect(run({ connectionId: 'conn1' })).rejects.toThrow('Backend Error');
+
+      expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'token-claim', 'Backend Error');
+      expect(h.walkFolder).not.toHaveBeenCalled();
+    });
+
+    describe('a 401 from the probe (token rejected)', () => {
+      const unauthorized = () => Object.assign(new Error('Invalid Credentials'), { code: 401 });
+
+      it('refreshes the token once and carries on when the retried probe reaches the folder', async () => {
+        h.probeConnectedFolder.mockRejectedValueOnce(unauthorized()).mockResolvedValueOnce({ reachable: true });
+        h.getValidConnectionDriveAccessToken.mockResolvedValueOnce('stale-token').mockResolvedValueOnce('fresh-token');
+        h.walkFolder.mockResolvedValue([]);
+
+        await expect(run({ connectionId: 'conn1' })).resolves.toBeUndefined();
+
+        expect(h.probeConnectedFolder).toHaveBeenCalledTimes(2);
+        expect(h.probeConnectedFolder).toHaveBeenNthCalledWith(1, { token: 'stale-token' }, 'FOLDER');
+        expect(h.probeConnectedFolder).toHaveBeenNthCalledWith(2, { token: 'fresh-token' }, 'FOLDER');
+        expect(h.walkFolder.mock.calls[0]?.[0]).toEqual({ token: 'fresh-token' });
+        expect(h.getValidConnectionDriveAccessToken).toHaveBeenCalledTimes(2);
+        expect(h.getValidConnectionDriveAccessToken).toHaveBeenLastCalledWith('conn1', expect.anything(), {
+          forceRefresh: true,
+        });
+        expect(h.releaseSyncClaim).not.toHaveBeenCalledWith(
+          'conn1',
+          expect.anything(),
+          expect.anything(),
+          'needs_reconnect'
+        );
+        expect(h.walkFolder).toHaveBeenCalled();
+      });
+
+      it('stops quietly, with no SQS retry or needs_reconnect, when the forced refresh finds the grant revoked', async () => {
+        h.probeConnectedFolder.mockRejectedValueOnce(unauthorized());
+        h.getValidConnectionDriveAccessToken
+          .mockResolvedValueOnce('stale-token')
+          .mockRejectedValueOnce(new ServerBadRequestError('Google Drive access was revoked - reconnect required'));
+
+        await expect(run({ connectionId: 'conn1' })).resolves.toBeUndefined();
+
+        expect(h.getValidConnectionDriveAccessToken).toHaveBeenLastCalledWith('conn1', expect.anything(), {
+          forceRefresh: true,
+        });
+        expect(h.probeConnectedFolder).toHaveBeenCalledTimes(1);
+        expect(h.releaseSyncClaim).not.toHaveBeenCalledWith(
+          'conn1',
+          expect.anything(),
+          expect.anything(),
+          'needs_reconnect'
+        );
+        expect(h.walkFolder).not.toHaveBeenCalled();
+        expect(h.sendToQueue).not.toHaveBeenCalled();
+      });
+
+      it('settles the adopted batch of a continuation when the grant was revoked', async () => {
+        h.probeConnectedFolder.mockRejectedValueOnce(unauthorized());
+        h.getValidConnectionDriveAccessToken
+          .mockResolvedValueOnce('stale-token')
+          .mockRejectedValueOnce(new ServerBadRequestError('Google Drive access was revoked - reconnect required'));
+        h.batchFindById.mockResolvedValue({
+          id: 'batch1',
+          dataLakeId: 'lake1',
+          status: 'processing',
+          totalFiles: 3,
+          skippedFiles: 0,
+          files: [{ fabFileId: 'ff-prev' }],
+          vectorizedFiles: 0,
+          failedFiles: 0,
+        });
+
+        await expect(
+          run({ connectionId: 'conn1', resumeBatchId: 'batch1', slice: 1, claimToken: 'tok0' })
+        ).resolves.toBeUndefined();
+
+        expect(h.finalizeBatchIfComplete).toHaveBeenCalled();
+        expect(h.walkFolder).not.toHaveBeenCalled();
+      });
+
+      it('flags credential_error and stops quietly when the forced refresh succeeds but Drive 401s again', async () => {
+        h.probeConnectedFolder.mockRejectedValueOnce(unauthorized()).mockRejectedValueOnce(unauthorized());
+
+        await expect(run({ connectionId: 'conn1' })).resolves.toBeUndefined();
+
+        expect(h.probeConnectedFolder).toHaveBeenCalledTimes(2);
+        expect(h.updateHealth).toHaveBeenCalledWith('conn1', {
+          status: 'credential_error',
+          lastError: REJECTED_DRIVE_TOKEN_MESSAGE,
+        });
+        expect(h.walkFolder).not.toHaveBeenCalled();
+        expect(h.sendToQueue).not.toHaveBeenCalled();
+        expect(h.releaseSyncClaim).not.toHaveBeenCalledWith(
+          'conn1',
+          expect.anything(),
+          expect.anything(),
+          'needs_reconnect'
+        );
+      });
+
+      it('treats a revoked-scope 403 like a 401: one forced refresh, then credential_error', async () => {
+        const scopeRevoked = () =>
+          Object.assign(new Error('Insufficient Permission'), {
+            code: 403,
+            errors: [{ reason: 'insufficientPermissions' }],
+          });
+        h.probeConnectedFolder.mockRejectedValueOnce(scopeRevoked()).mockRejectedValueOnce(scopeRevoked());
+
+        await expect(run({ connectionId: 'conn1' })).resolves.toBeUndefined();
+
+        expect(h.getValidConnectionDriveAccessToken).toHaveBeenLastCalledWith('conn1', expect.anything(), {
+          forceRefresh: true,
+        });
+        expect(h.updateHealth).toHaveBeenCalledWith('conn1', {
+          status: 'credential_error',
+          lastError: REJECTED_DRIVE_TOKEN_MESSAGE,
+        });
+        expect(h.sendToQueue).not.toHaveBeenCalled();
+      });
+
+      it('stops quietly when the first token fetch already finds the grant revoked', async () => {
+        h.getValidConnectionDriveAccessToken.mockRejectedValueOnce(
+          new ServerBadRequestError('Google Drive access was revoked - reconnect required')
+        );
+
+        await expect(run({ connectionId: 'conn1' })).resolves.toBeUndefined();
+
+        expect(h.probeConnectedFolder).not.toHaveBeenCalled();
+        expect(h.walkFolder).not.toHaveBeenCalled();
+        expect(h.sendToQueue).not.toHaveBeenCalled();
+        // A run with no resumeBatchId must not settle a batch: looking one up by an undefined id would
+        // still count as a lookup here, so pin the guard, not just the finalize.
+        expect(h.batchFindById).not.toHaveBeenCalled();
+        expect(h.finalizeBatchIfComplete).not.toHaveBeenCalled();
+      });
+
+      it('settles the adopted batch of a continuation when the first token fetch finds the grant revoked', async () => {
+        h.getValidConnectionDriveAccessToken.mockRejectedValueOnce(
+          new ServerBadRequestError('Google Drive access was revoked - reconnect required')
+        );
+        h.batchFindById.mockResolvedValue({
+          id: 'batch1',
+          dataLakeId: 'lake1',
+          status: 'processing',
+          totalFiles: 3,
+          skippedFiles: 0,
+          files: [{ fabFileId: 'ff-prev' }],
+          vectorizedFiles: 0,
+          failedFiles: 0,
+        });
+
+        await expect(
+          run({ connectionId: 'conn1', resumeBatchId: 'batch1', slice: 1, claimToken: 'tok0' })
+        ).resolves.toBeUndefined();
+
+        expect(h.finalizeBatchIfComplete).toHaveBeenCalled();
+        expect(h.probeConnectedFolder).not.toHaveBeenCalled();
+      });
+
+      it('rethrows a non-terminal failure of the first token fetch so SQS retries', async () => {
+        h.getValidConnectionDriveAccessToken.mockRejectedValueOnce(new Error('Backend Error'));
+
+        await expect(run({ connectionId: 'conn1' })).rejects.toThrow('Backend Error');
+        expect(h.probeConnectedFolder).not.toHaveBeenCalled();
+      });
+
+      it('rethrows a non-terminal failure of the forced refresh so SQS retries', async () => {
+        h.probeConnectedFolder.mockRejectedValueOnce(unauthorized());
+        h.getValidConnectionDriveAccessToken
+          .mockResolvedValueOnce('stale-token')
+          .mockRejectedValueOnce(new Error('Backend Error'));
+
+        await expect(run({ connectionId: 'conn1' })).rejects.toThrow('Backend Error');
+      });
+    });
+
+    it('logs and returns when the claim was taken away before the park landed', async () => {
+      h.probeConnectedFolder.mockResolvedValue({ reachable: false, reason: 'not_found' });
+      h.releaseSyncClaim.mockResolvedValue(null);
+
+      await expect(run({ connectionId: 'conn1' })).resolves.toBeUndefined();
+
+      expect(logger.warn).toHaveBeenCalledWith(
+        '[driveLakeIngest] claim was taken away before parking; leaving the new owner alone',
+        { connectionId: 'conn1' }
+      );
+      expect(h.walkFolder).not.toHaveBeenCalled();
+    });
+
+    it('settles the adopted batch of a continuation whose folder has gone', async () => {
+      h.probeConnectedFolder.mockResolvedValue({ reachable: false, reason: 'not_found' });
+      h.batchFindById.mockResolvedValue({
+        id: 'batch1',
+        dataLakeId: 'lake1',
+        status: 'processing',
+        totalFiles: 3,
+        skippedFiles: 0,
+        files: [{ fabFileId: 'ff-prev' }],
+        vectorizedFiles: 0,
+        failedFiles: 0,
+      });
+
+      await run({ connectionId: 'conn1', resumeBatchId: 'batch1', slice: 1, claimToken: 'tok0' });
+
+      expect(h.finalizeBatchIfComplete).toHaveBeenCalled();
+      expect(h.releaseSyncClaim).toHaveBeenCalledWith(
+        'conn1',
+        'token-adopt',
+        expect.stringContaining('not found'),
+        'needs_reconnect'
+      );
+      expect(h.walkFolder).not.toHaveBeenCalled();
+    });
   });
 
   describe('incremental sync (#2396)', () => {
@@ -2566,6 +3188,24 @@ describe('driveLakeIngest consumer', () => {
       });
     });
 
+    it('clears not-ingested rows for files that left the folder, tracked or not', async () => {
+      // `skipped` never ingested, so it has no FabFile and only the untracked arm can report it.
+      withCursor();
+      setExisting([{ id: 'ff-d1', driveFileId: 'd1', userId: 'user1' }]);
+      h.listChanges.mockResolvedValue({
+        changes: [
+          { fileId: 'skipped', removed: true },
+          { fileId: 'd1', removed: true },
+        ],
+        newStartPageToken: 'cursor-1',
+      });
+
+      await run();
+
+      expect(h.clearSkipSources).toHaveBeenCalledWith('lake1', 'google_drive', ['skipped', 'd1']);
+      expect(h.pruneMissingSkips).not.toHaveBeenCalled();
+    });
+
     it('still ingests the adds in a window that also carries an unconfirmed removal', async () => {
       // A mixed window must not let the removal handling swallow the adds (the removed all-or-nothing
       // guard this replaced dropped `pureAdds`/`changed` when it fired).
@@ -2806,6 +3446,7 @@ describe('classifyDriveChanges', () => {
       changed: [],
       removedFileIds: [],
       unconfirmedRemovalIds: [],
+      untrackedGoneIds: [],
       ambiguous: 0,
     });
   });
@@ -2826,6 +3467,32 @@ describe('classifyDriveChanges', () => {
       logger
     );
     expect(result.adds).toEqual([]);
+    expect(result.untrackedGoneIds).toEqual(['d1']);
+  });
+
+  it('reports an untracked file Drive confirms trashed as gone, for the not-ingested list', async () => {
+    const result = await classifyDriveChanges(
+      drive,
+      [{ fileId: 'd1', removed: false, file: { id: 'd1', name: 'a.txt', mimeType: 'text/plain', trashed: true } }],
+      'ROOT',
+      () => undefined,
+      logger
+    );
+    expect(result.untrackedGoneIds).toEqual(['d1']);
+    expect(result.removedFileIds).toEqual([]);
+  });
+
+  it('leaves an untracked file out of untrackedGoneIds when its ancestry check fails', async () => {
+    h.isUnderRoot.mockRejectedValue(new Error('drive blip'));
+    const result = await classifyDriveChanges(
+      drive,
+      [{ fileId: 'd1', removed: false, file: { id: 'd1', name: 'a.txt', mimeType: 'text/plain', parents: ['X'] } }],
+      'ROOT',
+      () => undefined,
+      logger
+    );
+    expect(result.untrackedGoneIds).toEqual([]);
+    expect(result.ambiguous).toBe(1);
   });
 
   it('ignores a new (never-tracked) file that Drive reports removed - nothing to add or prune', async () => {
@@ -2836,7 +3503,15 @@ describe('classifyDriveChanges', () => {
       () => undefined,
       logger
     );
-    expect(result).toEqual({ adds: [], changed: [], removedFileIds: [], unconfirmedRemovalIds: [], ambiguous: 0 });
+    // Nothing to add or unpick, but a not-ingested row for it (if the sync skipped it) must go.
+    expect(result).toEqual({
+      adds: [],
+      changed: [],
+      removedFileIds: [],
+      unconfirmedRemovalIds: [],
+      untrackedGoneIds: ['d1'],
+      ambiguous: 0,
+    });
     expect(h.isUnderRoot).not.toHaveBeenCalled();
   });
 
@@ -2939,7 +3614,14 @@ describe('classifyDriveChanges', () => {
       id => (id === 'd1' ? { driveMd5Checksum: 'A' } : undefined),
       logger
     );
-    expect(result).toEqual({ adds: [], changed: [], removedFileIds: [], unconfirmedRemovalIds: [], ambiguous: 1 });
+    expect(result).toEqual({
+      adds: [],
+      changed: [],
+      removedFileIds: [],
+      unconfirmedRemovalIds: [],
+      untrackedGoneIds: [],
+      ambiguous: 1,
+    });
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('tracked file'),
       expect.objectContaining({ fileId: 'd1' })
@@ -2955,7 +3637,14 @@ describe('classifyDriveChanges', () => {
       () => undefined,
       logger
     );
-    expect(result).toEqual({ adds: [], changed: [], removedFileIds: [], unconfirmedRemovalIds: [], ambiguous: 1 });
+    expect(result).toEqual({
+      adds: [],
+      changed: [],
+      removedFileIds: [],
+      unconfirmedRemovalIds: [],
+      untrackedGoneIds: [],
+      ambiguous: 1,
+    });
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('new file'),
       expect.objectContaining({ fileId: 'd1' })
@@ -2977,7 +3666,14 @@ describe('classifyDriveChanges', () => {
       id => (id === 'd1' ? { driveMd5Checksum: 'SAME' } : undefined),
       logger
     );
-    expect(result).toEqual({ adds: [], changed: [], removedFileIds: [], unconfirmedRemovalIds: [], ambiguous: 0 });
+    expect(result).toEqual({
+      adds: [],
+      changed: [],
+      removedFileIds: [],
+      unconfirmedRemovalIds: [],
+      untrackedGoneIds: [],
+      ambiguous: 0,
+    });
   });
 
   it('collapses repeated entries for one fileId to the last one (the feed is a log, not a snapshot)', async () => {

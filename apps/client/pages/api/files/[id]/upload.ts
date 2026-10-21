@@ -2,8 +2,9 @@ import { adminSettingsRepository, FabFile } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { MAX_FILE_SIZE_DEFAULT_MB } from '@server/utils/maxFileSizeDefault';
-import { getFilesStorage } from '@server/utils/storage';
+import { MAX_FILE_SIZE_DEFAULT_MB } from '@bike4mind/server-utils/utils/maxFileSizeDefault';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { admitLandedUpload } from '@server/s3/uploadSizeGate';
 import { recomputeStatsForUploadedFile } from '@server/dataLakes/recomputeStatsForUploadedFile';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
@@ -19,7 +20,7 @@ import type { Request, Response } from 'express';
  * (the storage upload takes a Buffer) and marks the FabFile complete - the PUT completing proves
  * the object landed. The MinIO ObjectCreated webhook still fires to enqueue chunking; marking
  * complete here (not only in the webhook) is what lets the safety-net scan
- * (server/s3/chunkScan.ts) recover a truly-lost webhook, since that scan only rescues
+ * (apps/workers/src/s3/chunkScan.ts) recover a truly-lost webhook, since that scan only rescues
  * status:'complete' files.
  *
  * Auth is normal baseApi (the caller is the logged-in user / API key), so no capability token is
@@ -42,13 +43,15 @@ const handler = baseApi({ maxBodySize: BODY_CEILING_BYTES, requiredScopes: FILES
     if (!fabFile || fabFile.userId !== req.user.id) {
       return res.status(404).json({ error: 'File not found' });
     }
-    if (fabFile.status !== 'pending') {
+    // A server-written row is never a client upload: accepting bytes for one would skip the size gate.
+    if (fabFile.status !== 'pending' || !fabFile.clientUpload) {
       return res.status(400).json({ error: 'File is not awaiting upload' });
     }
     if (!fabFile.filePath) {
       return res.status(400).json({ error: 'File has no storage path' });
     }
     const filePath = fabFile.filePath;
+    const declaredBytes = fabFile.fileSize ?? 0;
 
     const maxBytes =
       getSettingsValue(
@@ -66,6 +69,11 @@ const handler = baseApi({ maxBodySize: BODY_CEILING_BYTES, requiredScopes: FILES
     for await (const chunk of req) {
       const buf = chunk as Buffer;
       received += buf.length;
+      // Same refusal (and status) as a hosted PUT to the presign, which is bound to the declared size.
+      if (received > declaredBytes) {
+        req.destroy();
+        return res.status(403).json({ error: 'Upload must be exactly the declared size', declaredBytes });
+      }
       if (received > maxBytes) {
         req.destroy();
         return res.status(413).json({ error: 'File size exceeds maximum file size', maxBytes });
@@ -73,6 +81,15 @@ const handler = baseApi({ maxBodySize: BODY_CEILING_BYTES, requiredScopes: FILES
       chunks.push(buf);
     }
     const body = Buffer.concat(chunks);
+    if (body.length !== declaredBytes) {
+      return res.status(403).json({ error: 'Upload must be exactly the declared size', declaredBytes });
+    }
+
+    // The row goes complete below, which the webhook's size gate skips, so the proxy runs it itself
+    // for the MaxFileSize and quota arms.
+    if (!(await admitLandedUpload(fabFile, body.length, filePath, req.logger))) {
+      return res.status(413).json({ error: 'File is larger than declared or exceeds your storage limit' });
+    }
 
     // Write to the FabFile's own storage key (from the DB, never client-supplied) so the caller
     // can't target an arbitrary key and the webhook fires on the expected object.

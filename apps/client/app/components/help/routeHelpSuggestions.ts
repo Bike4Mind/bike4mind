@@ -27,7 +27,7 @@ export const ROUTE_HELP_SUGGESTIONS: RouteHelpSuggestion[] = [
   {
     path: '/organizations',
     helpIds: ['features/organizations-teams'],
-    label: 'Learn about Organizations & Teams',
+    label: 'Learn about Teams',
   },
   { path: '/quests', helpIds: ['features/quest-master'], label: 'Learn about Quest Master' },
 ];

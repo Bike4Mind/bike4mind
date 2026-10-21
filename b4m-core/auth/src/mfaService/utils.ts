@@ -32,17 +32,27 @@ export async function generateTOTPSetup(
   };
 }
 
+const TOTP_STEP_SECONDS = 30;
+
 /**
- * Verify a TOTP token against a secret
- * Using industry-standard window to handle minor clock drift
+ * Match a TOTP token against a secret and return the time step it belongs to, or null.
+ * The window of 1 step either side absorbs minor clock drift (industry standard). Callers that
+ * accept a code must also claim the step (see claimTOTPCode) so the code cannot be replayed.
  */
-export function verifyTOTPToken(secret: string, token: string, window = 1): boolean {
-  return speakeasy.totp.verify({
+export function matchTOTPStep(secret: string, token: string, window = 1, nowMs = Date.now()): number | null {
+  // An empty key is public, so anyone could compute its codes. decryptAtRest returns '' when a
+  // stored secret cannot be decrypted, which must fail closed rather than verify.
+  if (!secret) return null;
+  const time = Math.floor(nowMs / 1000);
+  const match = speakeasy.totp.verifyDelta({
     secret,
     encoding: 'base32',
     token,
-    window, // Allow ±30 seconds for clock drift (industry standard)
+    window,
+    time,
+    step: TOTP_STEP_SECONDS,
   });
+  return match ? Math.floor(time / TOTP_STEP_SECONDS) + match.delta : null;
 }
 
 /**

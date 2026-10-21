@@ -38,3 +38,23 @@ export async function isOperationalBillingEnabled(
     (getSettingsValue('enforceCredits', settings) ?? false)
   );
 }
+
+/**
+ * Whether this deployment meters credits at all - the `enforceCredits` master switch alone (off on
+ * self-host, where there is no billing stack), WITHOUT the `billOperationalUsage` policy on top.
+ *
+ * For spend that is billed on its own terms rather than by that policy: data-lake research judge
+ * calls are charged to the lake owner because a manager can start a run on a per-run ceiling, which
+ * `billOperationalUsage` was never meant to govern (it names auto-naming, summarization, tagging and
+ * KB search embeddings). The research pre-flight and settlement MUST both key off this one function
+ * for the same reason `isOperationalBillingEnabled` exists - a pre-flight stricter than the
+ * settlement refuses work that would never have been charged.
+ *
+ * Still respects `enforceCredits`: on a deployment that does not meter credits, research must not
+ * debit a ledger that does not exist, so it is recorded as platform cost exactly as today.
+ * Throws if the settings store does, matching `isOperationalBillingEnabled`.
+ */
+export async function areCreditsEnforced(db: OperationalBillingSettingsAdapter, logger?: Logger): Promise<boolean> {
+  const settings = await getSettingsMap(db, { logger });
+  return getSettingsValue('enforceCredits', settings) ?? false;
+}

@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { EditImageRequestBodySchema, GenerateImageIvokeParamsSchema } from './llm';
+import {
+  ChatCompletionInvokeParamsSchema,
+  EditImageRequestBodySchema,
+  GenerateImageIvokeParamsSchema,
+  LLMApiRequestBodySchema,
+} from './llm';
 import { MAX_REFERENCE_IMAGES } from './utils/modelHelpers';
 
 describe('referenceImageFabFileIds cap', () => {
@@ -20,5 +25,37 @@ describe('referenceImageFabFileIds cap', () => {
   ] as const)('%s accepts 15 references and rejects 16', (_, schema) => {
     expect(refIssues(schema, 15)).toEqual([]);
     expect(refIssues(schema, 16)).toHaveLength(1);
+  });
+});
+
+describe('LLMApiRequestBodySchema toolMode fence', () => {
+  const body = {
+    sessionId: 'session-1',
+    historyCount: 0,
+    fabFileIds: [],
+    message: 'hi',
+    params: { model: 'gpt-4o' },
+    toolMode: 'smart',
+  };
+
+  it('strips toolMode so an in-app turn cannot be attributed to a public /api/chat mode', () => {
+    expect(ChatCompletionInvokeParamsSchema.parse(body)).toHaveProperty('toolMode', 'smart');
+    expect(LLMApiRequestBodySchema.parse(body)).not.toHaveProperty('toolMode');
+  });
+});
+
+describe('ChatCompletionInvokeParamsSchema.deepResearchConfig', () => {
+  const issuesAt = (deepResearchConfig: unknown) =>
+    (ChatCompletionInvokeParamsSchema.safeParse({ deepResearchConfig }).error?.issues ?? []).filter(
+      issue => issue.path[0] === 'deepResearchConfig'
+    );
+
+  it('rejects a depth or duration past the Deep Research ceilings', () => {
+    expect(issuesAt({ maxDepth: 1000 })).not.toHaveLength(0);
+    expect(issuesAt({ duration: 1000 })).not.toHaveLength(0);
+  });
+
+  it('accepts values within the ceilings', () => {
+    expect(issuesAt({ maxDepth: 10, duration: 10 })).toHaveLength(0);
   });
 });

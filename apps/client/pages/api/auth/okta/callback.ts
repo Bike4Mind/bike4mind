@@ -12,7 +12,7 @@
  * @see https://datatracker.ietf.org/doc/rfc7636/
  */
 import { Request, Response } from 'express';
-import { authFailLogRepository, User, authSessionRepository } from '@bike4mind/database';
+import { authFailLogRepository, User, authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { IAuthProviders } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -26,23 +26,34 @@ import {
   readPkceVerifierCookie,
   clearPkceVerifierCookie,
 } from '@server/auth/oauthFlowCookie';
-import { authSuccessRedirectQuery } from '@server/auth/authSuccessRedirect';
+import { authSuccessRedirectQuery, mfaHandoffFragment } from '@server/auth/authSuccessRedirect';
 import { OKTA_STATE_AUDIENCE, OktaStatePayload } from '@server/auth/oktaConstants';
 import { issueBrowserSession } from '@server/auth/issueSession';
+import { logSignInSuccess, resolveSecondFactor, type SecondFactorOutcome } from '@server/auth/signInSecondFactor';
 import { logEvent } from '@server/utils/analyticsLog';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { AuthEvents, AuthStrategy } from '@bike4mind/common';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { requireNonSystemUser } from '@server/auth/requireNonSystemUser';
 import { validateAppUrl } from '@server/utils/validators';
-import { encryptSecret } from '@server/security/secretEncryption';
-import { Config } from '@server/utils/config';
+import { encryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
+import { Config } from '@bike4mind/server-utils/utils/config';
+import { authSessionService } from '@bike4mind/services';
 import { Logger } from '@bike4mind/observability';
 import { decideAutoLink, applyAccountLink } from '@server/utils/auth/oauthAccountLink';
 import { createUniqueOAuthUser, deriveOAuthUsername } from '@server/utils/auth/createOAuthUser';
+import { applyEmailVerifiedGrants } from '@server/auth/emailVerifiedGrants';
+import { applyOAuthSignupDomainGrant } from '@server/utils/auth/oauthSignupGrants';
 import { emailMatchesIdpDomain, IDP_EMAIL_DOMAIN_MISMATCH } from '@server/utils/auth/idpEmailDomain';
 import { isLocalAppUrl } from '@server/utils/validators';
-import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
+import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
+import { stampOAuthSourceTag } from '@server/utils/auth/oauthSourceTag';
+import { getClientIp } from '@bike4mind/server-utils/utils/ip';
+import {
+  emitEmailVerifiedFunnelEvents,
+  emitSignupFunnelEvents,
+  recordSignupAcquisition,
+} from '@server/analytics/funnel';
 
 /**
  * Type guard to validate query parameter is a non-empty string.
@@ -72,7 +83,7 @@ function sanitizeOAuthError(error: string): string {
 }
 
 const handleOktaCallback = async (req: Request, res: Response) => {
-  const ip = req.socket?.remoteAddress || (req.headers['x-forwarded-for'] as string) || req.ip || 'unknown';
+  const ip = getClientIp(req);
   const userAgent = req.headers['user-agent'] || 'unknown';
 
   try {
@@ -307,6 +318,8 @@ const handleOktaCallback = async (req: Request, res: Response) => {
     // Tracks whether this callback links Okta to an existing account for the
     // first time (vs. a routine re-login on an already-linked provider).
     let isNewProviderLink = false;
+    let isNewUser = false;
+    let signupCreditsGranted = 0;
     if (user) {
       // Update existing user's OAuth credentials
       const authProviders: IAuthProviders[] = user.authProviders || [];
@@ -414,12 +427,35 @@ const handleOktaCallback = async (req: Request, res: Response) => {
         }
       }
       Object.assign(user, reflect);
+      // Mirrors verifyCallback.ts: promotion is this account's email verification, so apply its
+      // grants here (OTC login and Resend no longer will once emailVerified is set).
+      if (promoteEmailVerified) {
+        const grants = await applyEmailVerifiedGrants({
+          user: { id: user.id, tags: user.tags, pendingCreditGrant: user.pendingCreditGrant },
+          verifiedEmail: email,
+          trigger: 'oauth-link-verification',
+          releaseReason: 'Okta account link (email verified)',
+          logger: Logger.globalInstance,
+        });
+        await emitEmailVerifiedFunnelEvents({
+          user,
+          method: AuthStrategy.Okta,
+          creditsGranted: grants.creditsGranted + grants.subscriptionCreditsGranted,
+        });
+      }
       // Invariant (mirrors verifyCallback.ts): the new-provider tokenVersion bump must also revoke
       // AuthSessions, else an opaque refresh token -- never checked against tokenVersion -- rotates
       // into a fresh access token stamped with the new version and survives the bump. Safe to revoke
       // ALL: this login's session is minted below, after the revoke, so it is created fresh.
       if (isNewProviderLink) {
-        await authSessionRepository.revokeAllByUserId(user.id);
+        await authSessionService.revokeAllUserSessions(
+          user.id,
+          {},
+          {
+            db: { authSessions: authSessionRepository, realtimeConnections: realtimeConnectionRepository },
+            logger: req.logger,
+          }
+        );
       }
       Logger.debug('[Okta Callback] Updated existing user:', user.id);
     } else {
@@ -442,7 +478,14 @@ const handleOktaCallback = async (req: Request, res: Response) => {
       const emailForNewAccount = userInfo.email_verified === true ? email : null;
       const baseUsername = deriveOAuthUsername(username ?? null, name, emailForNewAccount);
       user = await createUniqueOAuthUser({ name, baseUsername, email: emailForNewAccount, oauthCredentials });
+      isNewUser = true;
       Logger.debug('[Okta Callback] Created new user:', user.id);
+      // Never reaches /api/email/verify, so the verified domain's grant runs here (no flat grant for Okta).
+      if (emailForNewAccount) {
+        const domainGrant = await applyOAuthSignupDomainGrant(user.id, emailForNewAccount);
+        signupCreditsGranted = domainGrant.creditsGranted + domainGrant.subscriptionCreditsGranted;
+      }
+      await stampOAuthSourceTag(user.id, stateResult.payload.clientId);
     }
 
     // Parity with verifyCallback.ts, which omits the password hash from the user
@@ -452,9 +495,46 @@ const handleOktaCallback = async (req: Request, res: Response) => {
     // persisted: nothing below calls user.save() (writes go via User.updateOne).
     user.password = null;
 
+    if (isNewUser) {
+      const signupFunnel = await recordSignupAcquisition({ req, user, method: AuthStrategy.Okta });
+      await emitSignupFunnelEvents({
+        user: { id: user.id, ...signupFunnel },
+        method: AuthStrategy.Okta,
+        emailVerified: userInfo.email_verified === true,
+        creditsGranted: signupCreditsGranted,
+      });
+    }
+
     // Check if user is banned
     if (user.isBanned) {
       throw new ForbiddenError('User is banned');
+    }
+
+    // Audited before the second-factor gate, which may end the request: the link is already
+    // persisted. Mirrors verifyCallback.ts for the generic OAuth path.
+    if (isNewProviderLink) {
+      await logAuthAudit(req, { userId: user.id, event: 'oauth_link', strategy: AuthStrategy.Okta });
+    }
+
+    // Resume the originally requested path (round-tripped via the state JWT).
+    // /auth/success applies sanitizeRedirectTo before navigating, so it is
+    // passed through as an opaque, URL-encoded query value.
+    const successQuery = authSuccessRedirectQuery(redirectTo);
+
+    // An Okta IdP record is bound to its org's email domain (checked above), so that IdP owns
+    // MFA. The unbound SST-secret fallback has no such binding and is challenged like a
+    // consumer social sign-in.
+    const secondFactor: SecondFactorOutcome = idp
+      ? { kind: 'satisfied', trustedDevice: null }
+      : await resolveSecondFactor(req, user, { origin: { strategy: AuthStrategy.Okta, createdVia: 'okta' } });
+    if (secondFactor.kind !== 'satisfied') {
+      const handoff = mfaHandoffFragment({
+        mfaToken: secondFactor.mfaToken,
+        userId: user.id,
+        mode: secondFactor.kind === 'challenge' ? 'verify' : 'setup',
+        passkeyAvailable: secondFactor.kind === 'challenge' && secondFactor.passkeyAvailable,
+      });
+      return res.redirect(`/auth/success${successQuery}${handoff}`);
     }
 
     // Generate our session tokens (distinct from the Okta IdP accessToken/refreshToken above).
@@ -475,20 +555,13 @@ const handleOktaCallback = async (req: Request, res: Response) => {
       },
     });
 
-    await logAuthAudit(req, { userId: user.id, event: 'login_success', strategy: AuthStrategy.Okta });
-
-    // Record the forensic trail for a genuine new account-link (not a re-login),
-    // mirroring verifyCallback.ts for the generic OAuth path.
-    if (isNewProviderLink) {
-      await logAuthAudit(req, { userId: user.id, event: 'oauth_link', strategy: AuthStrategy.Okta });
-    }
+    await logSignInSuccess(req, {
+      userId: user.id,
+      strategy: AuthStrategy.Okta,
+      trustedDevice: secondFactor.trustedDevice,
+    });
 
     Logger.debug('[Okta Callback] Authentication successful for user:', user.id);
-
-    // Resume the originally requested path (round-tripped via the state JWT).
-    // /auth/success applies sanitizeRedirectTo before navigating, so it is
-    // passed through as an opaque, URL-encoded query value.
-    const successQuery = authSuccessRedirectQuery(redirectTo);
 
     // Redirect to the application with tokens in URL fragment (not query string)
     // Using fragments prevents tokens from being logged in server access logs,

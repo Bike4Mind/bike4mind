@@ -29,6 +29,9 @@ describe('ChatService tool loop', () => {
 
   /** `turnLimits` is how a test reaches a budget whose real values it could not afford to. */
   function build(turnLimits?: ChatServiceDeps['turnLimits']): ChatService {
+    // Bound to this test's sinks: a previous service replying late must not write into the next test's.
+    const emitted = events;
+    const boundPost = post;
     return new ChatService({
       store,
       models: {
@@ -48,10 +51,10 @@ describe('ChatService tool loop', () => {
       getApiClient: () =>
         ({
           get: vi.fn().mockResolvedValue({}),
-          getAxiosInstance: () => ({ post }),
+          getAxiosInstance: () => ({ post: boundPost }),
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
-      emit: event => events.push(event),
+      emit: event => emitted.push(event),
     });
   }
 
@@ -70,11 +73,12 @@ describe('ChatService tool loop', () => {
 
     store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-loop-sessions-')), 'test-model');
     events = [];
-    streams = [];
+    const opened: PassThrough[] = [];
+    streams = opened;
     // A fresh stream per POST, so each turn of the loop has its own response.
     post = vi.fn().mockImplementation(() => {
       const stream = new PassThrough();
-      streams.push(stream);
+      opened.push(stream);
       return Promise.resolve({ data: stream, status: 200 });
     });
 
@@ -302,7 +306,14 @@ describe('ChatService tool loop', () => {
     const sent = await service.send(id, 'build it');
     await firstRequest();
 
-    streams[0].write(frame({ type: 'content', text: 'Reading the config.' }));
+    streams[0].write(
+      frame({
+        type: 'content',
+        text: 'Reading the config.',
+        usage: { inputTokens: 1000, outputTokens: 200, cacheReadInputTokens: 50 },
+        credits: { used: 20 },
+      })
+    );
     await driveRounds(1, () => '{"pattern":"*"}');
     const stopped = await waitFor(events, 'done');
     expect(stopped).toMatchObject({ stopReason: 'tool_turn_limit' });
@@ -310,6 +321,11 @@ describe('ChatService tool loop', () => {
     events.length = 0;
     const resumed = await service.continueReply(id);
     expect(resumed).toMatchObject({ ok: true, messageId: sent.ok && !sent.queued ? sent.messageId : '' });
+    // The resumed run opens by saying what the interrupted one had already spent, so a consumer
+    // reads the earlier part from here instead of inferring it from the resumed totals.
+    expect(await waitFor(events, 'start')).toMatchObject({
+      baseUsage: { inputTokens: 1000, outputTokens: 200, cacheReadInputTokens: 50, creditsUsed: 20 },
+    });
     await vi.waitUntil(() => streams.length === 2, { timeout: 3000, interval: 5 });
 
     // The resumed request replays the interrupted turn's own tool call and its result, which is
@@ -338,7 +354,12 @@ describe('ChatService tool loop', () => {
     // so the thread still draws the tool call where it happened.
     const reply = session?.messages.find(message => message.role === 'assistant');
     expect(reply?.rounds).toEqual([
-      { text: 'Reading the config.', toolCallIds: [expect.any(String)], timing: expect.any(Object) },
+      {
+        text: 'Reading the config.',
+        toolCallIds: [expect.any(String)],
+        timing: expect.any(Object),
+        usage: { inputTokens: 1000, outputTokens: 200, cacheReadInputTokens: 50, creditsUsed: 20 },
+      },
       { text: 'Done.', toolCallIds: [], timing: expect.any(Object) },
     ]);
   });

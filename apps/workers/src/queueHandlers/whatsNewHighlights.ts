@@ -5,8 +5,11 @@ import {
   adminSettingsRepository,
 } from '@bike4mind/database';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
-import { WhatsNewHighlightsPayloadSchema } from '@server/whatsNew/whatsNewHighlights.types';
-import type { WhatsNewHighlightsConfig, HighlightsRunStatus } from '@server/whatsNew/whatsNewHighlights.types';
+import { WhatsNewHighlightsPayloadSchema } from '@bike4mind/server-utils/whatsNew/whatsNewHighlights.types';
+import type {
+  WhatsNewHighlightsConfig,
+  HighlightsRunStatus,
+} from '@bike4mind/server-utils/whatsNew/whatsNewHighlights.types';
 import { loadHighlightsReleaseNotes, parseHighlightsEndDate } from '@server/whatsNew/releaseNoteHighlights';
 import {
   buildHighlightsPrompt,
@@ -17,9 +20,9 @@ import { getSettingsByNames } from '@bike4mind/utils';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { apiKeyService } from '@bike4mind/services';
-import { ChatModels } from '@bike4mind/common';
+import { ChatModels, CHAT_MODELS } from '@bike4mind/common';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
-import { emitModalGenerationMetrics } from '@server/utils/cloudwatch';
+import { emitModalGenerationMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
 import { decryptToken } from '@server/security/tokenEncryption';
 
 const SETTING_NAME = 'whatsNewHighlightsConfig';
@@ -199,9 +202,8 @@ async function processHighlightsGeneration(
   const config = await getHighlightsConfig();
   let llmModel = config?.llmModel || DEFAULT_LLM_MODEL;
 
-  // Validate model is a known ChatModels value, fallback to default if not
-  const validModels = Object.values(ChatModels) as string[];
-  if (!validModels.includes(llmModel)) {
+  // Validate model is a servable ChatModels value, fallback to default if not
+  if (!CHAT_MODELS.includes(llmModel)) {
     logger.warn('Invalid LLM model configured, falling back to default', {
       configuredModel: llmModel,
       defaultModel: DEFAULT_LLM_MODEL,
@@ -417,7 +419,7 @@ async function postToSlack(
         unfurl_media: false,
       }),
     });
-    result = await response.json();
+    result = (await response.json()) as SlackPostMessageResponse;
   } catch (error) {
     throw new Error(`Slack chat.postMessage request failed: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -468,7 +470,7 @@ async function uploadMarkdownSnippet(
         Authorization: `Bearer ${botToken}`,
       },
     });
-    getUrlResult = await getUrlResponse.json();
+    getUrlResult = (await getUrlResponse.json()) as SlackGetUploadUrlResponse;
   } catch (error) {
     logger.warn('Failed to request upload URL for markdown snippet', {
       error: error instanceof Error ? error.message : String(error),
@@ -523,7 +525,7 @@ async function uploadMarkdownSnippet(
         initial_comment: 'Raw markdown version for easy copy/paste:',
       }),
     });
-    completeResult = await completeResponse.json();
+    completeResult = (await completeResponse.json()) as SlackCompleteUploadResponse;
   } catch (error) {
     logger.warn('Failed to complete Slack upload', {
       error: error instanceof Error ? error.message : String(error),

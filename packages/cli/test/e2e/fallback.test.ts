@@ -76,12 +76,12 @@ describe('e2e — FallbackLlmBackend wrapping faux', () => {
     expect(callCount).toBe(2);
   });
 
-  it('discards partial output from a failed attempt and falls back cleanly (no double-fire)', async () => {
-    // The canonical partial-output path: primary streams a chunk, THEN throws.
-    // The decorator buffers inner deliveries and flushes only on success, so the
-    // primary's partial output is discarded and only the secondary's result is
-    // delivered - exactly once, with no double-fire.
+  it('streams partial output live and surfaces a later failure instead of falling back (no double-content)', async () => {
+    // Primary streams a chunk, THEN throws. Deliveries pass straight through, so
+    // the chunk has already reached the caller; falling back would land the
+    // secondary's answer on top of it. The failure surfaces instead.
     const primaryError = new Error('connection reset');
+    const modelsAttempted: string[] = [];
     const inner: ICompletionBackend = {
       currentModel: 'primary',
       pushToolMessages: vi.fn(),
@@ -92,6 +92,7 @@ describe('e2e — FallbackLlmBackend wrapping faux', () => {
         _opts: Partial<ICompletionOptions>,
         callback: (text: (string | null | undefined)[], info?: CompletionInfo) => Promise<void>
       ) => {
+        modelsAttempted.push(model);
         if (model === 'primary') {
           await callback(['partial chunk'], {});
           throw primaryError;
@@ -108,13 +109,12 @@ describe('e2e — FallbackLlmBackend wrapping faux', () => {
       captured.push(text.filter((t): t is string => !!t).join(''));
     });
 
-    await fb.complete('primary', [{ role: 'user', content: 'hi' }], { tools: [] }, callback);
+    await expect(fb.complete('primary', [{ role: 'user', content: 'hi' }], { tools: [] }, callback)).rejects.toThrow(
+      primaryError
+    );
 
-    // Only the successful fallback's output is delivered, exactly once -
-    // the primary's discarded partial chunk never reaches the caller.
-    expect(callback).toHaveBeenCalledOnce();
-    expect(captured).toEqual(['secondary fallback']);
-    expect(onFallback).toHaveBeenCalledOnce();
-    expect(onFallback).toHaveBeenCalledWith('primary', 'secondary', primaryError);
+    expect(captured).toEqual(['partial chunk']);
+    expect(modelsAttempted).toEqual(['primary']);
+    expect(onFallback).not.toHaveBeenCalled();
   });
 });

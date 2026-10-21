@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { DEEP_RESEARCH_MAX_DEPTH, DEEP_RESEARCH_MAX_DURATION_MIN } from './constants/llmLimits';
 import { ChatCompletionCreateInputSchema, ImageOutputFormatSchema, OpenAIImageGenerationInput } from './schemas/openai';
 import { b4mLLMTools, B4MLLMTools } from './schemas/llm';
 import { supportedVoiceGenerationVendor, voiceOutputFormatSchema } from './voiceGeneration';
@@ -6,6 +7,8 @@ import { BFLSafetyToleranceSchema } from './schemas/bfl';
 import { PROMPT_TEXT_MAX } from './schemas/briefcasePrompt';
 import { MAX_REFERENCE_IMAGES } from './utils/modelHelpers';
 import { GenerationCallbackUrlSchema } from './schemas/generationCallback';
+import { BillingOrganizationIdSchema } from './schemas/billingOrganization';
+import { ChatToolModeSchema } from './schemas/promptMeta';
 
 // Re-export LLM tools for external use
 export { b4mLLMTools };
@@ -99,6 +102,16 @@ export const GenerateImageIvokeParamsSchema = OpenAIImageGenerationInput.extend(
 });
 export type GenerateImageIvokeParams = z.infer<typeof GenerateImageIvokeParamsSchema>;
 
+/**
+ * snake_case alias of `organizationId` on the public image request bodies. The route maps it
+ * (`resolveBillingOrgInput`) rather than the schema, which a public request schema may not
+ * `.transform()`. Same rules as `organizationId`: null bills personal, blank is a 422.
+ */
+const BillingOrgIdAliasSchema = BillingOrganizationIdSchema.describe(
+  'Alias of `organizationId`, for callers used to the snake_case video and music bodies. Sending both ' +
+    'with different values is a 422.'
+);
+
 // `intent` and `promptEnhancement` are outputs of the route's prompt resolver, which always sets
 // them, so they are not part of the public request (api-contract/contracts/imageGeneration.contract.ts).
 export const GenerateImageRequestBodySchema = GenerateImageIvokeParamsSchema.omit({
@@ -107,6 +120,8 @@ export const GenerateImageRequestBodySchema = GenerateImageIvokeParamsSchema.omi
 }).extend({
   sessionId: z.string().optional(),
   sessionName: z.string().optional(),
+  organizationId: BillingOrganizationIdSchema,
+  organization_id: BillingOrgIdAliasSchema,
   callbackUrl: GenerationCallbackUrlSchema.optional(),
   projectId: z.string().optional(),
   prompt_resolution: ImagePromptResolutionSchema.optional().describe(
@@ -164,7 +179,8 @@ export type AudioGenerationToolCall = z.infer<typeof AudioGenerationToolCallSche
 export const EditImageRequestBodySchema = OpenAIImageGenerationInput.extend({
   sessionId: z.string(),
   questId: z.string().optional(),
-  organizationId: z.string().nullable().optional(),
+  organizationId: BillingOrganizationIdSchema,
+  organization_id: BillingOrgIdAliasSchema,
   aspect_ratio: z.string().optional(),
   fabFileIds: z.array(z.string()).prefault([]),
   /**
@@ -240,8 +256,8 @@ export const ChatCompletionInvokeParamsSchema = z.object({
   audioConfig: AudioGenerationToolCallSchema.optional(),
   deepResearchConfig: z
     .object({
-      maxDepth: z.number().optional(),
-      duration: z.number().optional(),
+      maxDepth: z.number().int().min(1).max(DEEP_RESEARCH_MAX_DEPTH).optional(),
+      duration: z.number().positive().max(DEEP_RESEARCH_MAX_DURATION_MIN).optional(),
       // Note: searchers are passed via ToolContext and not through this API schema
       searchers: z.array(z.any()).optional(),
     })
@@ -306,6 +322,13 @@ export const ChatCompletionInvokeParamsSchema = z.object({
    */
   skipAutoOffers: z.boolean().optional(),
   /**
+   * Per-request twin of `session.disableUserIntegrations`, ORed with it: no user MCP servers, no
+   * agents or agent delegation, and no user skills (catalog or `/skill` expansion). For a server
+   * caller running a prompt the user did not author (e.g. a Slack workflow step), where the user's
+   * own integrations must not be reachable from that prompt.
+   */
+  disableUserIntegrations: z.boolean().optional(),
+  /**
    * Withhold only the reply-choices guidance, for a caller with no button UI (voice speaks the
    * raw reply stream, so a choices block would be read aloud). Narrower than `skipAutoOffers`,
    * which also withholds knowledge and MCP offers such a caller may still need.
@@ -360,6 +383,8 @@ export const ChatCompletionInvokeParamsSchema = z.object({
   allowedAgents: z.array(z.string()).optional(),
   /** When true, Quest Processor injects Slack-specific tool configs (help, notebooks, curated files) */
   enableSlackTools: z.boolean().optional(),
+  /** Public /api/chat `toolMode`, persisted on promptMeta for tool-calling evals. */
+  toolMode: ChatToolModeSchema.optional(),
   /**
    * Agent-mode toggle state forwarded from the composer. The chat
    * completion path itself does not branch on this - that decision happens
@@ -377,7 +402,9 @@ export const ChatCompletionInvokeParamsSchema = z.object({
 });
 export type ChatCompletionInvokeParams = z.infer<typeof ChatCompletionInvokeParamsSchema>;
 
-export const LLMApiRequestBodySchema = ChatCompletionInvokeParamsSchema.extend({
+// toolMode is omitted so an in-app request cannot stamp a mode no tool selection ran under; only
+// /api/chat sets it, after its own toolMode handling.
+export const LLMApiRequestBodySchema = ChatCompletionInvokeParamsSchema.omit({ toolMode: true }).extend({
   /** Notebook session ID */
   sessionId: z.string().optional(),
   /** Notebook session name */
@@ -388,6 +415,11 @@ export const LLMApiRequestBodySchema = ChatCompletionInvokeParamsSchema.extend({
    * is absent; ignored when an existing session is resolved.
    */
   agentIds: z.array(z.string()).optional(),
+  /**
+   * The subset of `messageFileIds` the user scoped to this message only. Every other notebook-scope
+   * message attachment is pinned to the session so it stays in context on later turns.
+   */
+  messageOnlyFileIds: z.array(z.string()).optional(),
 });
 export type LLMApiRequestBody = z.infer<typeof LLMApiRequestBodySchema>;
 

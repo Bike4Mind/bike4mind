@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { baseApi } from '@server/middlewares/baseApi';
 import { OperationsModelService } from '@client/services/operationsModelService';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import { ApiKeyScope, SpeechToTextModels } from '@bike4mind/common';
 

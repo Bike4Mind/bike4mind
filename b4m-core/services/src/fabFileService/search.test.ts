@@ -192,3 +192,26 @@ describe('fabFileService search - type filter', () => {
     await expect(search('u1', params, a)).rejects.toThrow();
   });
 });
+
+describe('fabFileService search - generated filter', () => {
+  it.each([
+    [true, true],
+    ['true', true],
+    ['false', false],
+    [false, false],
+  ])('reads %j as %j', async (sent, expected) => {
+    const { adapters: a, fabFilesSearch } = adapters();
+    const params = { filters: { generated: sent } } as unknown as Parameters<typeof search>[1];
+
+    await search('u1', params, a);
+
+    expect(filtersArgOf(fabFilesSearch).generated).toBe(expected);
+  });
+
+  it('rejects a value that is not a boolean', async () => {
+    const { adapters: a } = adapters();
+    const params = { filters: { generated: 'yes' } } as unknown as Parameters<typeof search>[1];
+
+    await expect(search('u1', params, a)).rejects.toThrow();
+  });
+});

@@ -10,6 +10,7 @@ import {
   resolveRetryAfterDelayMs,
 } from '../rateLimitHeaders';
 import { getErrorMessage } from '../atlassian/config';
+import { apiPath, assertSafeApiPath } from '../atlassian/apiPath';
 
 import {
   formatUserResponse,
@@ -51,6 +52,11 @@ export type RestrictionOperation = (typeof RESTRICTION_OPERATIONS)[number];
  */
 export const RESTRICTION_SUBJECT_TYPES = ['user', 'group'] as const;
 export type RestrictionSubjectType = (typeof RESTRICTION_SUBJECT_TYPES)[number];
+
+/** Confluence page ids are numeric; anything else must never be interpolated into a request path. */
+export function isValidConfluencePageId(id: string): boolean {
+  return /^\d+$/.test(id);
+}
 
 // ============================================================================
 // Types & Interfaces
@@ -289,6 +295,7 @@ export class ConfluenceApi {
    * Build URL with query parameters
    */
   private buildUrl(path: string, query: QueryParams = {}, useV1 = false): string {
+    assertSafeApiPath(path);
     const baseUrl = useV1 ? this.config.apiBaseUrlV1 : this.config.apiBaseUrlV2;
     const base = `${baseUrl}${path}`;
     const url = new URL(base);
@@ -485,7 +492,7 @@ export class ConfluenceApi {
 
     let page;
     if (pageId) {
-      page = await this.get<ConfluenceApiResponse>(`/pages/${pageId}`, {
+      page = await this.get<ConfluenceApiResponse>(apiPath`/pages/${pageId}`, {
         'body-format': includeContent ? 'storage' : undefined,
       });
     } else {
@@ -502,6 +509,19 @@ export class ConfluenceApi {
     }
 
     return formatPageResponse(page, this.config.siteUrl);
+  }
+
+  /**
+   * Get a page's raw storage-format body with its current title and version number.
+   */
+  async getPageStorage(params: { pageId: string }): Promise<{ title: string; version: number; storage: string }> {
+    const { pageId } = params;
+    const page = await this.get<ConfluencePage>(apiPath`/pages/${pageId}`, { 'body-format': 'storage' });
+    const version = page?.version?.number;
+    if (typeof version !== 'number') {
+      throw new Error(`Unable to determine current version for page ${pageId}.`);
+    }
+    return { title: page?.title ?? '', version, storage: page?.body?.storage?.value ?? '' };
   }
 
   /**
@@ -545,37 +565,56 @@ export class ConfluenceApi {
   }
 
   /**
-   * Update an existing Confluence page
+   * Update an existing Confluence page.
+   *
+   * With `expectedVersion` the page is not refetched: the write is sent as `expectedVersion + 1`, so Confluence
+   * rejects it (409) if the page changed since the caller read it. `title` is then required.
    */
-  async updatePage(params: { pageId: string; title?: string; content: string }): Promise<FormattedPage> {
-    const { pageId, title, content } = params;
+  async updatePage(params: {
+    pageId: string;
+    title?: string;
+    content: string;
+    expectedVersion?: number;
+  }): Promise<FormattedPage> {
+    const { pageId, title, content, expectedVersion } = params;
 
     if (!pageId || !content) {
       throw new Error('pageId, and content are required to update a page.');
     }
 
-    const currentPage = await this.get<ConfluenceApiResponse>(`/pages/${pageId}`);
-    const currentVersion = currentPage?.version?.number;
-    const currentTitle = currentPage?.title;
+    let nextVersion: number;
+    let resolvedTitle: string | undefined = title;
 
-    if (typeof currentVersion !== 'number') {
-      throw new Error(`Unable to determine current version for page ${pageId}.`);
+    if (expectedVersion !== undefined) {
+      if (!title) {
+        throw new Error('title is required when expectedVersion is provided.');
+      }
+      nextVersion = expectedVersion + 1;
+    } else {
+      const currentPage = await this.get<ConfluenceApiResponse>(apiPath`/pages/${pageId}`);
+      const currentVersion = currentPage?.version?.number;
+
+      if (typeof currentVersion !== 'number') {
+        throw new Error(`Unable to determine current version for page ${pageId}.`);
+      }
+      nextVersion = currentVersion + 1;
+      resolvedTitle = title || currentPage?.title;
     }
 
     const payload = {
       id: pageId,
-      title: title || currentTitle,
+      title: resolvedTitle,
       body: {
         value: content,
         representation: 'storage',
       },
       status: 'current',
       version: {
-        number: currentVersion + 1,
+        number: nextVersion,
       },
     };
 
-    const updatedPage = await this.put<ConfluenceApiResponse>(`/pages/${pageId}`, payload);
+    const updatedPage = await this.put<ConfluenceApiResponse>(apiPath`/pages/${pageId}`, payload);
     return formatPageResponse(updatedPage, this.config.siteUrl);
   }
 
@@ -589,7 +628,7 @@ export class ConfluenceApi {
       throw new Error('pageId is required to delete a page.');
     }
 
-    await this.request<void>('DELETE', `/pages/${pageId}`);
+    await this.request<void>('DELETE', apiPath`/pages/${pageId}`);
   }
 
   /**
@@ -674,7 +713,7 @@ export class ConfluenceApi {
       throw new Error('spaceId is required to fetch space details.');
     }
 
-    const space = await this.get<ConfluenceApiResponse>(`/spaces/${spaceId}`);
+    const space = await this.get<ConfluenceApiResponse>(apiPath`/spaces/${spaceId}`);
     return formatSpaceResponse(space, this.config.siteUrl);
   }
 
@@ -688,7 +727,7 @@ export class ConfluenceApi {
       throw new Error('pageId is required to fetch child pages.');
     }
 
-    const children = await this.get<ConfluenceApiResponse>(`/pages/${pageId}/direct-children`, {
+    const children = await this.get<ConfluenceApiResponse>(apiPath`/pages/${pageId}/direct-children`, {
       limit: Math.min(Math.max(limit, 1), 50),
     });
 
@@ -738,7 +777,7 @@ export class ConfluenceApi {
 
     try {
       const payload = labels.map(label => ({ prefix: 'global', name: label }));
-      await this.postV1(`/content/${pageId}/label`, payload);
+      await this.postV1(apiPath`/content/${pageId}/label`, payload);
     } catch (error) {
       console.warn(`Failed to add labels to page ${pageId}:`, error);
     }
@@ -767,7 +806,7 @@ export class ConfluenceApi {
       throw new Error('pageId is required to fetch comments.');
     }
 
-    const comments = await this.getV1<ConfluenceApiResponse>(`/content/${pageId}/child/comment`, {
+    const comments = await this.getV1<ConfluenceApiResponse>(apiPath`/content/${pageId}/child/comment`, {
       limit: Math.min(Math.max(limit, 1), 50),
       start,
       expand: expand || 'body.storage,history.lastUpdated,history.createdBy,ancestors,extensions.inlineProperties',
@@ -783,7 +822,7 @@ export class ConfluenceApi {
     const { commentId } = params;
     if (!commentId) throw new Error('commentId is required');
 
-    const comment = await this.getV1<ConfluenceApiResponse>(`/content/${commentId}`, {
+    const comment = await this.getV1<ConfluenceApiResponse>(apiPath`/content/${commentId}`, {
       expand: 'body.storage,history.lastUpdated,history.createdBy,ancestors,extensions.inlineProperties,container',
     });
     return formatCommentResponse(comment, this.config.siteUrl);
@@ -924,7 +963,7 @@ export class ConfluenceApi {
     }
 
     // 1. Fetch current comment to get version and type
-    const currentComment = await this.getV1<ConfluenceApiResponse>(`/content/${commentId}`, {
+    const currentComment = await this.getV1<ConfluenceApiResponse>(apiPath`/content/${commentId}`, {
       expand: 'version,body.storage',
     });
 
@@ -959,7 +998,7 @@ export class ConfluenceApi {
       };
     }
 
-    const result = await this.put<ConfluenceApiResponse>(`/content/${commentId}`, payload);
+    const result = await this.put<ConfluenceApiResponse>(apiPath`/content/${commentId}`, payload);
     return formatCommentResponse(result, this.config.siteUrl);
   }
 
@@ -972,7 +1011,7 @@ export class ConfluenceApi {
 
     // 1. Try v2 Footer Comment Delete
     try {
-      await this.request('DELETE', `/footer-comments/${commentId}`);
+      await this.request('DELETE', apiPath`/footer-comments/${commentId}`);
       return;
     } catch {
       // Ignore 404 (might be inline) or 400
@@ -980,15 +1019,19 @@ export class ConfluenceApi {
 
     // 2. Try v2 Inline Comment Delete
     try {
-      await this.request('DELETE', `/inline-comments/${commentId}`);
+      await this.request('DELETE', apiPath`/inline-comments/${commentId}`);
       return;
     } catch {
       // Ignore
     }
 
-    // 3. Fallback to v1 Content Delete
+    // 3. Fallback to v1 Content Delete. v1 deletes any content type, so confirm the id is a comment first.
+    const contentPath = apiPath`/content/${commentId}`;
+    let isComment = false;
     try {
-      await this.requestV1('DELETE', `/content/${commentId}`);
+      const content = await this.getV1<{ type?: string }>(contentPath);
+      isComment = content.type === 'comment';
+      if (isComment) await this.requestV1('DELETE', contentPath);
     } catch (error: unknown) {
       if (getErrorMessage(error).includes('410')) {
         throw new Error(
@@ -996,6 +1039,9 @@ export class ConfluenceApi {
         );
       }
       throw error;
+    }
+    if (!isComment) {
+      throw new Error(`Content ${commentId} is not a comment; refusing to delete it as one.`);
     }
   }
 
@@ -1031,7 +1077,7 @@ export class ConfluenceApi {
    */
   async validateGroupExists(groupName: string): Promise<{ name: string }> {
     try {
-      const group = await this.getV1<ConfluenceApiResponse>(`/group/${encodeURIComponent(groupName)}`);
+      const group = await this.getV1<ConfluenceApiResponse>(apiPath`/group/${groupName}`);
       if (!group || group.error) {
         throw new Error(`Group "${groupName}" not found.`);
       }
@@ -1054,7 +1100,7 @@ export class ConfluenceApi {
       throw new Error('pageId is required to get page restrictions.');
     }
 
-    const result = await this.getV1<ConfluenceApiResponse>(`/content/${pageId}/restriction`, {
+    const result = await this.getV1<ConfluenceApiResponse>(apiPath`/content/${pageId}/restriction`, {
       expand: 'restrictions.user,restrictions.group',
     });
 
@@ -1130,7 +1176,7 @@ export class ConfluenceApi {
       },
     ];
 
-    await this.postV1(`/content/${pageId}/restriction`, restrictionPayload);
+    await this.postV1(apiPath`/content/${pageId}/restriction`, restrictionPayload);
 
     return {
       success: true,
@@ -1210,10 +1256,10 @@ export class ConfluenceApi {
     let deleteQuery: QueryParams | undefined;
 
     if (restrictionType === 'user') {
-      deletePath = `/content/${pageId}/restriction/byOperation/${operation}/user`;
+      deletePath = apiPath`/content/${pageId}/restriction/byOperation/${operation}/user`;
       deleteQuery = { accountId: subject };
     } else {
-      deletePath = `/content/${pageId}/restriction/byOperation/${operation}/group/${encodeURIComponent(subject)}`;
+      deletePath = apiPath`/content/${pageId}/restriction/byOperation/${operation}/group/${subject}`;
     }
 
     await this.request<void>('DELETE', deletePath, { query: deleteQuery, useV1: true });
@@ -1244,7 +1290,7 @@ export class ConfluenceApi {
 
     // Use v2 API for attachments - works with granular scopes (read:attachment:confluence)
     // v1 API (/content/{id}/child/attachment) requires classic scopes which may not be granted
-    const result = await this.get<{ results?: RawConfluenceAttachment[] }>(`/pages/${pageId}/attachments`, {
+    const result = await this.get<{ results?: RawConfluenceAttachment[] }>(apiPath`/pages/${pageId}/attachments`, {
       limit: Math.min(Math.max(limit, 1), 100),
     });
 
@@ -1314,7 +1360,7 @@ export class ConfluenceApi {
     }
 
     // Build URL using v1 API - v2 API doesn't support attachment uploads with OAuth
-    const url = `${this.config.apiBaseUrlV1}/content/${pageId}/child/attachment`;
+    const url = this.buildUrl(apiPath`/content/${pageId}/child/attachment`, {}, true);
 
     // Make request with special headers for attachment upload
     const response = await fetch(url, {
@@ -1375,7 +1421,7 @@ export class ConfluenceApi {
     }
 
     // Get attachment metadata using v2 API
-    const metadata = await this.get<RawConfluenceAttachment>(`/attachments/${attachmentId}`);
+    const metadata = await this.get<RawConfluenceAttachment>(apiPath`/attachments/${attachmentId}`);
 
     // v2 API returns downloadLink directly or in _links
     const downloadPath = metadata.downloadLink || metadata._links?.download;
@@ -1392,7 +1438,7 @@ export class ConfluenceApi {
 
     // Use v1 API endpoint for download - this works with OAuth Bearer tokens
     // The endpoint returns a 302 redirect to the actual downloadable URL
-    const downloadUrl = `${this.config.apiBaseUrlV1}/content/${pageId}/child/attachment/${attachmentId}/download`;
+    const downloadUrl = this.buildUrl(apiPath`/content/${pageId}/child/attachment/${attachmentId}/download`, {}, true);
 
     // Download the actual file content, following redirects
     const response = await fetch(downloadUrl, {
@@ -1419,6 +1465,19 @@ export class ConfluenceApi {
   }
 
   /**
+   * Get an attachment's metadata (not its content) by ID.
+   */
+  async getAttachment(params: { attachmentId: string }): Promise<Pick<RawConfluenceAttachment, 'id' | 'title'>> {
+    const { attachmentId } = params;
+
+    if (!attachmentId) {
+      throw new Error('attachmentId is required to get an attachment.');
+    }
+
+    return this.get<RawConfluenceAttachment>(apiPath`/attachments/${attachmentId}`);
+  }
+
+  /**
    * Delete an attachment by ID.
    * Uses v2 API which works with granular OAuth scopes (write:attachment:confluence)
    */
@@ -1429,6 +1488,6 @@ export class ConfluenceApi {
       throw new Error('attachmentId is required to delete an attachment.');
     }
 
-    await this.request<void>('DELETE', `/attachments/${attachmentId}`);
+    await this.request<void>('DELETE', apiPath`/attachments/${attachmentId}`);
   }
 }

@@ -1,12 +1,13 @@
 import { appFilesBucket, fabFileBucket, generatedImagesBucket } from './buckets';
 import { DEFAULT_LAMBDA_ENVIRONMENT, isPreviewStage } from './constants';
+import { appUrlForLambdaEnv } from './router';
 import { allSecrets, secrets } from './secrets';
 import { lambdaVpc } from './vpc';
 
 // Database migration function (equivalent to SST v2 onUpdate)
 // This runs database migrations on every deployment when in CI mode
 const migrator = new sst.aws.Function('DatabaseMigrator', {
-  handler: 'apps/client/server/utils/manageDatabase.updateDatabase',
+  handler: 'apps/workers/src/database/manageDatabase.updateDatabase',
   runtime: 'nodejs24.x',
   timeout: '15 minutes',
   memory: '512 MB',
@@ -25,13 +26,15 @@ const migrator = new sst.aws.Function('DatabaseMigrator', {
 
 // Database seeder function for preview environments
 const seeder = new sst.aws.Function('DatabaseSeeder', {
-  handler: 'apps/client/server/utils/seedDatabase.handler',
+  handler: 'apps/workers/src/database/seedDatabase.handler',
   runtime: 'nodejs24.x',
   timeout: '15 minutes',
   memory: '512 MB',
   link: [...allSecrets, fabFileBucket, generatedImagesBucket, appFilesBucket],
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
+    // B4M's OIDC issuer: OAuthClientSeeder points the preview federated client at it.
+    APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),
   },
   vpc: lambdaVpc,
   permissions: [
@@ -52,7 +55,7 @@ const seeder = new sst.aws.Function('DatabaseSeeder', {
 // Only deployed for preview stages - not needed for dev or production
 const cleaner = isPreviewStage
   ? new sst.aws.Function('DatabaseCleaner', {
-      handler: 'apps/client/server/utils/dropPreviewDatabase.handler',
+      handler: 'apps/workers/src/database/dropPreviewDatabase.handler',
       runtime: 'nodejs24.x',
       timeout: '2 minutes',
       memory: '512 MB',

@@ -10,6 +10,7 @@ import Typography from '@mui/joy/Typography';
 import type { SkillSummary } from '@shared/skills';
 import type { ComposerCommand } from './commands';
 import { contentColumnSx } from './layout';
+import { skillChipColor, skillSourceLabel } from './skillMenu';
 
 /** Past this the menu scrolls rather than pushing the transcript off the top of the window. */
 const MAX_HEIGHT = 280;
@@ -35,6 +36,7 @@ export function SkillPicker({
   onPickCommand,
   onPick,
   onTrustProject,
+  onBrowseMarket,
 }: {
   /** The app's own `/` actions, drawn above the skills. See commands.ts. */
   commands?: readonly ComposerCommand[];
@@ -46,6 +48,8 @@ export function SkillPicker({
   onPickCommand?: (command: ComposerCommand) => void;
   onPick: (skill: SkillSummary) => void;
   onTrustProject: () => void;
+  /** Offered when there are no skills, so an empty menu points somewhere. */
+  onBrowseMarket?: () => void;
 }) {
   const activeRef = useRef<HTMLDivElement | null>(null);
 
@@ -61,6 +65,7 @@ export function SkillPicker({
           <Typography level="body-xs" textColor="text.tertiary">
             No skills found. Put one in ~/.claude/skills/&lt;name&gt;/SKILL.md and type / again.
           </Typography>
+          {onBrowseMarket && <BrowseMarketLink onBrowse={onBrowseMarket} />}
         </Sheet>
       </Box>
     );
@@ -157,10 +162,11 @@ export function SkillPicker({
                   <Chip
                     size="sm"
                     variant="soft"
-                    color={skill.source === 'project' ? 'warning' : 'neutral'}
+                    color={skillChipColor(skill.source)}
                     title={skill.filePath}
+                    data-testid="skill-picker-chip"
                   >
-                    {skill.source}
+                    {skillSourceLabel(skill.source)}
                   </Chip>
                 </Stack>
                 <Typography level="body-xs" textColor="text.tertiary" noWrap>
@@ -170,7 +176,30 @@ export function SkillPicker({
             </ListItemButton>
           ))}
         </List>
+        {skills.length === 0 && onBrowseMarket && (
+          <Box sx={{ px: 1.5, pb: 1 }}>
+            <BrowseMarketLink onBrowse={onBrowseMarket} />
+          </Box>
+        )}
       </Sheet>
     </Box>
+  );
+}
+
+function BrowseMarketLink({ onBrowse }: { onBrowse: () => void }) {
+  return (
+    <Button
+      size="sm"
+      variant="plain"
+      sx={{ px: 0, mt: 0.5 }}
+      // Mouse down, for the same reason as the rows: the textarea keeps focus until it is acted on.
+      onMouseDown={event => {
+        event.preventDefault();
+        onBrowse();
+      }}
+      data-testid="skill-picker-market-btn"
+    >
+      Browse the Skill Market
+    </Button>
   );
 }

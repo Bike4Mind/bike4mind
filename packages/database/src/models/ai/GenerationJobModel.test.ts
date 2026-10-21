@@ -224,16 +224,52 @@ describe('GenerationJobRepository', () => {
     });
   });
 
+  const anyStage = { beforeSubmitOnly: false };
+
   it('requestCancel flags only pending and running jobs', async () => {
     for (const state of ['pending', 'running'] as const) {
       const job = await generationJobRepository.createJob(newJob({ state }));
-      expect(await generationJobRepository.requestCancel(job.id)).toMatchObject({ cancelRequested: true });
+      expect(await generationJobRepository.requestCancel(job.id, anyStage)).toMatchObject({ cancelRequested: true });
     }
     for (const state of ['storing', 'succeeded', 'cancelled'] as const) {
       const job = await generationJobRepository.createJob(newJob({ state }));
-      expect(await generationJobRepository.requestCancel(job.id)).toBeNull();
+      expect(await generationJobRepository.requestCancel(job.id, anyStage)).toBeNull();
       expect((await generationJobRepository.findById(job.id))?.cancelRequested).toBe(false);
     }
+  });
+
+  it('requestCancel with beforeSubmitOnly flags only a pending job not yet submitted', async () => {
+    const beforeSubmitOnly = { beforeSubmitOnly: true };
+    const unsubmitted = await generationJobRepository.createJob(newJob({ state: 'pending' }));
+    expect(await generationJobRepository.requestCancel(unsubmitted.id, beforeSubmitOnly)).toMatchObject({
+      cancelRequested: true,
+    });
+    const submitted = await generationJobRepository.createJob(newJob({ state: 'pending', submitAttemptedAt: t0 }));
+    const running = await generationJobRepository.createJob(newJob({ state: 'running', submitAttemptedAt: t0 }));
+    for (const job of [submitted, running]) {
+      expect(await generationJobRepository.requestCancel(job.id, beforeSubmitOnly)).toBeNull();
+      expect((await generationJobRepository.findById(job.id))?.cancelRequested).toBe(false);
+    }
+  });
+
+  it('markSubmitAttempted records the attempt, and with markRunning moves the job to running', async () => {
+    const job = await generationJobRepository.createJob(newJob({ state: 'pending' }));
+    expect(await generationJobRepository.markSubmitAttempted(job.id, t0, { markRunning: true })).toMatchObject({
+      state: 'running',
+      submitAttemptedAt: t0,
+    });
+    const asyncJob = await generationJobRepository.createJob(newJob({ state: 'pending' }));
+    expect(await generationJobRepository.markSubmitAttempted(asyncJob.id, t0, { markRunning: false })).toMatchObject({
+      state: 'pending',
+      submitAttemptedAt: t0,
+    });
+  });
+
+  it('markSubmitAttempted refuses a job whose cancel landed first, leaving it unsubmitted', async () => {
+    const job = await generationJobRepository.createJob(newJob({ state: 'pending' }));
+    await generationJobRepository.requestCancel(job.id, { beforeSubmitOnly: true });
+    expect(await generationJobRepository.markSubmitAttempted(job.id, t0, { markRunning: true })).toBeNull();
+    expect(await generationJobRepository.findById(job.id)).toMatchObject({ state: 'pending', submitAttemptedAt: null });
   });
 
   const setUpdatedAt = (id: string, updatedAt: Date) =>

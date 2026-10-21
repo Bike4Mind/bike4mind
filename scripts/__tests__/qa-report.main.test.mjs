@@ -240,6 +240,30 @@ describe('main', () => {
     });
   });
 
+  it('includes the gate tests in the counts file when a breach is flagged', async () => {
+    await writeFixture();
+    await fs.mkdir(path.join(dir, 'lat'), { recursive: true });
+    await fs.writeFile(
+      path.join(dir, 'lat', 'ai-latency-short-answers-results.json'),
+      JSON.stringify({ model: 'model-a', thresholdSec: 5, averageResponseTimeSec: 9 })
+    );
+    const { fetch } = fakeFetch();
+    const out = path.join(dir, 'qa-counts.json');
+    await main(
+      ['--results', path.join(dir, 'pw-results.json'), '--latency-dir', path.join(dir, 'lat'), '--counts-out', out],
+      { ...ENV, QA_LATENCY_BREACH: 'true' },
+      { fetch, sleep: noSleep, log: makeLog() }
+    );
+    expect(JSON.parse(await fs.readFile(out, 'utf8'))).toEqual({
+      passed: 3,
+      failed: 2,
+      skipped: 0,
+      notStarted: 1,
+      ran: 5,
+      total: 5,
+    });
+  });
+
   it('merges a downloaded matrix with per-artifact labels and latency metrics', async () => {
     const report = JSON.parse(await fs.readFile(path.join(here, 'fixtures/pw-results.json'), 'utf8'));
     report.stats.unexpected = 0;
@@ -265,5 +289,85 @@ describe('main', () => {
       ['model-cell-a', 'ai-latency-short-answers'],
       ['model-cell-b', 'ai-latency-short-answers'],
     ]);
+  });
+
+  it('posts a latency breach as a failed gate test only when the workflow flags one', async () => {
+    const report = JSON.parse(await fs.readFile(path.join(here, 'fixtures/pw-results.json'), 'utf8'));
+    report.stats.unexpected = 0;
+    await fs.mkdir(path.join(dir, 'dl', 'cell-a', 'playwright-report'), { recursive: true });
+    await fs.writeFile(
+      path.join(dir, 'dl', 'cell-a', 'playwright-report/spec-pw-results.json'),
+      JSON.stringify(report)
+    );
+    await fs.writeFile(
+      path.join(dir, 'dl', 'cell-a', 'ai-latency-short-answers-results.json'),
+      JSON.stringify({ model: 'model-a', thresholdSec: 5, averageResponseTimeSec: 9 })
+    );
+    const args = ['--results-dir', path.join(dir, 'dl'), '--latency-dir', path.join(dir, 'dl')];
+
+    const flagged = fakeFetch();
+    await main(args, { ...ENV, QA_LATENCY_BREACH: 'true' }, { fetch: flagged.fetch, sleep: noSleep, log: makeLog() });
+    const body = runBody(flagged.calls);
+    expect(body.counts.failed).toBe(1);
+    expect(body.tests[0]).toMatchObject({
+      test_key: 'latency-gate::ai-latency-short-answers [model-a]',
+      status: 'failed',
+      error: 'avg 9.00s, threshold 5s',
+    });
+
+    const unflagged = fakeFetch();
+    await main(
+      args,
+      { ...ENV, QA_LATENCY_BREACH: 'false' },
+      { fetch: unflagged.fetch, sleep: noSleep, log: makeLog() }
+    );
+    expect(runBody(unflagged.calls).counts.failed).toBe(0);
+
+    const unset = fakeFetch();
+    await main(args, ENV, { fetch: unset.fetch, sleep: noSleep, log: makeLog() });
+    expect(runBody(unset.calls).tests.some(t => t.test_key.startsWith('latency-gate'))).toBe(false);
+  });
+
+  it('posts a within-budget cell as a passed gate test when the workflow reports no breach', async () => {
+    const report = JSON.parse(await fs.readFile(path.join(here, 'fixtures/pw-results.json'), 'utf8'));
+    report.stats.unexpected = 0;
+    await fs.mkdir(path.join(dir, 'dl', 'cell-a', 'playwright-report'), { recursive: true });
+    await fs.writeFile(
+      path.join(dir, 'dl', 'cell-a', 'playwright-report/spec-pw-results.json'),
+      JSON.stringify(report)
+    );
+    await fs.writeFile(
+      path.join(dir, 'dl', 'cell-a', 'ai-latency-short-answers-results.json'),
+      JSON.stringify({ model: 'model-a', thresholdSec: 5, averageResponseTimeSec: 3 })
+    );
+    const args = ['--results-dir', path.join(dir, 'dl'), '--latency-dir', path.join(dir, 'dl')];
+
+    const unset = fakeFetch();
+    await main(args, ENV, { fetch: unset.fetch, sleep: noSleep, log: makeLog() });
+    const baseline = runBody(unset.calls).counts;
+
+    const clean = fakeFetch();
+    await main(args, { ...ENV, QA_LATENCY_BREACH: 'false' }, { fetch: clean.fetch, sleep: noSleep, log: makeLog() });
+    const body = runBody(clean.calls);
+    expect(body.tests).toContainEqual(
+      expect.objectContaining({ test_key: 'latency-gate::ai-latency-short-answers [model-a]', status: 'passed' })
+    );
+    expect(body.counts.passed).toBe(baseline.passed + 1);
+    expect(body.counts.ran).toBe(baseline.ran + 1);
+  });
+
+  it('keeps a run with latency data but no Playwright results at ran 0', async () => {
+    await fs.mkdir(path.join(dir, 'dl', 'cell-a'), { recursive: true });
+    await fs.writeFile(
+      path.join(dir, 'dl', 'cell-a', 'ai-latency-short-answers-results.json'),
+      JSON.stringify({ model: 'model-a', thresholdSec: 5, averageResponseTimeSec: 2 })
+    );
+    const { fetch, calls } = fakeFetch();
+    await main(
+      ['--results-dir', path.join(dir, 'dl'), '--latency-dir', path.join(dir, 'dl')],
+      { ...ENV, QA_LATENCY_BREACH: 'false' },
+      { fetch, sleep: noSleep, log: makeLog() }
+    );
+    expect(runBody(calls).counts.ran).toBe(0);
   });
 });

@@ -15,7 +15,11 @@ import type {
   ReasoningEffortSetting,
   UpdateProjectRequest,
 } from '@shared/chat';
+import { normalizeSessionTitle } from '@shared/chat';
+import type { CreatedSession } from '@shared/ipc';
+import type { SidebarSectionsState } from '@shared/sidebarSections';
 import { appendArrived, OPTIMISTIC_ID_PREFIX } from './arrivedMessage';
+import { addDirPath } from './commands';
 import { describeReturn } from './queuedMessages';
 import { applyLiveEvent, coalesceLiveEvents, startReply, type LiveReplyEvent } from '@shared/liveReply';
 import { applyReplyDone } from './replyDone';
@@ -30,9 +34,9 @@ export interface SessionsController {
   sessions: ChatSessionSummary[];
   loading: boolean;
   reload: () => Promise<void>;
-  create: () => Promise<string>;
+  create: (placement?: SessionPlacement) => Promise<string>;
   /** Start a Code session. Resolves null when main refused; `codeError` then says why. */
-  createCode: (request: CreateCodeSessionRequest) => Promise<string | null>;
+  createCode: (request: CreateCodeSessionRequest, placement?: SessionPlacement) => Promise<string | null>;
   /** Set while a Code session is being created - resolving a worktree can take a moment. */
   creatingCode: boolean;
   codeError: string | null;
@@ -40,8 +44,21 @@ export interface SessionsController {
   remove: (sessionId: string) => Promise<void>;
   togglePin: (session: ChatSessionSummary) => Promise<void>;
   toggleArchived: (session: ChatSessionSummary) => Promise<void>;
+  /** Rename any listed session, shown at once and rolled back (with `renameError`) if main refuses. */
+  rename: (session: ChatSessionSummary, title: string) => Promise<void>;
+  renameError: string | null;
+  clearRenameError: () => void;
   /** Apply a summary main just returned, so the sidebar reorders without a full reload. */
   apply: (summary: ChatSessionSummary) => void;
+}
+
+/** A user sidebar section to start a session in; see CreateSessionRequest. */
+export interface SessionPlacement {
+  sectionId: string;
+  /** Gets main's section state in the same update that adds the row, so it is drawn in place. */
+  placed: (sections: SidebarSectionsState) => void;
+  /** Main could not save the placement; the row still exists and starts in the default groups. */
+  failed: () => void;
 }
 
 export function useSessions(): SessionsController {
@@ -49,6 +66,7 @@ export function useSessions(): SessionsController {
   const [loading, setLoading] = useState(true);
   const [creatingCode, setCreatingCode] = useState(false);
   const [codeError, setCodeError] = useState<string | null>(null);
+  const [renameError, setRenameError] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     const next = await window.b4m.chat.listSessions();
@@ -70,27 +88,43 @@ export function useSessions(): SessionsController {
     });
   }, []);
 
-  const create = useCallback(async () => {
-    const created = await window.b4m.chat.createSession();
-    setSessions(current => [created, ...current]);
-    return created.id;
+  // The section state and the new row are set in one synchronous block, so React renders them
+  // together and the row never shows in the default groups on its way into its section.
+  const list = useCallback((created: CreatedSession, placement: SessionPlacement | undefined) => {
+    if (created.sidebarSections) placement?.placed(created.sidebarSections);
+    else if (created.placementFailed) placement?.failed();
+    setSessions(current => [created.session, ...current]);
   }, []);
 
-  const createCode = useCallback(async (request: CreateCodeSessionRequest) => {
-    setCreatingCode(true);
-    setCodeError(null);
-    try {
-      const result = await window.b4m.chat.createCodeSession(request);
-      if (!result.ok) {
-        setCodeError(result.error);
-        return null;
+  const create = useCallback(
+    async (placement?: SessionPlacement) => {
+      const created = await window.b4m.chat.createSession(placement && { sectionId: placement.sectionId });
+      list(created, placement);
+      return created.session.id;
+    },
+    [list]
+  );
+
+  const createCode = useCallback(
+    async (request: CreateCodeSessionRequest, placement?: SessionPlacement) => {
+      setCreatingCode(true);
+      setCodeError(null);
+      try {
+        const result = await window.b4m.chat.createCodeSession(
+          placement ? { ...request, sectionId: placement.sectionId } : request
+        );
+        if (!result.ok) {
+          setCodeError(result.error);
+          return null;
+        }
+        list(result, placement);
+        return result.session.id;
+      } finally {
+        setCreatingCode(false);
       }
-      setSessions(current => [result.session, ...current]);
-      return result.session.id;
-    } finally {
-      setCreatingCode(false);
-    }
-  }, []);
+    },
+    [list]
+  );
 
   const remove = useCallback(async (sessionId: string) => {
     await window.b4m.chat.deleteSession(sessionId);
@@ -117,7 +151,35 @@ export function useSessions(): SessionsController {
     setSessions(current => current.map(entry => (entry.id === updated.id ? updated : entry)));
   }, []);
 
+  const rename = useCallback(
+    async (session: ChatSessionSummary, title: string) => {
+      const next = normalizeSessionTitle(title);
+      if (!next || next === session.title) return;
+      setRenameError(null);
+      const retitle = (from: string, to: string) =>
+        setSessions(current =>
+          current.map(entry => (entry.id === session.id && entry.title === from ? { ...entry, title: to } : entry))
+        );
+      retitle(session.title, next);
+      let updated: ChatSessionSummary | null = null;
+      try {
+        updated = await window.b4m.chat.renameSession(session.id, next);
+      } catch {
+        updated = null;
+      }
+      if (updated) {
+        apply(updated);
+        return;
+      }
+      // Only undone if nothing has renamed the row since, so a later name is not clobbered.
+      retitle(next, session.title);
+      setRenameError(`Could not rename "${session.title}".`);
+    },
+    [apply]
+  );
+
   const clearCodeError = useCallback(() => setCodeError(null), []);
+  const clearRenameError = useCallback(() => setRenameError(null), []);
 
   return {
     sessions,
@@ -131,6 +193,9 @@ export function useSessions(): SessionsController {
     remove,
     togglePin,
     toggleArchived,
+    rename,
+    renameError,
+    clearRenameError,
     apply,
   };
 }
@@ -242,6 +307,8 @@ export interface ProjectBindingController {
   dismissError: () => void;
   /** Open the folder picker, then re-root the session on whatever is chosen. */
   pickDirectory: () => Promise<void>;
+  /** Re-root the session on a folder already known, such as a recent one: no picker. */
+  chooseDirectory: (directory: string) => Promise<void>;
   setBranch: (branch: string) => Promise<void>;
   setWorkspace: (workspace: boolean) => Promise<void>;
   /** Move the session into the worktree that already has `elsewhere.branch` checked out. */
@@ -689,7 +756,7 @@ export function useConversation(
       const summary = await window.b4m.chat.getSession(sessionId);
       if (summary) {
         setSession(summary);
-        const { messages: _messages, ...rest } = summary;
+        const { messages: _messages, spawnSuggestions: _suggestions, ...rest } = summary;
         onSummaryChanged({ ...rest, messageCount: summary.messages.length });
       }
     },
@@ -708,8 +775,47 @@ export function useConversation(
     const result = await window.b4m.chat.continueReply(sessionId);
     if (!result.ok) setSendError(result.error);
   }, [sessionId]);
+
+  // A summary main just wrote, folded into both the open conversation and the sidebar row.
+  const applySummary = useCallback(
+    (updated: ChatSessionSummary) => {
+      setSession(current =>
+        current ? { ...current, project: updated.project, grantedDirectories: updated.grantedDirectories } : current
+      );
+      onSummaryChanged(updated);
+    },
+    [onSummaryChanged]
+  );
+
   /**
-   * Run `/clear` or `/compact`.
+   * The chip's picker when `path` is absent, `/add-dir <path>` when present. Both go through the
+   * one main-side share, so neither can grant what the other would refuse. A refusal lands in
+   * `sendError`; `confirm` adds a line for an addition the user typed, since a typed command has
+   * no button whose result they are already looking at.
+   */
+  const shareDirectory = useCallback(
+    async (path: string | undefined, confirm: boolean) => {
+      if (!sessionId) return;
+      const result = await window.b4m.chat.addContextDirectory(sessionId, path);
+      if (result.status === 'cancelled') return;
+      if (result.status === 'refused') {
+        setSendError(result.error);
+        return;
+      }
+      if (result.status === 'already') {
+        setNotice(`${result.path} is already shared with this conversation.`);
+        return;
+      }
+      applySummary(result.session);
+      if (confirm || result.warning) {
+        setNotice([`Shared ${result.path} with this conversation.`, result.warning].filter(Boolean).join(' '));
+      }
+    },
+    [sessionId, applySummary]
+  );
+
+  /**
+   * Run `/clear`, `/compact`, `/pr` or `/add-dir`.
    *
    * Main owns both outcomes. The streaming check that refuses a compaction is made THERE for the
    * reason queueing is: a turn that ends between a renderer-side check and the IPC call would
@@ -734,6 +840,10 @@ export function useConversation(
         if (!bound.ok) setSendError(bound.error);
         return;
       }
+      if (name === 'add-dir') {
+        await shareDirectory(addDirPath(args), true);
+        return;
+      }
       setCommandProgress(name === 'compact' ? 'Summarising this conversation...' : null);
       try {
         const result =
@@ -750,7 +860,7 @@ export function useConversation(
         setCommandProgress(null);
       }
     },
-    [sessionId]
+    [sessionId, shareDirectory]
   );
 
   const cancelQueued = useCallback(
@@ -822,17 +932,6 @@ export function useConversation(
 
   const dismissNotice = useCallback(() => setNotice(null), []);
 
-  // A summary main just wrote, folded into both the open conversation and the sidebar row.
-  const applySummary = useCallback(
-    (updated: ChatSessionSummary) => {
-      setSession(current =>
-        current ? { ...current, project: updated.project, grantedDirectories: updated.grantedDirectories } : current
-      );
-      onSummaryChanged(updated);
-    },
-    [onSummaryChanged]
-  );
-
   /** Resolves true when the session really moved, so a caller can report what happened after. */
   const changeProject = useCallback(
     async (change: Omit<UpdateProjectRequest, 'sessionId'>) => {
@@ -858,24 +957,31 @@ export function useConversation(
     [sessionId, applySummary]
   );
 
+  const chooseDirectory = useCallback(
+    async (directory: string) => {
+      setProjectError(null);
+      const inspected = await window.b4m.chat.inspectProject(directory);
+      // A folder nothing could run in is reported instead of being bound. Main refuses it too,
+      // so this only spares the user a move that would come back as the same sentence.
+      if (inspected.refusal) {
+        setProjectError({ message: inspected.refusal, busy: false });
+        return;
+      }
+      // The workspace choice does not travel: it named a worktree of the repository being left,
+      // and carrying it across would create one in a repository the user has only just pointed at.
+      const moved = await changeProject({ directory, branch: inspected.currentBranch ?? '', workspace: false });
+      // The folder is still usable when git could not be read - it just has no branches to offer -
+      // so this is reported after the move rather than instead of it.
+      if (moved && inspected.error) setProjectError({ message: inspected.error, busy: false });
+    },
+    [changeProject]
+  );
+
   const pickDirectory = useCallback(async () => {
     setProjectError(null);
     const directory = await window.b4m.chat.pickProjectDirectory();
-    if (!directory) return;
-    const inspected = await window.b4m.chat.inspectProject(directory);
-    // A folder nothing could run in is reported instead of being bound. Main refuses it too,
-    // so this only spares the user a move that would come back as the same sentence.
-    if (inspected.refusal) {
-      setProjectError({ message: inspected.refusal, busy: false });
-      return;
-    }
-    // The workspace choice does not travel: it named a worktree of the repository being left,
-    // and carrying it across would create one in a repository the user has only just pointed at.
-    const moved = await changeProject({ directory, branch: inspected.currentBranch ?? '', workspace: false });
-    // The folder is still usable when git could not be read - it just has no branches to offer -
-    // so this is reported after the move rather than instead of it.
-    if (moved && inspected.error) setProjectError({ message: inspected.error, busy: false });
-  }, [changeProject]);
+    if (directory) await chooseDirectory(directory);
+  }, [chooseDirectory]);
 
   const setBranch = useCallback(
     async (branch: string) => {
@@ -904,14 +1010,11 @@ export function useConversation(
   );
 
   const addContextDirectory = useCallback(async () => {
-    if (!sessionId) return;
     setProjectError(null);
-    const updated = await window.b4m.chat.addContextDirectory(sessionId);
-    // Null is a dismissed picker, which is not an error: the button is disabled until the
-    // session has a project, so the other way main returns null is not reachable from here.
-    if (!updated) return;
-    applySummary(updated);
-  }, [sessionId, applySummary]);
+    setSendError(null);
+    setNotice(null);
+    await shareDirectory(undefined, false);
+  }, [shareDirectory]);
 
   const removeContextDirectory = useCallback(
     async (directory: string) => {
@@ -930,6 +1033,7 @@ export function useConversation(
       error: projectError,
       dismissError: dismissProjectError,
       pickDirectory,
+      chooseDirectory,
       setBranch,
       setWorkspace,
       moveToCheckout,
@@ -942,6 +1046,7 @@ export function useConversation(
       projectError,
       dismissProjectError,
       pickDirectory,
+      chooseDirectory,
       setBranch,
       setWorkspace,
       moveToCheckout,

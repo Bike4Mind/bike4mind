@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { CreditHolderType } from '@bike4mind/common';
 import { createMocks } from 'node-mocks-http';
 
 const { mocks, InsufficientCreditsPreflightError, TtsProviderNotConfiguredError, UnprocessableEntityError } =
@@ -15,9 +16,11 @@ const { mocks, InsufficientCreditsPreflightError, TtsProviderNotConfiguredError,
         estimateTtsCreditCost: vi.fn(),
         assertPreflightCredits: vi.fn(),
         deductTtsCredits: vi.fn(),
-        persistGeneratedAudio: vi.fn(),
+        saveGeneratedAssetToFiles: vi.fn(),
         upload: vi.fn(),
         getSignedUrl: vi.fn(),
+        orgFindById: vi.fn(),
+        orgFindAccessibleById: vi.fn(),
       },
     };
   });
@@ -61,6 +64,17 @@ vi.mock('@server/utils/synthesizeTts', () => ({
     return status === 401 || status === 403;
   },
 }));
+vi.mock('@bike4mind/database', () => ({
+  organizationRepository: {
+    findById: (...a: unknown[]) => mocks.orgFindById(...a),
+    shareable: { findAccessibleById: (...a: unknown[]) => mocks.orgFindAccessibleById(...a) },
+  },
+}));
+// Real membership predicate: the resolver's roster re-check is what these tests exercise.
+vi.mock('@bike4mind/services', async () => {
+  const services = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
+  return { organizationService: { isCurrentOrgMember: services.organizationService.isCurrentOrgMember } };
+});
 vi.mock('@server/utils/deductTtsCredits', () => ({
   deductTtsCredits: (...a: unknown[]) => mocks.deductTtsCredits(...a),
 }));
@@ -71,12 +85,12 @@ vi.mock('@server/utils/creditPreflight', () => ({
 // Mock the persistence helper so this route test doesn't pull in the real
 // FabFile/services/database stack (which references @bike4mind/common exports
 // not provided by the partial mock above).
-vi.mock('@server/utils/persistGeneratedAudio', () => ({
-  persistGeneratedAudio: (...a: unknown[]) => mocks.persistGeneratedAudio(...a),
+vi.mock('@server/utils/saveGeneratedAssetToFiles', () => ({
+  saveGeneratedAssetToFiles: (...a: unknown[]) => mocks.saveGeneratedAssetToFiles(...a),
 }));
 
 // Only the oversized-audio offload touches storage; the delivery module itself is real.
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({
     upload: (...a: unknown[]) => mocks.upload(...a),
     getSignedUrl: (...a: unknown[]) => mocks.getSignedUrl(...a),
@@ -88,10 +102,12 @@ import handler from '../tts';
 
 const run = (
   body: Record<string, unknown>,
-  user: { id?: string; preferences?: { saveGeneratedAudio?: boolean } } | undefined = { id: 'u1' }
+  user: { id?: string; organizationId?: string | null; isAdmin?: boolean } | undefined = { id: 'u1' },
+  apiKeyInfo?: unknown
 ) => {
   const { req, res } = createMocks({ method: 'POST', body });
   (req as Record<string, unknown>).user = user;
+  if (apiKeyInfo) (req as Record<string, unknown>).apiKeyInfo = apiKeyInfo;
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   (req as Record<string, unknown>).logger = logger;
   return {
@@ -119,12 +135,21 @@ beforeEach(() => {
   mocks.deductTtsCredits.mockResolvedValue(undefined);
   mocks.upload.mockResolvedValue(undefined);
   mocks.getSignedUrl.mockResolvedValue('https://s3/offload');
-  mocks.persistGeneratedAudio.mockResolvedValue({
+  mocks.saveGeneratedAssetToFiles.mockResolvedValue({
     saved: true,
-    fabFileId: 'fab-1',
+    fileId: 'fab-1',
+    s3Key: 'k/speech-1.mp3',
     fileName: 'speech-1.mp3',
     fileUrl: 'https://s3/get',
   });
+  // Billing fixtures: every named org exists and every caller belongs to the one they name.
+  mocks.orgFindById.mockImplementation(async (id: string) => ({
+    id,
+    currentCredits: 1000,
+    userDetails: [],
+    users: [{ userId: 'u1' }],
+  }));
+  mocks.orgFindAccessibleById.mockImplementation(async (_user: unknown, id: string) => ({ id }));
   okSynthesis();
 });
 
@@ -176,6 +201,8 @@ describe('POST /api/ai/tts', () => {
       userId: 'u1',
       estimatedCredits: 50,
       featureLabel: 'text-to-speech',
+      // Omitted keeps this endpoint's historical personal default.
+      billingOrganizationId: null,
     });
   });
 
@@ -189,6 +216,83 @@ describe('POST /api/ai/tts', () => {
     const { promise } = run({ text: 'hello', model: 'tts-1-hd' });
     await promise;
     expect(mocks.estimateTtsCreditCost).toHaveBeenCalledWith('openai', 'tts-1-hd', 5);
+  });
+
+  describe('billing account', () => {
+    it('bills the organization the switcher selected', async () => {
+      const { res, promise } = run({ text: 'hi', organization_id: 'teamOrg' });
+      await promise;
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(mocks.assertPreflightCredits).toHaveBeenCalledWith(
+        expect.objectContaining({ billingOrganizationId: 'teamOrg' })
+      );
+      expect(mocks.deductTtsCredits).toHaveBeenCalledWith(
+        expect.objectContaining({ billingOrganizationId: 'teamOrg' })
+      );
+    });
+
+    it('bills personal credits when the switcher is on Personal, even for an org member', async () => {
+      // Explicit null = personal; the home-org seat must not override the switcher.
+      const { res, promise } = run({ text: 'hi', organization_id: null }, { id: 'u1', organizationId: 'homeOrg' });
+      await promise;
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(mocks.orgFindAccessibleById).not.toHaveBeenCalled();
+      expect(mocks.deductTtsCredits).toHaveBeenCalledWith(expect.objectContaining({ billingOrganizationId: null }));
+    });
+
+    it('refuses (403) an organization the caller does not belong to, before synthesis', async () => {
+      mocks.orgFindAccessibleById.mockResolvedValue(null);
+
+      const { promise } = run({ text: 'hi', organization_id: 'otherOrg' });
+      await expect(promise).rejects.toMatchObject({ statusCode: 403 });
+      expect(mocks.synthesizeTts).not.toHaveBeenCalled();
+      expect(mocks.deductTtsCredits).not.toHaveBeenCalled();
+    });
+
+    // An org-billed key's target is stamped on the key; before this fix Speech charged the user.
+    it('bills an org-billed API key to its own organization when the body names none', async () => {
+      const { res, promise } = run(
+        { text: 'hi' },
+        { id: 'u1' },
+        { billingOwnerType: CreditHolderType.Organization, organizationId: 'keyOrg' }
+      );
+      await promise;
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(mocks.assertPreflightCredits).toHaveBeenCalledWith(
+        expect.objectContaining({ billingOrganizationId: 'keyOrg' })
+      );
+      expect(mocks.deductTtsCredits).toHaveBeenCalledWith(expect.objectContaining({ billingOrganizationId: 'keyOrg' }));
+    });
+
+    it('refuses (403) an org-billed API key that names another organization', async () => {
+      const { promise } = run(
+        { text: 'hi', organization_id: 'otherOrg' },
+        { id: 'u1' },
+        { billingOwnerType: CreditHolderType.Organization, organizationId: 'keyOrg' }
+      );
+      await expect(promise).rejects.toMatchObject({
+        statusCode: 403,
+        additionalInfo: { errorCode: 'billing_organization_mismatch' },
+      });
+      expect(mocks.synthesizeTts).not.toHaveBeenCalled();
+    });
+
+    it('bills a user-billed key to the user even when the user has an org seat', async () => {
+      const { res, promise } = run(
+        { text: 'hi' },
+        { id: 'u1', organizationId: 'homeOrg' },
+        { billingOwnerType: CreditHolderType.User }
+      );
+      await promise;
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(mocks.deductTtsCredits).toHaveBeenCalledWith(
+        expect.objectContaining({ billingOrganizationId: undefined })
+      );
+    });
   });
 
   describe('audio over the response limit', () => {
@@ -220,7 +324,7 @@ describe('POST /api/ai/tts', () => {
     it('offloads an unsaved binary response and redirects with a 303', async () => {
       const { res, promise } = run({ text: 'hi', preview: true });
       await promise;
-      expect(mocks.persistGeneratedAudio).not.toHaveBeenCalled();
+      expect(mocks.saveGeneratedAssetToFiles).not.toHaveBeenCalled();
       expect(mocks.upload).toHaveBeenCalledWith(
         oversizedAudio,
         expect.stringMatching(/^generated-audio-offload\/.+\.mp3$/),
@@ -344,24 +448,59 @@ describe('POST /api/ai/tts', () => {
     expect(mocks.deductTtsCredits).not.toHaveBeenCalled();
   });
 
-  it('persists the audio by default and surfaces the saved reference in the base64 body', async () => {
+  it('saves the audio by default and surfaces the saved reference in the base64 body', async () => {
     const { res, promise } = run({ text: 'hello', encoding: 'base64' });
     await promise;
-    expect(mocks.persistGeneratedAudio).toHaveBeenCalledTimes(1);
-    expect(mocks.persistGeneratedAudio).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u1', source: 'tts' }));
+    expect(mocks.saveGeneratedAssetToFiles).toHaveBeenCalledTimes(1);
+    expect(mocks.saveGeneratedAssetToFiles).toHaveBeenCalledWith(
+      {
+        userId: 'u1',
+        bytes: expect.any(Buffer),
+        contentType: 'audio/mpeg',
+        generation: { generator: 'speech', provider: 'openai', modelId: 'tts-1', prompt: 'hello', format: 'mp3' },
+      },
+      expect.anything()
+    );
     expect(res._getJSONData()).toMatchObject({ saved: true, fabFileId: 'fab-1', fileUrl: 'https://s3/get' });
+  });
+
+  it('records the requested voice and language so the settings can be reused', async () => {
+    const { promise } = run({ text: 'hello', provider: 'elevenlabs', voice: 'v-1', languageCode: 'ja' });
+    await promise;
+    expect(mocks.saveGeneratedAssetToFiles).toHaveBeenCalledWith(
+      expect.objectContaining({ generation: expect.objectContaining({ voice: 'v-1', languageCode: 'ja' }) }),
+      expect.anything()
+    );
+  });
+
+  it('drops the requested voice when another provider stood in', async () => {
+    okSynthesis('openai', 'elevenlabs');
+    const { promise } = run({ text: 'hello', provider: 'elevenlabs', voice: 'v-1' });
+    await promise;
+    const [{ generation }] = mocks.saveGeneratedAssetToFiles.mock.calls[0];
+    expect(generation).not.toHaveProperty('voice');
+  });
+
+  it('records the vendor that actually produced the audio when a fallback was used', async () => {
+    okSynthesis('elevenlabs', 'openai');
+    const { promise } = run({ text: 'hello' });
+    await promise;
+    expect(mocks.saveGeneratedAssetToFiles).toHaveBeenCalledWith(
+      expect.objectContaining({ generation: expect.objectContaining({ provider: 'elevenlabs' }) }),
+      expect.anything()
+    );
   });
 
   it('skips persistence for a throwaway preview (preview: true)', async () => {
     const { res, promise } = run({ text: 'hi', preview: true });
     await promise;
     expect(res._getStatusCode()).toBe(200);
-    expect(mocks.persistGeneratedAudio).not.toHaveBeenCalled();
+    expect(mocks.saveGeneratedAssetToFiles).not.toHaveBeenCalled();
   });
 
-  it('skips persistence when the user opted out (saveGeneratedAudio: false)', async () => {
-    const { promise } = run({ text: 'hi' }, { id: 'u1', preferences: { saveGeneratedAudio: false } });
+  it('always saves a non-preview call regardless of any stored user preference', async () => {
+    const { promise } = run({ text: 'hi' }, { id: 'u1', preferences: { saveGeneratedAudio: false } } as never);
     await promise;
-    expect(mocks.persistGeneratedAudio).not.toHaveBeenCalled();
+    expect(mocks.saveGeneratedAssetToFiles).toHaveBeenCalledTimes(1);
   });
 });

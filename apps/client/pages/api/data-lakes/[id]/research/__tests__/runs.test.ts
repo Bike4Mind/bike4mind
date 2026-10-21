@@ -23,7 +23,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@bike4mind/services', () => ({
   dataLakeResearchService: { startResearchRun: h.startResearchRun },
 }));
@@ -39,6 +39,9 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: { touchIfStable: h.touchIfStable },
   dataLakeResearchConfigRepository: {},
   dataLakeResearchRunRepository: { listByLake: h.listByLake },
+  // The balance pre-flight's holder reads (see StartResearchRunAdapters).
+  userRepository: { name: 'users' },
+  organizationRepository: { name: 'organizations' },
   lakeConfigChangeEventRepository: {},
   adminSettingsRepository: {},
 }));

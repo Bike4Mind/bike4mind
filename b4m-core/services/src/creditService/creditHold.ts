@@ -45,7 +45,8 @@ const holderMethodsFor = (hold: Pick<CreditHold, 'ownerType'>, adapters: HolderA
 /**
  * Hold `requiredCredits` against the user, or against `organizationId`'s pool when given, BEFORE
  * any provider cost is incurred. Throws a 422 `insufficient_credits` when the member cap or the
- * pool cannot cover it; nothing has moved when it throws.
+ * pool cannot cover it. Nothing has moved when it throws, unless the overdraw rollback itself fails,
+ * which is logged at error level for a manual credit.
  */
 export async function holdCredits(
   params: {
@@ -53,12 +54,13 @@ export async function holdCredits(
     organizationId: string | null;
     requiredCredits: number;
     featureLabel: string;
+    logger: Logger;
     /** Runs after the user/org are loaded and before any balance moves; throw to refuse. */
     assertBillable?: (user: IUserDocument, organization: IOrganizationDocument | null) => void;
   },
   adapters: CreditHoldAdapters
 ): Promise<CreditHold> {
-  const { userId, organizationId, requiredCredits, featureLabel } = params;
+  const { userId, organizationId, requiredCredits, featureLabel, logger } = params;
   // A negative hold would credit the owner and NaN would corrupt the balance ($inc NaN passes the
   // `< 0` check), so refuse before any read. A pricing bug, not caller input: not a 400.
   if (!Number.isFinite(requiredCredits) || requiredCredits <= 0) {
@@ -92,9 +94,25 @@ export async function holdCredits(
   // guarantees the charge can never fail after the provider output is produced. Rolled back
   // immediately if it overdraws.
   const reservedHolder = await holderMethods.incrementCredits(ownerId, -requiredCredits);
-  if (!reservedHolder || reservedHolder.currentCredits < 0) {
-    if (reservedHolder) await holderMethods.incrementCredits(ownerId, requiredCredits);
-    const availableCredits = (reservedHolder?.currentCredits ?? 0) + requiredCredits;
+  // Loaded above, so a null here means the holder was deleted mid-request: nothing moved, and it is not a
+  // balance problem, so it must not read as one.
+  if (!reservedHolder) {
+    throw new BadRequestError(organization ? 'Billing organization not found' : 'User not found');
+  }
+  if (reservedHolder.currentCredits < 0) {
+    try {
+      await holderMethods.incrementCredits(ownerId, requiredCredits);
+    } catch (err) {
+      // Still a 422 to the caller (that is the truth about their balance), but the owner is now short by
+      // the whole hold with no ledger row, so it needs a manual credit.
+      logger.error(`${featureLabel} overdraw rollback failed - owner debited with no charge`, {
+        ownerId,
+        ownerType,
+        requiredCredits,
+        error: err instanceof Error ? err.message : 'Unknown error',
+      });
+    }
+    const availableCredits = reservedHolder.currentCredits + requiredCredits;
     throw insufficientCreditsError(
       organization
         ? `Your organization does not have enough credits for ${featureLabel}. It currently has ${availableCredits} credits and this requires approximately ${requiredCredits}.`
@@ -112,7 +130,11 @@ export async function holdCredits(
   };
 }
 
-/** Return the whole hold - the provider call failed and incurred no cost. */
+/**
+ * Return the whole hold - the provider call failed and incurred no cost. Throws when the write rejects
+ * (a deleted holder resolves silently), so a caller that can retry (a job's terminal settlement) does
+ * not record it as released; a caller that cannot logs it instead (reserveRequestCredits).
+ */
 export async function releaseCreditHold(hold: CreditHold, adapters: HolderAdapters): Promise<void> {
   if (hold.reservedCredits <= 0) return;
   await holderMethodsFor(hold, adapters).incrementCredits(hold.ownerId, hold.reservedCredits);
@@ -120,14 +142,14 @@ export async function releaseCreditHold(hold: CreditHold, adapters: HolderAdapte
 
 /**
  * Keep `chargedCredits` (clamped to [0, reservedCredits]), refund the rest, and write the ledger
- * row. Returns the credits actually charged. Never throws: the balance already moved at hold time,
- * so a failed refund or ledger write is logged and only the audit trail is affected.
+ * row. Returns the credits actually charged. By default failures are logged after the balance moved.
+ * Transactional callers set throwOnWriteFailure so every failed write aborts their settlement instead.
  */
 export async function settleCreditHold(
   hold: CreditHold,
   chargedCredits: number,
   entry: CreditLedgerEntry,
-  context: { featureLabel: string; logger: Logger },
+  context: { featureLabel: string; logger: Logger; throwOnWriteFailure?: boolean },
   adapters: CreditHoldAdapters
 ): Promise<number> {
   const { featureLabel, logger } = context;
@@ -152,6 +174,7 @@ export async function settleCreditHold(
       settledHolder =
         (await holderMethodsFor(hold, adapters).incrementCredits(hold.ownerId, overReserved)) ?? settledHolder;
     } catch (err) {
+      if (context.throwOnWriteFailure) throw err;
       logger.error(`${featureLabel} over-reserved credit refund failed - caller over-charged`, {
         ownerId: hold.ownerId,
         overReserved,
@@ -183,6 +206,7 @@ export async function settleCreditHold(
       { skipBalanceUpdate: true, currentCreditHolder: settledHolder }
     );
   } catch (err) {
+    if (context.throwOnWriteFailure) throw err;
     logger.error(`${featureLabel} usage transaction write failed - credits charged, ledger row missing`, {
       userId: hold.userId,
       organizationId: hold.organizationId ?? undefined,

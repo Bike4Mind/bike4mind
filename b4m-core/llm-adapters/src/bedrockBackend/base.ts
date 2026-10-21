@@ -8,10 +8,13 @@ import {
   ARTIFACT_DELIVERED_PLACEHOLDER,
   ARTIFACT_REMOVED_PLACEHOLDER,
   bedrockClientConfig,
+  estimateStreamedOutputTokens,
   type ModelInfo,
+  type TurnUsage,
 } from '@bike4mind/common';
 import { stripAllToolBlocks, stripToolDependentMessages } from '../toolPairingUtils';
 import { executeToolsBatch, shouldEndTurnAfterTools } from '../executeToolsBatch';
+import { logToolRound, summarizeToolOutcomes } from '../toolRoundTiming';
 import { recordToolResult, type RecordableToolUse } from '../recordToolResult';
 import {
   ChoiceEndReason,
@@ -24,6 +27,7 @@ import {
   ICompletionResponseChunk,
 } from '../backend';
 import { getCachingAdapter } from '../caching/adapters';
+import { describePayloadShape } from './payloadShape';
 import { handleToolResultStreaming, createRecursiveArtifactGuard, declaredArtifactType } from '../toolStreamingHelper';
 import { injectJsonSchemaInstruction, isBestEffortJsonSchema } from '../responseFormatHelpers';
 import {
@@ -37,6 +41,9 @@ interface BedrockOptions {
   stream: boolean;
 }
 
+// Bedrock rewords context overflow per model family; Llama says "maximum context length".
+const CONTEXT_OVERFLOW_MESSAGES = ['Input is too long', 'maximum context length'];
+
 // Harden Bedrock retries for transient 503 (ServiceUnavailableException) and
 // throttling. The AWS SDK default is maxAttempts:3 with sub-second standard backoff -
 // too shallow for brief Bedrock capacity blips.
@@ -48,6 +55,11 @@ interface BedrockOptions {
 // (recommended for throttle/503-prone workloads). This absorbs brief blips; sustained
 // outages still need provider/model fallback (tracked separately).
 const BEDROCK_RETRY_CONFIG = { maxAttempts: 6, retryMode: 'adaptive' as const };
+
+// A failed tool-use turn rethrows through every enclosing catch. Logging each time would repeat the
+// error once per recursion depth, and the outer entries would describe a request that never failed.
+// The innermost catch sees the failing payload, so it logs and the rest stay quiet.
+const loggedErrors = new WeakSet<Error>();
 
 /**
  * The subset of @smithy's NodeHttp2HandlerOptions that BEDROCK_REQUEST_HANDLER sets. Declared
@@ -235,6 +247,10 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
 
     // Tool chaining safeguard: Track and limit recursive tool calls
     const toolCallCount = options._internal?.toolCallCount ?? 0;
+    const requestStartedAt = options._internal?.requestStartedAt ?? Date.now();
+    if (options._internal?.requestStartedAt === undefined) {
+      options = { ...options, _internal: { ...options._internal, requestStartedAt } };
+    }
     const maxToolCalls = options._internal?.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
 
     // Multi-turn token accumulators. Each Bedrock InvokeModel call (every
@@ -244,6 +260,10 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     // keeps the running total across recursive turns.
     const accumInputTokens = options._internal?.accumInputTokens ?? 0;
     const accumOutputTokens = options._internal?.accumOutputTokens ?? 0;
+    // Cache reads/writes are billed per InvokeModel call too, so they accumulate like input/output.
+    const accumCacheReadTokens = options._internal?.accumCacheReadTokens ?? 0;
+    const accumCacheWriteTokens = options._internal?.accumCacheWriteTokens ?? 0;
+    const accumTurnUsage = options._internal?.accumTurnUsage;
 
     // Check if we've exceeded the tool call limit (only when there are tools to execute)
     if (toolCallCount >= maxToolCalls && options.tools?.length) {
@@ -307,7 +327,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     // the reactive ValidationException catches below remain the safety net for those cases.
     const contextWindow = this.getModelContextWindow(model);
     if (contextWindow > 0) {
-      const baseOutputTokens = typeof options.maxTokens === 'number' ? options.maxTokens : 4096;
+      const baseOutputTokens = this.getEffectiveMaxOutputTokens(options);
       // Extended thinking reserves additional tokens on top of max_tokens in the actual payload.
       const thinkingBudget = options.thinking?.budget_tokens ?? 0;
       const reservedOutputTokens = baseOutputTokens + thinkingBudget;
@@ -373,7 +393,21 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     // reply on the client's truncation heuristic instead.
     let stopReason: string | undefined;
 
+    // This call's own usage appended to the chain's (see CompletionInfo.turnUsage). Anthropic-native
+    // fields: input already excludes cache, so no split.
+    const turnUsageSoFar = (): TurnUsage[] => [
+      ...(accumTurnUsage ?? []),
+      {
+        inputTokens,
+        outputTokens,
+        ...(cacheReadTokens > 0 ? { cacheReadInputTokens: cacheReadTokens } : {}),
+        ...(cacheWriteTokens > 0 ? { cacheCreationInputTokens: cacheWriteTokens } : {}),
+      },
+    ];
+
     const buildCompletionInfo = (): CompletionInfo => {
+      const totalCacheReadTokens = accumCacheReadTokens + cacheReadTokens;
+      const totalCacheWriteTokens = accumCacheWriteTokens + cacheWriteTokens;
       // Emit accum + this turn's running tokens. wrappedOnChunk's assign-not-add
       // means the last cb's tokens win; emitting accum+thisTurn at every site
       // keeps the running cross-turn total correct across recursive turns.
@@ -386,8 +420,9 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         // with cache-INCLUSIVE input must not forward without subtracting (see the
         // warnings in openaiBackend/geminiBackend). This is one of the two adapters
         // covered by the disjoint-fields assumption in ChatCompletionProcess.ts.
-        ...(cacheReadTokens > 0 ? { cacheReadInputTokens: cacheReadTokens } : {}),
-        ...(cacheWriteTokens > 0 ? { cacheCreationInputTokens: cacheWriteTokens } : {}),
+        ...(totalCacheReadTokens > 0 ? { cacheReadInputTokens: totalCacheReadTokens } : {}),
+        ...(totalCacheWriteTokens > 0 ? { cacheCreationInputTokens: totalCacheWriteTokens } : {}),
+        turnUsage: turnUsageSoFar(),
         ...(bestEffortFormat ? { responseFormatMode: 'best-effort' as const } : {}),
         ...(stopReason ? { stopReason } : {}),
       };
@@ -445,6 +480,8 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
 
       if (options.stream) {
         let response;
+        const roundStart = Date.now();
+        let firstChunkAt: number | null = null;
         try {
           response = await this.invokeModelStream(input, options.abortSignal);
         } catch (err: unknown) {
@@ -465,6 +502,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         const isToolArgument = (choice: IChoice) => Boolean(func[choice.index]?.name) && (choice.toolArguments ?? true);
 
         for await (const streamEvent of response.body) {
+          firstChunkAt ??= Date.now();
           if (streamEvent.chunk?.bytes) {
             const json = new TextDecoder().decode(streamEvent.chunk.bytes);
             const { done, chunk } = this.translateStreamChunk(model, JSON.parse(json));
@@ -510,6 +548,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
             await callback(streamedText, { ...buildCompletionInfo(), ...(channel ? { channel } : {}) });
           }
         }
+        const modelDoneAt = Date.now();
 
         // FAIL LOUD on an empty completion. No text AND no tool call means the model produced nothing a
         // user or the pipeline can use - almost always a misrouted inference profile (a "global." model
@@ -558,6 +597,36 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
               `TRUNCATED. Usually a stalled Bedrock socket cut the stream short; the partial text is ` +
               `withheld deliberately rather than returned as a finished answer.`
           );
+        }
+
+        // A Stop cut the stream before its terminal usage event, so this call reported its prompt
+        // (Claude's message_start) but no output, though the provider billed what it streamed.
+        // Estimated only on call 2+, for the reason given at anthropicBackend's
+        // withAbortedOutputEstimate; the final callback carries it to settlement.
+        if (
+          this.signalsStreamTermination &&
+          !sawTerminalEvent &&
+          options.abortSignal?.aborted &&
+          outputTokens === 0 &&
+          inputTokens + cacheReadTokens + cacheWriteTokens > 0 &&
+          accumTurnUsage?.length
+        ) {
+          const toolArgumentChars = func.reduce((n, f) => n + (f?.parameters?.length ?? 0), 0);
+          outputTokens = estimateStreamedOutputTokens(emittedTextChars + toolArgumentChars, model);
+          await callback([], buildCompletionInfo());
+        }
+
+        if (!func.some(f => f.name)) {
+          logToolRound(Logger.globalInstance, {
+            model,
+            round: toolCallCount,
+            msToFirstChunk: firstChunkAt === null ? null : firstChunkAt - roundStart,
+            modelMs: modelDoneAt - roundStart,
+            roundMs: Date.now() - roundStart,
+            sinceRequestMs: Date.now() - requestStartedAt,
+            stopReason: stopReason ?? null,
+            tools: [],
+          });
         }
 
         // If there is a tool being used, then
@@ -715,6 +784,17 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
               }
             }
 
+            logToolRound(Logger.globalInstance, {
+              model,
+              round: toolCallCount,
+              msToFirstChunk: firstChunkAt === null ? null : firstChunkAt - roundStart,
+              modelMs: modelDoneAt - roundStart,
+              roundMs: Date.now() - roundStart,
+              sinceRequestMs: Date.now() - requestStartedAt,
+              stopReason: stopReason ?? null,
+              tools: summarizeToolOutcomes(outcomes),
+            });
+
             if (
               shouldEndTurnAfterTools(
                 toolCalls.map(t => t.name),
@@ -754,6 +834,9 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                   toolCallCount: toolCallCount + 1,
                   accumInputTokens: accumInputTokens + inputTokens,
                   accumOutputTokens: accumOutputTokens + outputTokens,
+                  accumCacheReadTokens: accumCacheReadTokens + cacheReadTokens,
+                  accumCacheWriteTokens: accumCacheWriteTokens + cacheWriteTokens,
+                  accumTurnUsage: turnUsageSoFar(),
                   artifactGuard,
                 },
               },
@@ -907,6 +990,9 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                     toolCallCount: toolCallCount + 1,
                     accumInputTokens: accumInputTokens + inputTokens,
                     accumOutputTokens: accumOutputTokens + outputTokens,
+                    accumCacheReadTokens: accumCacheReadTokens + cacheReadTokens,
+                    accumCacheWriteTokens: accumCacheWriteTokens + cacheWriteTokens,
+                    accumTurnUsage: turnUsageSoFar(),
                     artifactGuard,
                   },
                 },
@@ -939,20 +1025,27 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
           Logger.globalInstance.log('[BaseBedrockBackend] Request aborted, skipping error logging');
           throw error;
         }
-        Logger.globalInstance.error(`[BaseBedrockBackend] Error invoking model ${model}:`, error);
-        Logger.globalInstance.error(`[BaseBedrockBackend] Error details:`, {
+        // One entry, so the alert carries the real error. The request is described by shape only:
+        // error logs reach a shared alert channel and must never include prompt text.
+        if (loggedErrors.has(error)) throw error;
+        loggedErrors.add(error);
+        const { $fault, $metadata, $retryable } = error as Error & {
+          $fault?: unknown;
+          $metadata?: unknown;
+          $retryable?: unknown;
+        };
+        Logger.globalInstance.error(`[BaseBedrockBackend] Error invoking model ${model}: ${error.name}`, {
           name: error.name,
           message: error.message,
           stack: error.stack,
-          // Add more properties that might be available on the specific error type
-          ...(error as any),
-        });
-
-        // Log the request payload for debugging
-        Logger.globalInstance.error(`[BaseBedrockBackend] Request payload:`, {
-          modelId: input.modelId,
-          contentType: input.contentType,
-          bodyPreview: input.body.substring(0, 500) + (input.body.length > 500 ? '...' : ''),
+          $fault,
+          $metadata,
+          $retryable,
+          request: {
+            modelId: input.modelId,
+            contentType: input.contentType,
+            ...describePayloadShape(input.body),
+          },
         });
       }
 
@@ -1028,7 +1121,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
   private handleBedrockError(err: unknown): never {
     const errName = (err as { name?: string })?.name;
     const errMsg = (err as { message?: string })?.message ?? '';
-    if (errName === 'ValidationException' && errMsg.includes('Input is too long')) {
+    if (errName === 'ValidationException' && CONTEXT_OVERFLOW_MESSAGES.some(m => errMsg.includes(m))) {
       Logger.globalInstance.warn(
         '[ContextOverflow] Bedrock ValidationException: input too long — surfacing user-friendly error'
       );
@@ -1054,6 +1147,11 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
    */
   protected getModelContextWindow(_model: string): number {
     return 0;
+  }
+
+  /** Output reservation must match any provider-specific limit applied to the payload. */
+  protected getEffectiveMaxOutputTokens(options: Partial<ICompletionOptions>): number {
+    return typeof options.maxTokens === 'number' ? options.maxTokens : 4096;
   }
 
   /**

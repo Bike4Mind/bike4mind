@@ -127,6 +127,13 @@ export const secrets = {
   IS_SOURCE_DEPLOYMENT: new sst.Secret('IS_SOURCE_DEPLOYMENT', 'false'),
   // Shared secret for authenticating rate limit ingest requests from MCP Lambda
   RATE_LIMIT_INGEST_TOKEN: new sst.Secret('RATE_LIMIT_INGEST_TOKEN', 'not-configured'),
+  // NCMEC CyberTipline ESP credentials for 18 U.S.C. section 2258A reporting.
+  // Obtain from your NCMEC ESP representative. Set per stage via `sst secret set`.
+  // NCMEC_USE_SANDBOX must be 'true' on non-production stages.
+  NCMEC_ESP_ID: new sst.Secret('NCMEC_ESP_ID', 'not-configured'),
+  NCMEC_API_KEY: new sst.Secret('NCMEC_API_KEY', 'not-configured'),
+  NCMEC_USE_SANDBOX: new sst.Secret('NCMEC_USE_SANDBOX', 'true'),
+  NCMEC_ESP_EMAIL: new sst.Secret('NCMEC_ESP_EMAIL', 'not-configured'),
   // RSA private key for signing OIDC ID tokens (RS256). Base64-encoded PEM.
   // Generate with: openssl genrsa 2048 | base64 | tr -d '\n'
   // If not set, an ephemeral key is generated at runtime (dev only — NOT safe for production).

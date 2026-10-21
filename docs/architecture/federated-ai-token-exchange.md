@@ -36,11 +36,13 @@ requested scopes differ, and returns the minted scopes in the response's `scope`
 
 ## Grant enforcement and rollout
 
-The SST `production` and `dev` stages enforce grants automatically. Other stages
-use grace mode unless `OAUTH_AI_TOKEN_ENFORCE_GRANT=true`; in grace mode missing
-grants or scope gaps produce warnings rather than rejection. Setting
+The SST `production` and `dev` stages, and preview stages, enforce grants
+automatically. Other stages (e.g. self-host, local, personal stages) use grace mode unless
+`OAUTH_AI_TOKEN_ENFORCE_GRANT=true`; in grace mode missing grants or scope gaps
+produce warnings rather than rejection. Setting
 `OAUTH_AI_TOKEN_ENFORCE_GRANT=false` (or any value other than `true`) overrides
-the stage default and disables enforcement, including on `production` and `dev`.
+the stage default and disables enforcement, including on `production`, `dev`
+and previews.
 
 In enforcement mode, relying-party clients need a durable OAuth grant for the
 user/client pair, and the grant must cover every scope the exchange mints. An
@@ -57,6 +59,10 @@ For `access_denied` due to missing grants or AI consent, send the user through t
 OAuth authorization flow requesting the needed scope. Refreshing or re-exchanging
 an ID token does not create a grant. A grant lookup failure returns 503 in
 enforcement mode; retry after the underlying service recovers.
+
+The self-asserted `'identities'` subject source (see below) stays accepted on every
+stage, `production` and `dev` included, unless `OAUTH_AI_TOKEN_REQUIRE_SUB=true` is
+set for that stage. Set it only once every live federated client uses `'sub'`.
 
 ## The two issuer shapes
 
@@ -100,8 +106,7 @@ on it would break if the alias ever moved.
 
 ## Registering a client
 
-`packages/scripts/src/seed-oauth-client.ts` registers a client and prints its
-`client_id` / `client_secret`. For a B4M-issued client:
+Admins register clients from the admin console (Security > OAuth Clients), which takes the same trust config in its "Federated trust" section. Both it and `packages/scripts/src/seed-oauth-client.ts` go through `createOAuthClient` (`packages/database/src/models/auth/oauthClientAdmin.ts`), so the rules below apply to both. The script prints the `client_id` / `client_secret`; it is the fallback where no admin user exists. For a B4M-issued client:
 
 ```bash
 MONGODB_URI=<uri> \

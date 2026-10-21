@@ -234,6 +234,25 @@ class MemoryLedgerRepository extends BaseRepository<IMemoryLedgerEvent> {
     return docs.map(d => d.toObject());
   }
 
+  /** Hashes of the events that carry a full vector - presence only, so a caller can tell without shipping it. */
+  async listHashesWithEmbedding(
+    principalKind: MemoryPrincipalKind,
+    principalId: string,
+    ownerUserId: string
+  ): Promise<string[]> {
+    const docs = await this.model
+      .find({
+        principalKind,
+        principalId,
+        ownerUserId,
+        embeddingCipher: { $nin: [null, ''] },
+        embeddingIv: { $nin: [null, ''] },
+        embeddingTag: { $nin: [null, ''] },
+      })
+      .select('hash');
+    return docs.map(d => d.hash);
+  }
+
   /**
    * Re-write one event's encrypted vector in place, with its new space stamp.
    *

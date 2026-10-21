@@ -1,10 +1,10 @@
 import { Request, Response } from 'express';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, BadRequestError } from '@server/utils/errors';
+import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { MailService, type TestEmailResult } from '@server/utils/mailer';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { logAuditEvent, AdminConfigAuditEvents } from '@server/utils/auditLog';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { z } from 'zod';
 
 const TestEmailSchema = z.object({
@@ -36,15 +36,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       const mailService = new MailService();
       const result: TestEmailResult = await mailService.sendTestEmail(recipientEmail);
 
-      await logAuditEvent(
-        {
-          userId: req.user!.id,
-          action: AdminConfigAuditEvents.ADMIN_TEST_EMAIL_SENT,
-          ip: req.ip,
-          userAgent: req.headers['user-agent'] || 'unknown',
-        },
-        req.logger
-      );
+      await recordAdminActionFromRequest(req, {
+        action: 'system_health.test_run',
+        target: { kind: 'system', id: 'system-health', displayName: 'System health' },
+        summary: 'sent a test email',
+        details: { testType: 'email' },
+      });
 
       return res.json({
         ...result,

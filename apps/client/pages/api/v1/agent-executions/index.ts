@@ -11,20 +11,20 @@
  * Auth mode, scopes and body validation all come from `startAgentExecutionContract`.
  */
 
-import { BadRequestError, ConflictError, NotFoundError, BadGatewayError } from '@server/utils/errors';
+import { BadRequestError, ConflictError, ForbiddenError, NotFoundError, BadGatewayError } from '@bike4mind/server-utils/utils/errors';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
-import { startAgentExecutionContract } from '@bike4mind/common';
+import { BILLING_ORGANIZATION_MISMATCH_ERROR_CODE, startAgentExecutionContract } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
 import { isChatModelUsable, resolveDefaultChatModel } from '@server/utils/chatCompletionDefaults';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
-import { HEADLESS_CONNECTION_ID } from '@server/utils/headlessConnection';
+import { HEADLESS_CONNECTION_ID } from '@bike4mind/server-utils/utils/headlessConnection';
 
 const handler = nextRouteForContract(startAgentExecutionContract, {
   rateLimit: rateLimit({
-    limit: req => resolveUserRateLimitPerMin(req.user),
+    limit: req => resolveUserRateLimitPerMin(req.user, req),
     windowMs: 60 * 1000,
   }),
 }).post(async (req, res) => {
@@ -56,9 +56,9 @@ const handler = nextRouteForContract(startAgentExecutionContract, {
   }
 
   // Billing target is an explicit, opt-in choice: omitted means the run is billed to
-  // the caller personally. The membership check lives in `startAgentExecution` - one
-  // gate, shared with the WebSocket transport, rather than a second one here that
-  // would disagree with it about who counts as a member.
+  // the caller personally, unless an org-billed key is calling, which always bills its
+  // own org. Both rules live in `startAgentExecution` - one gate, shared with the
+  // WebSocket transport, rather than a second one here that would disagree with it.
   const result = await startAgentExecution(
     {
       userId: req.user.id,
@@ -101,6 +101,10 @@ const handler = nextRouteForContract(startAgentExecutionContract, {
         // Same reasoning as the session case: "no such org" and "not your org" are one
         // response, so membership cannot be probed.
         throw new NotFoundError('Organization not found');
+      case 'billing_organization_mismatch':
+        throw new ForbiddenError(result.message, { errorCode: BILLING_ORGANIZATION_MISMATCH_ERROR_CODE });
+      case 'billing_key_stale':
+        throw new BadRequestError(result.message);
       case 'concurrent_limit':
         throw new ConflictError(result.message);
       case 'dispatch_failed':

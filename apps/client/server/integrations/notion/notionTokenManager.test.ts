@@ -305,14 +305,18 @@ describe('NotionTokenManager', () => {
 
       await NotionTokenManager.syncMcpServer('user-123', 'access-token', 'ws-123');
 
-      expect(mockMcpUpdate).toHaveBeenCalledWith({
-        id: 'mcp-123',
-        envVariables: expect.arrayContaining([
-          expect.objectContaining({ key: 'NOTION_ACCESS_TOKEN' }),
-          expect.objectContaining({ key: 'NOTION_WORKSPACE_ID' }),
-        ]),
-        enabled: true,
-      });
+      expect(mockMcpUpdate).toHaveBeenCalledWith(
+        {
+          id: 'mcp-123',
+          envVariables: expect.arrayContaining([
+            expect.objectContaining({ key: 'NOTION_ACCESS_TOKEN' }),
+            expect.objectContaining({ key: 'NOTION_WORKSPACE_ID' }),
+          ]),
+          enabled: true,
+        },
+        // Reconnect clears the confirmed-empty tool marker before the tool fetch.
+        { unset: ['toolSchemasFetchedAt'] }
+      );
     });
 
     it('should fetch and store MCP tools', async () => {
@@ -330,6 +334,8 @@ describe('NotionTokenManager', () => {
             expect.objectContaining({ name: 'notion_create_page' }),
             expect.objectContaining({ name: 'notion_read_page' }),
           ]),
+          // The confirmed-empty marker is stamped on a successful fetch, empty or not.
+          toolSchemasFetchedAt: expect.any(Date),
         })
       );
     });

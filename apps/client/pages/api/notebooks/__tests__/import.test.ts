@@ -43,7 +43,7 @@ describe('POST /api/notebooks/import', () => {
     const req = {
       user: { id: 'user-1' },
       ability: { can: () => true },
-      body: { conflictResolution: 'skip' },
+      body: { conflictResolution: 'skip', size: 4096 },
       logger: { info: vi.fn() },
     } as unknown as Request;
     const res = { json: vi.fn() } as unknown as Response;
@@ -55,14 +55,29 @@ describe('POST /api/notebooks/import', () => {
     if (selfHost) {
       expect(sign).not.toHaveBeenCalled();
     } else {
-      expect(sign).toHaveBeenCalledExactlyOnceWith('notebooks/user-1/1700000000000.json', 'put', { expiresIn: 600 });
+      expect(sign).toHaveBeenCalledExactlyOnceWith('notebooks/user-1/1700000000000.json', 'put', {
+        expiresIn: 600,
+        ContentLength: 4096,
+      });
     }
     expect(res.json).toHaveBeenCalledWith({
       success: true,
       importId: 1700000000000,
       uploadUrl: selfHost
-        ? '/api/notebooks/import/upload?importId=1700000000000'
+        ? '/api/notebooks/import/upload?importId=1700000000000&size=4096'
         : 'https://storage.example/signed-upload',
     });
+  });
+
+  it('refuses a hosted import without a declared size, so the upload is never unbounded', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'false');
+    const req = {
+      user: { id: 'user-1' },
+      ability: { can: () => true },
+      body: { conflictResolution: 'skip' },
+      logger: { info: vi.fn() },
+    } as unknown as Request;
+    await expect(captured.post!(req, { json: vi.fn() } as unknown as Response)).rejects.toThrow();
+    expect(sign).not.toHaveBeenCalled();
   });
 });

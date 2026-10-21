@@ -1,8 +1,24 @@
 import { IProjectDocument } from '@bike4mind/common';
-import { useAddFilesToProject, useAddSessionsToProject, useSearchProjects } from '@client/app/hooks/data/projects';
-import { Autocomplete, Box, Button, CircularProgress, Modal, ModalClose, ModalDialog } from '@mui/joy';
+import {
+  useAddFilesToProject,
+  useAddSessionsToProject,
+  useCreateProject,
+  useSearchProjects,
+} from '@client/app/hooks/data/projects';
+import {
+  Autocomplete,
+  Box,
+  Button,
+  CircularProgress,
+  Input,
+  Modal,
+  ModalClose,
+  ModalDialog,
+  Typography,
+} from '@mui/joy';
 import { FC, ReactNode, useMemo, useState, createContext, useContext, useRef, useEffect } from 'react';
 import { debounce } from 'lodash';
+import { toast } from 'sonner';
 
 interface ProjectAddToModalContextType {
   openModal: (dataId: string, dataType: 'file' | 'session') => void;
@@ -82,6 +98,10 @@ export const ProjectAddToModal: FC<ProjectAddToModalProps> = ({ dataId, dataType
   const [selectedProject, setSelectedProject] = useState<IProjectDocument | null>(null);
   const [search, setSearch] = useState('');
   const [inputValue, setInputValue] = useState('');
+  const [newProjectName, setNewProjectName] = useState('');
+  // Set once create succeeded but the add failed: later submits retry the add only, never a second create.
+  const [createdProject, setCreatedProject] = useState<IProjectDocument | null>(null);
+  const inFlight = useRef(false);
 
   const debouncedSearch = useMemo(
     () =>
@@ -101,22 +121,39 @@ export const ProjectAddToModal: FC<ProjectAddToModalProps> = ({ dataId, dataType
       setSearch('');
       setInputValue('');
       setSelectedProject(null);
+      setNewProjectName('');
+      setCreatedProject(null);
     }
   }, [isOpen]);
 
+  // isOpen, not `open`: the render-prop caller (file browser) leaves `open` undefined and drives
+  // the internal state instead, so keying on `open` left its list permanently empty.
   const { data: projectResults, isLoading: isSearching } = useSearchProjects(
     search,
     {},
     { by: 'updatedAt', direction: 'desc' },
-    { enabled: open }
+    { enabled: isOpen }
   );
 
   const projects = projectResults?.pages.flatMap(page => page.data) ?? [];
+  // Only an unfiltered empty result means "no projects"; an empty search just found no match.
+  const hasNoProjects = !!projectResults && !isSearching && !search && projects.length === 0;
+
+  const pickerOptions = useMemo(
+    () =>
+      createdProject && !projects.some(p => p.id === createdProject.id) ? [createdProject, ...projects] : projects,
+    [createdProject, projects]
+  );
+
+  const close = () => {
+    setOpen?.(false);
+    setOpenModal(false);
+  };
 
   const addFileMutation = useAddFilesToProject({
     onSuccess: () => {
       setIsLoading(false);
-      setOpen?.(false);
+      close();
     },
     onError: () => {
       setIsLoading(false);
@@ -126,15 +163,74 @@ export const ProjectAddToModal: FC<ProjectAddToModalProps> = ({ dataId, dataType
   const addSessionMutation = useAddSessionsToProject({
     onSuccess: () => {
       setIsLoading(false);
-      setOpen?.(false);
+      close();
     },
     onError: () => {
       setIsLoading(false);
     },
   });
 
+  // Create-then-add reports once, after both requests settle; the hooks' own toasts would fire per step.
+  const createProject = useCreateProject({ silentSuccess: true });
+  const addSessionToNewProject = useAddSessionsToProject({ silent: true });
+  const isCreating = createProject.isPending || addSessionToNewProject.isPending;
+
+  const addNotebookToCreated = async (project: IProjectDocument) => {
+    try {
+      await addSessionToNewProject.mutateAsync({ projectId: project.id, sessionIds: [dataId] });
+    } catch {
+      // The project exists, so keep it and preselect it; Add retries only the notebook.
+      setCreatedProject(project);
+      setSelectedProject(project);
+      setInputValue(project.name);
+      toast.error(`Project "${project.name}" was created, but the notebook could not be added to it. Try Add again.`);
+      return;
+    }
+    setCreatedProject(null);
+    toast.success('Project created and notebook added');
+    close();
+  };
+
+  const handleCreate = async () => {
+    const name = newProjectName.trim();
+    if (!name || inFlight.current) return;
+    inFlight.current = true;
+    try {
+      if (createdProject) {
+        await addNotebookToCreated(createdProject);
+        return;
+      }
+      if (dataType === 'file') {
+        const created = await createProject
+          .mutateAsync({ name, description: '', fileIds: [dataId] })
+          .catch(() => undefined);
+        if (created) {
+          toast.success('Project created successfully');
+          close();
+        }
+        return;
+      }
+      const project = await createProject.mutateAsync({ name, description: '' }).catch(() => undefined);
+      if (!project) return;
+      await addNotebookToCreated(project);
+    } finally {
+      inFlight.current = false;
+    }
+  };
+
   const handleAdd = async () => {
     if (!selectedProject) return;
+
+    if (createdProject && selectedProject.id === createdProject.id) {
+      if (inFlight.current) return;
+      inFlight.current = true;
+      try {
+        await addNotebookToCreated(createdProject);
+      } finally {
+        inFlight.current = false;
+      }
+      return;
+    }
 
     setIsLoading(true);
     if (dataType === 'file') {
@@ -145,8 +241,9 @@ export const ProjectAddToModal: FC<ProjectAddToModalProps> = ({ dataId, dataType
   };
 
   const handleClose = () => {
-    setOpen?.(false);
-    setOpenModal(false);
+    if (isCreating) return;
+    close();
+    setCreatedProject(null);
     setSearch('');
     setInputValue('');
     setSelectedProject(null);
@@ -169,46 +266,88 @@ export const ProjectAddToModal: FC<ProjectAddToModalProps> = ({ dataId, dataType
               <Box fontSize="20px" lineHeight="20px" className="project-add-to-modal-title">
                 Add to Project
               </Box>
-              <Box display="flex" flexDirection="column" gap="16px" className="project-add-to-modal-form">
-                <Autocomplete
-                  placeholder="Search projects..."
-                  loading={isSearching}
-                  options={projects}
-                  value={selectedProject}
-                  inputValue={inputValue}
-                  onChange={(_event, newValue) => setSelectedProject(newValue)}
-                  onInputChange={(_event, value) => {
-                    setInputValue(value);
-                    debouncedSearch(value);
+              {!createdProject && (hasNoProjects || isCreating) ? (
+                <Box
+                  display="flex"
+                  flexDirection="column"
+                  gap="16px"
+                  className="project-add-to-modal-empty"
+                  data-testid="project-add-to-modal-empty"
+                  component="form"
+                  onSubmit={(event: React.FormEvent) => {
+                    event.preventDefault();
+                    handleCreate();
                   }}
-                  getOptionLabel={option => option.name}
-                  slotProps={{
-                    loading: {
-                      children: <CircularProgress size="sm" className="project-add-to-modal-search-progress" />,
-                    },
-                  }}
-                  className="project-add-to-modal-autocomplete"
-                />
-                <Box display="flex" justifyContent="flex-end" gap="8px" className="project-add-to-modal-actions">
-                  <Button
-                    variant="outlined"
-                    onClick={handleClose}
-                    disabled={isLoading}
-                    color="neutral"
-                    className="project-add-to-modal-cancel-button"
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    onClick={handleAdd}
-                    disabled={isLoading || !selectedProject}
-                    loading={isLoading}
-                    className="project-add-to-modal-add-button"
-                  >
-                    Add
-                  </Button>
+                >
+                  <Typography level="body-md">
+                    No projects yet. Create one and this {dataType === 'file' ? 'file' : 'notebook'} goes straight into
+                    it.
+                  </Typography>
+                  <Input
+                    autoFocus
+                    placeholder="Project name"
+                    value={newProjectName}
+                    onChange={event => setNewProjectName(event.target.value)}
+                    slotProps={{
+                      input: { 'aria-label': 'Project name', 'data-testid': 'project-add-to-modal-name-input' },
+                    }}
+                  />
+                  <Box display="flex" justifyContent="flex-end" gap="8px">
+                    <Button variant="outlined" color="neutral" onClick={handleClose} disabled={isCreating}>
+                      Cancel
+                    </Button>
+                    <Button
+                      type="submit"
+                      loading={isCreating}
+                      disabled={!newProjectName.trim()}
+                      data-testid="project-add-to-modal-create-btn"
+                    >
+                      Create project
+                    </Button>
+                  </Box>
                 </Box>
-              </Box>
+              ) : (
+                <Box display="flex" flexDirection="column" gap="16px" className="project-add-to-modal-form">
+                  <Autocomplete
+                    placeholder="Search projects..."
+                    loading={isSearching}
+                    options={pickerOptions}
+                    value={selectedProject}
+                    inputValue={inputValue}
+                    onChange={(_event, newValue) => setSelectedProject(newValue)}
+                    onInputChange={(_event, value) => {
+                      setInputValue(value);
+                      debouncedSearch(value);
+                    }}
+                    getOptionLabel={option => option.name}
+                    slotProps={{
+                      loading: {
+                        children: <CircularProgress size="sm" className="project-add-to-modal-search-progress" />,
+                      },
+                    }}
+                    className="project-add-to-modal-autocomplete"
+                  />
+                  <Box display="flex" justifyContent="flex-end" gap="8px" className="project-add-to-modal-actions">
+                    <Button
+                      variant="outlined"
+                      onClick={handleClose}
+                      disabled={isLoading}
+                      color="neutral"
+                      className="project-add-to-modal-cancel-button"
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      onClick={handleAdd}
+                      disabled={isLoading || isCreating || !selectedProject}
+                      loading={isLoading || isCreating}
+                      className="project-add-to-modal-add-button"
+                    >
+                      Add
+                    </Button>
+                  </Box>
+                </Box>
+              )}
             </Box>
           </ModalDialog>
         </Modal>

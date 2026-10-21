@@ -1,5 +1,5 @@
 import { GetEffectiveApiKeyAdapters } from '../apiKeyService';
-import { ToolExecutionRequest, ToolExecutionResult, ToolErrorType } from './types';
+import { ToolExecutionRequest, ToolExecutionResult, ToolErrorType, type ServerToolExecutors } from './types';
 import { firecrawlFetch, webFetchBody } from '../llm/tools/implementation/webfetch';
 import { performWebSearch, WebSearchParams } from '../llm/tools/implementation/websearch';
 import { fetchWeatherData, WeatherParams } from '../llm/tools/implementation/weather';
@@ -59,7 +59,9 @@ export async function executeServerTool(
   // Signs web_search image URLs - see WebSearchToolConfig.imageUrlSigningSecret. Omit only when
   // the caller genuinely has no secret; performWebSearch degrades to no images rather than
   // emitting an unverifiable URL.
-  imageUrlSigningSecret = ''
+  imageUrlSigningSecret = '',
+  // Host-supplied implementations for tools this package cannot reach (see ServerToolExecutors).
+  executors: ServerToolExecutors = {}
 ): Promise<ToolExecutionResult> {
   const startTime = Date.now();
 
@@ -89,6 +91,13 @@ export async function executeServerTool(
         // Shared formatter keeps truncation/continuation in-band and consistent with the
         // web_fetch tool and HTTP endpoint.
         content = webFetchBody(result);
+        break;
+      }
+
+      case 'decide': {
+        const decide = executors.decide;
+        if (!decide) throw new Error('decide is not configured on this deployment');
+        content = await decide(request);
         break;
       }
 

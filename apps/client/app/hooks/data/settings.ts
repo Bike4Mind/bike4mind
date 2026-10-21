@@ -7,6 +7,11 @@ import {
   SettingKey,
   settingsMap,
   experimentalFeatureSettingKeys,
+  forcedRetrievalFloorAboveMeasured,
+  forcedRetrievalFloorAboveMeasuredMessage,
+  isBlankSettingValue,
+  isSupportedEmbeddingModel,
+  OpenAIEmbeddingModel,
 } from '@bike4mind/common';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo } from 'react';
@@ -19,6 +24,7 @@ import {
   ADMIN_SETTINGS_ARRAY_QUERY_KEY,
   BRANDING_SETTINGS_QUERY_KEY,
   SCOPED_SETTING_OVERRIDES_QUERY_KEY,
+  SERVER_CONFIG_QUERY_KEY,
 } from './queryKeys';
 import { useAccessToken, useIsFullyAuthenticated } from '@client/app/hooks/useAccessToken';
 
@@ -29,17 +35,21 @@ export function useUpdateSettings() {
       key,
       value,
       confirmClear,
+      confirmAboveMeasuredFloor,
     }: {
       key: SettingKey;
       value: z.TypeOf<(typeof settingsMap)[SettingKey]['schema']>;
       // Required by the server to unset a sensitive setting - clearing one destroys a live
       // credential, so the intent has to be explicit rather than inferred from an empty value.
       confirmClear?: boolean;
+      // Sent only after the field has shown useFloorAboveMeasuredWarning's text.
+      confirmAboveMeasuredFloor?: boolean;
     }) => {
       const { data } = await api.put(`/api/settings/update`, {
         key,
         value,
         ...(confirmClear ? { confirmClear } : {}),
+        ...(confirmAboveMeasuredFloor ? { confirmAboveMeasuredFloor } : {}),
       });
 
       return data;
@@ -178,6 +188,25 @@ export function useGetSettingsValue(key: SettingKey) {
 }
 
 /**
+ * The warning an admin field shows before saving a forced-retrieval floor above the one measured for
+ * the default embedding model; the server refuses that value unless the save confirms it.
+ */
+export function useFloorAboveMeasuredWarning(key: SettingKey, value: unknown): string | undefined {
+  const model = useGetSettingsValue('defaultEmbeddingModel');
+  if (key !== 'forcedRetrievalMinSimilarityPct' || typeof model !== 'string' || isBlankSettingValue(value)) {
+    return undefined;
+  }
+  // Mirror `resolveDefaultEmbeddingModel` on the server: the stored value is the model only while it
+  // is supported, and an unsupported one falls back to 3-small - the floor the server refuses
+  // against. Without this the two sides disagree when the stored value is stale or legacy, and a
+  // save the client never warned about is refused with no way to confirm it from here.
+  const resolvedModel = isSupportedEmbeddingModel(model) ? model : OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL;
+  const pct = Number(value);
+  const measured = Number.isFinite(pct) ? forcedRetrievalFloorAboveMeasured(pct, resolvedModel) : undefined;
+  return measured === undefined ? undefined : forcedRetrievalFloorAboveMeasuredMessage(pct, measured, resolvedModel);
+}
+
+/**
  * The embedding model this deployment will actually embed with, or undefined while it is unknown.
  *
  * Use this, NOT `useGetSettingsValue('defaultEmbeddingModel')`, for anything that compares a file's
@@ -241,7 +270,7 @@ export function useConfig() {
   const isFullyAuthenticated = useIsFullyAuthenticated();
 
   return useQuery({
-    queryKey: ['server-config'],
+    queryKey: SERVER_CONFIG_QUERY_KEY,
     queryFn: async () => {
       const response = await api.get<ServerConfig>('/api/settings/serverConfig');
 

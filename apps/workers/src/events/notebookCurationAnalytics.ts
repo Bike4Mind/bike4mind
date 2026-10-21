@@ -1,4 +1,4 @@
-import { withEventContext } from '@server/utils/eventContext';
+import { withEventContext } from '@workers/utils/eventContext';
 import { NotebookCurationEvents } from '@server/utils/eventBus';
 import { FabFile } from '@bike4mind/database';
 import { logEvent } from '@server/utils/analyticsLog';

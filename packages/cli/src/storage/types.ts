@@ -3,6 +3,9 @@ import type { AgentStep, SubagentConfig, ThoroughnessLevel } from '@bike4mind/ag
 import type { MessageContentObject } from '@bike4mind/common';
 import type { SandboxConfig, PartialSandboxConfig } from '../sandbox/types.js';
 
+/** Content of a pending assistant message before any reply text arrives; MessageItem hides it. */
+export const PENDING_ASSISTANT_CONTENT = '...';
+
 /**
  * Message in a conversation
  */
@@ -446,6 +449,11 @@ export interface CustomCommand {
   variables?: Record<string, string>;
   /** Tool patterns to allow during skill execution */
   allowedTools?: string[];
+  /**
+   * A Skill Market import (RemoteSkillSource `includeImports`): owned by the user, written by
+   * someone else. Must run wrapped as untrusted content, never as trusted local instructions.
+   */
+  untrusted?: boolean;
   /** Execution context: 'inline' (default) or 'fork' (runs in subagent) */
   context?: 'fork' | 'inline';
   /** When true, skill is hidden from AI's auto-loading in system prompt */

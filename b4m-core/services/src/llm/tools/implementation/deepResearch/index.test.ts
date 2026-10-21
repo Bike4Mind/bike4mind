@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { Logger } from '@bike4mind/observability';
 
 const createFirecrawlApp = vi.fn();
 vi.mock('../webfetch/firecrawlApp', () => ({
@@ -139,6 +140,29 @@ describe('performDeepResearch discovery precedence', () => {
     );
   });
 
+  it('raises an error-level log when a search fails, since the caller would otherwise void it', async () => {
+    const failing = (name: 'serpapi' | 'searxng') => ({
+      name,
+      search: vi.fn(async () => {
+        throw new Error(`${name} is down`);
+      }),
+    });
+    createFirecrawlApp.mockReturnValue(null);
+    resolveWebSearchProviders.mockResolvedValue([failing('serpapi'), failing('searxng')]);
+    const errorSpy = vi.spyOn(Logger.globalInstance, 'error').mockImplementation(() => undefined);
+
+    try {
+      await performDeepResearch(makeContext(), { topic: 'marine biology' }, { maxDepth: 1, duration: 1 });
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        'Deep Research: search failed',
+        expect.objectContaining({ searcher: 'serpapi' })
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   it('uses the web-search provider for discovery when Firecrawl is absent', async () => {
     const provider = searchProvider();
     createFirecrawlApp.mockReturnValue(null);
@@ -202,6 +226,22 @@ describe('performDeepResearch honors the turn abort signal', () => {
 
     expect(result.success).toBe(true);
     expect(provider.search).not.toHaveBeenCalled();
+  });
+
+  it('clamps a requested depth past DEEP_RESEARCH_MAX_DEPTH', async () => {
+    createFirecrawlApp.mockReturnValue(null);
+    resolveWebSearchProviders.mockResolvedValue([searchProvider(), null]);
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await performDeepResearch(
+      makeContext(() => controller.signal),
+      { topic: 'marine biology' },
+      { maxDepth: 1000, duration: 1000 }
+    );
+
+    // totalSteps is three per depth level.
+    expect(result.data.totalSteps).toBe(30);
   });
 
   it('stops after the in-flight iteration instead of running to maxDepth', async () => {

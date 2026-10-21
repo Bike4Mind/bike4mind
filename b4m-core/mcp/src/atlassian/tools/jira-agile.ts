@@ -8,6 +8,8 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { getJiraApi } from '../client.js';
 import { createJsonResponse, createErrorResponse, createTextResponse } from '../helpers/responses.js';
+import { createPreviewResponse } from '../../shared/confirmation-helpers.js';
+import { confirmationParams } from '../../shared/schemas.js';
 import { boardIdSchema, sprintIdSchema, paginationParams } from '../helpers/schemas.js';
 import {
   JIRA_LIST_BOARDS,
@@ -112,8 +114,18 @@ export function registerJiraAgileTools(server: McpServer) {
         .optional()
         .describe('Sprint start date in ISO 8601 format (e.g., "2024-01-15T09:00:00.000Z").'),
       endDate: z.string().optional().describe('Sprint end date in ISO 8601 format (e.g., "2024-01-29T17:00:00.000Z").'),
+      ...confirmationParams,
     },
-    async ({ name, boardId, goal, startDate, endDate }) => {
+    async ({ name, boardId, goal, startDate, endDate, _executeFromButton }) => {
+      if (_executeFromButton !== true) {
+        return createPreviewResponse(
+          'Preview: Jira Sprint to be Created',
+          { name, boardId, goal: goal ?? null, startDate: startDate ?? null, endDate: endDate ?? null },
+          'sprint',
+          { tool: JIRA_CREATE_SPRINT, params: { name, boardId, goal, startDate, endDate } }
+        );
+      }
+
       try {
         const sprint = await getJiraApi().agile.createSprint({
           name,
@@ -143,8 +155,25 @@ export function registerJiraAgileTools(server: McpServer) {
         .enum(['active', 'closed'])
         .optional()
         .describe('Change sprint state: "active" to start the sprint, "closed" to complete it.'),
+      ...confirmationParams,
     },
-    async ({ sprintId, name, goal, startDate, endDate, state }) => {
+    async ({ sprintId, name, goal, startDate, endDate, state, _executeFromButton }) => {
+      if (_executeFromButton !== true) {
+        return createPreviewResponse(
+          'Preview: Jira Sprint Update',
+          {
+            sprintId,
+            name: name ?? null,
+            goal: goal ?? null,
+            startDate: startDate ?? null,
+            endDate: endDate ?? null,
+            state: state ?? null,
+          },
+          'sprint',
+          { tool: JIRA_UPDATE_SPRINT, params: { sprintId, name, goal, startDate, endDate, state } }
+        );
+      }
+
       try {
         const sprint = await getJiraApi().agile.updateSprint({ sprintId, name, goal, startDate, endDate, state });
         return createJsonResponse(sprint);
@@ -182,8 +211,18 @@ export function registerJiraAgileTools(server: McpServer) {
       issues: z
         .array(z.string())
         .describe('Array of issue keys or IDs to move (e.g., ["PROJ-1", "PROJ-2"]). Maximum 50 issues.'),
+      ...confirmationParams,
     },
-    async ({ sprintId, issues }) => {
+    async ({ sprintId, issues, _executeFromButton }) => {
+      if (_executeFromButton !== true) {
+        return createPreviewResponse(
+          'Preview: Move Issues to Jira Sprint',
+          { sprintId, count: issues.length, issues },
+          'move',
+          { tool: JIRA_MOVE_ISSUES_TO_SPRINT, params: { sprintId, issues } }
+        );
+      }
+
       try {
         await getJiraApi().agile.moveIssuesToSprint({ sprintId, issues });
         return createTextResponse(

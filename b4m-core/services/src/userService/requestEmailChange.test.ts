@@ -29,7 +29,7 @@ describe('requestEmailChange', () => {
       db: {
         users: {
           findById: vi.fn().mockResolvedValue(mockUser),
-          findByEmail: vi.fn().mockResolvedValue(null),
+          existsOtherUserWithEmail: vi.fn().mockResolvedValue(false),
           update: vi.fn().mockResolvedValue(undefined),
         },
       },
@@ -49,7 +49,7 @@ describe('requestEmailChange', () => {
     await requestEmailChange(baseParams, mockAdapters);
 
     expect(mockAdapters.db.users.findById).toHaveBeenCalledWith(baseParams.userId);
-    expect(mockAdapters.db.users.findByEmail).toHaveBeenCalledWith(baseParams.newEmail);
+    expect(mockAdapters.db.users.existsOtherUserWithEmail).toHaveBeenCalledWith(baseParams.newEmail, mockUser.id);
     expect(mockAdapters.db.users.update).toHaveBeenCalledWith({
       id: baseParams.userId,
       pendingEmail: baseParams.newEmail,
@@ -92,7 +92,7 @@ describe('requestEmailChange', () => {
   });
 
   it('should silently fail if new email is already taken by another user (prevent enumeration)', async () => {
-    mockAdapters.db.users.findByEmail.mockResolvedValue({ id: 'differentUserId', email: baseParams.newEmail });
+    mockAdapters.db.users.existsOtherUserWithEmail.mockResolvedValue(true);
 
     // Should not throw error (silent fail to prevent email enumeration)
     await expect(requestEmailChange(baseParams, mockAdapters)).resolves.not.toThrow();
@@ -102,13 +102,16 @@ describe('requestEmailChange', () => {
     expect(mockAdapters.mailer.sendEmailChangeVerification).not.toHaveBeenCalled();
   });
 
-  it('should allow email change if same user already has that email (edge case)', async () => {
-    // Same user trying to set their current email again
-    mockAdapters.db.users.findByEmail.mockResolvedValue(mockUser);
-    const sameUserParams = { ...baseParams, newEmail: 'another@example.com' };
+  it('normalizes the new address before the availability check and the pending write', async () => {
+    await requestEmailChange({ ...baseParams, newEmail: '  Another@Example.COM ' }, mockAdapters);
 
-    // Should not throw
-    await expect(requestEmailChange(sameUserParams, mockAdapters)).resolves.not.toThrow();
+    expect(mockAdapters.db.users.existsOtherUserWithEmail).toHaveBeenCalledWith('another@example.com', mockUser.id);
+    expect(mockAdapters.db.users.update.mock.calls[0][0].pendingEmail).toBe('another@example.com');
+    expect(mockAdapters.mailer.sendEmailChangeVerification).toHaveBeenCalledWith(
+      mockUser,
+      'another@example.com',
+      expect.any(String)
+    );
   });
 
   it('should generate a new token even if previous pending change exists', async () => {
@@ -190,7 +193,7 @@ describe('requestEmailChange', () => {
   });
 
   it('should not send notification email if silent fail due to email enumeration', async () => {
-    mockAdapters.db.users.findByEmail.mockResolvedValue({ id: 'differentUserId', email: baseParams.newEmail });
+    mockAdapters.db.users.existsOtherUserWithEmail.mockResolvedValue(true);
 
     await requestEmailChange(baseParams, mockAdapters);
 

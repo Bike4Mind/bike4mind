@@ -120,11 +120,16 @@ export class ShareableDocumentRepository<T> implements IShareableStaticMethods<T
    * notebook file list. Every `shareable` repository shares this method - Session, FabFile,
    * Project, Agent, Skill, Tool, Organization - and all of them are ObjectId-keyed.
    */
-  async findAllAccessibleByIds(user: Pick<IUserDocument, 'id' | 'groups'>, ids: string[]): Promise<T[]> {
-    return this.model.where({
+  async findAllAccessibleByIds(
+    user: Pick<IUserDocument, 'id' | 'groups'>,
+    ids: string[],
+    options?: { includeDeleted?: boolean }
+  ): Promise<T[]> {
+    const query = this.model.where({
       _id: { $in: usableObjectIds(ids, `${this.model.modelName}.findAllAccessibleByIds`) },
       $or: readAccessArms(user),
     });
+    return options?.includeDeleted ? query.setOptions({ includeDeleted: true }) : query;
   }
 
   /**

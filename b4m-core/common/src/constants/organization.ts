@@ -1,6 +1,10 @@
 /**
  * Organization seat-limit policy - the floor and ceiling every seat change is bound by.
  *
+ * These are the DEFAULTS of the admin settings `teamPlanMinSeats` / `teamPlanMaxSeats` /
+ * `teamPlanCreditsPerSeat` (Admin -> Growth & Pricing). Enforcement sites read the settings via
+ * `resolveTeamPlanSettings` (common/utils/teamPlanSettings) and fall back to these.
+ *
  * Lives in common (not the app's subscriptions constants) because the ceiling has to be
  * enforced in the persistence layer too: `OrganizationModel.addMemberRaisingSeats` clamps
  * the auto-raise against MAX, and packages/database cannot import from apps/client. The app
@@ -17,6 +21,16 @@ export const ORGANIZATION_SUBSCRIPTION_MIN_SEATS = 4;
  * `setSeats` value can satisfy (#1424).
  */
 export const ORGANIZATION_SUBSCRIPTION_MAX_SEATS = 100;
+
+/** Credits granted per paid team seat each billing cycle. */
+export const ORGANIZATION_SUBSCRIPTION_CREDITS_PER_SEAT = 50000;
+
+/**
+ * Absolute rail on the admin-tunable seat settings (`teamPlanMinSeats` / `teamPlanMaxSeats`): an
+ * operator can move the floor and ceiling, but not past this. The constants above are the
+ * settings' defaults and the fallback wherever no setting can be read.
+ */
+export const TEAM_PLAN_SEATS_HARD_LIMIT = 10_000;
 
 /**
  * The org `users[]` ACL permission values that CONSTITUTE membership - the single definition every
@@ -94,10 +108,73 @@ export const isOrgOwnerOrCurrentAdmin = (
  * May this actor set the org's per-member credit budgets - the default `maxCreditsPerMember` and
  * each member's `userDetails[].maxCredits` override?
  *
- * Exactly `isOrgOwnerOrCurrentAdmin`. Deliberately excludes a manager who is not also an appointed
- * admin: a spending limit on the owner's pool is a billing decision, the same line
- * `organizationService/update.ts` draws for `billingContact`. Appointed admins hold only a read row
+ * Exactly `isOrgOwnerOrCurrentAdmin`, so every `adminUserIds` manager may set budgets. Appointed admins hold only a read row
  * in `users[]` and so cannot pass `shareable.findUpdateAccessById` - server callers must fetch with
  * `findById`. The budget routes enforce it; the client uses it only to decide which controls to show.
  */
 export const canManageMemberCreditBudgets = isOrgOwnerOrCurrentAdmin;
+
+/**
+ * The owner-only tier: the billing owner or a platform admin, never a manager. The server enforces
+ * it with `verifyOrgOwner` (apps/client/server/utils/orgAccess.ts) and the client's org tab gates
+ * (apps/client/app/routes/organizations/orgTabAccess.ts) run this same function.
+ */
+export const isOrgOwnerOrPlatformAdmin = (
+  user: { id: string; isAdmin?: boolean | null },
+  org: { userId: string }
+): boolean => user.isAdmin === true || org.userId === user.id;
+
+/** The actor slice an administration decision needs - resolved from auth, never from the body. */
+export type OrgAuthorityActor = { id: string; isAdmin?: boolean | null };
+
+/** The organization slice an administration decision needs. */
+export type AdministrableOrg = {
+  userId: string;
+  adminUserIds?: readonly string[] | null;
+  users?: ReadonlyArray<{ userId: string }> | null;
+};
+
+/**
+ * May this actor administer the organization - its roster (remove members, or add them through the
+ * direct `addMember` path) and the write routes behind `verifyOrgAccess`, such as connecting a
+ * lake's GitHub or Drive source? Billing owner, any org manager, or platform admin.
+ *
+ * "Managers" are the `adminUserIds` list the owner edits in the UI, held to the same current-row
+ * rule as `isOrgOwnerOrCurrentAdmin`. Billing, credit spend reports and org integration secrets stay
+ * owner-only via `verifyOrgOwner` (see `isOrgOwnerOrPlatformAdmin`).
+ *
+ * Deliberately NARROWER than `shareable.findAccessibleById`, which is a MEMBERSHIP ACL: it admits
+ * anyone in `users[]` holding `read`, and `addMember` only ever grants `[Permission.read]`, so
+ * every ordinary member satisfied it and could therefore enroll arbitrary accounts.
+ *
+ * The same answer as `isOrgOwnerOrCurrentAdmin`, kept as its own name because it is the roster
+ * gate; invites (and cancelling them) gate on that one directly, behind an `isOrgMember` check.
+ *
+ * `userId` and `adminUserIds` are declared as strings on the organization schema, so a strict
+ * comparison is correct. Callers include `organizationService` `addMember` and `revokeAccess`
+ * (b4m-core/services), the addUser route (apps/client/pages/api/organizations/[id]/addUser.ts),
+ * `canManageOrg` in apps/client/server/utils/orgAccess.ts, and the client's Members tab
+ * (components/organizations/Member.tsx).
+ */
+export function canAdministerOrganization(actor: OrgAuthorityActor, organization: AdministrableOrg): boolean {
+  return isOrgOwnerOrCurrentAdmin(actor, organization);
+}
+
+/**
+ * May this actor remove `targetUserId` from the organization? `canAdministerOrganization`, except
+ * that only the billing owner or a platform admin may remove a manager: removal purges the target
+ * from `adminUserIds`, so a manager revoking another manager would be
+ * editing the Managers list, which `organizations/[id]/admins.ts` reserves for the owner.
+ *
+ * Enforced by `organizationService.revokeAccess`; the client's Members tab
+ * (components/organizations/Member.tsx) asks it per card so it never offers a refused Revoke.
+ */
+export function canRevokeOrgMember(
+  actor: OrgAuthorityActor,
+  organization: AdministrableOrg,
+  targetUserId: string
+): boolean {
+  if (!canAdministerOrganization(actor, organization)) return false;
+  if (isOrgOwnerOrPlatformAdmin(actor, organization)) return true;
+  return !(organization.adminUserIds ?? []).includes(targetUserId);
+}

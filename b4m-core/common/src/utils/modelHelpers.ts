@@ -232,7 +232,7 @@ export function supportsImageEdit(model?: string | null): boolean {
  *
  * Both edit dispatchers bill through this so the charge equals what is delivered: the
  * image-edit queue handler (services/llm/ImageEdit.ts) and the chat edit_image tool, whose
- * onToolStart payload feeds both the classic (ToolBuilder.reserveImageCredits) and agent-mode
+ * onToolFinish payload feeds both the classic (ToolBuilder.settleImageCredits) and agent-mode
  * (estimateGeneratedMediaUsd) credit rails. Raise it only together with ImageEditResponse itself -
  * billing more than one image before the response can carry more re-opens the overcharge.
  */

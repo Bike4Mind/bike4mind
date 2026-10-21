@@ -149,7 +149,8 @@ export interface McpHandlerPayload {
   envVariables: EnvVariable[];
   name: string;
   action: 'getTools' | 'callTool';
-  userId?: string;
+  /** Required so a caller can't drop out of the per-tenant MCP throttle and breaker by omission. */
+  userId: string | null;
   toolName?: string;
   toolArgs?: Record<string, unknown>;
 }

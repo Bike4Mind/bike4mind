@@ -31,6 +31,7 @@ import { knowledgeBaseSearchTool } from './implementation/knowledgeBaseSearch';
 import { knowledgeBaseRetrieveTool } from './implementation/knowledgeBaseRetrieve';
 import { knowledgeBaseCountTool } from './implementation/knowledgeBaseCount';
 import { describeKnowledgeBaseTool } from './implementation/describeKnowledgeBase';
+import { decideTool } from './implementation/decide';
 import { createDataLakeTool, listMyDataLakesTool, saveContentToDataLakeTool } from './implementation/dataLakeContent';
 import { navigateViewTool } from './implementation/navigateView';
 import { jupyterNotebookTool } from './implementation/jupyterNotebook';
@@ -78,6 +79,7 @@ export type {
 } from './implementation/askUserQuestion';
 
 export { isVideoToolConfig, type VideoToolConfig } from './implementation/videoGeneration';
+export { isMusicToolConfig, type MusicToolConfig } from './implementation/musicGeneration';
 export type { Searcher, SearchResult, ContentExtractionResult } from './implementation/deepResearch';
 
 /**
@@ -135,6 +137,7 @@ export const b4mTools = {
   retrieve_knowledge_content: knowledgeBaseRetrieveTool,
   count_knowledge_base: knowledgeBaseCountTool,
   describe_knowledge_base: describeKnowledgeBaseTool,
+  decide: decideTool,
   list_my_data_lakes: listMyDataLakesTool,
   create_data_lake: createDataLakeTool,
   save_content_to_data_lake: saveContentToDataLakeTool,
@@ -173,3 +176,7 @@ export const b4mTools = {
  * tool map explicitly.
  */
 export { generateTools, generateMcpTools, generateMcpToolsFromCache } from './toolGenerators';
+
+// Shared "confirmed empty" guard so the chat path (ToolBuilder) and agent path (loadAgentMcpTools) cannot drift.
+export { MCP_EMPTY_TOOL_FETCH_TTL_MS, shouldLiveFetchTools, buildMcpToolCacheUpdate } from './mcpToolFetchCache';
+export type { McpToolSchema } from './mcpToolFetchCache';

@@ -12,6 +12,8 @@
  * site in ChatCompletionProcess.
  */
 
+import type { TurnUsage } from '@bike4mind/common';
+
 /**
  * Split a cache-INCLUSIVE prompt total into the disjoint pair CompletionInfo carries.
  *
@@ -29,6 +31,23 @@ export function splitCacheInclusiveInput(
   if (cacheReadTokens <= 0) return { inputTokens: totalPromptTokens };
   const cached = Math.min(cacheReadTokens, totalPromptTokens);
   return { inputTokens: Math.max(0, totalPromptTokens - cached), cacheReadInputTokens: cached };
+}
+
+/**
+ * `prior` plus one provider request's usage, split like splitCacheInclusiveInput. Takes the
+ * request's OWN prompt/cached/output counts, never the running totals: each entry is priced on its
+ * own long-context tier (getTurnsCost), so an accumulated value here would re-tier the whole chain.
+ */
+export function appendCacheInclusiveTurn(
+  prior: readonly TurnUsage[] | undefined,
+  turnPromptTokens: number,
+  turnCacheReadTokens: number,
+  turnOutputTokens: number
+): TurnUsage[] {
+  return [
+    ...(prior ?? []),
+    { ...splitCacheInclusiveInput(turnPromptTokens, turnCacheReadTokens), outputTokens: turnOutputTokens },
+  ];
 }
 
 /**

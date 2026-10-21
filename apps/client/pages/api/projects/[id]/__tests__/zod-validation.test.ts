@@ -23,7 +23,7 @@ const update = vi.hoisted(() => vi.fn(async () => ({ id: 'p1', name: 'n', descri
 vi.mock('@bike4mind/services', () => ({ projectService: { update, get: vi.fn() } }));
 vi.mock('@bike4mind/database', () => ({ projectRepository: {}, userRepository: {} }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn(async () => {}) }));
-vi.mock('@server/utils/isDuplicateKeyError', () => ({ isDuplicateKeyError: () => false }));
+vi.mock('@bike4mind/server-utils/utils/isDuplicateKeyError', () => ({ isDuplicateKeyError: () => false }));
 
 import '@pages/api/projects/[id]/index';
 

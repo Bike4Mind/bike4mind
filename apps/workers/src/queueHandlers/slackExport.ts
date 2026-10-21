@@ -44,6 +44,24 @@ interface SlackMessage {
   attachments?: unknown[];
 }
 
+// Slack Web API response shapes, narrowed to the fields this handler reads.
+interface SlackConversationInfoResponse {
+  ok: boolean;
+  channel?: { name: string };
+}
+
+interface SlackConversationMessagesResponse {
+  ok: boolean;
+  error?: string;
+  messages?: SlackMessage[];
+  response_metadata?: { next_cursor?: string };
+}
+
+interface SlackUserInfoResponse {
+  ok: boolean;
+  user?: { real_name?: string; name?: string };
+}
+
 interface ExportResult {
   channel: {
     id: string;
@@ -114,7 +132,7 @@ async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 3)
 /**
  * Translate Slack API error codes to user-friendly messages
  */
-function getSlackErrorMessage(errorCode: string): string {
+function getSlackErrorMessage(errorCode: string | undefined): string {
   const errorMessages: Record<string, string> = {
     channel_not_found: 'Channel not found or bot is not a member.',
     not_in_channel: 'Bot is not a member of this channel.',
@@ -126,7 +144,7 @@ function getSlackErrorMessage(errorCode: string): string {
     ratelimited: 'Slack rate limit exceeded.',
   };
 
-  return errorMessages[errorCode] || `Slack API error: ${errorCode}`;
+  return (errorCode && errorMessages[errorCode]) || `Slack API error: ${errorCode}`;
 }
 
 /**
@@ -285,7 +303,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         },
       });
 
-      const channelInfo = await response.json();
+      const channelInfo = (await response.json()) as SlackConversationInfoResponse;
       if (channelInfo.ok && channelInfo.channel) {
         channelName = channelInfo.channel.name;
       }
@@ -326,10 +344,10 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         },
       });
 
-      const result = await response.json();
+      const result = (await response.json()) as SlackConversationMessagesResponse;
 
       if (result.ok && result.messages) {
-        messages.push(...(result.messages as SlackMessage[]));
+        messages.push(...result.messages);
         cursor = result.response_metadata?.next_cursor;
         hasMore = Boolean(cursor);
 
@@ -384,10 +402,10 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
                 },
               });
 
-              const result = await response.json();
+              const result = (await response.json()) as SlackConversationMessagesResponse;
 
               if (result.ok && result.messages) {
-                const replies = (result.messages as SlackMessage[]).slice(1);
+                const replies = result.messages.slice(1);
                 threadsFetched++;
                 threadRepliesFetched += replies.length;
 
@@ -461,7 +479,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
                 },
               });
 
-              const result = await response.json();
+              const result = (await response.json()) as SlackUserInfoResponse;
               if (result.ok && result.user) {
                 const name = result.user.real_name || result.user.name || userId;
                 userCache.set(userId, name);

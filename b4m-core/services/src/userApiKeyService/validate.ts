@@ -1,6 +1,7 @@
 import { Logger } from '@bike4mind/observability';
 import {
   ApiKeyBillingOwnerType,
+  ApiKeyStoredSecret,
   ApiKeyScope,
   ApiKeyStatus,
   IEmbedBranding,
@@ -47,6 +48,23 @@ export interface ValidationResult {
   /** Cumulative settled spend in credits (`usage.totalSpendCredits`) at validation time. */
   currentSpend?: number;
   reason?: 'not_found' | 'invalid_hash' | 'expired' | 'disabled' | 'rate_limited';
+}
+
+/**
+ * Checks `key` against the stored secret and returns the one it matched, or null. A key with a
+ * stored digest is checked by constant-time SHA-256 compare only - the digest is authoritative, so a
+ * mismatch never falls through to bcrypt. Keys minted before the digest existed fall back to the
+ * bcrypt keyHash; a record with neither secret fails closed.
+ */
+async function matchStoredSecret(key: string, apiKey: IUserApiKeyDocument): Promise<ApiKeyStoredSecret | null> {
+  if (apiKey.keyDigest) {
+    return keyDigestMatches(key, apiKey.keyDigest) ? { keyDigest: apiKey.keyDigest } : null;
+  }
+  if (apiKey.keyHash) {
+    return (await bcrypt.compare(key, apiKey.keyHash)) ? { keyHash: apiKey.keyHash } : null;
+  }
+  Logger.globalInstance.warn('API key record has neither keyDigest nor keyHash; rejecting', { keyId: apiKey.id });
+  return null;
 }
 
 /**
@@ -114,13 +132,8 @@ export const validateUserApiKey = async (
     return { isValid: false, reason: 'not_found' };
   }
 
-  // Verify the secret. A key with a stored digest is checked by constant-time
-  // SHA-256 compare only - the digest is authoritative, so a mismatch never falls
-  // through to bcrypt. Keys minted before the digest existed fall back to the
-  // bcrypt keyHash and get a digest backfilled below.
-  const storedDigest = apiKey.keyDigest;
-  const isHashValid = storedDigest ? keyDigestMatches(key, storedDigest) : await bcrypt.compare(key, apiKey.keyHash);
-  if (!isHashValid) {
+  const matchedSecret = await matchStoredSecret(key, apiKey);
+  if (!matchedSecret) {
     return { isValid: false, reason: 'invalid_hash' };
   }
 
@@ -131,11 +144,11 @@ export const validateUserApiKey = async (
   // (fire and forget). Only heal a VALID key - matches the original ordering (gates
   // first) so an expired/disabled key isn't rewritten on every rejected request.
   // Prefix-specific to this path, so it stays here, not in the shared finalize helper.
-  // Both heals pass the keyHash this request validated against, so a rotation that commits during
-  // the bcrypt compare above makes them no-ops instead of reviving the rotated-away key.
+  // Both heals pass the secret this request validated against, so a rotation that commits during
+  // validation makes them no-ops instead of reviving the rotated-away key.
   if (foundViaLegacyPrefix && result.isValid) {
     apiKey.keyPrefix = keyPrefix;
-    db.userApiKeys.healKeyPrefix(apiKey.id, keyPrefix, apiKey.keyHash).catch(err => {
+    db.userApiKeys.healKeyPrefix(apiKey.id, keyPrefix, matchedSecret).catch(err => {
       Logger.globalInstance.warn('Failed to self-heal legacy API key prefix:', err);
     });
   }
@@ -143,10 +156,10 @@ export const validateUserApiKey = async (
   // Backfill the fast-path digest for a pre-digest key (fire and forget), same
   // valid-only rule as the prefix heal, so existing keys migrate on first use
   // without a rotation sweep.
-  if (!storedDigest && result.isValid) {
+  if ('keyHash' in matchedSecret && result.isValid) {
     const keyDigest = computeKeyDigest(key);
     apiKey.keyDigest = keyDigest;
-    db.userApiKeys.setKeyDigest(apiKey.id, keyDigest, apiKey.keyHash).catch(err => {
+    db.userApiKeys.setKeyDigest(apiKey.id, keyDigest, matchedSecret.keyHash).catch(err => {
       Logger.globalInstance.warn('Failed to backfill API key digest:', err);
     });
   }

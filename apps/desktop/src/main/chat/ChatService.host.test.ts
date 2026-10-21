@@ -34,14 +34,18 @@ describe('ChatService app-control tools', () => {
     projectA = await realpath(await mkdtemp(join(tmpdir(), 'b4m-host-a-')));
     projectB = await realpath(await mkdtemp(join(tmpdir(), 'b4m-host-b-')));
     store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-host-sessions-')), 'test-model');
-    events = [];
-    streams = [];
+    // Bound per test: a previous service replying late must not push into this test's events.
+    const emitted: ChatStreamEvent[] = [];
+    events = emitted;
+    const opened: PassThrough[] = [];
+    streams = opened;
     asked = [];
-    post = vi.fn().mockImplementation(() => {
+    const boundPost = vi.fn().mockImplementation(() => {
       const stream = new PassThrough();
-      streams.push(stream);
+      opened.push(stream);
       return Promise.resolve({ data: stream, status: 200 });
     });
+    post = boundPost;
     approvals = new ApprovalGate({ requested: vi.fn(), settled: vi.fn() });
 
     service = new ChatService({
@@ -52,11 +56,11 @@ describe('ChatService app-control tools', () => {
       getApiClient: () =>
         ({
           get: vi.fn().mockResolvedValue({}),
-          getAxiosInstance: () => ({ post }),
+          getAxiosInstance: () => ({ post: boundPost }),
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
       emit: event => {
-        events.push(event);
+        emitted.push(event);
         // Stand in for the user, answering every ask the moment it is raised. 'always' is
         // chosen so that anything which CAN become a standing approval does, and a card that
         // offers a choice is answered with the option that runs where the caller already is:
@@ -87,6 +91,27 @@ describe('ChatService app-control tools', () => {
   function callTool(stream: PassThrough, id: string, name: string, args: Record<string, unknown>): void {
     stream.write(frame({ type: 'tool_use', tools: [{ id, name, arguments: JSON.stringify(args) }] }));
     stream.write(frame('[DONE]'));
+  }
+
+  /** Start the session's one pending suggestion from its card, in this working directory. */
+  async function startSuggested(sessionId: string): Promise<void> {
+    const suggestion = await vi.waitUntil(
+      () => {
+        const latest = events.findLast(event => event.type === 'spawn-suggestions' && event.sessionId === sessionId);
+        return latest?.type === 'spawn-suggestions'
+          ? latest.suggestions.find(entry => entry.status === 'pending')
+          : undefined;
+      },
+      { timeout: 5000, interval: 5 }
+    );
+    const result = await service.startSpawnSuggestion({
+      sessionId,
+      suggestionId: suggestion.id,
+      placement: 'local',
+      prompt: suggestion.prompt,
+      title: suggestion.title,
+    });
+    if (!result.ok) throw new Error(result.error);
   }
 
   function settled(name: string) {
@@ -139,6 +164,8 @@ describe('ChatService app-control tools', () => {
       'session_send',
       'session_archive',
       'session_delete',
+      'session_suggestion_update',
+      'session_suggestion_dismiss',
     ]);
   });
 
@@ -199,6 +226,7 @@ describe('ChatService app-control tools', () => {
     await service.send(parent.id, 'delegate it');
     callTool(await awaitStreamOf('delegate it'), 'c1', 'session_spawn', { prompt: 'go and do it' });
     await vi.waitUntil(() => settled('session_spawn').length === 1, { timeout: 5000, interval: 5 });
+    await startSuggested(parent.id);
 
     // The parent finishes first, so the report has an idle conversation to land in.
     const parentFollowUp = await awaitStreamOf('delegate it');
@@ -244,6 +272,7 @@ describe('ChatService app-control tools', () => {
     await service.send(parent.id, 'delegate it');
     callTool(await awaitStreamOf('delegate it'), 'c1', 'session_spawn', { prompt: 'go and do it' });
     await vi.waitUntil(() => settled('session_spawn').length === 1, { timeout: 5000, interval: 5 });
+    await startSuggested(parent.id);
 
     const childId = (await store.list()).find(session => session.origin)?.id;
     expect(childId).toBeDefined();

@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Config is module-scoped; mock it so tests can control analytics configuration state.
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: {
     B4M_ANALYTICS_ENABLED: 'true',
     OVERWATCH_INGEST_URL: 'https://app.bike4mind.com/api/overwatch/v1/events',
@@ -21,7 +21,7 @@ import {
 } from './emitActiveEvent';
 import { pseudonymize } from './pseudonymize';
 import { OVERWATCH_ANONYMOUS_USER_ID, OVERWATCH_UNKNOWN_SESSION_ID } from '@bike4mind/common';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 
 const CONFIGURED = {
   B4M_ANALYTICS_ENABLED: 'true',
@@ -361,6 +361,35 @@ describe('emitProductEvent', () => {
 
     expect(warnSpy).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ productId: 'widgets' }));
     for (const call of warnSpy.mock.calls) expect(JSON.stringify(call)).not.toContain(WIDGETS_KEY);
+  });
+
+  it.each([503, 500])('warns for a purchase ingest %s response without failing the caller', async status => {
+    resetConfig();
+    mockFetch.mockResolvedValue({ status });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await expect(
+      emitProductEvent({ productId: 'widgets', event: 'purchase', reportFailure: true })
+    ).resolves.toBeUndefined();
+
+    expect(warnSpy).toHaveBeenCalledWith('[b4m-analytics] ingest server error', {
+      status,
+      productId: 'widgets',
+    });
+    expect(JSON.stringify(warnSpy.mock.calls)).not.toContain(WIDGETS_KEY);
+  });
+
+  it('warns for a purchase network failure without failing the caller', async () => {
+    resetConfig();
+    mockFetch.mockRejectedValue(new Error('network failure'));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await expect(
+      emitProductEvent({ productId: 'widgets', event: 'purchase', reportFailure: true })
+    ).resolves.toBeUndefined();
+
+    expect(warnSpy).toHaveBeenCalledWith('[b4m-analytics] ingest request failed', { productId: 'widgets' });
+    expect(JSON.stringify(warnSpy.mock.calls)).not.toContain(WIDGETS_KEY);
   });
 
   it('leaves the host emitters on the host product and key', async () => {

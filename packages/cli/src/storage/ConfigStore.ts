@@ -14,7 +14,8 @@ import {
   type SandboxConfig,
   type SandboxMode,
 } from '../sandbox/types.js';
-import { canTrustTool } from '../config/toolSafety';
+import { resolveStaticToolDescriptor } from '../tools/gateway/toolCatalog.js';
+import { canTrustTool } from '../tools/gateway/toolPolicy.js';
 import { PROJECT_CONTEXT_FILES } from '../utils/contextLoader';
 import { logger } from '../utils/Logger';
 
@@ -247,17 +248,17 @@ const CliConfigSchema = z.object({
     maxTokens: z.number().optional(),
     temperature: z.number(),
     autoSave: z.boolean(),
-    autoCompact: z.boolean().optional().prefault(true),
+    autoCompact: z.boolean().prefault(true),
     // No prefault: an absent flag means "ask on launch" (consent-first), so the
     // tri-state must survive as undefined rather than being coerced to true/false.
     autoUpdate: z.boolean().optional(),
     theme: z.enum(['light', 'dark']),
     exportFormat: z.enum(['markdown', 'json']),
     maxIterations: z.number().nullable().prefault(10),
-    enableSkillTool: z.boolean().optional().prefault(true),
+    enableSkillTool: z.boolean().prefault(true),
     // Six always-on tools would sit in every completion's schema list; off by
     // default so only users who want persistent tracking pay for them.
-    enableWorkItemTools: z.boolean().optional().prefault(false),
+    enableWorkItemTools: z.boolean().prefault(false),
     /**
      * When false (or set via the `--no-remote-skills` CLI flag / the
      * `B4M_NO_REMOTE_SKILLS=1` env var), the CLI skips fetching skills from
@@ -265,20 +266,20 @@ const CliConfigSchema = z.object({
      * Defaults to true so authenticated users get cross-machine skill sync
      * out of the box.
      */
-    enableRemoteSkills: z.boolean().optional().prefault(true),
-    enableDynamicAgentCreation: z.boolean().optional().prefault(false),
-    enableCoordinatorMode: z.boolean().optional().prefault(false),
+    enableRemoteSkills: z.boolean().prefault(true),
+    enableDynamicAgentCreation: z.boolean().prefault(false),
+    enableCoordinatorMode: z.boolean().prefault(false),
     // Deliberately absent from the project/local schemas: checking runs the
     // repo's own tsc/eslint (and eslint configs are executable JS), so a cloned
     // repo must not be able to switch it on for whoever opens it.
-    postEditDiagnostics: z.boolean().optional().prefault(false),
+    postEditDiagnostics: z.boolean().prefault(false),
     /**
      * System-prompt variant. 'current' uses the elaborate behavioral-scaffolding
      * prompt; 'minimal' uses a pi-style short prompt. See packages/cli/src/core/prompts.ts.
      * Defaults to 'current' for backward compatibility; switch via /config or by
      * editing the config file directly.
      */
-    promptVariant: z.enum(['current', 'minimal']).optional().prefault('current'),
+    promptVariant: z.enum(['current', 'minimal']).prefault('current'),
     showThoughts: z.boolean().optional(),
     // Retention window for resumable sub-agent history (ms). Absent = use
     // DEFAULT_SUBAGENT_HISTORY_TTL_MS. See AgentHistoryStore / resume_agent.
@@ -309,13 +310,12 @@ const CliConfigSchema = z.object({
         })
         .catchall(z.boolean())
     )
-    .optional()
     .prefault({}),
-  trustedTools: z.array(z.string()).optional().prefault([]),
-  trustedProjects: z.array(z.string()).optional().prefault([]),
-  trustedMcpDefinitions: z.record(z.string(), z.array(z.string())).optional().prefault({}),
+  trustedTools: z.array(z.string()).prefault([]),
+  trustedProjects: z.array(z.string()).prefault([]),
+  trustedMcpDefinitions: z.record(z.string(), z.array(z.string())).prefault({}),
   sandbox: SandboxConfigSchema.optional(),
-  additionalDirectories: z.array(z.string()).optional().prefault([]),
+  additionalDirectories: z.array(z.string()).prefault([]),
   fallbackModels: z.array(z.string()).optional(),
 });
 
@@ -830,11 +830,13 @@ function mergeConfigs(global: CliConfig, project: ProjectConfig | null, local: P
   // Never-loosen for tools: a repo cannot re-enable a globally-disabled tool,
   // and a repo-contributed trusted tool must be one that can actually be
   // trusted and isn't disabled. (Global's own trustedTools are left untouched.)
+  // Resolved without a catalog instance: config merges before any catalog exists, so a
+  // registered (feature/plugin) tool resolves as unknown here.
   const disabledSet = new Set(merged.tools.disabled);
   merged.tools = { ...merged.tools, enabled: merged.tools.enabled.filter(t => !disabledSet.has(t)) };
   const globalTrusted = new Set(global.trustedTools || []);
   merged.trustedTools = (merged.trustedTools || []).filter(
-    t => globalTrusted.has(t) || (canTrustTool(t) && !disabledSet.has(t))
+    t => globalTrusted.has(t) || (canTrustTool(resolveStaticToolDescriptor(t)) && !disabledSet.has(t))
   );
 
   return merged;

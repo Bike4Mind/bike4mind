@@ -21,7 +21,7 @@ import {
 import { createSmallLLMService, type SmallLLMService } from '@bike4mind/services/llm/SmallLLMService';
 import type { SmallLLMAdapters } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import { buildGroomPrompt, buildOrientPrompt, buildReflectPrompt } from './prompts';
+import { buildGroomPrompt, buildOrientPrompt, buildReflectPrompt } from '@bike4mind/server-utils/deepAgent/prompts';
 
 /**
  * LLM-backed cognitive steps for the wake cycle.

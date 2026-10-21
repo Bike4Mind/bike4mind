@@ -1,4 +1,4 @@
-import type { SkillSummary } from '@shared/skills';
+import type { SkillSource, SkillSummary } from '@shared/skills';
 
 /**
  * When the composer is asking for a skill, and which ones answer.
@@ -54,7 +54,18 @@ function rankAll(skills: readonly SkillSummary[], rank: (skill: SkillSummary) =>
 }
 
 function sourceOrder(skill: SkillSummary): number {
-  return skill.source === 'project' ? 0 : 1;
+  return { project: 0, global: 1, account: 2 }[skill.source];
+}
+
+/** Chip colour per source, shared by the picker, the thread and Customize. */
+export function skillChipColor(source: SkillSource): 'warning' | 'primary' | 'neutral' {
+  if (source === 'project') return 'warning';
+  return source === 'account' ? 'primary' : 'neutral';
+}
+
+export function skillSourceLabel(source: SkillSource): string {
+  if (source === 'project') return 'Project';
+  return source === 'account' ? 'Bike4Mind' : 'Global';
 }
 
 /** Lower is better; -1 means no match. */

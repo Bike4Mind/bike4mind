@@ -2,12 +2,20 @@ import { z } from 'zod';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { organizationRepository } from '@bike4mind/database/infra';
-import { partnerSignupRuleRepository, userRepository, withTransaction } from '@bike4mind/database';
+import {
+  creditLotRepository,
+  creditTransactionRepository,
+  integrationRequestRepository,
+  partnerSignupRuleRepository,
+  userRepository,
+  withTransaction,
+} from '@bike4mind/database';
 import { groupRepository } from '@bike4mind/database/social';
 import { invalidatePartnerRuleCache } from '@server/entitlements/partnerRules';
-import { organizationService } from '@bike4mind/services';
-import { toSafeOrganization } from '@bike4mind/common';
-import { BadRequestError } from '@server/utils/errors';
+import { creditService, organizationService } from '@bike4mind/services';
+import { CreditHolderType, MAX_STORAGE_LIMIT_MB, toSafeOrganization } from '@bike4mind/common';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { Request } from 'express';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
@@ -16,10 +24,60 @@ const updateOrgBodySchema = z.object({
   name: z.string().optional(),
   description: z.string().optional(),
   billingContact: z.string().optional(),
-  currentCredits: z.coerce.number().optional(),
+  // No bare coerce: it reads null (what JSON makes of NaN) and '' as 0, which would wipe the balance.
+  currentCredits: z
+    .union([z.number(), z.string().trim().min(1)])
+    .pipe(z.coerce.number<string | number>().min(0))
+    .optional(),
   systemPrompt: z.string().max(10000).optional(),
   maxCreditsPerMember: z.number().int().positive().nullable().optional(),
+  storageLimit: z.number().min(0).max(MAX_STORAGE_LIMIT_MB).nullable().optional(),
 });
+
+/**
+ * A platform admin's edit of the org balance, applied as a ledger row plus a strict audit
+ * entry. Must run inside the caller's transaction, so no admin balance change lands without
+ * either (or without the profile update). The profile update never writes currentCredits itself.
+ */
+const applyAdminCreditEdit = async (req: Request, orgId: string, requestedBalance: number) => {
+  const creditAdapters = {
+    db: { creditTransactions: creditTransactionRepository, creditLots: creditLotRepository },
+    creditHolderMethods: organizationRepository,
+  };
+
+  // Read the balance inside the transaction so a retry after a write conflict recomputes the delta.
+  const organization = await organizationRepository.findById(orgId);
+  if (!organization) throw new NotFoundError('Organization not found');
+
+  const previousBalance = organization.currentCredits ?? 0;
+  const credits = requestedBalance - previousBalance;
+  if (credits === 0) return;
+
+  const reason = parseAdminActionReason((req.body as { creditReason?: unknown } | undefined)?.creditReason);
+  const metadata = { adminUserId: req.user!.id, reason, previousBalance, source: 'admin_org_edit' };
+  const ledgerEntry = {
+    ownerId: organization.id,
+    ownerType: CreditHolderType.Organization,
+    credits: Math.abs(credits),
+    reason: 'admin_adjustment',
+    description: reason,
+    metadata,
+  } as const;
+
+  if (credits > 0) {
+    await creditService.addCredits({ ...ledgerEntry, type: 'generic_add' }, creditAdapters);
+  } else {
+    await creditService.subtractCredits({ ...ledgerEntry, type: 'generic_deduct' }, creditAdapters);
+  }
+  await recordAdminActionFromRequest(req, {
+    action: 'org.credits.adjusted',
+    target: { kind: 'organization', id: organization.id, displayName: organization.name },
+    summary: `${credits > 0 ? 'granted' : 'deducted'} ${Math.abs(credits)} credits`,
+    reason,
+    changes: [{ field: 'currentCredits', before: previousBalance, after: requestedBalance }],
+    details: { credits, ownerId: organization.userId },
+  });
+};
 
 const handler = baseApi()
   .get(
@@ -48,16 +106,26 @@ const handler = baseApi()
         throw new BadRequestError('Invalid organization id');
       }
 
-      const body = updateOrgBodySchema.parse(req.body);
-      const updatedOrganization = await organizationService.update(
-        req.user!,
-        { ...body, id: orgId },
-        {
-          db: {
-            organizations: organizationRepository,
-          },
-        }
-      );
+      const { currentCredits, ...profile } = updateOrgBodySchema.parse(req.body);
+      // Non-admins cannot move credits here; their value is ignored, as before.
+      const updateProfile = () =>
+        organizationService.update(
+          req.user!,
+          { ...profile, id: orgId },
+          {
+            db: {
+              organizations: organizationRepository,
+            },
+          }
+        );
+
+      const updatedOrganization =
+        req.user!.isAdmin && currentCredits !== undefined
+          ? await withTransaction(async () => {
+              await applyAdminCreditEdit(req, orgId, currentCredits);
+              return updateProfile();
+            })
+          : await updateProfile();
 
       return res.json(toSafeOrganization(updatedOrganization, { userId: req.user!.id, isAdmin: req.user!.isAdmin }));
     })
@@ -100,6 +168,17 @@ const handler = baseApi()
     // still apply); only the org association is dropped. Cache invalidation makes it immediate.
     await partnerSignupRuleRepository.updateMany({ organizationId: id }, { organizationId: null });
     invalidatePartnerRuleCache();
+    // Same for roadmap integration requests: they are the members' own votes and stay. Best-effort:
+    // the org is already gone, so a failure here must not turn the committed delete into a 500 a
+    // retry cannot fix. The request keeps a dangling organizationId, which the admin demand list
+    // already shows as a deleted organization.
+    try {
+      await integrationRequestRepository.clearOrganization(id);
+    } catch (err) {
+      req.logger.warn(
+        `Failed to clear integration requests' organization for deleted organization ${id}: ${String(err)}`
+      );
+    }
 
     return res.json({ id });
   });

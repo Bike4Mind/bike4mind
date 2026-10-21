@@ -1,5 +1,13 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { IDataLakeResearchConfigDocument } from '@bike4mind/common';
+
+// The credit pre-flight's gate. Off by default here so the scheduler's own rails are what every test
+// below exercises; the credit-skip test at the bottom turns it on explicitly.
+const { areCreditsEnforcedMock } = vi.hoisted(() => ({ areCreditsEnforcedMock: vi.fn() }));
+vi.mock('../billing/isOperationalBillingEnabled', () => ({
+  areCreditsEnforced: (...args: unknown[]) => areCreditsEnforcedMock(...args),
+}));
+
 import {
   addCadence,
   nextResearchRunAfter,
@@ -42,6 +50,7 @@ const makeAdapters = (
     lakes?: Record<string, ReturnType<typeof lakeFor>>;
     pending?: Record<string, number>;
     active?: number;
+    ownerCredits?: number;
     enqueue?: ResearchScheduleAdapters['enqueue'];
     recordScheduleOutcome?: ReturnType<typeof vi.fn>;
   } = {}
@@ -71,6 +80,9 @@ const makeAdapters = (
       dataLakeResearchRuns: runs,
       dataLakeProposals: proposals,
       lakeConfigChangeEvents: { record },
+      adminSettings: {},
+      users: { findById: vi.fn(async () => ({ id: 'user-1', currentCredits: overrides.ownerCredits ?? 1_000_000 })) },
+      organizations: { findById: vi.fn(async () => null) },
     },
     enqueue,
     logger,
@@ -109,6 +121,11 @@ describe('nextResearchRunAfter', () => {
 });
 
 describe('runDueResearchSchedules', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    areCreditsEnforcedMock.mockResolvedValue(false);
+  });
+
   it('claims due configs under a lease and starts a periodic run for each', async () => {
     const { adapters, configs, runs, enqueue } = makeAdapters();
 
@@ -247,5 +264,25 @@ describe('runDueResearchSchedules', () => {
 
     await expect(runDueResearchSchedules(adapters)).resolves.toMatchObject({ started: 1 });
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('could not record'), expect.any(Error));
+  });
+
+  // A broke owner is a spend rail, not a fault: the tick must record a skip (and retry within the
+  // hour), exactly as it does for a lake that is busy - a `failed` tick would alarm on a condition
+  // that simply clears when someone tops the balance up.
+  it('skips and retries within the hour when the owner cannot cover the run ceiling', async () => {
+    areCreditsEnforcedMock.mockResolvedValue(true);
+    const { adapters, configs, runs, enqueue } = makeAdapters({ ownerCredits: 0 });
+
+    const summary = await runDueResearchSchedules(adapters);
+
+    expect(runs.createRun).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(configs.recordScheduleOutcome).toHaveBeenCalledWith(
+      'config-1',
+      'daily',
+      { outcome: 'skipped', at: NOW, reason: 'insufficient_credits' },
+      new Date(NOW.getTime() + RESEARCH_SCHEDULE_RETRY_MS)
+    );
+    expect(summary).toEqual({ claimed: 1, started: 0, skipped: 1, failed: 0 });
   });
 });

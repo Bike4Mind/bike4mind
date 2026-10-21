@@ -244,7 +244,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   const startResearchRun = useStartDataLakeResearchRun(lake?.id ?? '');
   // Shown to a manager even with no configuration: this tab is where one is CREATED.
   const showResearchTab = !!lake?.canManage && !researchConfigs.isForbidden;
-  const { data: modelCatalog } = useModelInfo();
+  const { data: modelCatalog, isLoading: modelsLoading } = useModelInfo();
   const researchModelOptions = useMemo(() => researchJudgeModelOptions(modelCatalog ?? []), [modelCatalog]);
   const researchDefaultModel = useMemo(() => researchDefaultModelLabel(modelCatalog ?? []), [modelCatalog]);
   const confirm = useConfirmation();
@@ -656,8 +656,9 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
             ))}
           </Select>
           <FormHelperText data-testid="datalake-settings-origin-help">
-            Connector-fed lakes accept content a connected Drive folder adds on its own; curated lakes accept only files
-            someone adds by hand. Either way, a connected folder can still remove files it previously added.
+            Connector-fed lakes accept content a connected source (a Drive folder or GitHub repository) adds on its own;
+            curated lakes accept only files someone adds by hand. Either way, a connected source can still remove files
+            it previously added.
           </FormHelperText>
         </FormControl>
       )}
@@ -936,6 +937,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                       error={researchConfigs.isForbidden ? null : (researchConfigs.error ?? researchRuns.error)}
                       pendingProposals={researchConfigs.pendingProposals}
                       modelOptions={researchModelOptions}
+                      modelsLoading={modelsLoading}
                       defaultModelLabel={researchDefaultModel}
                       isCreating={createResearchConfig.isPending}
                       savingConfigId={updateResearchConfig.isPending ? updateResearchConfig.variables?.configId : null}

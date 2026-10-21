@@ -11,8 +11,9 @@ import { sessionService } from '@bike4mind/services';
 import { redactSessionForClient } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { surfaceAccessForRequest } from '@server/entitlements/surfaceAccess';
+import { copySurfaceAccessForRequest } from '@server/entitlements/surfaceAccess';
 import { parseTargetSurface } from '@server/utils/parseTargetSurface';
+import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
 
 const handler = baseApi().post(
   asyncHandler<{}, unknown, { targetSurface?: unknown } | undefined, { id?: string; messageId?: string }>(
@@ -49,7 +50,8 @@ const handler = baseApi().post(
             // alternative is persisting an unreachable scope, which is permanent once non-empty.
             resolveLakeAccess: async () =>
               (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScope(req),
-            resolveSurfaceAccess: surfaceAccessForRequest(req),
+            resolveSurfaceAccess: copySurfaceAccessForRequest(req),
+            workspaceSessionSettings: premiumWorkspaceSessionSettings,
           }
         )
       );

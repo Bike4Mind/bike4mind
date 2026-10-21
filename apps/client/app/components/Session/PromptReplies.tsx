@@ -1,6 +1,7 @@
 import ImageContainer from '@client/app/components/Session/ImageContainer';
 import VideoContainer from '@client/app/components/Session/VideoContainer';
-import { GeneratedVideoJobs } from '@client/app/components/Session/GeneratedVideoJobs';
+import { GeneratedAudioPlayer } from '@client/app/components/Session/GeneratedAudioPlayer';
+import { GeneratedJobs } from '@client/app/components/Session/GeneratedJobs';
 import { Box, Stack, Chip, Avatar, Tooltip, Button, Alert } from '@mui/joy';
 import Typography from '@mui/joy/Typography';
 import React, {
@@ -15,8 +16,15 @@ import React, {
   createContext,
   ComponentProps,
 } from 'react';
-import ReactMarkdown, { ExtraProps } from 'react-markdown';
+import ReactMarkdown, { ExtraProps, Options as ReactMarkdownOptions } from 'react-markdown';
 import { createMarkdownComponents } from './markdown/markdownComponents';
+import {
+  CITATION_MARKER_TAG,
+  CitationMarker,
+  shouldLinkCitationMarkers,
+  ReplyCitablesContext,
+  remarkCitationMarkers,
+} from './markdown/inlineCitations';
 import './markdown/observatory.css';
 import { useMessageEditMode } from '@client/app/hooks/useMessageEditMode';
 import ErrorBoundary from '@client/app/components/common/ErrorBoundary';
@@ -38,10 +46,9 @@ import ImageDisplay from './ImageDisplay';
 import { InsufficientCreditsNotice } from './InsufficientCreditsNotice';
 import MementoIndicator from './MementoIndicator';
 import { agentAvatarFallbackSx } from '@client/app/components/Agent/AgentAvatar';
-import { remarkGfmNoSingleTilde, promoteInlineLatexDollars } from '@client/app/utils/remarkPlugins';
-import remarkMath from 'remark-math';
+import { assistantReplyRemarkPlugins, promoteInlineLatexDollars } from '@client/app/utils/remarkPlugins';
 import rehypeKatex from 'rehype-katex';
-import type { ChessArtifact, MermaidArtifact } from '@bike4mind/common';
+import { questGenerationJobs, type ChessArtifact, type MermaidArtifact } from '@bike4mind/common';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import EditModeContent from './EditModeContent';
 import { ExpandCollapseButton } from './ExpandCollapseButton';
@@ -53,13 +60,13 @@ import {
 } from '@bike4mind/common';
 import { ArtifactElisionBanner } from './ArtifactElisionBanner';
 import { RetrievalCoverageBanner } from './RetrievalCoverageBanner';
+import { RetrievalFloorBanner } from './RetrievalFloorBanner';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { isAxiosError } from 'axios';
 import { z } from 'zod';
-import { useConfig } from '@client/app/hooks/data/settings';
+import { useGeneratedMediaUrls } from '@client/app/hooks/data/generatedMedia';
 import {
-  hasCompleteOpeningTag,
   parseArtifactsWithFallback,
   shouldWarnElidedArtifact,
   validateMermaidSyntax,
@@ -67,7 +74,7 @@ import {
 import RechartsRenderer from '../Charts/RechartsRenderer';
 import ChessBoard from '../Chess/ChessBoard';
 import { useSessions } from '@client/app/contexts/SessionsContext';
-import { extractReplies, extractThinking } from '@client/shared/replyUtils';
+import { extractReplies, extractThinking } from '@bike4mind/server-utils/shared/replyUtils';
 import DeepResearchProgress from '../GenAI/DeepResearchProgress';
 import PromptEnhancementBanner from './PromptEnhancementBanner';
 import { extractCodeBlockTitle } from '@client/app/utils/codeBlockTitleExtractor';
@@ -76,20 +83,29 @@ import { parseChartJSON, ChartParseError, getChartErrorMessage } from '@client/a
 import NavigationButtons from './NavigationButtons';
 import ReplyChoiceButtons from './ReplyChoiceButtons';
 import ReplyAccessories from './ReplyAccessories';
+import EnableWebSearchAction from './EnableWebSearchAction';
 import AttachmentNotices from './AttachmentNotices';
 import { NotebookExecutionButtons } from './NotebookExecutionButtons';
 import type { UiSideEffect } from '@bike4mind/common';
-import { dispatchUiSideEffects } from '@client/app/utils/uiSideEffectDispatcher';
-import { getReplyTruncationState } from '@client/app/utils/replyTruncation';
+import {
+  claimLiveDispatch,
+  claimReplayDispatch,
+  dispatchUiSideEffects,
+  noteReplyInFlight,
+  settleReplyInFlight,
+} from '@client/app/utils/uiSideEffectDispatcher';
+import { getReplyTruncationState, repairTruncatedArtifact } from '@client/app/utils/replyTruncation';
+import { GitHubProjectActionTarget } from './GitHubProjectActionTarget';
 
 import SearchResultCards from './SearchResultCards';
 import { SEARCH_RESULT_CARDS_LANGUAGE } from './parseSearchResultCards';
 import LocationMap from './LocationMap';
 import { LOCATION_MAP_LANGUAGE, placesFromCitables } from './parseLocationMap';
-import type { WebSearchPlace } from '@bike4mind/common';
+import type { CitableSource, WebSearchPlace } from '@bike4mind/common';
 
 // Artifact system (extracted modules)
 import ArtifactRenderer from './artifacts/ArtifactRenderer';
+import { isConfirmableMcpTool } from '@client/app/utils/confirmableMcpTool';
 import {
   extractChessJson,
   validateChessFen,
@@ -134,6 +150,8 @@ const SearchResultCardsInReply: FC<{ content: string }> = ({ content }) => {
   const replyComplete = useContext(ReplyCompleteContext);
   return <SearchResultCards content={content} replyComplete={replyComplete} />;
 };
+
+const NO_CITABLES: readonly CitableSource[] = [];
 
 // The web_search places of the reply being rendered, keyed by place id - the only source of map
 // pins. Context for the same identity-stability reason as ReplyCompleteContext above.
@@ -529,9 +547,6 @@ const PromptReplies: FC<PromptReplyProps> = ({
   isExpandable,
   onEdit,
 }) => {
-  const { data: config } = useConfig();
-  const cdnUrl = config?.cdnUrl || process.env.NEXT_PUBLIC_CDN_URL || '';
-
   const replies = useMemo(() => extractReplies(messageData), [messageData]);
 
   // extractThinking walks every thinking block across every reply slot (see
@@ -540,26 +555,34 @@ const PromptReplies: FC<PromptReplyProps> = ({
   // whole slot with the answer and raw <think> markers still in it.
   const thought = useMemo(() => extractThinking(messageData), [messageData]);
 
-  const generatedImagesUrl = `${cdnUrl}/generated`;
   // quest.images carries every file a tool generated this turn, but not all of them are
-  // images - e.g. excel_generation drops an .xlsx and music_generation an audio track in
+  // images - e.g. excel_generation drops an .xlsx and audio_generation (or a pre-job music turn) an audio track in
   // here. Classify once into the inline grid, inline audio players, and download chips
   // (non-image/-audio files, also surfaced in the Knowledge Base) so each lands in exactly
   // one place instead of rendering as a broken <img>. See classifyGeneratedFiles.
-  const { images, audio, generatedFiles } = useMemo(() => {
-    if (!generatedImagesUrl) return { images: [], audio: [], generatedFiles: [] };
-    const buckets = classifyGeneratedFiles(messageData.images ?? []);
-    return {
-      images: buckets.images.map(image => `${generatedImagesUrl}/${image}`),
-      audio: buckets.audio.map(file => `${generatedImagesUrl}/${file}`),
-      generatedFiles: buckets.others.map(name => ({ name, url: `${generatedImagesUrl}/${name}` })),
-    };
-  }, [messageData.images, generatedImagesUrl]);
-  const videos = useMemo(
-    () =>
-      generatedImagesUrl ? messageData.videos?.map(video => `${generatedImagesUrl}/${video}`).filter(Boolean) : [],
-    [messageData.videos, generatedImagesUrl]
+  const generatedBuckets = useMemo(() => classifyGeneratedFiles(messageData.images ?? []), [messageData.images]);
+  const videoKeys = useMemo(() => (messageData.videos ?? []).filter(Boolean), [messageData.videos]);
+  const allGeneratedKeys = useMemo(
+    () => [...generatedBuckets.images, ...generatedBuckets.audio, ...generatedBuckets.others, ...videoKeys],
+    [generatedBuckets, videoKeys]
   );
+  const { urls: generatedMediaUrls } = useGeneratedMediaUrls(messageData.sessionId, allGeneratedKeys);
+
+  // Entries whose presigned URL has not resolved yet (or that the caller may not read) are omitted
+  // rather than rendered with an empty src.
+  const { images, audio, generatedFiles, videos } = useMemo(() => {
+    const resolve = (keys: string[]) =>
+      keys.flatMap(key => {
+        const url = generatedMediaUrls[key];
+        return url ? [{ key, url }] : [];
+      });
+    return {
+      images: resolve(generatedBuckets.images).map(entry => entry.url),
+      audio: resolve(generatedBuckets.audio).map(entry => entry.url),
+      generatedFiles: resolve(generatedBuckets.others).map(({ key, url }) => ({ name: key, url })),
+      videos: resolve(videoKeys).map(entry => entry.url),
+    };
+  }, [generatedBuckets, videoKeys, generatedMediaUrls]);
 
   // Extract notebook content from tool results
   const notebookContent = useMemo(() => {
@@ -600,7 +623,7 @@ const PromptReplies: FC<PromptReplyProps> = ({
         images={images}
         generatedFiles={generatedFiles}
         videos={videos}
-        videoJobIds={messageData.videoJobIds}
+        generationJobs={questGenerationJobs(messageData)}
         audio={audio}
         search={search}
         isExpandable={isExpandable}
@@ -622,6 +645,7 @@ const PromptReplies: FC<PromptReplyProps> = ({
         attachmentNotices={messageData.attachmentNotices}
         attachmentDelivery={messageData.attachmentDelivery}
         uiSideEffects={messageData.uiSideEffects}
+        replySessionId={messageData.sessionId}
         jupyterNotebook={messageData.jupyterNotebook}
         notebookContent={notebookContent}
       />
@@ -754,9 +778,11 @@ function getPendingActionError(error: unknown, fallbackMessage: string): { messa
   };
 }
 
-export const PendingActionButtons: FC<PendingActionButtonsProps> = props => (
-  <PendingActionButtonsContent key={props.pendingAction.ts} {...props} />
-);
+// The confirm route executes only allowlisted write tools, so any other pending action gets no card.
+export const PendingActionButtons: FC<PendingActionButtonsProps> = props =>
+  isConfirmableMcpTool(props.pendingAction.tool) ? (
+    <PendingActionButtonsContent key={props.pendingAction.ts} {...props} />
+  ) : null;
 
 const PendingActionButtonsContent: FC<PendingActionButtonsProps> = ({ pendingAction, messageId, sessionId }) => {
   const storageKey = messageId ? `mcp-confirm-${messageId}-${pendingAction.ts}` : null;
@@ -886,6 +912,7 @@ const PendingActionButtonsContent: FC<PendingActionButtonsProps> = ({ pendingAct
       <Typography level="body-sm" sx={{ mb: 1.5, fontWeight: 'md' }}>
         Ready to execute: {toolDisplayName}
       </Typography>
+      <GitHubProjectActionTarget tool={pendingAction.tool} params={pendingAction.params} />
       <Stack direction="row" spacing={1}>
         <Button
           size="sm"
@@ -1034,10 +1061,7 @@ const AttachmentDownloadButtons: FC<AttachmentDownloadButtonsProps> = ({ attachm
     try {
       const response = await api.post('/api/mcp/delete-attachment', {
         sessionId,
-        source: attachmentList.source,
         attachmentId: attachment.id,
-        filename: attachment.filename,
-        ...(attachmentList.pageId && { pageId: attachmentList.pageId }),
       });
 
       if (response.data?.success) {
@@ -1157,21 +1181,29 @@ const AttachmentDownloadButtons: FC<AttachmentDownloadButtonsProps> = ({ attachm
 
 // UiSideEffectDispatcher
 
-const UiSideEffectDispatcher: FC<{ effects: UiSideEffect[]; completed: boolean; dedupeKey?: string }> = ({
-  effects,
-  completed,
-  dedupeKey,
-}) => {
-  const hasDispatched = useRef(false);
-
+const UiSideEffectDispatcher: FC<{
+  effects?: UiSideEffect[];
+  completed: boolean;
+  dedupeKey: string;
+  sessionId?: string;
+}> = ({ effects, completed, dedupeKey, sessionId }) => {
   useEffect(() => {
-    if (!completed || hasDispatched.current) return;
-    hasDispatched.current = true;
-    // Live arrival from a just-completed reply - auto-apply the brief and follow
-    // the AI to its console. dedupeKey ensures the streaming path and this render
-    // path apply the same quest only once (the later one is a no-op).
-    dispatchUiSideEffects(effects, { live: true, dedupeKey });
-  }, [completed, effects, dedupeKey]);
+    if (!completed) {
+      noteReplyInFlight(dedupeKey, sessionId);
+      return;
+    }
+    if (!effects?.length) {
+      settleReplyInFlight(dedupeKey);
+      return;
+    }
+    // Live only for the first dispatch of a reply this client watched finish; anything else
+    // is a replay, once per view of the session. See claimLiveDispatch / claimReplayDispatch.
+    if (claimLiveDispatch(dedupeKey, sessionId)) {
+      dispatchUiSideEffects(effects, { live: true, dedupeKey });
+    } else if (claimReplayDispatch(dedupeKey, sessionId)) {
+      dispatchUiSideEffects(effects, { dedupeKey });
+    }
+  }, [completed, effects, dedupeKey, sessionId]);
 
   return null;
 };
@@ -1185,7 +1217,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   images = [],
   generatedFiles = [],
   videos = [],
-  videoJobIds = [],
+  generationJobs = [],
   audio = [],
   search,
   isExpandable = false,
@@ -1209,6 +1241,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   attachmentNotices,
   attachmentDelivery,
   uiSideEffects,
+  replySessionId,
   jupyterNotebook,
   notebookContent,
 }) => {
@@ -1304,6 +1337,16 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
 
   const codeComponent = useMemo(() => createCodeComponent(), []);
   const placesById = useMemo(() => placesFromCitables(promptMeta?.citables), [promptMeta?.citables]);
+  // Off until the reply is done and the markers can link, so any other reply keeps its `[N]` as ordinary text (search
+  // highlighting matches across it) rather than one element per marker.
+  const linksCitationMarkers = shouldLinkCitationMarkers(promptMeta?.citables ?? NO_CITABLES, !!completed);
+  const replyRemarkPlugins = useMemo(
+    (): ReactMarkdownOptions['remarkPlugins'] => [
+      ...assistantReplyRemarkPlugins,
+      ...(linksCitationMarkers ? [remarkCitationMarkers] : []),
+    ],
+    [linksCitationMarkers]
+  );
 
   const cleanReply = useMemo(() => {
     return omitBetweenTags(reply || '', '<think>', '</think>');
@@ -1342,23 +1385,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
         preprocessedContent = preprocessedContent.substring(0, artifactIndex).trim();
       }
     } else if (isTruncatedArtifact) {
-      // Completed but truncated mid-artifact. Target the LAST opening tag - that's the
-      // dangling one; any earlier artifacts are already closed and must be left intact.
-      // If that opening tag is complete (has a closing `>`), best-effort close the
-      // artifact so the partial parses into a previewable/downloadable card (a truncation
-      // banner is rendered above it). If the opening tag itself was cut off mid-attribute,
-      // drop the partial from that tag onward so no raw HTML leaks into the bubble.
-      const artifactIndex = preprocessedContent.lastIndexOf('<artifact');
-      const tail = artifactIndex !== -1 ? preprocessedContent.substring(artifactIndex) : '';
-      if (hasCompleteOpeningTag(tail)) {
-        preprocessedContent = `${preprocessedContent.trimEnd()}\n</artifact>`;
-      } else {
-        // Opening tag truncated mid-attribute - nothing renderable. Log the dropped
-        // length so mid-attribute truncations are observable if they occur in prod.
-        console.warn(`[Artifacts] Dropping truncated artifact with incomplete opening tag (${tail.length} chars)`);
-        preprocessedContent =
-          artifactIndex === -1 ? preprocessedContent : preprocessedContent.substring(0, artifactIndex).trim();
-      }
+      preprocessedContent = repairTruncatedArtifact(preprocessedContent);
     }
 
     // Parse explicit <artifact> tags, then promote any bare/fenced HTML document left in the
@@ -1577,6 +1604,11 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
         <RetrievalCoverageBanner reasons={promptMeta.retrievalCoverage.reasons} />
       )}
 
+      {/* A knowledge tool can still ground the turn after forced retrieval came back empty. */}
+      {promptMeta?.retrievalFloorRejection && !promptMeta.citables?.length && (
+        <RetrievalFloorBanner {...promptMeta.retrievalFloorRejection} />
+      )}
+
       {showSyntaxHighlight ? (
         <>
           <HighlightedCode code={processedContent || cleanReply} />
@@ -1620,7 +1652,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                 images.length > 0 ||
                 generatedFiles.length > 0 ||
                 videos.length > 0 ||
-                videoJobIds.length > 0 ||
+                generationJobs.length > 0 ||
                 audio.length > 0 ||
                 navSuggestions) && (
                 <Box
@@ -1629,6 +1661,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                   }}
                 >
                   <Typography
+                    data-testid="ai-response-body"
                     // plain, not soft: the reply body is unframed, and Joy's soft
                     // variant would paint its own background once the explicit one
                     // below is gone. The user's prompt keeps its bubble.
@@ -1724,20 +1757,12 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                         {audio.length > 0 && (
                           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, width: '100%', mt: 1 }}>
                             {audio.map((src, index) => (
-                              <Box
-                                key={index}
-                                component="audio"
-                                controls
-                                preload="metadata"
-                                src={src}
-                                data-testid="generated-audio-player"
-                                sx={{ width: '100%', maxWidth: 480 }}
-                              />
+                              <GeneratedAudioPlayer key={index} src={src} />
                             ))}
                           </Box>
                         )}
 
-                        <GeneratedVideoJobs jobIds={videoJobIds} />
+                        <GeneratedJobs jobs={generationJobs} />
 
                         {videos?.length > 0 && (
                           <Box
@@ -1812,47 +1837,47 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                           <div className="b4m-md">
                             <ReplyCompleteContext.Provider value={!!completed}>
                               <ReplyPlacesContext.Provider value={placesById}>
-                                <ReactMarkdown
-                                  components={{
-                                    ...markdownComponents,
-                                    code: codeComponent,
-                                    img: ({ alt, src, title }) => {
-                                      if (!src) {
-                                        return null;
-                                      }
+                                <ReplyCitablesContext.Provider value={promptMeta?.citables ?? NO_CITABLES}>
+                                  <ReactMarkdown
+                                    components={{
+                                      ...markdownComponents,
+                                      code: codeComponent,
+                                      img: ({ alt, src, title }) => {
+                                        if (!src) {
+                                          return null;
+                                        }
 
-                                      const srcStr = typeof src === 'string' ? src : '';
-                                      if (
-                                        srcStr.startsWith('/mnt/') ||
-                                        srcStr.startsWith('/tmp/') ||
-                                        srcStr.startsWith('file://') ||
-                                        srcStr.startsWith('sandbox:') ||
-                                        srcStr.includes('/mnt/data/')
-                                      ) {
-                                        return null;
-                                      }
+                                        const srcStr = typeof src === 'string' ? src : '';
+                                        if (
+                                          srcStr.startsWith('/mnt/') ||
+                                          srcStr.startsWith('/tmp/') ||
+                                          srcStr.startsWith('file://') ||
+                                          srcStr.startsWith('sandbox:') ||
+                                          srcStr.includes('/mnt/data/')
+                                        ) {
+                                          return null;
+                                        }
 
-                                      return (
-                                        <ImageContainer
-                                          src={srcStr}
-                                          index={0}
-                                          totalImages={1}
-                                          images={[srcStr]}
-                                          onSendMessage={onSendMessage}
-                                        />
-                                      );
-                                    },
-                                    a: link,
-                                  }}
-                                  remarkPlugins={[
-                                    remarkGfmNoSingleTilde,
-                                    [remarkMath, { singleDollarTextMath: false }],
-                                  ]}
-                                  rehypePlugins={[rehypeKatex]}
-                                  remarkRehypeOptions={{ clobberPrefix: `fn-${messageId ?? 'reply'}-` }}
-                                >
-                                  {mathReadyContent}
-                                </ReactMarkdown>
+                                        return (
+                                          <ImageContainer
+                                            src={srcStr}
+                                            index={0}
+                                            totalImages={1}
+                                            images={[srcStr]}
+                                            onSendMessage={onSendMessage}
+                                          />
+                                        );
+                                      },
+                                      a: link,
+                                      [CITATION_MARKER_TAG]: CitationMarker,
+                                    }}
+                                    remarkPlugins={replyRemarkPlugins}
+                                    rehypePlugins={[rehypeKatex]}
+                                    remarkRehypeOptions={{ clobberPrefix: `fn-${messageId ?? 'reply'}-` }}
+                                  >
+                                    {mathReadyContent}
+                                  </ReactMarkdown>
+                                </ReplyCitablesContext.Provider>
                               </ReplyPlacesContext.Provider>
                             </ReplyCompleteContext.Provider>
                           </div>
@@ -1861,6 +1886,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                     )}
 
                     {completed && <ReplyAccessories questId={messageId} sessionId={currentSessionId ?? undefined} />}
+                    {completed && <EnableWebSearchAction reply={cleanReply} />}
                     {replyActions}
                   </Typography>
                 </Box>
@@ -1872,14 +1898,19 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
 
       <ExpandCollapseButton needsTruncation={needsTruncation} isExpanded={isExpanded} onToggle={toggleExpanded} />
 
-      {/* Below the reply, not above it. The [N] markers are plain text in the body, so a list
-          above it means reading forward to the marker and then scrolling BACK past the answer
-          to resolve it - and citables merge in mid-stream (useStreamingMessageMerge), so a card
+      {/* Below the reply, not above it. A reader who does not click an inline [N] marker resolves
+          it here, so a list above it means reading forward to the marker and then scrolling BACK
+          past the answer to resolve it - and citables merge in mid-stream (useStreamingMessageMerge), so a card
           above pushed text the reader had already started reading down the page.
 
           After the expand control, which belongs to the reply body it truncates, and before
           artifacts, so a tall chart cannot separate a source from the marker that cites it. */}
-      {promptMeta?.citables && promptMeta.citables.length > 0 && <CitableSources citables={promptMeta.citables} />}
+      {promptMeta?.citables && promptMeta.citables.length > 0 && (
+        // The reply only once done, so chips do not reshuffle under the reader as citations stream in.
+        // processedContent, not cleanReply: an artifact body the reader never sees must not count as
+        // citing a source. Not displayContent either, which is cut to the collapsed view.
+        <CitableSources citables={promptMeta.citables} reply={completed ? processedContent : undefined} />
+      )}
 
       {/* Artifacts sit between the reply and the footer. This Stack owns ALL of their
           spacing - 24px above, 8px below, 16px between cards - so individual artifact
@@ -1916,8 +1947,13 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
           starts, and waiting hides it for exactly as long as the model is answering without it. */}
       <AttachmentNotices attachmentNotices={attachmentNotices} attachmentDelivery={attachmentDelivery} />
 
-      {uiSideEffects && uiSideEffects.length > 0 && completed && (
-        <UiSideEffectDispatcher effects={uiSideEffects} completed={completed} dedupeKey={messageId} />
+      {messageId && (
+        <UiSideEffectDispatcher
+          effects={uiSideEffects}
+          completed={completed}
+          dedupeKey={messageId}
+          sessionId={replySessionId}
+        />
       )}
 
       {notebookContent && completed && (

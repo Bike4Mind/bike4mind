@@ -105,7 +105,20 @@ export function useStreamingQueryUpdates(params: {
       setChatCompletion((prev: any) => ({
         ...prev,
         completed: isComplete,
-        quest: prev.quest?.id === quest.id ? { ...prev.quest, ...questForUpdate } : questForUpdate,
+        quest:
+          prev.quest?.id === quest.id
+            ? {
+                ...prev.quest,
+                ...questForUpdate,
+                // Streamed frames carry only the promptMeta fields that changed (retrieval chips,
+                // artifacts), so merge them over the frame before instead of replacing it whole -
+                // an optimized frame that only clears `citables` must not drop the model, warnings
+                // or function calls an earlier full frame delivered.
+                promptMeta: questForUpdate.promptMeta
+                  ? { ...prev.quest.promptMeta, ...questForUpdate.promptMeta }
+                  : prev.quest.promptMeta,
+              }
+            : questForUpdate,
         statusMessage: isComplete ? statusMessage : statusMessage || prev.statusMessage,
       }));
     },

@@ -4,6 +4,7 @@ const h = vi.hoisted(() => ({
   assertCanWriteDataLakeTags: vi.fn(),
   toggleTags: vi.fn(),
   baseApiOptions: undefined as unknown,
+  tx: [] as string[],
 }));
 
 // baseApi mock: callable chain routed by req.method (same shape as the data-lake route tests).
@@ -35,12 +36,20 @@ vi.mock('@bike4mind/services', async importOriginal => {
   };
 });
 vi.mock('@bike4mind/database', () => ({
+  withTransaction: async (fn: () => unknown) => {
+    h.tx.push('enter');
+    try {
+      return await fn();
+    } finally {
+      h.tx.push('exit');
+    }
+  },
   // The config-audit repos the code under test now wires (see lakeConfigAuditDb). Stubbed
   // rather than omitted because this mock REPLACES the whole module: a missing export is an
   // import-time failure, not a silent undefined.
   lakeConfigChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
   lakeMembershipChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
-  dataLakeRepository: { name: 'dataLakes' },
+  dataLakeRepository: { name: 'dataLakes', findByDatalakeTags: vi.fn().mockResolvedValue([]) },
   dataLakeAccessGrantRepository: {
     listByLake: vi.fn().mockResolvedValue([]),
     listActiveByLakes: vi.fn().mockResolvedValue([]),
@@ -50,9 +59,17 @@ vi.mock('@bike4mind/database', () => ({
     removeGrant: vi.fn().mockResolvedValue(true),
     removeAllForLake: vi.fn().mockResolvedValue(0),
   },
-  fabFileRepository: { name: 'fabFiles' },
+  fabFileRepository: { name: 'fabFiles', setOwnerOrganizationIfUnchanged: vi.fn().mockResolvedValue(true) },
   fileTagRepository: { name: 'fileTags' },
-  userRepository: { name: 'users' },
+  userRepository: {
+    name: 'users',
+    findById: vi.fn().mockResolvedValue(null),
+    incrementCurrentStorage: vi.fn().mockResolvedValue(undefined),
+  },
+  organizationRepository: {
+    findById: vi.fn().mockResolvedValue(null),
+    incrementCurrentStorage: vi.fn().mockResolvedValue(undefined),
+  },
   // Backing stores for the admission contract's enforcement lever (#1680), which the service
   // resolves at the join branch.
   adminSettingsRepository: { name: 'adminSettings' },
@@ -89,8 +106,21 @@ const call = (r: unknown, res: unknown) => (handler as (req: unknown, res: unkno
 describe('POST /api/files/tags/toggle', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    h.tx.length = 0;
     h.assertCanWriteDataLakeTags.mockResolvedValue(undefined);
     h.toggleTags.mockResolvedValue([{ id: 'f1' }]);
+  });
+
+  it('runs the toggle inside a transaction, so a failed owner move rolls back its tag write', async () => {
+    h.toggleTags.mockImplementation(async () => {
+      h.tx.push('toggle');
+      return [{ id: 'f1' }];
+    });
+    const { res } = makeRes();
+
+    await call(req({ ids: ['f1'], tags: ['datalake:lake'] }), res);
+
+    expect(h.tx).toEqual(['enter', 'toggle', 'exit']);
   });
 
   it('gives the service the data-lake repository so lake toggles reach the membership path', async () => {
@@ -116,7 +146,10 @@ describe('POST /api/files/tags/toggle', () => {
         }),
       })
     );
-    expect(h.toggleTags.mock.calls[0][2].db.dataLakes).toEqual({ name: 'dataLakes' });
+    expect(h.toggleTags.mock.calls[0][2].db.dataLakes).toEqual({
+      name: 'dataLakes',
+      findByDatalakeTags: expect.any(Function),
+    });
     expect(json).toHaveBeenCalledWith([{ id: 'f1' }]);
   });
 

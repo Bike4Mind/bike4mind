@@ -70,6 +70,15 @@ vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe }));
 const getUserEntitlements = vi.hoisted(() => vi.fn().mockResolvedValue([]));
 vi.mock('@server/entitlements', () => ({ getUserEntitlements }));
 
+// Product-scope access of the minting user; every product on by default so the embed/org cases
+// below are unaffected. The resolver itself is covered in server/entitlements/apiKeyScopeAccess.test.ts.
+const scopeAccess = vi.hoisted(() => ({
+  current: { hasOptiAccess: true, hasOverwatchAccess: true, hearthEnabled: true },
+}));
+vi.mock('@server/entitlements/apiKeyScopeAccess', () => ({
+  resolveApiKeyScopeAccess: vi.fn(async () => scopeAccess.current),
+}));
+
 import { CreditHolderType } from '@bike4mind/common';
 import '@pages/api/user-api-keys/index';
 
@@ -559,5 +568,34 @@ describe('POST /api/user-api-keys - caller key scopes forwarded for containment'
       expect.anything(),
       expect.objectContaining({ callerExpiresAt: expiresAt })
     );
+  });
+});
+
+describe('POST /api/user-api-keys - product scope entitlement', () => {
+  beforeEach(() => {
+    createUserApiKey.mockClear();
+    scopeAccess.current = { hasOptiAccess: false, hasOverwatchAccess: false, hearthEnabled: false };
+  });
+
+  it.each(['hearth:read', 'overwatch:read', 'marketing-reports:write', 'optihashi:compute'])(
+    'refuses %s to a user without that product and never calls the service',
+    async scope => {
+      const { req, res } = post({ name: 'k', scopes: ['me:read', scope] });
+      await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(`Scope not available on your account: ${scope}`);
+      expect(createUserApiKey).not.toHaveBeenCalled();
+    }
+  );
+
+  it('mints a product scope once the user has the product', async () => {
+    scopeAccess.current = { ...scopeAccess.current, hearthEnabled: true };
+    const { req, res } = post({ name: 'k', scopes: ['hearth:read'] });
+    await mockRefs.postHandler!(req, res);
+    expect(res._getStatusCode()).toBe(201);
+  });
+
+  it('mints ungated scopes without any product', async () => {
+    const { req, res } = post({ name: 'k', scopes: ['me:read', 'files:read'] });
+    await mockRefs.postHandler!(req, res);
+    expect(res._getStatusCode()).toBe(201);
   });
 });

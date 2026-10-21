@@ -79,7 +79,7 @@ vi.mock('@server/auth/auth', async orig => {
 });
 
 import { ApiKeyScope, ScopeForbiddenErrorSchema, defineEndpoint, sessionCloneContract } from '@bike4mind/common';
-import { UnauthorizedError } from '@server/utils/errors';
+import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { baseApi, methodNotAllowedHandler } from './baseApi';
 import { nextRouteForContract } from './defineNextRoute';
 
@@ -384,6 +384,50 @@ describe('nextRouteForContract', () => {
       await route(req, res);
       expect(res._getStatusCode()).toBe(404);
       expect(res.getHeader('Allow')).toBeUndefined();
+    });
+  });
+
+  describe('deprecated contracts', () => {
+    const deprecated = { since: '2026-10-15', sunset: '2027-01-15', successor: '/api/v1/fixtures' };
+
+    it('sends Deprecation, Sunset and Link on a handled response', async () => {
+      validKey([ApiKeyScope.AI_CHAT]);
+      const route = nextRouteForContract(makeContract({ deprecated })).post((_req, res) => res.json({ ok: true }));
+      const { req, res } = fire({ apiKey: 'b4m_live_x' });
+      await route(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res.getHeader('Deprecation')).toBe('@1792022400');
+      expect(res.getHeader('Sunset')).toBe('Fri, 15 Jan 2027 00:00:00 GMT');
+      expect(res.getHeader('Link')).toBe('</api/v1/fixtures>; rel="successor-version"');
+    });
+
+    it('still sends them when the body fails validation', async () => {
+      validKey([ApiKeyScope.AI_CHAT]);
+      const route = nextRouteForContract(makeContract({ deprecated })).post((_req, res) => res.json({ ok: true }));
+      const { req, res } = fire({ apiKey: 'b4m_live_x', body: { message: 1 } });
+      await route(req, res);
+      expect(res._getStatusCode()).toBe(422);
+      expect(res.getHeader('Sunset')).toBe('Fri, 15 Jan 2027 00:00:00 GMT');
+    });
+
+    it('still sends them when the rateLimit option rejects the request', async () => {
+      validKey([ApiKeyScope.AI_CHAT]);
+      const limiter = (_req: unknown, res: { status: (code: number) => { json: (body: unknown) => void } }) =>
+        res.status(429).json({ error: 'slow down' });
+      // any: the fixture limiter isn't typed as the adapter's ValidatedReq handler.
+      const route = nextRouteForContract(makeContract({ deprecated }), { rateLimit: limiter as any }).post(vi.fn());
+      const { req, res } = fire({ apiKey: 'b4m_live_x' });
+      await route(req, res);
+      expect(res._getStatusCode()).toBe(429);
+      expect(res.getHeader('Sunset')).toBe('Fri, 15 Jan 2027 00:00:00 GMT');
+    });
+
+    it('sends none on a contract that is not deprecated', async () => {
+      validKey([ApiKeyScope.AI_CHAT]);
+      const route = nextRouteForContract(makeContract()).post((_req, res) => res.json({ ok: true }));
+      const { req, res } = fire({ apiKey: 'b4m_live_x' });
+      await route(req, res);
+      expect(res.getHeader('Deprecation')).toBeUndefined();
     });
   });
 

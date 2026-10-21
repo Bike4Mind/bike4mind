@@ -9,13 +9,16 @@ import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 import { ApiKeyScope } from '@bike4mind/common';
 
-const { mockFindById, mockSearchOwnSessions, mockLogEvent, mockValidate, mockRateLimit } = vi.hoisted(() => ({
-  mockFindById: vi.fn(),
-  mockSearchOwnSessions: vi.fn(),
-  mockLogEvent: vi.fn(),
-  mockValidate: vi.fn(),
-  mockRateLimit: vi.fn(),
-}));
+const { mockFindById, mockSearchOwnSessions, mockLogEvent, mockValidate, mockRateLimit, mockUnpublish } = vi.hoisted(
+  () => ({
+    mockUnpublish: vi.fn(),
+    mockFindById: vi.fn(),
+    mockSearchOwnSessions: vi.fn(),
+    mockLogEvent: vi.fn(),
+    mockValidate: vi.fn(),
+    mockRateLimit: vi.fn(),
+  })
+);
 
 const RATE_LIMIT_HEADERS = {
   'X-RateLimit-Limit-Minute': '60',
@@ -32,6 +35,9 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
 }));
 
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: (...a: unknown[]) => mockLogEvent(...a) }));
+vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
+  unpublishUserArtifactsBySource: (...a: unknown[]) => mockUnpublish(...a),
+}));
 
 vi.mock('@bike4mind/services', async orig => {
   const actual = await orig<Record<string, unknown>>();
@@ -83,6 +89,7 @@ function keyWithScopes(scopes: ApiKeyScope[]) {
 
 describe('/api/sessions API-key scopes', () => {
   let mockDeleteMany: MockInstance;
+  let mockFind: MockInstance;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -100,10 +107,15 @@ describe('/api/sessions API-key scopes', () => {
     });
     mockSearchOwnSessions.mockResolvedValue({ data: [], hasMore: false });
     mockDeleteMany = vi.spyOn(Session, 'deleteMany').mockResolvedValue({ deletedCount: 3 } as never);
+    mockFind = vi.spyOn(Session, 'find').mockReturnValue({
+      select: () => ({ lean: () => Promise.resolve([{ _id: 'nb-1' }, { _id: 'nb-2' }]) }),
+    } as never);
+    mockUnpublish.mockResolvedValue({ artifacts: [], annotations: 0, reports: 0, viewAudits: 0 });
   });
 
   afterEach(() => {
     mockDeleteMany.mockRestore();
+    mockFind.mockRestore();
     vi.unstubAllEnvs();
   });
 
@@ -119,6 +131,7 @@ describe('/api/sessions API-key scopes', () => {
     // The message pins which gate refused: CASL's ability check would answer a bare 'Forbidden'.
     expect(JSON.stringify(res._getData())).toContain('notebooks:write is required');
     expect(mockDeleteMany).not.toHaveBeenCalled();
+    expect(mockUnpublish).not.toHaveBeenCalled();
   });
 
   it('lets a notebooks:write key delete all notebooks', async () => {
@@ -128,6 +141,11 @@ describe('/api/sessions API-key scopes', () => {
 
     expect(res._getStatusCode()).toBe(204);
     expect(mockDeleteMany).toHaveBeenCalledTimes(1);
+    expect(mockUnpublish).toHaveBeenCalledWith(
+      'user-1',
+      { kind: 'reply', sessionIds: ['nb-1', 'nb-2'] },
+      expect.anything()
+    );
   });
 
   it('still serves the notebook list to a notebooks:read key', async () => {

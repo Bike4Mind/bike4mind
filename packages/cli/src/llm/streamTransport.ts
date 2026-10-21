@@ -42,9 +42,9 @@ export interface CompletionRequest {
  * Contract (the core relies on all three):
  * - Normal completion: the async iterable RETURNS after yielding every event
  *   (an SSE `[DONE]` / a `cli_completion_done` frame ends iteration).
- * - Wire failure: the iterable THROWS. `runCompletion` classifies the thrown
- *   error via the retry policy - a transient drop is retried, a real server
- *   error propagates. A server-sent `error` frame is surfaced as a throw, NOT
+ * - Wire failure: the iterable THROWS, ideally a classified `ModelCallError`
+ *   (modelCallError.ts). `decideRetry` retries a transient kind and lets the
+ *   rest propagate. A server-sent `error` frame is surfaced as a throw, NOT
  *   yielded, because it terminates the stream.
  * - Abort: when `signal` aborts, the iterable stops (returns) promptly; the
  *   core, seeing the aborted signal, settles without invoking the callback.
@@ -55,21 +55,4 @@ export interface CompletionRequest {
  */
 export interface StreamTransport {
   open(req: CompletionRequest, signal?: AbortSignal): AsyncIterable<StreamEvent>;
-}
-
-/**
- * Retry policy injected into `runCompletion`: how many times to re-open the
- * stream after a delivered-nothing attempt, and which thrown errors are worth
- * retrying (a transient network drop) vs. surfacing (a real server error).
- */
-export interface RetryPolicy {
-  /** Max re-opens after the first attempt (so total attempts = maxRetries + 1). */
-  maxRetries: number;
-  /** True when a thrown error is a transient wire failure worth retrying. */
-  isRetryable(error: unknown): boolean;
-  /**
-   * Base linear backoff between attempts, in ms; the wait before retry N is
-   * `backoffMs * (N + 1)`. Defaults to 500. Set 0 in tests for instant retries.
-   */
-  backoffMs?: number;
 }

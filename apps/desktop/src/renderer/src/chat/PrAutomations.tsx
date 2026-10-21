@@ -2,7 +2,7 @@ import { useState } from 'react';
 import Checkbox from '@mui/joy/Checkbox';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import type { PrActionResult, PrBarState, PrOption } from '@shared/pullRequest';
+import { AUTO_FIX_LABEL, type PrActionResult, type PrBarState, type PrOption } from '@shared/pullRequest';
 
 /** One line under the auto-merge box saying who merges and what it is waiting for. */
 export function autoMergeDescription(state: PrBarState): string {
@@ -19,7 +19,7 @@ export function autoFixDescription(state: PrBarState): string {
   const { status, attempts, max, note } = state.autoFix;
   if (note) return note;
   if (status === 'exhausted') return `Gave up after ${max} attempts. Re-check the box to allow more.`;
-  return `Watching for failed checks and new review comments. ${attempts} of ${max} attempts used.`;
+  return `Watching for failed checks, merge conflicts and new review comments. ${attempts} of ${max} attempts used.`;
 }
 
 /**
@@ -53,7 +53,7 @@ export function PrAutomations({
     <Stack spacing={0.75} data-testid="pr-ci-automations">
       <Checkbox
         size="sm"
-        label="Auto-fix CI & address comments"
+        label={AUTO_FIX_LABEL}
         checked={binding.autoFix === true}
         disabled={busy !== null}
         onChange={event => toggle('autoFix', event.target.checked)}

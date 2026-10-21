@@ -11,7 +11,7 @@ import { ChatCompletionInvoke } from '@bike4mind/services/llm/ChatCompletionInvo
 import { SQSService } from '@bike4mind/utils';
 import { getOrCreateSession } from '@server/managers/sessionManager';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
-import { resolveBillingOrgId } from '@server/utils/orgAccess';
+import { resolveRequestBillingOrgId } from '@server/billing/apiKeyBillingOrg';
 import { dataLakeToolsDeniedFor } from '@server/dataLakes/dataLakeScopes';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
@@ -19,6 +19,7 @@ import { getDefaultChatCompletionOptions, getSharedTokenizer } from '@server/uti
 import { sessionWillInjectAuthoredPrompt } from '@server/utils/sessionSystemPromptResolver';
 import { dispatchQuest } from '@server/utils/dispatchQuest';
 import { loadBaseIdentitySystemPromptMessages } from '@server/utils/systemPrompts/loader';
+import { requestTurnAuth } from '@server/auth/turnAuth';
 import { Request } from 'express';
 
 // Gate API-key callers on `ai:chat`: this route commissions a billed chat completion
@@ -75,19 +76,23 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
     // Everything that can reject the request runs before getOrCreateSession, so a rejected request
     // leaves no session behind. invoke() parses the body again, but only after that write.
     const body = LLMApiRequestBodySchema.parse(req.body);
-    // agentIds is destructured out so a session-creation field never rides into the completion body.
-    const { sessionId: reqSessionId, sessionName, agentIds, ...invokeParams } = body;
+    // agentIds and messageOnlyFileIds are destructured out so session-write input never rides into the
+    // completion body.
+    const { sessionId: reqSessionId, sessionName, agentIds, messageOnlyFileIds, ...invokeParams } = body;
 
     // Resolve the billing org from the client-supplied value, rejecting any org the caller is
     // not a member of (a bare body value would otherwise let A bill B's credit pool).
-    // null = personal account, undefined = fall back to the caller's own org.
-    const effectiveOrgId = await resolveBillingOrgId(req, invokeParams.organizationId);
+    // null = personal account, undefined = fall back to the caller's own org. An org-billed
+    // API key always bills its own org, as on the v1 media routes; naming another is a 403.
+    const effectiveOrgId = await resolveRequestBillingOrgId(req, invokeParams.organizationId);
 
     const { session, sessionId, asyncPromises } = await getOrCreateSession({
       sessionId: reqSessionId,
       sessionName,
       projectId: body.projectId,
       fabFileIds: body.fabFileIds,
+      // In-app sends only: an API-key turn keeps its files per-run, as the v1 agent route does.
+      ...(req.apiKeyInfo ? {} : { messageFileIds: body.messageFileIds, messageOnlyFileIds }),
       agentIds,
       origin: resolveSessionOrigin(req),
       user: req.user,
@@ -102,8 +107,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
     // RESOLVES the id rather than testing membership: an allowlisted id an admin has disabled (or a
     // lake bound to a since-delisted id) would otherwise suppress the identity here while the
     // completion path injects nothing, leaving the session with no system prompt at all.
-    // Prepended ahead of any client-sent context.
-    if (!(await sessionWillInjectAuthoredPrompt(session))) {
+    // Prepended ahead of any client-sent context. The quest runs in another process that reloads and
+    // re-resolves the session, so this resolve is not threaded through; a mismatch only moves the identity.
+    if (!(await sessionWillInjectAuthoredPrompt(session, { user: req.user, logger: req.logger }))) {
       const identityPrompts = await loadBaseIdentitySystemPromptMessages(req.logger);
       if (identityPrompts.length > 0) {
         invokeParams.extraContextMessages = [...identityPrompts, ...(invokeParams.extraContextMessages ?? [])];
@@ -136,8 +142,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
         ...(deniedTools.length > 0 ? { deniedTools } : {}),
       },
       userId: req.user.id,
-      // Attributes a lake write a tool drives this turn to the key rather than its owner.
-      apiKeyId: req.apiKeyInfo?.keyId,
+      // The key (when one authenticated the turn) also attributes a lake write a tool drives.
+      ...requestTurnAuth(req),
     });
 
     // Handle case where quest creation failed (session or quest not found during invoke)

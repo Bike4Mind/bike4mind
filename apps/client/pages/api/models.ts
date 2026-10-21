@@ -2,7 +2,8 @@
  * GET /api/models - the full internal `ModelInfo` list the SPA and CLI read.
  *
  * Unversioned and unpublished; integrators get the public projection at GET /api/v1/models
- * (pages/api/v1/models.ts). Both read getCallerModelList, so they list the same models.
+ * (pages/api/v1/models.ts). Both read getCallerModelList, so they list the same models;
+ * v1 additionally drops disabled ones.
  */
 
 import { baseApi } from '@server/middlewares/baseApi';

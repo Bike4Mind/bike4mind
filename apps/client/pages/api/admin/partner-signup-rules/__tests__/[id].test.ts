@@ -33,6 +33,7 @@ vi.mock('@server/entitlements/partnerRules', async importOriginal => ({
 
 // Importing the route registers handlers.put / handlers.delete via the mocked baseApi.
 import '@pages/api/admin/partner-signup-rules/[id]';
+import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
 
 type ReqOverrides = { user?: unknown; body?: unknown; query?: unknown };
 function makeReqRes(method: string, over: ReqOverrides = {}) {
@@ -99,6 +100,37 @@ describe('/api/admin/partner-signup-rules/[id] — update (PUT)', () => {
     const { req, res } = makeReqRes('PUT', { body: { entitlements: ['datalake:'] } });
     await expect(handlers.put(req, res)).rejects.toThrow(/unknown entitlement key/i);
     expect(repo.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects a subscription for an unknown plan with a 400 and never writes', async () => {
+    const body = { subscription: { priceId: 'price_nope', durationMonths: 1 } };
+    const { req, res } = makeReqRes('PUT', { body });
+    await expect(handlers.put(req, res)).rejects.toThrow(/unknown subscription plan/i);
+    expect(repo.update).not.toHaveBeenCalled();
+  });
+
+  it('sets a catalog-plan subscription and clears it with null', async () => {
+    const subscription = { priceId: SUBSCRIPTION_PLANS[0].priceId, durationMonths: 2 };
+    const set = makeReqRes('PUT', { body: { subscription } });
+    await handlers.put(set.req, set.res);
+    expect(repo.update).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'r1', subscription }));
+
+    const { req, res } = makeReqRes('PUT', { body: { subscription: null } });
+    await handlers.put(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(repo.update).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'r1', subscription: null }));
+  });
+
+  it('keeps a rule editable when its stored plan was removed, but rejects switching to an unknown plan', async () => {
+    const stale = { priceId: 'price_removed', durationMonths: 2 };
+    repo.findById.mockResolvedValue({ id: 'r1', subscription: stale });
+
+    const same = makeReqRes('PUT', { body: { subscription: stale, enabled: false } });
+    await handlers.put(same.req, same.res);
+    expect(same.res._getStatusCode()).toBe(200);
+
+    const other = makeReqRes('PUT', { body: { subscription: { priceId: 'price_nope', durationMonths: 2 } } });
+    await expect(handlers.put(other.req, other.res)).rejects.toThrow(/unknown subscription plan/i);
   });
 
   it('returns 404 when the row was deleted between check and write', async () => {

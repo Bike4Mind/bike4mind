@@ -10,6 +10,7 @@ import { runShellCommand } from '../utils/shellRunner.js';
 import { createSkillTool } from '../tools/skillTool.js';
 import { buildSkillsPromptSection } from '../core/skillsPrompt.js';
 import { generateCliTools } from '../utils/toolsAdapter.js';
+import { ToolCatalog, wrapTools } from '../tools/gateway/index.js';
 import { DEFAULT_SANDBOX_CONFIG } from '../sandbox/types.js';
 
 // A denied hook must never reach the shell; mock it to observe (and to let the
@@ -39,6 +40,10 @@ vi.mock('../utils/toolsAdapter.js', async importOriginal => {
     ...actual,
     generateCliTools: vi.fn(async (...args: unknown[]) => ({ tools: [], agentContext: args[5] })),
   };
+});
+vi.mock('../tools/gateway/index.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../tools/gateway/index.js')>();
+  return { ...actual, wrapTools: vi.fn(actual.wrapTools) };
 });
 
 /**
@@ -349,21 +354,26 @@ describe('resume_agent end-to-end through the real orchestrator', () => {
 
 describe('SubagentOrchestrator hook-permission wiring', () => {
   /** Orchestrator whose Stop-hook permission prompt returns `action`. */
-  function createHookOrchestrator(action: 'deny' | 'allow-once', customCommandStore?: unknown) {
+  function createHookOrchestrator(
+    action: 'deny' | 'allow-once',
+    customCommandStore?: unknown,
+    checkpointStore?: unknown
+  ) {
     const showPermissionPrompt = vi.fn(async () => ({ action }) as { action: 'deny' | 'allow-once' });
     const deps = {
       userId: 'test-user',
       llm: createOneShotLlm('done'),
       logger: { debug() {}, info() {}, warn() {}, error() {} },
-      permissionManager: new PermissionManager(),
+      permissionManager: new PermissionManager(new ToolCatalog()),
       showPermissionPrompt,
       configStore: { get: async () => ({}) },
       apiClient: {},
       agentStore: { getAgent: () => undefined, getAgentNames: () => [] },
       historyStore: new AgentHistoryStore(),
       customCommandStore,
+      checkpointStore,
     } as unknown as OrchestratorDependencies;
-    return { orchestrator: new SubagentOrchestrator(deps), showPermissionPrompt };
+    return { orchestrator: new SubagentOrchestrator(deps), showPermissionPrompt, checkpointStore };
   }
 
   function agentWithStopHook(): SpawnAgentOptions['agentDefinition'] {
@@ -416,6 +426,53 @@ describe('SubagentOrchestrator hook-permission wiring', () => {
     const deps = vi.mocked(createSkillTool).mock.calls[0][0];
     expect(deps.permission.permissionManager).toBeDefined();
     expect(deps.permission.promptFn).toBeDefined();
+    const skillTool = vi.mocked(createSkillTool).mock.results[0].value;
+    expect(vi.mocked(wrapTools).mock.calls.some(([tools]) => tools.includes(skillTool))).toBe(true);
+  });
+
+  it('routes injected tools through the permission wrapper under the subagent mode ceiling', async () => {
+    vi.mocked(wrapTools).mockClear();
+    const decompose = {
+      toolFn: vi.fn(async () => 'ok'),
+      toolSchema: { name: 'decompose_task', description: '', parameters: { type: 'object' as const, properties: {} } },
+    };
+    const { orchestrator } = createHookOrchestrator('allow-once');
+    await orchestrator.delegateToAgent({
+      task: 'do it',
+      agentName: 'tester',
+      parentSessionId: 'session-1',
+      agentDefinition: inlineAgent(),
+      additionalTools: [decompose],
+      parentInteractionMode: 'plan',
+    });
+
+    const call = vi.mocked(wrapTools).mock.calls.find(([tools]) => tools.includes(decompose));
+    expect(call).toBeDefined();
+    expect(call![1].interactionModeOverride).toBe('plan');
+  });
+
+  it('routes declared shared-context tools through the permission wrapper', async () => {
+    vi.mocked(wrapTools).mockClear();
+    const checkpointStore = { createCheckpoint: vi.fn() };
+    const { orchestrator } = createHookOrchestrator('allow-once', undefined, checkpointStore);
+    const sharedContext = { get: () => undefined, getAll: () => ({}), set: () => undefined };
+
+    await orchestrator.delegateToAgent({
+      task: 'do it',
+      agentName: 'tester',
+      parentSessionId: 'session-1',
+      agentDefinition: { ...inlineAgent()!, sharedContext: ['read', 'write'] },
+      sharedContext: sharedContext as never,
+      parentInteractionMode: 'plan',
+    });
+
+    const call = vi
+      .mocked(wrapTools)
+      .mock.calls.find(([tools]) => tools.some(t => t.toolSchema.name === 'shared_context_write'));
+    expect(call).toBeDefined();
+    expect(call![0].map(t => t.toolSchema.name)).toEqual(['shared_context_read', 'shared_context_write']);
+    expect(call![1].interactionModeOverride).toBe('plan');
+    expect(call![1].checkpointStore).toBe(checkpointStore);
   });
 
   it('advertises the model-reachable command set (not getAllCommands) in the skills prompt', async () => {

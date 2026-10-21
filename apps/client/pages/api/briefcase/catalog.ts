@@ -1,16 +1,16 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { briefcaseService } from '@bike4mind/services';
 import { briefcasePromptRepository } from '@bike4mind/database';
-import { BriefcaseBatchRequestSchema, BriefcaseEvents, type ICaller } from '@bike4mind/common';
+import { BriefcaseBatchRequestSchema, BriefcaseEvents, isOAuthSourceTag, type ICaller } from '@bike4mind/common';
 import { logEvent } from '@server/utils/analyticsLog';
 import { Request } from 'express';
 
 const toCaller = (req: Request): ICaller => ({
   id: req.user.id,
-  entitlements: req.user.tags ?? [],
+  entitlements: (req.user.tags ?? []).filter(tag => !isOAuthSourceTag(tag)),
   isAdmin: !!req.user.isAdmin,
   isApiKey: !!req.apiKeyInfo,
 });

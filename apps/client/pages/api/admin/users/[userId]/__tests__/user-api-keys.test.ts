@@ -25,7 +25,7 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (fn: (req: unknown, res: unknown) => unknown) => fn,
 }));
 
-vi.mock('@server/utils/errors', () => ({
+vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   ForbiddenError: class ForbiddenError extends Error {},
 }));
 
@@ -55,7 +55,7 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', () => ({
 import handler from '../user-api-keys';
 // These resolve to the mocked classes above, so instanceof pins which error
 // (and therefore which status) each guard maps to.
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 
 const ADMIN = { id: 'admin1', isAdmin: true };

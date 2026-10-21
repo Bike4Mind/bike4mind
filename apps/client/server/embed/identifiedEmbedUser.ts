@@ -1,8 +1,8 @@
 import { z } from 'zod';
 import { ApiKeyScope, type IUserDocument } from '@bike4mind/common';
 import { oauthClientRepository, userRepository, type IOAuthClientDocument } from '@bike4mind/database/auth';
-import { assertAccountStateUsable } from '@server/cli/auth';
-import { hasAcceptedPolicy } from '@server/auth/consentGate';
+import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
+import { hasAcceptedPolicy } from '@bike4mind/server-utils/auth/consentGate';
 import { checkFederatedGrant } from '@server/auth/federatedGrantGate';
 import { verifyFederatedIdToken, FederatedIdTokenError } from '@server/auth/verifyFederatedIdToken';
 

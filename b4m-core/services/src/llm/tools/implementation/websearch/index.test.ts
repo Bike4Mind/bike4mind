@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { verifyImageUrlSignature } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 import type { ToolContext } from '../../base/types';
 import {
   safeHostname,
@@ -492,6 +493,29 @@ describe('performWebSearch - place handling', () => {
     vi.unstubAllGlobals();
   });
 
+  it('labels places with the numbers the turn stamped on them, and keeps local labels otherwise', async () => {
+    useSerpApi();
+    stubSerpApi([mapsPlace('ChIJa', 'A'), mapsPlace('ChIJb', 'B')]);
+    const numberCitables: NonNullable<ToolContext['numberCitables']> = citables =>
+      citables.map((c, i) => ({ ...c, metadata: { ...c.metadata, citationIndex: i + 3 } }));
+
+    const numbered = await performWebSearch(
+      mockAdapters,
+      { query: 'dinner', include_places: true },
+      '',
+      undefined,
+      numberCitables
+    );
+    expect(numbered.formattedResults).toMatch(/^\[4\] A - /m);
+    expect(numbered.formattedResults).toMatch(/^\[5\] B - /m);
+    expect(numbered.formattedResults).not.toMatch(/^1\. A/m);
+
+    const plain = await performWebSearch(mockAdapters, { query: 'dinner', include_places: true });
+    expect(plain.formattedResults).toMatch(/^1\. A - /m);
+    expect(plain.formattedResults).toMatch(/^2\. B - /m);
+    vi.unstubAllGlobals();
+  });
+
   it('sends the model query unchanged to the organic search, without US geo-targeting', async () => {
     useSerpApi();
     const fetchStub = stubSerpApi([mapsPlace('ChIJa', 'A'), mapsPlace('ChIJb', 'B')]);
@@ -805,6 +829,87 @@ describe('webSearchTool - hedged backup and cache', () => {
     expect(String(await pending)).toMatch(/serpapi: Web search timed out.*searxng: Web search timed out/);
   });
 
+  // Error-level logs page the production alert channel, so only a failure the caller cannot recover
+  // from may raise one; a provider attempt the hedge recovers logs at warn.
+  describe('alert-level logging', () => {
+    let errorSpy: ReturnType<typeof vi.spyOn>;
+    let warnSpy: ReturnType<typeof vi.spyOn>;
+    const errorMessages = () => errorSpy.mock.calls.map(([message]) => String(message));
+
+    beforeEach(() => {
+      errorSpy = vi.spyOn(Logger.globalInstance, 'error').mockImplementation(() => undefined);
+      warnSpy = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => undefined);
+    });
+
+    afterEach(() => {
+      errorSpy.mockRestore();
+      warnSpy.mockRestore();
+    });
+
+    it('logs no error when the backup recovers a failed SerpAPI lead', async () => {
+      configure('serpapi');
+      stubProviders({ serpOrganic: [{ status: 503 }, { status: 503 }], searxng: searxngHit });
+
+      await expect(buildTool().toolFn({ query: 'q' })).resolves.toContain('searx.example');
+      expect(warnSpy).toHaveBeenCalled();
+      expect(errorSpy).not.toHaveBeenCalled();
+    });
+
+    it('logs one error naming the provider that failed while the other answered empty', async () => {
+      configure('searxng');
+      stubProviders({ searxng: { status: 200, body: { results: [] } }, serpOrganic: [{ status: 503 }] });
+
+      await expect(buildTool().toolFn({ query: 'q' })).resolves.toBe('No results found from web search.');
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('provider failed while the other answered empty'),
+        expect.objectContaining({ provider: 'serpapi' })
+      );
+    });
+
+    it('logs one error naming the failed SerpAPI lead when the SearXNG backup answers empty', async () => {
+      configure('serpapi');
+      stubProviders({
+        serpOrganic: [{ status: 503 }, { status: 503 }],
+        searxng: { status: 200, body: { results: [] } },
+      });
+
+      await expect(buildTool().toolFn({ query: 'q' })).resolves.toBe('No results found from web search.');
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('provider failed while the other answered empty'),
+        expect.objectContaining({ provider: 'serpapi' })
+      );
+    });
+
+    it('logs no error when both providers answer empty', async () => {
+      configure('searxng');
+      stubProviders({
+        searxng: { status: 200, body: { results: [] } },
+        serpOrganic: [{ status: 200, body: { organic_results: [] } }],
+      });
+
+      await expect(buildTool().toolFn({ query: 'q' })).resolves.toBe('No results found from web search.');
+      expect(errorSpy).not.toHaveBeenCalled();
+    });
+
+    it('logs the final failure at error once when both providers fail', async () => {
+      configure('searxng');
+      stubProviders({ searxng: { status: 502 }, serpOrganic: [{ status: 503 }] });
+
+      await expect(buildTool().toolFn({ query: 'q' })).rejects.toThrow('Web search failed on both providers');
+      expect(errorMessages()).toEqual([expect.stringContaining('Error during search')]);
+    });
+
+    it('keeps a non-retryable SerpAPI failure at error even with a backup to recover it', async () => {
+      configure('serpapi');
+      stubProviders({ serpOrganic: [{ status: 401 }], searxng: searxngHit });
+
+      await expect(buildTool().toolFn({ query: 'q' })).resolves.toContain('searx.example');
+      expect(errorMessages()).toEqual([expect.stringContaining('API error details')]);
+    });
+  });
+
   it('keeps SearXNG fail-soft when there is no backup to try', async () => {
     configure('searxng', { serp: false });
     stubProviders({ searxng: { status: 502 } });
@@ -840,5 +945,51 @@ describe('webSearchTool - hedged backup and cache', () => {
     await expect(toolFn({ query: 'q' })).rejects.toThrow();
     await expect(toolFn({ query: 'q' })).resolves.toContain('serp.example');
     expect(calls(fetchStub, isSerpOrganic)).toBe(2);
+  });
+});
+
+describe('performWebSearch - shared citation numbering', () => {
+  const hits = [
+    { title: 'A', link: 'https://a.com', snippet: 'about a' },
+    { title: 'B', link: 'https://b.com', snippet: 'about b' },
+  ];
+
+  beforeEach(() => {
+    mockGetSerperKey.mockResolvedValue('serp-key');
+    mockGetSearxngUrl.mockResolvedValue(null);
+    mockGetProvider.mockResolvedValue('serpapi');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => ({ organic_results: hits }),
+        text: async () => '',
+      } as unknown as Response)
+    );
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('labels each result with the number the turn gave it and returns the stamped citables', async () => {
+    // Two forced-retrieval documents already hold [1] and [2].
+    const numberCitables: NonNullable<ToolContext['numberCitables']> = citables =>
+      citables.map((c, i) => ({ ...c, metadata: { ...c.metadata, citationIndex: i + 3 } }));
+
+    const result = await performWebSearch(mockAdapters, { query: 'q' }, '', undefined, numberCitables);
+
+    expect(result.formattedResults).toContain('[3] **A**');
+    expect(result.formattedResults).toContain('[4] **B**');
+    expect(result.formattedResults).not.toMatch(/^1\. \*\*/m);
+    expect(result.formattedResults).toContain('ONLY by the bracketed number');
+    expect(result.citables.map(c => c.metadata?.citationIndex)).toEqual([3, 4]);
+  });
+
+  it('keeps local labels when the turn is not numbered', async () => {
+    const result = await performWebSearch(mockAdapters, { query: 'q' }, '', undefined, () => undefined);
+
+    expect(result.formattedResults).toContain('1. **A**');
+    expect(result.formattedResults).not.toContain('ONLY by the bracketed number');
+    expect(result.citables.every(c => c.metadata?.citationIndex === undefined)).toBe(true);
   });
 });

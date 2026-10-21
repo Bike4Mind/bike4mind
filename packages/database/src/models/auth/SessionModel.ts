@@ -121,7 +121,9 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     surface: { type: String, required: false },
     enabledTools: [{ type: String, required: false }],
     disabledTools: [{ type: String, required: false }],
+    autoAddedTools: [{ type: String, required: false }],
     disableUserIntegrations: { type: Boolean, required: false },
+    userSetFields: { type: [String], required: false, default: undefined },
     forceKnowledgeRetrieval: { type: Boolean, required: false },
     retrievalTags: [{ type: String, required: false }],
     // DELIBERATELY no default: absent must stay distinguishable from false, since `retrievalTags`
@@ -275,6 +277,11 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     },
     voiceReservedCredits: { type: Number, required: false, default: null },
     voiceSessionStartedAt: { type: Date, required: false, default: null },
+    voiceConnectedAt: { type: Date, required: false, default: null },
+    voiceLastActivityAt: { type: Date, required: false, default: null },
+    // No default: $inc needs the field absent or numeric, never null.
+    voiceBilledCredits: { type: Number, required: false },
+    voiceHoldUserId: { type: String, required: false },
     ...ShareableDocumentSchema,
   },
   {
@@ -534,6 +541,11 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     return session;
   }
 
+  async addAutoAddedTools(sessionId: string, toolNames: string[]) {
+    if (toolNames.length === 0) return;
+    await this.sessionModel.updateOne({ _id: sessionId }, { $addToSet: { autoAddedTools: { $each: toolNames } } });
+  }
+
   async detachAgent(sessionId: string, agentId: string) {
     const session = await this.sessionModel.findByIdAndUpdate(
       sessionId,
@@ -620,7 +632,7 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
    * the spider itself already runs at.
    *
    * Must stay in step with the handler's gate (`determineSessionOperations` in
-   * apps/client/server/utils/sessionOperations.ts): quest existence AND the retry backoff. Both halves of
+   * packages/server-utils/src/utils/sessionOperations.ts): quest existence AND the retry backoff. Both halves of
    * the backoff are declared together in `@bike4mind/common` so they cannot drift.
    */
   async countTaggableNotebooks(userId: string): Promise<number> {
@@ -645,6 +657,140 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
       userId,
       voiceSessionStartedAt: { $gte: sixtyMinutesAgo },
     });
+  }
+
+  async addVoiceBilledCredits(sessionId: string, startedAt: Date, credits: number) {
+    // Only a realtime hold (opened with the marker) is billed per response; a response frame against
+    // any other hold gets null and is charged from the balance, so it can never re-price that hold.
+    const before = await this.sessionModel.findOneAndUpdate(
+      { _id: sessionId, voiceSessionStartedAt: startedAt, voiceBilledCredits: { $exists: true } },
+      { $inc: { voiceBilledCredits: credits } },
+      { new: false, projection: { voiceBilledCredits: 1 } }
+    );
+    return before ? (before.voiceBilledCredits ?? 0) : null;
+  }
+
+  async findStaleVoiceHolds(startedBefore: Date, realtimeStartedBefore: Date, limit: number) {
+    // Served by the partial voiceSessionStartedAt_1_openVoiceHold index; keep the top-level
+    // `voiceReservedCredits: { $gt: 0 }`, which is what lets the planner use it.
+    const sessions = await this.sessionModel
+      .find(
+        {
+          voiceReservedCredits: { $gt: 0 },
+          $or: [
+            { voiceBilledCredits: { $exists: false }, voiceSessionStartedAt: { $lt: startedBefore } },
+            { voiceBilledCredits: { $exists: true }, voiceSessionStartedAt: { $lt: realtimeStartedBefore } },
+          ],
+        },
+        {
+          userId: 1,
+          voiceReservedCredits: 1,
+          voiceSessionStartedAt: 1,
+          voiceConnectedAt: 1,
+          voiceLastActivityAt: 1,
+          voiceBilledCredits: 1,
+        }
+      )
+      .sort({ voiceSessionStartedAt: 1 })
+      .limit(limit)
+      .lean();
+    return sessions.map(s => ({
+      id: s._id.toString(),
+      userId: s.userId,
+      voiceReservedCredits: s.voiceReservedCredits as number,
+      voiceSessionStartedAt: s.voiceSessionStartedAt as Date,
+      voiceConnectedAt: s.voiceConnectedAt ?? null,
+      voiceLastActivityAt: s.voiceLastActivityAt ?? null,
+      realtime: s.voiceBilledCredits != null,
+    }));
+  }
+
+  async recordVoiceActivity(
+    sessionId: string,
+    at: Date,
+    holdStartedAt?: Date | null,
+    options: { realtimeOnly?: boolean } = {}
+  ) {
+    // Keyed on the hold's start when the signal names it, so a call still running elsewhere can
+    // never mark a newer hold on the same session connected.
+    // One pipeline update: the first signal sets voiceConnectedAt, and $max never moves activity back.
+    const { matchedCount } = await this.sessionModel.updateOne(
+      {
+        _id: sessionId,
+        voiceSessionStartedAt: holdStartedAt ?? { $ne: null },
+        ...(options.realtimeOnly ? { voiceBilledCredits: { $exists: true } } : {}),
+      },
+      [
+        {
+          $set: {
+            voiceConnectedAt: { $ifNull: ['$voiceConnectedAt', at] },
+            voiceLastActivityAt: { $max: ['$voiceLastActivityAt', at] },
+          },
+        },
+      ]
+    );
+    return matchedCount === 1;
+  }
+
+  async claimVoiceHold(sessionId: string, startedAt: Date, options?: { realtimeOnly?: boolean }) {
+    // Matching on startedAt makes the claim one-shot per hold: only one of a concurrent
+    // end, sweep or settlement frame wins, and a newer call's hold is never touched. The
+    // pre-update billed total includes every response frame that charged the hold before it.
+    // realtimeOnly matches only a hold carrying the realtime marker, as addVoiceBilledCredits does.
+    const before = await this.sessionModel.findOneAndUpdate(
+      {
+        _id: sessionId,
+        voiceSessionStartedAt: startedAt,
+        ...(options?.realtimeOnly ? { voiceBilledCredits: { $exists: true } } : {}),
+      },
+      {
+        $set: {
+          voiceReservedCredits: null,
+          voiceSessionStartedAt: null,
+          voiceConnectedAt: null,
+          voiceLastActivityAt: null,
+        },
+        $unset: { voiceBilledCredits: '', voiceHoldUserId: '' },
+      },
+      { new: false, projection: { voiceBilledCredits: 1, voiceHoldUserId: 1 } }
+    );
+    return before
+      ? { billedCredits: before.voiceBilledCredits ?? null, payerId: before.voiceHoldUserId ?? null }
+      : null;
+  }
+
+  async openVoiceHold(
+    sessionId: string,
+    priorStartedAt: Date | null,
+    hold: { voiceReservedCredits: number | null; voiceSessionStartedAt: Date; realtime: boolean; payerId: string }
+  ) {
+    // Conditional on the hold the bootstrap read: once it is settled (null) or, if it held no reserve
+    // and so was never claimed, still that start. A concurrent bootstrap that already wrote its own
+    // hold makes this match nothing, so only one of them keeps a reserve. The prior start matches
+    // only without a reserve: a reserved hold whose settlement failed still owes it (settleVoiceHold),
+    // so it must not be overwritten.
+    const { matchedCount } = await this.sessionModel.updateOne(
+      {
+        _id: sessionId,
+        $or: [
+          { voiceSessionStartedAt: null },
+          ...(priorStartedAt ? [{ voiceSessionStartedAt: priorStartedAt, voiceReservedCredits: null }] : []),
+        ],
+      },
+      {
+        $set: {
+          voiceReservedCredits: hold.voiceReservedCredits,
+          voiceSessionStartedAt: hold.voiceSessionStartedAt,
+          voiceConnectedAt: null,
+          voiceLastActivityAt: null,
+          voiceHoldUserId: hold.payerId,
+          // Realtime holds are billed per response against this marker (server/websocket/voiceSessionEnded.ts).
+          ...(hold.realtime ? { voiceBilledCredits: 0 } : {}),
+        },
+        ...(hold.realtime ? {} : { $unset: { voiceBilledCredits: '' } }),
+      }
+    );
+    return matchedCount === 1;
   }
 
   async findSessionIdsByUserId(userId: string) {
@@ -813,6 +959,15 @@ SessionSchema.index(
 
 // Index for countActiveVoiceSessionsByUserId - runs on every voice session creation
 SessionSchema.index({ userId: 1, voiceSessionStartedAt: 1 }, { sparse: true });
+// Index for findStaleVoiceHolds (the stale voice hold sweep). Partial on the sweep's own top-level
+// `voiceReservedCredits: { $gt: 0 }`, so only open paid holds are indexed and the planner can prove
+// the query is covered by the filter. A `{ voiceSessionStartedAt: { $type: 'date' } }` filter is not
+// implied by the sweep's `$lt` ranges, so that index was never chosen. Named so it can coexist with
+// that index until migration 20260921235986_ensure-stale-voice-hold-index drops it.
+SessionSchema.index(
+  { voiceSessionStartedAt: 1 },
+  { name: 'voiceSessionStartedAt_1_openVoiceHold', partialFilterExpression: { voiceReservedCredits: { $gt: 0 } } }
+);
 
 export const Session: ISessionModel =
   (mongoose.models[ModelName] as unknown as ISessionModel) ?? model<ISession, ISessionModel>(ModelName, SessionSchema);

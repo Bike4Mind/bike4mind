@@ -8,7 +8,8 @@ name: Dependency Audit Gate
 #   so a new advisory against an existing dependency doesn't turn every PR red.
 # - Schedule and manual runs on main (audit-main): full mode. Opens or updates
 #   one tracking issue on new findings (comments only when the finding set
-#   changes) and closes it once main is clean.
+#   changes), opens or updates one auto-fix PR (scripts/audit-autofix.mjs) for a
+#   human to merge, and closes both once main is clean.
 # The existing packages-audit.yml sends a full report to the Security Dashboard
 # and remains workflow_dispatch-only; this workflow is independent of it.
 
@@ -89,7 +90,7 @@ jobs:
         run: node scripts/audit-gate.mjs
 
       - name: Run audit gate tests
-        run: pnpm exec vitest run --dir scripts/__tests__ --reporter=verbose audit-gate
+        run: pnpm exec vitest run --dir scripts/__tests__ --reporter=verbose audit-
 
   audit-main:
     name: Dependency Audit (main)
@@ -100,15 +101,22 @@ jobs:
     # Standard runner: the repo is public, so it's free, and this job is small.
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # GITHUB_TOKEN only manages the issue and closes a stale auto-fix PR; the
+    # auto-fix branch and PR use the App token so CI runs on the PR.
     permissions:
       contents: read
       issues: write
+      pull-requests: write
     env:
+      AUTOFIX_BRANCH: ci/dependency-audit-autofix
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+        with:
+          # The auto-fix push authenticates with the App token, not GITHUB_TOKEN.
+          persist-credentials: false
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v5
@@ -142,6 +150,96 @@ jobs:
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
           exit "$code"
 
+      # Auto-fix steps are continue-on-error so a registry, App token or API
+      # failure still leaves the tracking issue and Slack ping below.
+      - name: Raise overrides past the failing advisories
+        id: autofix
+        if: steps.gate.outputs.exit_code == '2'
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          PACKAGES_JSON_REPORT_PATH: audit-report.json
+          AUTOFIX_SUMMARY_PATH: ${{ runner.temp }}/autofix-summary.md
+          AUTOFIX_SKIPPED_PATH: ${{ runner.temp }}/autofix-skipped.txt
+        run: node scripts/audit-autofix.mjs
+
+      - name: Update lockfile and re-check
+        id: recheck
+        if: steps.autofix.outputs.changed == 'true'
+        continue-on-error: true
+        timeout-minutes: 10
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PACKAGES_JSON_REPORT_PATH: ${{ runner.temp }}/audit-report-fixed.json
+          AUTOFIX_SUMMARY_PATH: ${{ runner.temp }}/autofix-summary.md
+        run: |
+          if [ -n "$NPM_TOKEN" ]; then echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" > ~/.npmrc; fi
+          pnpm install --lockfile-only
+          pnpm install --frozen-lockfile --lockfile-only
+          bash scripts/audit-report.sh . "$PACKAGES_JSON_REPORT_PATH"
+          if node scripts/audit-gate.mjs > "$RUNNER_TEMP/gate-fixed.txt" 2>&1; then
+            echo "fixed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "fixed=false" >> "$GITHUB_OUTPUT"
+            {
+              echo
+              echo 'Still failing after this change (needs a human):'
+              echo
+              echo '```'
+              cat "$RUNNER_TEMP/gate-fixed.txt"
+              echo '```'
+            } >> "$AUTOFIX_SUMMARY_PATH"
+          fi
+
+      - name: Generate App token
+        id: app-token
+        if: steps.recheck.outcome == 'success'
+        continue-on-error: true
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      # Rebuilt from the current main on every failing run. A push happens only
+      # when the manifests or the lockfile differ from the branch (a new fix, or
+      # main changing one of them), so CI is not re-run for unrelated main commits.
+      - name: Push auto-fix branch and open or update PR
+        id: autofix-pr
+        if: steps.recheck.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          AUTOFIX_SUMMARY_PATH: ${{ runner.temp }}/autofix-summary.md
+        run: |
+          if [ -z "$APP_TOKEN" ]; then
+            echo "::error::App token generation returned empty - check RELEASE_APP_ID / RELEASE_APP_PRIVATE_KEY. Not falling back to GITHUB_TOKEN (its PRs skip CI)."
+            exit 1
+          fi
+          git config user.name "b4m-release-bot[bot]"
+          git config user.email "b4m-release-bot[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git switch -c "$AUTOFIX_BRANCH"
+          git add package.json pnpm-workspace.yaml pnpm-lock.yaml
+          git commit -m "fix(deps): raise overrides past new high/critical advisories"
+          if git fetch --no-tags --depth=1 origin "$AUTOFIX_BRANCH" && git diff --quiet FETCH_HEAD HEAD -- package.json pnpm-workspace.yaml pnpm-lock.yaml; then
+            echo "The auto-fix branch already carries this change; not pushing."
+          else
+            git push --force origin "HEAD:refs/heads/$AUTOFIX_BRANCH"
+          fi
+          PR_URL=$(gh pr list --head "$AUTOFIX_BRANCH" --state open --json url -q '.[0].url // empty')
+          if [ -z "$PR_URL" ]; then
+            PR_URL=$(gh pr create --base main --head "$AUTOFIX_BRANCH" \
+              --title 'fix(deps): raise overrides past new high/critical advisories' \
+              --body-file "$AUTOFIX_SUMMARY_PATH" --label dependencies --label security)
+          else
+            gh pr edit "$PR_URL" --body-file "$AUTOFIX_SUMMARY_PATH"
+          fi
+          echo "url=$PR_URL" >> "$GITHUB_OUTPUT"
+
       - name: Open, update or close tracking issue
         id: issue
         if: >-
@@ -150,21 +248,20 @@ jobs:
         uses: actions/github-script@v8
         env:
           GATE_EXIT_CODE: ${{ steps.gate.outputs.exit_code }}
+          AUTOFIX_OUTCOME: ${{ steps.autofix.outcome }}
+          AUTOFIX_CHANGED: ${{ steps.autofix.outputs.changed }}
+          AUTOFIX_FIXED: ${{ steps.recheck.outputs.fixed }}
+          AUTOFIX_PR_URL: ${{ steps.autofix-pr.outputs.url }}
+          AUTOFIX_SKIPPED_PATH: ${{ runner.temp }}/autofix-skipped.txt
         with:
           script: |
             const fs = require('fs');
+            const { planIssueBody, MARKER } = await import(`${process.env.GITHUB_WORKSPACE}/scripts/audit-issue.mjs`);
             const { owner, repo } = context.repo;
             const runUrl = `${process.env.GITHUB_SERVER_URL}/${owner}/${repo}/actions/runs/${context.runId}`;
             const playbookUrl = `${process.env.GITHUB_SERVER_URL}/${owner}/${repo}/blob/main/CONTRIBUTING.md#fixing-a-dependency-advisory`;
-            const crypto = require('crypto');
-            const marker = '<!-- dependency-audit-main -->';
             const failed = process.env.GATE_EXIT_CODE === '2';
             const output = fs.existsSync('gate-output.txt') ? fs.readFileSync('gate-output.txt', 'utf8').trim() : '';
-            // Hash only the "[SEVERITY] pkg: GHSA" lines so a reworded message doesn't count as a change.
-            const advisoryLines = output.split('\n').filter(l => /^\s*\[[A-Z]+\] /.test(l)).map(l => l.trim()).sort();
-            const findingsHash = crypto.createHash('sha256').update(advisoryLines.join('\n')).digest('hex').slice(0, 16);
-            const hashMarker = `<!-- dependency-audit-findings:${findingsHash} -->`;
-            const hashMarkerRe = /<!-- dependency-audit-findings:[0-9a-f]+ -->/;
 
             const existing = await github.rest.issues.listForRepo({
               owner,
@@ -173,42 +270,63 @@ jobs:
               labels: 'security',
               per_page: 100,
             });
-            const found = existing.data.find(i => i.body && i.body.includes(marker));
+            const found = existing.data.find(i => i.body && i.body.includes(MARKER));
+
+            let autofix;
+            if (process.env.AUTOFIX_PR_URL) {
+              autofix = `**Auto-fix PR:** ${process.env.AUTOFIX_PR_URL}`;
+              if (process.env.AUTOFIX_FIXED !== 'true') autofix += ' (does not fix everything; see its description)';
+            } else if (process.env.AUTOFIX_OUTCOME === 'success' && process.env.AUTOFIX_CHANGED === 'false') {
+              autofix = '**Auto-fix:** nothing could be fixed automatically.';
+            } else {
+              autofix = '**Auto-fix:** the auto-fix PR could not be created; see the run log.';
+            }
 
             if (failed) {
-              const findings = ['```', output, '```'].join('\n');
+              // Skip data counts only from a step that finished; otherwise it is unknown.
+              const skippedPath = process.env.AUTOFIX_SKIPPED_PATH;
+              const skippedText =
+                process.env.AUTOFIX_OUTCOME === 'success' && fs.existsSync(skippedPath)
+                  ? fs.readFileSync(skippedPath, 'utf8')
+                  : null;
+              const plan = planIssueBody({
+                existingBody: found ? found.body : null,
+                gateOutput: output,
+                skippedText,
+                autofix,
+                runUrl,
+                playbookUrl,
+              });
               if (found) {
-                // Comment only when the finding set changed, so a red main doesn't notify every run.
-                if (found.body.includes(hashMarker)) return;
-                await github.rest.issues.createComment({
-                  owner,
-                  repo,
-                  issue_number: found.number,
-                  body: [`Still failing as of ${runUrl}, with a changed set of advisories:`, '', findings].join('\n'),
-                });
-                const body = hashMarkerRe.test(found.body)
-                  ? found.body.replace(hashMarkerRe, hashMarker)
-                  : found.body.replace(marker, `${marker}\n${hashMarker}`);
-                await github.rest.issues.update({ owner, repo, issue_number: found.number, body });
+                // The body is refreshed every run (no notification); a comment is posted
+                // only when the advisories or skip reasons changed, so a red main doesn't
+                // notify every run.
+                if (plan.changed) {
+                  await github.rest.issues.createComment({
+                    owner,
+                    repo,
+                    issue_number: found.number,
+                    body: [
+                      `Still failing as of ${runUrl}, with a changed set of advisories or skip reasons:`,
+                      '',
+                      '```',
+                      output,
+                      '```',
+                      '',
+                      autofix,
+                    ].join('\n'),
+                  });
+                }
+                if (plan.body !== found.body) {
+                  await github.rest.issues.update({ owner, repo, issue_number: found.number, body: plan.body });
+                }
               } else {
                 const created = await github.rest.issues.create({
                   owner,
                   repo,
                   title: 'Dependency audit: high/critical advisories on main',
                   labels: ['security', 'dependencies'],
-                  body: [
-                    marker,
-                    hashMarker,
-                    '',
-                    'The scheduled dependency audit found high/critical advisories on `main` that are not in `scripts/audit-allowlist.json`.',
-                    '',
-                    findings,
-                    '',
-                    `**Run:** ${runUrl}`,
-                    `**Fix steps:** ${playbookUrl}`,
-                    '',
-                    '_This issue is updated by `.github/workflows/audit-gate.yml` and closed automatically once main is clean._',
-                  ].join('\n'),
+                  body: plan.body,
                 });
                 core.setOutput('created', 'true');
                 core.setOutput('url', created.data.html_url);
@@ -223,6 +341,24 @@ jobs:
               await github.rest.issues.update({ owner, repo, issue_number: found.number, state: 'closed' });
             }
 
+            if (!failed) {
+              const prs = await github.rest.pulls.list({
+                owner,
+                repo,
+                state: 'open',
+                head: `${owner}:${process.env.AUTOFIX_BRANCH}`,
+              });
+              for (const pr of prs.data) {
+                await github.rest.issues.createComment({
+                  owner,
+                  repo,
+                  issue_number: pr.number,
+                  body: `main is clean as of ${runUrl}; closing.`,
+                });
+                await github.rest.pulls.update({ owner, repo, pull_number: pr.number, state: 'closed' });
+              }
+            }
+
       - name: Notify Slack on new tracking issue
         if: always() && steps.issue.outputs.created == 'true' && env.SLACK_WEBHOOK_URL != ''
         uses: slackapi/slack-github-action@v2.1.0
@@ -231,7 +367,7 @@ jobs:
           webhook-type: incoming-webhook
           payload: |
             {
-              "text": ":rotating_light: New high/critical dependency advisories on main. <${{ steps.issue.outputs.url }}|Tracking issue> | <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>"
+              "text": ":rotating_light: New high/critical dependency advisories on main. <${{ steps.issue.outputs.url }}|Tracking issue> | <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>${{ steps.autofix-pr.outputs.url && format(' | <{0}|Auto-fix PR>', steps.autofix-pr.outputs.url) || '' }}"
             }
 
       - name: Fail the run when advisories were found

@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
-import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
   dataLakeRepository,
@@ -12,14 +12,21 @@ import {
   fallbackLakeSettingsRepository,
   orgGitHubLakeConnectionRepository,
 } from '@bike4mind/database';
-import { CreateDataLakeRequestInput, BadRequestError, ForbiddenError } from '@bike4mind/common';
+import {
+  CreateDataLakeRequestInput,
+  BadRequestError,
+  ForbiddenError,
+  dataLakeConfigListResponseSchema,
+  dataLakeResponseSchema,
+} from '@bike4mind/common';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { respond } from '@server/utils/respond';
 import { resolveLakeListRetrievalScope } from '@server/dataLakes/resolveLakeListRetrievalScope';
 import { labelLakeRetrievability } from '@server/dataLakes/labelLakeRetrievability';
-import { isValidObjectId } from '@server/utils/objectId';
-import { resolveActiveOrg } from '@server/utils/resolveActiveOrg';
-import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
+import { resolveActiveOrg } from '@bike4mind/server-utils/utils/resolveActiveOrg';
+import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 
 const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
@@ -92,7 +99,9 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
         : null,
     ]);
 
-    return res.json({ data: retrievalScope ? labelLakeRetrievability(dataLakes, retrievalScope) : dataLakes });
+    return respond(res, dataLakeConfigListResponseSchema, {
+      data: retrievalScope ? labelLakeRetrievability(dataLakes, retrievalScope) : dataLakes,
+    });
   })
   // POST /api/data-lakes - create a new data lake
   .post(async (req: Request, res) => {
@@ -119,7 +128,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo)
     );
 
-    return res.status(201).json(dataLake);
+    return respond(res, dataLakeResponseSchema, dataLake, 201);
   });
 
 export const config = {

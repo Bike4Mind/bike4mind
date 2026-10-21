@@ -111,7 +111,7 @@ export default function NotebookGroupList({
           <Typography
             className="combined-notebooks-group-title"
             level="body-xs"
-            sx={{ color: 'neutral.softDisabledColor', marginBottom: '0.1em' }}
+            sx={{ color: 'text.tertiary', marginBottom: '0.1em' }}
           >
             {key}
           </Typography>

@@ -116,8 +116,10 @@ const GEARS: GearDef[] = [
     check: async ({ userId }) => !!(await FabFile.exists({ userId })),
   },
   {
-    // Nav slot unlocks on publish; the credit payout waits for a NON-OWNER
-    // view (anti-farm: "someone saw your work", not "you clicked publish").
+    // Nav slot unlocks on publish; the credit payout waits for a SIGNED-IN NON-OWNER
+    // view (anti-farm: "someone saw your work", not "you clicked publish"). An anonymous
+    // view never counts - it could be the owner. Counted by the serve route for a request
+    // that carries a credential, and for bundle pages by /api/publish/view.
     key: 'published',
     credits: 5000,
     kind: 'destination',

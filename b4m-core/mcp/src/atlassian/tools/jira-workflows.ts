@@ -27,8 +27,16 @@ export function registerJiraWorkflowTools(server: McpServer) {
     {
       issueKey: issueKeySchema,
       body: z.string().describe('Comment text (plain text).'),
+      ...confirmationParams,
     },
-    async ({ issueKey, body }) => {
+    async ({ issueKey, body, _executeFromButton }) => {
+      if (_executeFromButton !== true) {
+        return createPreviewResponse('Preview: Jira Comment', { issueKey, body }, 'comment', {
+          tool: JIRA_ADD_COMMENT,
+          params: { issueKey, body },
+        });
+      }
+
       try {
         const comment = await getJiraApi().addComment({ issueKey, body });
         return createJsonResponse(comment);
@@ -148,8 +156,21 @@ export function registerJiraWorkflowTools(server: McpServer) {
         .min(1)
         .max(1000)
         .describe('Array of issues to transition (1-1000 issues). Each issue specifies its target transition.'),
+      ...confirmationParams,
     },
-    async ({ issues }) => {
+    async ({ issues, _executeFromButton }) => {
+      if (_executeFromButton !== true) {
+        return createPreviewResponse(
+          'Preview: Jira Bulk Transition',
+          {
+            count: issues.length,
+            issues: issues.map(i => ({ issue: i.issueIdOrKey, transitionId: i.transitionId })),
+          },
+          'transitions',
+          { tool: JIRA_BULK_TRANSITION_ISSUES, params: { issues } }
+        );
+      }
+
       try {
         const result = await getJiraApi().bulkTransitionIssues({ issues });
 

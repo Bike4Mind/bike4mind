@@ -14,17 +14,10 @@ import type { Session } from '../storage';
 import { ReActAgent } from '@bike4mind/agents';
 import type { AgentStep, AgentResult } from '@bike4mind/agents';
 import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services/llm';
-import { isReadOnlyTool } from '../config/toolSafety.js';
 import { reconstructTurnBlocks } from '../context/ConversationContext.js';
 import { buildSystemPrompt } from '../core/prompts';
-import {
-  generateCliTools,
-  wrapTools,
-  PermissionManager,
-  type AgentContext,
-  type PermissionPromptKind,
-  requireApiUrl,
-} from '../utils';
+import { generateCliTools, buildCliToolList, PermissionManager, type AgentContext, requireApiUrl } from '../utils';
+import { ToolCatalog, wrapTools } from '../tools/gateway/index.js';
 import { McpManager } from '../utils/mcpAdapter';
 import { buildProjectAgentStore, loadProjectContext } from '../bootstrap/projectStores.js';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
@@ -67,12 +60,11 @@ import { readFile } from 'fs/promises';
 import {
   HEADLESS_SCHEMA_VERSION,
   createHeadlessEmitter,
-  classifyToolRisk,
-  resolveHeadlessPermissionDecision,
   parseStringArray,
   parsePermissionPolicy,
   type HeadlessPermissionPolicy,
 } from './headlessProtocol.js';
+import { createHeadlessPromptFn } from './headlessPermissionPrompt.js';
 
 export type OutputFormat = 'text' | 'json' | 'stream-json';
 
@@ -257,58 +249,26 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
     await logger.initialize(session.id);
 
     // Initialize permission manager
-    const permissionManager = new PermissionManager(config.trustedTools ?? [], undefined, config.tools.disabled);
+    const permissionManager = new PermissionManager(
+      new ToolCatalog(),
+      config.trustedTools ?? [],
+      config.tools.disabled
+    );
 
     // NDJSON emitter, stamped with schemaVersion + runId (see headlessProtocol.ts).
     // Shared by the permission protocol below and the step stream further down.
     const emit = createHeadlessEmitter(runId, line => process.stdout.write(line));
     const streaming = outputFormat === 'stream-json';
 
-    // Permission prompt function for headless mode. Every gated tool surfaces a
-    // structured permission_request + permission_decision pair on the stream (so
-    // decisions are never silent), then resolves the decision. Precedence:
-    //   --dangerously-skip-permissions -> allow-once (explicit blanket override);
-    //   a --permission-policy -> its per-tool/per-risk verdict;
-    //   otherwise -> deny (safe default, no silent auto-approve).
-    const promptFn = (
-      toolName: string,
-      args: unknown,
-      _preview?: string,
-      kind?: PermissionPromptKind
-    ): Promise<{ action: 'allow-once' | 'allow-session' | 'allow-always' | 'deny' }> => {
-      const risk = classifyToolRisk(toolName, args, permissionManager.getCategory(toolName));
-      if (streaming) {
-        emit({ type: 'permission_request', toolName, risk });
-      }
-
-      const decision = resolveHeadlessPermissionDecision({
-        dangerouslySkipPermissions,
-        isDirectoryGrant: kind === 'directory-grant',
-        toolName,
-        riskLevel: risk.level,
-        permissionPolicy,
-      });
-
-      if (streaming) {
-        emit({
-          type: 'permission_decision',
-          toolName,
-          action: decision.action,
-          reason: decision.reason,
-          risk: risk.level,
-        });
-      } else if (decision.action === 'deny') {
-        process.stderr.write(
-          `Warning: Tool "${toolName}" requires permission and was denied (${decision.reason}). ` +
-            `Grant it via --permission-policy, or --dangerously-skip-permissions to allow all tools.\n`
-        );
-      }
-
-      if (decision.action === 'allow-once') {
-        logger.debug(`[headless] Auto-allowing tool: ${toolName}`);
-      }
-      return Promise.resolve({ action: decision.action });
-    };
+    // Precedence: --dangerously-skip-permissions -> allow-once; a --permission-policy -> its
+    // per-tool/per-risk verdict; otherwise -> deny (no silent auto-approve).
+    const promptFn = createHeadlessPromptFn({
+      catalog: permissionManager.catalog,
+      dangerouslySkipPermissions,
+      permissionPolicy,
+      emit: streaming ? emit : null,
+      warn: message => process.stderr.write(message),
+    });
 
     // User question function - headless mode cannot respond interactively
     const userQuestionFn = (_payload: UserQuestionPayload): Promise<UserQuestionResponse> => {
@@ -330,10 +290,9 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
       log: headlessSandboxLog,
     });
 
-    // Agent context for observation tracking
+    // Per-agent state shared with the tool wrappers
     const agentContext: AgentContext = {
       currentAgent: null,
-      observationQueue: [],
     };
 
     // Generate tools
@@ -413,8 +372,6 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
     const resumeAgentTool = createResumeAgentTool(orchestrator, historyStore, backgroundManager);
     const todoStore = createTodoStore();
     const writeTodosTool = createWriteTodosTool(todoStore);
-    const findDefinitionTool = wrapTools([createFindDefinitionTool(additionalDirectories)], cliWrapDeps)[0];
-    const getFileStructureTool = wrapTools([createGetFileStructureTool(additionalDirectories)], cliWrapDeps)[0];
     // Off by default - see the matching note in index.tsx.
     const workItemTools = config.preferences.enableWorkItemTools
       ? createWorkItemTools(new WorkItemsClient(apiClient))
@@ -422,36 +379,33 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
 
     const enableSkillTool = config.preferences.enableSkillTool !== false;
     const skillTool = enableSkillTool
-      ? wrapTools(
-          [
-            createSkillTool({
-              customCommandStore,
-              subagentOrchestrator: orchestrator,
-              sessionId: session.id,
-              permission: { permissionManager, promptFn },
-              allowedDirectories: additionalDirectories,
-            }),
-          ],
-          cliWrapDeps
-        )[0]
+      ? createSkillTool({
+          customCommandStore,
+          subagentOrchestrator: orchestrator,
+          sessionId: session.id,
+          permission: { permissionManager, promptFn },
+          allowedDirectories: additionalDirectories,
+        })
       : null;
 
-    const cliTools = [
-      agentDelegateTool,
-      ...backgroundTools,
-      resumeAgentTool,
-      writeTodosTool,
-      findDefinitionTool,
-      getFileStructureTool,
-      ...workItemTools,
-    ];
-    if (skillTool) cliTools.push(skillTool);
-
-    // Add coordinate_task tool (gated by config flag)
-    if (config.preferences.enableCoordinatorMode === true) {
-      const coordinateTaskTool = createCoordinateTaskTool(orchestrator, agentStore, session.id);
-      cliTools.push(coordinateTaskTool);
-    }
+    // Every CLI-built tool goes through the ONE permission wrapper (see index.tsx).
+    const cliTools = buildCliToolList(
+      {
+        agentDelegateTool,
+        backgroundTools,
+        resumeAgentTool,
+        writeTodosTool,
+        findDefinitionTool: createFindDefinitionTool(additionalDirectories),
+        getFileStructureTool: createGetFileStructureTool(additionalDirectories),
+        workItemTools,
+        skillTool,
+        coordinateTaskTool:
+          config.preferences.enableCoordinatorMode === true
+            ? createCoordinateTaskTool(orchestrator, agentStore, session.id)
+            : null,
+      },
+      cliWrapDeps
+    );
 
     const allTools = [...b4mTools, ...mcpTools, ...cliTools];
 
@@ -483,8 +437,6 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
 
     agentContext.currentAgent = agent;
 
-    (agent as unknown as Record<string, unknown>).observationQueue = agentContext.observationQueue;
-
     // Set up step streaming for stream-json format (emitter created above).
     if (streaming) {
       agent.on('thought', (step: AgentStep) => {
@@ -513,7 +465,7 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
     try {
       result = await agent.run(fullPrompt, {
         parallelExecution: config.preferences.enableParallelToolExecution === true,
-        isReadOnlyTool,
+        isReadOnlyTool: toolName => permissionManager.catalog.isReadOnly(toolName),
         maxHistoryIterations: 4,
       });
     } finally {

@@ -18,31 +18,6 @@ declare module 'fzf' {
   }
 }
 
-declare module 'fdir' {
-  export interface FdirOptions {
-    withDirs?: boolean;
-    withSymlinks?: boolean;
-    withRelativePaths?: boolean;
-    withMaxDepth?: number;
-    withPathSeparator?: string;
-  }
-
-  export class fdir {
-    constructor(options?: FdirOptions);
-    withRelativePaths(): this;
-    withDirs(): this;
-    withSymlinks(): this;
-    withPathSeparator(separator: string): this;
-    withMaxDepth(depth: number): this;
-    exclude(callback: (dirPath: string, dirName: string) => boolean): this;
-    filter(callback: (filePath: string, isDirectory: boolean) => boolean): this;
-    crawl(directory: string): {
-      sync(): string[];
-      async(): Promise<string[]>;
-    };
-  }
-}
-
 declare module 'ignore' {
   interface Ignore {
     add(pattern: string | string[]): this;

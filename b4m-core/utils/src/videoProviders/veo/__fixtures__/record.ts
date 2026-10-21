@@ -9,9 +9,16 @@
  * failed should be re-run alone, not with the rest). Recordings are written as `<scenario>.json` and win over
  * the `.synthetic.json` stand-ins without any test edit. The key is checked absent from every file before it
  * is written, and the download probe records only status and headers, never the bytes.
+ *
+ * `blocked` needs a prompt Veo actually refuses; the gory default was NOT blocked live (Veo made a normal video).
+ * Set BLOCKED_PROMPT to override it, and BLOCKED_IMAGE=<local png/jpg/webp> to submit image-to-video instead (the
+ * likeness filter fires only on an input image). One of the two must be set.
  */
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { extname } from 'node:path';
 import { deflateSync, crc32 } from 'node:zlib';
+import { classifyGeminiSubmitFailure } from '../../gemini/geminiHttp';
+import { veoTerminalIsBlocked } from '../VeoVideoProvider';
 import { assertNoSecret, scrubBody, scrubUrl } from './scrub';
 
 const BASE = 'https://generativelanguage.googleapis.com';
@@ -152,12 +159,12 @@ const write = (scenario: string, exchanges: Exchange[]) => {
   process.stdout.write(`wrote ${scenario}.json\n`);
 };
 
-const recordGeneration = async (
-  scenario: string,
-  instance: Record<string, unknown>,
-  parameters: Record<string, unknown> = {}
-) => {
-  const submit = await call('POST', SUBMIT_PATH, submitBody(instance, parameters));
+// The docs allow only this value for image-to-video.
+const imageToVideoBody = (prompt: string, image: Record<string, unknown>) =>
+  submitBody({ prompt, image }, { personGeneration: 'allow_adult' });
+
+const recordGeneration = async (scenario: string, body: Record<string, unknown>) => {
+  const submit = await call('POST', SUBMIT_PATH, body);
   process.stdout.write(`${scenario}: submit ${submit.exchange.response.status}\n`);
   if (submit.exchange.response.status >= 400) {
     throw new Error(
@@ -177,49 +184,91 @@ const recordGeneration = async (
   write(scenario, [{ name: 'submit', ...submit.exchange }, ...exchanges, download]);
 };
 
+const IMAGE_MIME_TYPES: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+};
+const imageMimeOf = (path: string): string => {
+  const mimeType = IMAGE_MIME_TYPES[extname(path).toLowerCase()];
+  if (!mimeType) throw new Error(`BLOCKED_IMAGE must be png, jpg or webp: ${path}`);
+  return mimeType;
+};
+
 const BLOCKED_REDACTION = '<redacted:blocked-prompt>';
 
 // Everything echoed back from a blocked request is replaced, so the fixture never carries the prompt text.
 const redactBlocked = (value: unknown, prompt: string): unknown => {
+  // An empty prompt is a substring of every string, which would splice the marker between every character.
+  if (!prompt) return value;
   if (Array.isArray(value)) return value.map(item => redactBlocked(item, prompt));
   if (typeof value === 'string') return value.includes(prompt) ? value.split(prompt).join(BLOCKED_REDACTION) : value;
   if (!isRecord(value)) return value;
   return Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, redactBlocked(inner, prompt)]));
 };
 
+// The default prompt was not blocked live, and an input image is what triggers the likeness filter, so one of the
+// two must be set. Read before any scenario runs, so a bare run fails before it is billed.
+const blockedInput = (): { imagePath: string | undefined; prompt: string } => {
+  const imagePath = process.env.BLOCKED_IMAGE;
+  if (imagePath === '') throw new Error('BLOCKED_IMAGE is empty');
+  if (imagePath === undefined && process.env.BLOCKED_PROMPT === undefined) {
+    throw new Error('blocked: set BLOCKED_IMAGE or BLOCKED_PROMPT (the default prompt is not blocked)');
+  }
+  return {
+    imagePath,
+    prompt: process.env.BLOCKED_PROMPT ?? 'Extremely graphic, gory footage of a person being violently injured.',
+  };
+};
+
 const scenarios: Record<string, () => Promise<void>> = {
   'text-to-video': () =>
-    recordGeneration('text-to-video', {
-      prompt: 'A slow dolly shot of a red lighthouse on a rocky coast at dusk, waves breaking.',
-    }),
+    recordGeneration(
+      'text-to-video',
+      submitBody({ prompt: 'A slow dolly shot of a red lighthouse on a rocky coast at dusk, waves breaking.' })
+    ),
 
   'image-to-video': () =>
     recordGeneration(
       'image-to-video',
-      {
-        prompt: 'The color slowly ripples like water, camera static.',
-        image: { bytesBase64Encoded: solidPng(), mimeType: 'image/png' },
-      },
-      // The docs allow only this value for image-to-video.
-      { personGeneration: 'allow_adult' }
+      imageToVideoBody('The color slowly ripples like water, camera static.', {
+        bytesBase64Encoded: solidPng(),
+        mimeType: 'image/png',
+      })
     ),
 
   blocked: async () => {
-    // Prompt kept generic and redacted in the fixture; override locally if it does not trigger a block.
-    const blockedPrompt =
-      process.env.BLOCKED_PROMPT ?? 'Extremely graphic, gory footage of a person being violently injured.';
-    const blocked = await call('POST', SUBMIT_PATH, submitBody({ prompt: blockedPrompt }));
-    process.stdout.write(`blocked: submit ${blocked.exchange.response.status}\n`);
+    const { imagePath, prompt } = blockedInput();
+    const body = imagePath
+      ? imageToVideoBody(prompt, {
+          bytesBase64Encoded: readFileSync(imagePath).toString('base64'),
+          mimeType: imageMimeOf(imagePath),
+        })
+      : submitBody({ prompt });
+    const blocked = await call('POST', SUBMIT_PATH, body);
+    const { status } = blocked.exchange.response;
+    process.stdout.write(`blocked: submit ${status}\n`);
+    // A parameter 400 must not land as a block fixture; only one the adapter would classify as blocked does.
+    if (status >= 400 && classifyGeminiSubmitFailure(status, blocked.parsed, 'veo') !== 'blocked') {
+      throw new Error(
+        `blocked: submit ${status} is not a safety block; nothing written: ${JSON.stringify(blocked.exchange.response.body)}`
+      );
+    }
     const exchanges: Exchange[] = [{ name: 'submit', ...blocked.exchange }];
-    if (blocked.exchange.response.status < 400) {
+    if (status < 400) {
       const { exchanges: polls, terminal } = await pollToTerminal(operationNameOf(blocked.parsed));
       // The prompt did not trigger a block (a billed video was generated): a success recording must not pass as one.
       if (findVideoUri(terminal)) {
         throw new Error('blocked: the operation produced a video, so the prompt was not blocked; nothing written');
       }
+      // Nor may a terminal the adapter does not read as a block overwrite a good blocked.json.
+      if (!veoTerminalIsBlocked(terminal)) {
+        throw new Error('blocked: the operation did not end in a safety block; nothing written');
+      }
       exchanges.push(...polls);
     }
-    const redacted = redactBlocked(exchanges, blockedPrompt);
+    const redacted = redactBlocked(exchanges, prompt);
     if (!Array.isArray(redacted)) throw new Error('redaction changed the exchange list shape');
     write('blocked', redacted);
   },
@@ -241,7 +290,10 @@ const main = async () => {
   const requested = process.argv.slice(2);
   const unknown = requested.filter(name => !(name in scenarios));
   if (unknown.length > 0) throw new Error(`unknown scenario(s): ${unknown.join(', ')}`);
-  for (const name of requested.length > 0 ? requested : Object.keys(scenarios)) await scenarios[name]();
+  const toRun = requested.length > 0 ? requested : Object.keys(scenarios);
+  // Check the blocked inputs before the loop: a no-argument run must not pay for the billed scenarios and then throw.
+  if (toRun.includes('blocked')) blockedInput();
+  for (const name of toRun) await scenarios[name]();
 };
 
 await main();

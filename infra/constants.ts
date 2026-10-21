@@ -1,5 +1,14 @@
 export const isPreviewStage = process.env.IS_PREVIEW === 'true' || /^pr\d+$/.test($app.stage);
 const isStagingStage = $app.stage === 'dev';
+
+/**
+ * Whether this stage creates its scheduled crons at all. Only production and dev do; every other
+ * stage (PR previews, shared-dev, personal stages) skips them outright rather than deploying
+ * them disabled: a disabled EventBridge rule still counts against the default bus's per-account
+ * rule quota, which every preview in the account shares.
+ * Crons that should also run on previews (infra/cron.ts) are created unconditionally.
+ */
+export const runsScheduledJobs = ['production', 'dev'].includes($app.stage);
 /** Stages that run at full production scale (reserved concurrency, full memory, etc.).
  * Declared in @bike4mind/infra so the admin System Secrets page reads the same roster. */
 import { PRODUCTION_STAGES } from '@bike4mind/infra';
@@ -21,12 +30,20 @@ export { PRODUCTION_STAGES };
 export const SINGLE_RECORD_BATCH = { batch: { size: 1 } } as const;
 
 /**
- * Registers the fake video provider so the generation-job path can be exercised end to end without a paid
- * provider key. Never set on production-scale stages, which must only ever reach real providers.
+ * Registers the fake video and music providers so the generation-job path can be exercised end to end without a
+ * paid provider key. Never set on production-scale stages, which must only ever reach real providers.
  */
-export const TEST_VIDEO_PROVIDER_ENVIRONMENT: Record<string, string> = PRODUCTION_STAGES.includes($app.stage)
+export const TEST_GENERATION_PROVIDER_ENVIRONMENT: Record<string, string> = PRODUCTION_STAGES.includes($app.stage)
   ? {}
-  : { ENABLE_TEST_VIDEO_PROVIDER: 'true' };
+  : { ENABLE_TEST_VIDEO_PROVIDER: 'true', ENABLE_TEST_MUSIC_PROVIDER: 'true' };
+
+/**
+ * Registers the free `test-decisions` model so POST /api/v1/decisions can be exercised end to end without a vendor
+ * key. Never set on production-scale stages. Only the web function serves decisions.
+ */
+export const TEST_DECISION_PROVIDER_ENVIRONMENT: Record<string, string> = PRODUCTION_STAGES.includes($app.stage)
+  ? {}
+  : { ENABLE_TEST_DECISION_PROVIDER: 'true' };
 
 export const DEFAULT_LAMBDA_ENVIRONMENT = {
   SEED_APP_NAME: $app.name,

@@ -62,7 +62,7 @@ describe('ApprovalGate', () => {
   describe('always allow by prefix', () => {
     const always = (patterns: string[], texts: string[], directories: string[] = []): ApprovalAlways => ({
       namespace: 'bash_execute',
-      commands: patterns.map((pattern, index) => ({ pattern, text: texts[index] })),
+      commands: patterns.map((pattern, index) => ({ pattern, text: texts[index], coverable: true })),
       directories,
     });
 
@@ -105,6 +105,16 @@ describe('ApprovalGate', () => {
       ).toBe(true);
       expect(
         patternMatches('pnpm exec vitest *', commandTokens(['pnpm', '--filter', '@a/b', 'exec', 'rm']).join(' '))
+      ).toBe(false);
+    });
+
+    it('never covers a command whose normalising dropped something unsafe', async () => {
+      const gate = new ApprovalGate();
+      await allow(gate, always(['git status *'], ['git status']));
+      const stripped = always(['git status *'], ['git status']);
+      expect(gate.coversCommands('s', stripped)).toBe(true);
+      expect(
+        gate.coversCommands('s', { ...stripped, commands: stripped.commands.map(c => ({ ...c, coverable: false })) })
       ).toBe(false);
     });
 

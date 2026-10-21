@@ -8,6 +8,7 @@ const { mocks } = vi.hoisted(() => {
   return {
     mocks: {
       findById: vi.fn(),
+      orgFindById: vi.fn(),
       getSettingsMap: vi.fn(),
     },
   };
@@ -16,7 +17,15 @@ const { mocks } = vi.hoisted(() => {
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   userRepository: { findById: (...a: unknown[]) => mocks.findById(...a) },
+  organizationRepository: { findById: (...a: unknown[]) => mocks.orgFindById(...a) },
 }));
+// Real cap helper: the org branch's decision is the one under test.
+vi.mock('@bike4mind/services', async () => {
+  const creditService = await vi.importActual<typeof import('@bike4mind/services/creditService')>(
+    '@bike4mind/services/creditService'
+  );
+  return { creditService: { isMemberCreditCapExceeded: creditService.isMemberCreditCapExceeded } };
+});
 // Keep the real getSettingsValue: the hosted default (enforcement on when the
 // setting is unset) is the behaviour these tests exist to pin.
 vi.mock('@bike4mind/utils', async importOriginal => ({
@@ -28,6 +37,14 @@ import { assertPreflightCredits, InsufficientCreditsPreflightError } from './cre
 
 const check = (estimatedCredits?: number) =>
   assertPreflightCredits({ userId: 'u1', estimatedCredits, featureLabel: 'text-to-speech' });
+
+const checkOrg = (estimatedCredits: number | undefined, organizationId = 'org1') =>
+  assertPreflightCredits({
+    userId: 'u1',
+    estimatedCredits,
+    featureLabel: 'text-to-speech',
+    billingOrganizationId: organizationId,
+  });
 
 beforeEach(() => {
   Object.values(mocks).forEach(m => m.mockReset());
@@ -71,6 +88,50 @@ describe('assertPreflightCredits', () => {
     it('admits a balance that exactly covers the estimate', async () => {
       mocks.findById.mockResolvedValue({ currentCredits: 10 });
       await expect(check(10)).resolves.toBeUndefined();
+    });
+  });
+
+  describe('organization pool', () => {
+    beforeEach(() => mocks.findById.mockResolvedValue({ currentCredits: 0 }));
+
+    it('admits the request when the org pool covers the estimate, even with an empty personal balance', async () => {
+      mocks.orgFindById.mockResolvedValue({ currentCredits: 100, userDetails: [] });
+      await expect(checkOrg(50)).resolves.toBeUndefined();
+    });
+
+    it('rejects a pool that does not cover the estimate, naming the org balance', async () => {
+      mocks.orgFindById.mockResolvedValue({ currentCredits: 10, userDetails: [] });
+      await expect(checkOrg(50)).rejects.toThrow(
+        'Your organization does not have enough credits for text-to-speech. It currently has 10 credits and this requires approximately 50.'
+      );
+    });
+
+    it('rejects a zero-balance org pool', async () => {
+      mocks.orgFindById.mockResolvedValue({ currentCredits: 0, userDetails: [] });
+      await expect(checkOrg(0)).rejects.toBeInstanceOf(InsufficientCreditsPreflightError);
+    });
+
+    it('rejects a member at their cap before looking at the pool', async () => {
+      mocks.orgFindById.mockResolvedValue({
+        currentCredits: 10000,
+        maxCreditsPerMember: 40,
+        userDetails: [{ id: 'u1', usedCredits: 20, periodStart: new Date() }],
+      });
+      await expect(checkOrg(30)).rejects.toThrow('member credit limit');
+    });
+
+    it('rejects an organization that does not exist', async () => {
+      mocks.orgFindById.mockResolvedValue(null);
+      await expect(checkOrg(10)).rejects.toThrow('Billing organization not found');
+    });
+
+    it('admits a zero-balance pool when enforcement is off, but still requires the org to exist', async () => {
+      mocks.getSettingsMap.mockResolvedValue({ enforceCredits: 'false' });
+      mocks.orgFindById.mockResolvedValue({ currentCredits: 0, userDetails: [] });
+      await expect(checkOrg(100)).resolves.toBeUndefined();
+
+      mocks.orgFindById.mockResolvedValue(null);
+      await expect(checkOrg(100)).rejects.toThrow('Billing organization not found');
     });
   });
 

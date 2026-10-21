@@ -85,7 +85,7 @@ const CreditLimitModal: FC<CreditLimitModalProps> = ({
                 slotProps={{ input: { min: allowZero ? 0 : 1, step: 1, 'data-testid': 'credit-limit-input' } }}
               />
               <FormHelperText>
-                {allowZero ? 'Enter 0 to block spending from the organization pool.' : 'Must be greater than 0.'}
+                {allowZero ? 'Enter 0 to block spending from the team pool.' : 'Must be greater than 0.'}
               </FormHelperText>
             </FormControl>
             <Box display="flex" gap={1} justifyContent="space-between" flexWrap="wrap">

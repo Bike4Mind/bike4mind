@@ -205,6 +205,9 @@ export const isStaticRegistryDatalakeTag = (tag: string): boolean =>
  * tags - there is no creator to check against). Any other meta-tag that resolves to no lake, or to
  * a lake the caller can't manage, is rejected - this is the check that stops a read-only member
  * from injecting a file into a lake they don't own, mirroring the creator check on the remove path.
+ *
+ * Returns the lake documents it authorized (static registry lakes have none), so a caller needing
+ * them - createFabFile's owner resolution - does not look them up a second time.
  */
 export const assertCanWriteDataLakeTags = async (
   actor: ManageActor,
@@ -246,7 +249,7 @@ export const assertCanWriteDataLakeTags = async (
      */
     unattended?: boolean;
   }
-): Promise<void> => {
+): Promise<IDataLakeDocument[]> => {
   const metaTags = extractDataLakeMetaTags(tagNames);
   const targetLakes: IDataLakeDocument[] = [];
   for (const tag of metaTags) {
@@ -296,6 +299,7 @@ export const assertCanWriteDataLakeTags = async (
   if (members?.length) {
     await assertLakeAdmission(targetLakes, members, { db, logger });
   }
+  return targetLakes;
 };
 
 /**

@@ -174,7 +174,7 @@ describe('describeActivity', () => {
       label: 'Editing files...',
     });
     expect(describeActivity([], false, null, undefined, writingCall('session_spawn')).label).toBe(
-      'Starting a session...'
+      'Suggesting a session...'
     );
   });
 

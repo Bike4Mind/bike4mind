@@ -12,13 +12,19 @@ export interface PremiumRoutePartition<T extends PremiumRouteDescriptor> {
 /**
  * Splits premium route descriptors by how the router mounts them, and refuses one that
  * asks for two things at once: a gate on a public route would be invisible to the reader
- * it blocks, and the app shell's beforeLoad redirects a signed-out visitor before render.
+ * it blocks, the app shell's beforeLoad redirects a signed-out visitor before render, and
+ * only the app shell has a sidebar to draw a hosted workspace's conversation list in.
  */
 export function partitionPremiumRoutes<T extends PremiumRouteDescriptor>(
   descriptors: readonly T[]
 ): PremiumRoutePartition<T> {
   const partition: PremiumRoutePartition<T> = { public: [], standalone: [], appShell: [] };
   for (const descriptor of descriptors) {
+    if (descriptor.hostsWorkspace !== undefined && !descriptor.appShell) {
+      throw new Error(
+        `Premium route ${descriptor.path} sets hostsWorkspace without appShell; only the notebook layout draws a workspace's conversation list`
+      );
+    }
     if (descriptor.public) {
       const gated =
         descriptor.requireEntitlement !== undefined ||

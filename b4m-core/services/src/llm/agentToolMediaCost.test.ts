@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { ImageModels, ModelInfo } from '@bike4mind/common';
 import { estimateGeneratedMediaUsd } from './agentToolMediaCost';
-import { estimateMusicCredits } from '../musicCost';
 import { estimateAudioCredits } from '../audioCost';
 import { estimateImageCredits } from '../imageCost';
 
@@ -22,13 +21,6 @@ describe('estimateGeneratedMediaUsd', () => {
     const data = { kind: 'sound_effect', provider: 'elevenlabs', durationSeconds: 3, paths: ['a.mp3'] };
     expect(estimateGeneratedMediaUsd('audio_generation', data, models)).toBe(
       estimateAudioCredits({ kind: 'sound_effect', provider: 'elevenlabs', durationSeconds: 3 }).usdCost
-    );
-  });
-
-  it('music equals the estimateMusicCredits USD', () => {
-    const data = { provider: 'elevenlabs', lengthMs: 20000, modelId: 'm', paths: ['a.mp3'] };
-    expect(estimateGeneratedMediaUsd('music_generation', data, models)).toBe(
-      estimateMusicCredits('elevenlabs', { lengthMs: 20000 }).usdCost
     );
   });
 
@@ -64,7 +56,6 @@ describe('estimateGeneratedMediaUsd', () => {
 
   it('returns 0 when the payload is missing the fields the estimator needs', () => {
     expect(estimateGeneratedMediaUsd('audio_generation', { kind: 'speech' }, models)).toBe(0);
-    expect(estimateGeneratedMediaUsd('music_generation', { provider: 'elevenlabs' }, models)).toBe(0);
     expect(estimateGeneratedMediaUsd('image_generation', { n: 1 }, models)).toBe(0);
   });
 });

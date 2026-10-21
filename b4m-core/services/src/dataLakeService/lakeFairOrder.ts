@@ -32,10 +32,20 @@ export interface LakeOrderScope {
   key: string;
   datalakeTag?: string;
   /**
-   * Content-tag prefix arm, for a registry lake whose files carry no `datalake:<slug>` meta-tag -
-   * see attributeAccessedLakes, which reverses attribution the same two ways.
+   * Content-tag prefix arm for files carrying the prefix with no meta-tag of this lake: a dynamic
+   * lake's membership arm, or a registry prefix no resolved lake owns. A scope built from a
+   * membership with both `datalakeTag` and `fileTagPrefix` carries both (see `lakeOrderScopes`).
+   * Tested in scope order alongside the meta-tag arms; see attributeAccessedLakes for the reverse.
    */
   fileTagPrefix?: string;
+  /**
+   * A registry lake's open prefix, paired onto the scope that carries its `datalakeTag` (see
+   * `lakeOrderScopes`) so its prefix-only files share the meta-tagged files' bucket. Tested only
+   * after every other arm of every scope, so a file also meta-tagged into another lake stays
+   * charged to that lake. Among registry prefixes, scope order decides (the caller's `dataLakeTags`
+   * order, not `dataLakeTagPrefixes` order).
+   */
+  registryPrefix?: string;
 }
 
 /**
@@ -47,6 +57,21 @@ export interface LakeOrderScopeSources {
   dataLakeTags: string[];
   dataLakeTagPrefixes: string[];
   lakeMemberships: { datalakeTag?: string | null; fileTagPrefix?: string | null }[];
+  /**
+   * The resolved lakes, used only to pair an open registry prefix with its lake's meta-tag (see
+   * `semanticDataLakeSearch.ts` `lakes` for the rationale). A prefix carried by more than one lake
+   * is ambiguous and stays unpaired.
+   */
+  lakes?: { datalakeTag: string; fileTagPrefix?: string }[];
+}
+
+/**
+ * Bucket key of a membership arm. Keyed on the meta-tag so it merges with the dataLakeTags arm; a
+ * membership carrying only a prefix is its own lake and keys on that instead. Shared by
+ * `lakeOrderScopes` and `lakeScopeArms` so the two cannot drift.
+ */
+export function membershipScopeKey(m: LakeOrderScopeSources['lakeMemberships'][number]): string | undefined {
+  return m.datalakeTag || (m.fileTagPrefix ? `prefix:${m.fileTagPrefix}` : undefined);
 }
 
 /**
@@ -64,22 +89,53 @@ export function lakeOrderScopes(sources: LakeOrderScopeSources): LakeOrderScope[
     }
     existing.datalakeTag ??= scope.datalakeTag;
     existing.fileTagPrefix ??= scope.fileTagPrefix;
+    existing.registryPrefix ??= scope.registryPrefix;
   };
 
   for (const tag of sources.dataLakeTags) upsert(tag, { datalakeTag: tag });
   for (const membership of sources.lakeMemberships) {
     const datalakeTag = membership.datalakeTag || undefined;
     const fileTagPrefix = membership.fileTagPrefix || undefined;
-    // Keyed on the meta-tag so it merges with the dataLakeTags arm above; a membership carrying
-    // only a prefix is its own lake and keys on that instead.
-    const key = datalakeTag ?? (fileTagPrefix ? `prefix:${fileTagPrefix}` : undefined);
+    const key = membershipScopeKey(membership);
     if (!key) continue;
     upsert(key, { datalakeTag, fileTagPrefix });
   }
-  // Namespaced so a registry prefix can never collide with a `datalake:` meta-tag key.
-  for (const prefix of sources.dataLakeTagPrefixes) upsert(`prefix:${prefix}`, { fileTagPrefix: prefix });
+  for (const prefix of sources.dataLakeTagPrefixes) {
+    const owners = sources.lakes?.filter(l => l.fileTagPrefix === prefix) ?? [];
+    const lake = owners.length === 1 ? owners[0] : undefined;
+    // Paired: key on the lake's meta-tag so it merges with its dataLakeTags bucket. Unpaired:
+    // namespaced so a registry prefix can never collide with a `datalake:` meta-tag key.
+    if (lake) upsert(lake.datalakeTag, { datalakeTag: lake.datalakeTag, registryPrefix: prefix });
+    else upsert(`prefix:${prefix}`, { fileTagPrefix: prefix });
+  }
 
   return [...byKey.values()];
+}
+
+/** The slice of the caller's scope arms that reaches ONE lake's files. */
+export interface LakeScopeArms<M extends LakeOrderScopeSources['lakeMemberships'][number]> {
+  dataLakeTags: string[];
+  dataLakeTagPrefixes: string[];
+  lakeMemberships: M[];
+}
+
+/**
+ * Split the caller's scope arms back out per lake bucket, so each lake can be listed on its own.
+ * Mirrors the keying in `lakeOrderScopes`: an arm lands in the scope whose `key` it would have
+ * produced, so the per-scope slices partition the full arm set. Arms are filtered, never
+ * rebuilt, so a creator-anchored membership stays exactly as resolved.
+ */
+export function lakeScopeArms<M extends LakeOrderScopeSources['lakeMemberships'][number]>(
+  scope: LakeOrderScope,
+  sources: Pick<LakeOrderScopeSources, 'dataLakeTags' | 'dataLakeTagPrefixes'> & { lakeMemberships: M[] }
+): LakeScopeArms<M> {
+  return {
+    dataLakeTags: sources.dataLakeTags.filter(tag => tag === scope.key),
+    dataLakeTagPrefixes: sources.dataLakeTagPrefixes.filter(
+      prefix => prefix === scope.registryPrefix || scope.key === `prefix:${prefix}`
+    ),
+    lakeMemberships: sources.lakeMemberships.filter(m => membershipScopeKey(m) === scope.key),
+  };
 }
 
 /** Bucket key for files attributable to no lake - the caller's own and shared files, which
@@ -87,16 +143,19 @@ export function lakeOrderScopes(sources: LakeOrderScopeSources): LakeOrderScope[
 export const UNATTRIBUTED_LAKE_KEY = '';
 
 /**
- * The lake bucket a file is charged to. A file carrying several lakes' tags is charged to its
- * FIRST matching scope (scope order, which is the caller's own lake order) so it is counted and
- * emitted exactly once - double-emitting it would both duplicate a chunk query and inflate the
- * lake it appears under twice.
+ * The lake bucket a file is charged to: its FIRST matching scope in scope order (the caller's own
+ * lake order), with paired registry prefixes tested last. Charging once means it is counted and
+ * emitted exactly once; double-emitting would duplicate a chunk query and inflate a lake.
  */
 function bucketFor(fileTags: string[], scopes: LakeOrderScope[]): string {
   const metaTags = new Set(datalakeTagsFrom(fileTags));
   for (const scope of scopes) {
     if (scope.datalakeTag && metaTags.has(scope.datalakeTag)) return scope.key;
     if (scope.fileTagPrefix && fileTags.some(tag => typeof tag === 'string' && tag.startsWith(scope.fileTagPrefix!)))
+      return scope.key;
+  }
+  for (const scope of scopes) {
+    if (scope.registryPrefix && fileTags.some(tag => typeof tag === 'string' && tag.startsWith(scope.registryPrefix!)))
       return scope.key;
   }
   return UNATTRIBUTED_LAKE_KEY;

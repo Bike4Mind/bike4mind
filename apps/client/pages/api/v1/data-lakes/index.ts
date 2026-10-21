@@ -15,7 +15,7 @@ import {
   fabFileRepository,
 } from '@bike4mind/database';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
 import { paginateById } from '@server/utils/cursorPagination';
@@ -26,7 +26,7 @@ const CURSOR_SCOPE = 'v1.data-lakes';
 
 const handler = nextRouteForContract(listDataLakesContract, {
   rateLimit: rateLimit({
-    limit: req => resolveUserRateLimitPerMin(req.user),
+    limit: req => resolveUserRateLimitPerMin(req.user, req),
     windowMs: 60 * 1000,
     // Static route: the default pathname bucket is already stable, but named explicitly to match
     // the id-scoped routes' style and make the bucket auditable at a glance.

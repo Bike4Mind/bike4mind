@@ -8,17 +8,24 @@ Background work that used to live under `apps/client/server`, moved here one cat
 | `src/cron/` | Scheduled handlers (sweeps, reconcilers, reports) and the LiveOps/SecOps triage SQS workers | Lambdas declared in `infra/cron.ts` and `infra/queues.ts`; some sweeps also run as self-host scheduled tasks |
 | `src/jobs/` | DataSyncer: seeds a preview stage with staging config on its first deploy | Lambda declared in `infra/dataSyncer.ts` |
 | `src/emailIngestion/` | Inbound email parser and analyzer SQS consumers | Lambdas declared in `infra/emailIngestion.ts` |
+| `src/queueHandlers/` | SQS queue handlers: comms/ops, data-lake pipeline, What's New, image generation, quest export, lake ingest, the agent executor, and the Slack quest processor | Lambdas declared in `infra/*.ts` by handler path; the agent executor also runs self-host through `src/agentExecutor/` |
+| `src/s3/` | S3 upload-complete handlers for app files and FabFiles (moderation, storage charge, chunk enqueue) | Bucket notification subscribers in `infra/buckets.ts` and `infra/queues.ts` |
+| `src/database/` | Database migrator, seeder and preview cleaner | Lambdas declared in `infra/database.ts`, invoked on deploy and preview teardown |
+| `src/media/` | Image processor (PNG conversion and resizing with jimp) | Lambda declared in `infra/imageProcessor.ts` |
+| `src/cli/` | CLI tools endpoint (the Lambda transport of the tools contract) | Lambda declared in `infra/cliToolHandler.ts` |
+| `src/security/` | Security alert processor and Active Defense attack-simulation runner | Lambdas declared in `infra/securityAlerts.ts` and `infra/cron.ts` |
 | `src/selfhost/` | Self-host worker runner: SQS long-poll loop, scheduler, and event dispatch | The `worker` service in `compose.selfhost.yaml` |
+| `src/agentExecutor/` | Self-host agent executor: HTTP + SQS consumer that runs agent starts and resumes | The `agentexecutor` service in `compose.selfhost.yaml` |
 
 ## Interim bridge into apps/client
 
 Most of the code these handlers call still lives in `apps/client/server`. Until it is extracted into a shared package, `tsconfig.json` and `vitest.config.mts` map `@server/*`, `@client/*` and the other client aliases into `../client`. The dependency is one-way:
 
 - `apps/workers` may import `apps/client/server` code through those aliases.
-- The self-host `worker` service runs under `tsconfig.selfhost.json`, which extends `tsconfig.json` and also includes `../client/**/*.ts`. tsx applies compilerOptions only to included files, so without it the bridged client files would transpile outside strict mode. It is runtime-only; `tsc` never reads it.
+- The self-host `worker` and `agentexecutor` services run under `tsconfig.selfhost.json`, which extends `tsconfig.json` and also includes `../client/**/*.ts`. tsx applies compilerOptions only to included files, so without it the bridged client files would transpile outside strict mode. It is runtime-only; `tsc` never reads it.
 - `apps/client` must never import `apps/workers` (`@workers/*`). ESLint enforces this, and also stops workers from importing UI code (`@client/app/*`, React, Next, MUI).
 
-Code that both a client route and a worker need belongs on the client side of the bridge (for example `apps/client/server/utils/eventContext.ts` and `apps/client/server/s3/chunkScan.ts`), not here.
+Code that both a client route and a worker need belongs on the client side of the bridge (for example `apps/client/server/utils/eventBus.ts` and `apps/client/server/utils/sqsDelivery.ts`), not here. Code that only workers reach lives here, even when it is a helper rather than a handler (for example `src/utils/eventContext.ts` and `src/s3/chunkScan.ts`).
 
 ## Tests
 

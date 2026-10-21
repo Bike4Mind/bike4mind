@@ -1,11 +1,4 @@
-export {
-  generateCliTools,
-  wrapTools,
-  wrapToolWithPermission,
-  type AgentContext,
-  type WrapToolDeps,
-  type PermissionPromptKind,
-} from './toolsAdapter';
+export { generateCliTools, buildCliToolList, type AgentContext, type CliToolListInput } from './toolsAdapter';
 export { PermissionManager } from './PermissionManager';
 export { generateFileDiffPreview, generateFileCreatePreview, generateFileDeletePreview } from './diffPreview';
 export {
@@ -23,7 +16,6 @@ export {
 export { logger } from './Logger';
 export { searchCommands } from './fuzzySearch';
 export {
-  walkDirectory,
   searchFiles,
   formatFileSize,
   invalidateFileCache,

@@ -28,6 +28,7 @@ export const usageSchema = z
   .object({
     inputTokens: z.number().optional(),
     outputTokens: z.number().optional(),
+    reasoningTokens: z.number().optional(),
     cacheReadInputTokens: z.number().optional(),
     cacheCreationInputTokens: z.number().optional(),
   })
@@ -90,6 +91,9 @@ export const streamEventSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('error'),
     message: z.string().optional(),
+    // The server's classifier (CompletionSseErrorEventSchema in @bike4mind/common); kept open so a new code still parses.
+    code: z.string().optional(),
+    requestId: z.string().optional(),
   }),
 ]);
 export type StreamEvent = z.infer<typeof streamEventSchema>;

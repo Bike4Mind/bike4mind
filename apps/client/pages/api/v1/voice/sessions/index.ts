@@ -10,7 +10,6 @@ import {
   fabFileRepository,
   projectRepository,
   sessionRepository,
-  userRepository,
 } from '@bike4mind/database';
 import {
   ChatModels,
@@ -25,16 +24,26 @@ import { sessionService } from '@bike4mind/services';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { createElevenLabsConversationalTransport, type ElevenLabsClientBootstrap } from '@bike4mind/voice';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { BadGatewayError, BadRequestError, ForbiddenError, HTTPError, NotFoundError } from '@server/utils/errors';
-import { isValidObjectId } from '@server/utils/objectId';
+import {
+  BadGatewayError,
+  BadRequestError,
+  ConflictError,
+  ForbiddenError,
+  HTTPError,
+  NotFoundError,
+} from '@bike4mind/server-utils/utils/errors';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
+import { reserveVoiceHold, settlePriorVoiceHold } from '@server/voice/settleVoiceHold';
 import { signVoiceSessionToken } from '@server/voice/voiceSessionToken';
-import { MAX_SESSION_SECONDS, shouldReuseVoiceHold } from '@server/voice/voiceSessionLimits';
+import {
+  MAX_SESSION_SECONDS,
+  voiceSessionTokenExpiresAtMs,
+  shouldReuseVoiceHold,
+} from '@bike4mind/server-utils/voice/voiceSessionLimits';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
+import { requestTurnAuth } from '@server/auth/turnAuth';
 
 const DEFAULT_MODEL = ChatModels.CLAUDE_4_6_SONNET as ChatModelName;
-// The session token must stay valid for the whole call (ElevenLabs replays it on
-// every turn), plus headroom for clock skew and a slightly over-running call.
-const SESSION_TOKEN_TTL_SECONDS = MAX_SESSION_SECONDS + 120;
 // Mirror v1's concurrency guard so a user (or a leaked session endpoint) can't
 // open unbounded parallel calls, each holding a credit reservation.
 const MAX_CONCURRENT_VOICE_SESSIONS = 2;
@@ -143,6 +152,18 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
   }
   const resolvedSessionId = session.id;
 
+  // A reconnect re-attaches to a session that still holds a live reservation from
+  // the original connect. Reuse that hold: skip the second deduction and keep the
+  // original voiceSessionStartedAt, so the single end-reconciliation covers the
+  // whole call (against MAX_SESSION_SECONDS). Without this, every mobile reconnect
+  // would burn another full reserve that's never refunded. Guarded by an explicit
+  // live hold so a stray flag can't skip a real charge.
+  // ElevenLabs: only a hold without the realtime marker.
+  const reuseHold = shouldReuseVoiceHold(isReconnect, session, false);
+  // Decided before signing so the token names the hold this call bills against.
+  const holdStartedAt =
+    reuseHold && session.voiceSessionStartedAt ? new Date(session.voiceSessionStartedAt) : new Date();
+
   // Sign a session-bound token the proxy verifies on every turn. The browser
   // forwards it to ElevenLabs; the proxy trusts only these claims, never raw
   // request-body fields, so the proxy URL can't be used to impersonate a user.
@@ -154,9 +175,12 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
       organizationId: req.user.organizationId ? String(req.user.organizationId) : '',
       sessionId: String(resolvedSessionId),
       reasoningModelId,
-      apiKeyId: req.apiKeyInfo?.keyId,
+      ...requestTurnAuth(req),
+      voiceHoldStartedAt: holdStartedAt.toISOString(),
     },
-    SESSION_TOKEN_TTL_SECONDS
+    // Expires with the hold's window, not a fresh window per token: ElevenLabs replays it on every
+    // turn, and a reconnect onto the same hold must not extend the call the reserve covers.
+    Math.ceil((voiceSessionTokenExpiresAtMs(holdStartedAt) - Date.now()) / 1000)
   );
 
   const transport = createElevenLabsConversationalTransport({
@@ -167,19 +191,15 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
   const estimate = transport.estimateCost(MAX_SESSION_SECONDS);
   const reservedCredits = estimate.creditsToReserve;
 
-  // A reconnect re-attaches to a session that still holds a live reservation from
-  // the original connect. Reuse that hold: skip the second deduction and keep the
-  // original voiceSessionStartedAt, so the single end-reconciliation covers the
-  // whole call (against MAX_SESSION_SECONDS). Without this, every mobile reconnect
-  // would burn another full reserve that's never refunded. Guarded by an explicit
-  // live hold so a stray flag can't skip a real charge.
-  const reuseHold = shouldReuseVoiceHold(isReconnect, session);
+  // The hold read before any credit moves; the new hold is written only over it (or over none).
+  const priorHoldStartedAt = session.voiceSessionStartedAt ? new Date(session.voiceSessionStartedAt) : null;
+  // A fresh call writes its hold over this session's, so an earlier call left open is settled first.
+  if (!reuseHold) {
+    await settlePriorVoiceHold(session);
+  }
 
-  if (enforceCredits && !reuseHold) {
-    if ((req.user?.currentCredits ?? 0) < reservedCredits) {
-      throw insufficientCreditsError(`Insufficient credits for voice session (requires ~${reservedCredits} credits)`);
-    }
-    await userRepository.incrementCredits(req.user.id, -reservedCredits);
+  if (enforceCredits && !reuseHold && (req.user?.currentCredits ?? 0) < reservedCredits) {
+    throw insufficientCreditsError(`Insufficient credits for voice session (requires ~${reservedCredits} credits)`);
   }
 
   let createResult;
@@ -196,9 +216,6 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
       ...(req.user.voiceSystemPromptOverride ? { systemPromptOverride: req.user.voiceSystemPromptOverride } : {}),
     });
   } catch (error) {
-    if (enforceCredits && !reuseHold) {
-      await userRepository.incrementCredits(req.user.id, reservedCredits);
-    }
     const errDetail =
       error instanceof Error
         ? { message: error.message, stack: error.stack, name: error.name }
@@ -212,15 +229,25 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
   // shape to the published response schema at compile time.
   const clientBootstrap: VoiceClientBootstrap = createResult.clientBootstrap as ElevenLabsClientBootstrap;
 
-  // A reconnect leaves the original reservation record untouched so end-reconciliation
-  // measures the full call duration, not just the post-reconnect segment.
+  // The reserve and the hold that records it commit together, after the provider call, so a
+  // failure anywhere before this point has nothing to refund. A reconnect keeps the original hold
+  // so end-reconciliation measures the full call duration, not just the post-reconnect segment.
+  // Drops any realtime marker explicitly: a prior realtime hold with no reserve is never claimed, so
+  // its marker would otherwise survive and this ElevenLabs hold would settle as realtime.
   if (!reuseHold) {
-    const voiceSessionStartedAt = new Date();
-    await sessionRepository.update({
-      id: session.id,
-      voiceReservedCredits: enforceCredits ? reservedCredits : null,
-      voiceSessionStartedAt,
+    const opened = await reserveVoiceHold({
+      userId: req.user.id,
+      sessionId: session.id,
+      priorStartedAt: priorHoldStartedAt,
+      reservedCredits: enforceCredits ? reservedCredits : null,
+      startedAt: holdStartedAt,
+      realtime: false,
+      unaffordable: () =>
+        insufficientCreditsError(`Insufficient credits for voice session (requires ~${reservedCredits} credits)`),
     });
+    if (!opened) {
+      throw new ConflictError('Another voice call on this session started at the same time; retry');
+    }
   }
 
   return res.status(200).json({

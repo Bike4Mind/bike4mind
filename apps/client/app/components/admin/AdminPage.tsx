@@ -29,7 +29,7 @@ import {
 import { useGetWaitingSubscribersCount } from '@client/app/hooks/data/subscribers';
 import { useRouter, useSearch } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
-import { lazy, useEffect, useRef, useState, type ReactNode } from 'react';
+import { lazy, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { api } from '@client/app/contexts/ApiContext';
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
@@ -69,6 +69,8 @@ import ApiReferenceTab from './ApiReferenceTab';
 import ApiCookbookTab from './ApiCookbookTab';
 import { AdminTab, SIDEBAR_SECTIONS, type SidebarGate, type SidebarItem } from './adminSidebarConfig';
 import { adminTabFromSlug } from './adminTabSlugs';
+import { canRenderAdminTab } from './adminTabRenderability';
+import { useAdminTabUrlSync } from './useAdminTabUrlSync';
 import { useAdminModal } from './useAdminModal';
 import { useAdminSidebarSections } from './useAdminSidebarSections';
 
@@ -78,12 +80,15 @@ const AdminLiveOpsTriageMultiConfigTab = dynamic(() => import('./AdminLiveOpsTri
   ssr: false,
 });
 const WebhookAuditLogsTab = dynamic(() => import('./WebhookAuditLogs'), { ssr: false });
+const AuditLogTab = dynamic(() => import('./AuditLog'), { ssr: false });
 
 const MigrateUsersTab = dynamic(() => import('./MigrateUsersTab'), { ssr: false });
 const AgentOpsTab = dynamic(() => import('./AgentOpsTab'), { ssr: false });
 const AgentExecutionsTab = dynamic(() => import('./AgentExecutionsTab'), { ssr: false });
 const SubscribersTab = dynamic(() => import('./SubscribersTab'), { ssr: false });
 const PartnerSignupRulesTab = dynamic(() => import('./PartnerSignupRulesTab'), { ssr: false });
+const OAuthClientsTab = dynamic(() => import('./OAuthClientsTab'), { ssr: false });
+const AdminGrowthPricingTab = dynamic(() => import('./AdminGrowthPricingTab'), { ssr: false });
 const ModelMetricsTab = dynamic(() => import('./ModelMetrics'), { ssr: false });
 const ModelLifecycleTab = dynamic(() => import('./ModelLifecycleTab'), { ssr: false });
 const EventMetricsTab = dynamic(() => import('./EventMetrics'), { ssr: false });
@@ -99,6 +104,7 @@ const RateLimitsTab = dynamic(() => import('./RateLimits'), { ssr: false });
 const DlqReplayTab = dynamic(() => import('./DlqReplayTab'), { ssr: false });
 const ApiKeyScopePreflightTab = dynamic(() => import('./ApiKeyScopePreflightTab'), { ssr: false });
 const IntegrationHealthTab = dynamic(() => import('./IntegrationHealth'), { ssr: false });
+const IntegrationDemandTab = dynamic(() => import('./IntegrationDemandTab'), { ssr: false });
 const SreAgentTab = dynamic(() => import('./SreAgentTab'), { ssr: false });
 const SecopsTriageTab = dynamic(() => import('./SecopsTriageTab'), { ssr: false });
 const PublishedArtifactsTab = dynamic(() => import('./PublishedArtifactsTab'), { ssr: false });
@@ -300,19 +306,36 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
   const [activeTab, setActiveTab] = useAdminModal(useShallow(state => [state.activeTab, state.setActiveTab]));
   const hiddenNotifications = useAdminNotifications(state => state.hiddenNotifications);
   const { currentUser } = useUser();
-  const { tab: requestedTabSlug } = useSearch({ strict: false }) as { tab?: string };
+  // `select` keeps a keystroke in a tab's own search params (Admin Settings' `q`) from re-rendering
+  // the whole console through this page.
+  const requestedTabSlug = useSearch({ strict: false, select: search => (search as { tab?: string }).tab });
 
-  // A `?tab=` deep link chooses the opening tab. Keyed on the slug, NOT on activeTab, so this is
-  // an entry point rather than a mirror: activeTab is also driven by the sidebar and by the chat
-  // model picker's "manage models" shortcut (see useAdminModal), and re-asserting the URL's value
-  // on every change would fight both. Leaving the param in place is deliberate - the link stays
-  // shareable and survives a reload.
-  useEffect(() => {
-    const requestedTab = adminTabFromSlug(requestedTabSlug);
-    if (requestedTab !== undefined) {
-      setActiveTab(requestedTab);
-    }
-  }, [requestedTabSlug, setActiveTab]);
+  // LiveOps Triage tab visibility - show everywhere except fork production environments
+  const { data: liveopsEnvData, isError: isLiveOpsEnvError } = useQuery({
+    queryKey: ['liveops-triage', 'env'],
+    queryFn: async () => {
+      const { data } = await api.get<{ stage: string; isForkProduction: boolean; showTab: boolean }>(
+        '/api/admin/liveops-triage-env'
+      );
+      return data;
+    },
+    enabled: currentUser?.isAdmin,
+    staleTime: 1000 * 60 * 60, // Cache for 1 hour - environment doesn't change
+  });
+  const showLiveOpsTriageTab = liveopsEnvData?.showTab ?? false;
+
+  // Selecting a tab this screen cannot draw would leave the content pane blank, so the URL sync
+  // treats it as unknown and corrects the store instead.
+  const isAdminTabRenderable = useCallback(
+    (tab: AdminTab) =>
+      canRenderAdminTab(tab, {
+        enableUserMigration,
+        liveOpsTriage: isLiveOpsEnvError ? false : liveopsEnvData?.showTab,
+      }),
+    [enableUserMigration, liveopsEnvData, isLiveOpsEnvError]
+  );
+
+  useAdminTabUrlSync(activeTab, setActiveTab, isAdminTabRenderable);
 
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
 
@@ -360,20 +383,6 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
 
   // Global keyboard shortcut: Press '?' to toggle Help Center
   useHelpKeyboardShortcut();
-
-  // LiveOps Triage tab visibility - show everywhere except fork production environments
-  const { data: liveopsEnvData } = useQuery({
-    queryKey: ['liveops-triage', 'env'],
-    queryFn: async () => {
-      const { data } = await api.get<{ stage: string; isForkProduction: boolean; showTab: boolean }>(
-        '/api/admin/liveops-triage-env'
-      );
-      return data;
-    },
-    enabled: currentUser?.isAdmin,
-    staleTime: 1000 * 60 * 60, // Cache for 1 hour - environment doesn't change
-  });
-  const showLiveOpsTriageTab = liveopsEnvData?.showTab ?? false;
 
   // Get waiting subscribers count for badge
   const waitingSubscribers = useGetWaitingSubscribersCount({ enabled: currentUser?.isAdmin });
@@ -455,7 +464,12 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
                 flexShrink: 0,
               }}
             >
-              <IconButton onClick={() => setMobileDrawerOpen(true)} size="sm" data-testid="admin-mobile-menu-btn">
+              <IconButton
+                onClick={() => setMobileDrawerOpen(true)}
+                size="sm"
+                data-testid="admin-mobile-menu-btn"
+                aria-label="Open admin menu"
+              >
                 <MenuIcon />
               </IconButton>
               <Typography level="title-sm" sx={{ ml: 1 }}>
@@ -472,6 +486,9 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
               <TabPanel value={AdminTab.Users}>{activeTab === AdminTab.Users && <UsersTab />}</TabPanel>
               <TabPanel value={AdminTab.EmailVerification}>
                 {activeTab === AdminTab.EmailVerification && <EmailVerificationTab />}
+              </TabPanel>
+              <TabPanel value={AdminTab.GrowthPricing} sx={{ padding: 0 }}>
+                {activeTab === AdminTab.GrowthPricing && <AdminGrowthPricingTab />}
               </TabPanel>
               <TabPanel value={AdminTab.AdminSettings} sx={{ padding: 0 }}>
                 {activeTab === AdminTab.AdminSettings && <AdminSettingsTab />}
@@ -562,6 +579,9 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
               <TabPanel value={AdminTab.IdentityProviders}>
                 {activeTab === AdminTab.IdentityProviders && <IdentityProvidersTab />}
               </TabPanel>
+              <TabPanel value={AdminTab.OAuthClients} sx={{ padding: 0 }}>
+                {activeTab === AdminTab.OAuthClients && <OAuthClientsTab />}
+              </TabPanel>
               <TabPanel value={AdminTab.AgentOps}>{activeTab === AdminTab.AgentOps && <AgentOpsTab />}</TabPanel>
               <TabPanel value={AdminTab.AgentExecutions}>
                 {activeTab === AdminTab.AgentExecutions && <AgentExecutionsTab />}
@@ -593,6 +613,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
               <TabPanel value={AdminTab.WebhookAuditLogs}>
                 {activeTab === AdminTab.WebhookAuditLogs && <WebhookAuditLogsTab />}
               </TabPanel>
+              <TabPanel value={AdminTab.AuditLog}>{activeTab === AdminTab.AuditLog && <AuditLogTab />}</TabPanel>
               <TabPanel value={AdminTab.GitHubConnection}>
                 {activeTab === AdminTab.GitHubConnection && <GitHubConnectionTab />}
               </TabPanel>
@@ -606,6 +627,9 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
               </TabPanel>
               <TabPanel value={AdminTab.IntegrationHealth}>
                 {activeTab === AdminTab.IntegrationHealth && <IntegrationHealthTab />}
+              </TabPanel>
+              <TabPanel value={AdminTab.IntegrationDemand}>
+                {activeTab === AdminTab.IntegrationDemand && <IntegrationDemandTab />}
               </TabPanel>
               <TabPanel value={AdminTab.SreAgent}>{activeTab === AdminTab.SreAgent && <SreAgentTab />}</TabPanel>
               <TabPanel value={AdminTab.SecOpsTriage}>

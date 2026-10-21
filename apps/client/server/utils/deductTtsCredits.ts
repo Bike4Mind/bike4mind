@@ -1,7 +1,12 @@
 import { CreditHolderType, VoiceGenerationVendor, computeTtsUsd } from '@bike4mind/common';
 import { creditService } from '@bike4mind/services';
-import { usdToCredits } from '@bike4mind/utils';
-import { userRepository, creditTransactionRepository, usageEventRepository } from '@bike4mind/database';
+import { usdToCreditsStochastic } from '@bike4mind/utils';
+import {
+  userRepository,
+  organizationRepository,
+  creditTransactionRepository,
+  usageEventRepository,
+} from '@bike4mind/database';
 import { type ILogger } from '@bike4mind/observability';
 
 export interface DeductTtsArgs {
@@ -11,45 +16,74 @@ export interface DeductTtsArgs {
   model: string;
   // Input character count (VoiceSynthesisResult.characters) - the billable unit.
   characters: number;
+  // Org whose pool pays; the user stays the actor. Omitted or null bills the user.
+  billingOrganizationId?: string | null;
   logger: ILogger;
 }
 
 /**
- * Charge a user for one successful TTS synthesis. Cost is per input character,
+ * Charge for one successful TTS synthesis. Cost is per input character,
  * provider+model aware (voicePricing). Non-fatal: synthesis already succeeded,
  * so a billing failure is logged for ops rather than surfaced to the caller.
  * Mirrors deductTranscriptionCredits in the transcribe route.
+ *
+ * An org-billed synthesis debits the org pool through deductCreditsWithOrgSupport,
+ * which also tracks the member's usage so the org's per-member cap sees speech spend.
  */
-export async function deductTtsCredits({ userId, vendor, model, characters, logger }: DeductTtsArgs): Promise<void> {
+export async function deductTtsCredits({
+  userId,
+  vendor,
+  model,
+  characters,
+  billingOrganizationId,
+  logger,
+}: DeductTtsArgs): Promise<void> {
   const costUsd = computeTtsUsd(vendor, model, characters);
-  const credits = usdToCredits(costUsd);
-  if (credits <= 0) return;
+  // Unbiased rounding: a short clip can legitimately settle at 0 credits. The pre-flight gate
+  // (estimateTtsCreditCost in tts.ts) stays on the round-up.
+  const credits = usdToCreditsStochastic(costUsd);
 
   const sessionId = `tts-${userId}-${Date.now()}`;
 
   try {
-    await creditService.subtractCredits(
-      {
-        type: 'text_to_speech_usage',
-        ownerId: userId,
-        ownerType: CreditHolderType.User,
-        credits,
-        model,
-        sessionId,
-      },
-      {
-        db: { creditTransactions: creditTransactionRepository },
-        creditHolderMethods: userRepository,
-      }
-    );
+    const [user, organization] = await Promise.all([
+      userRepository.findById(userId),
+      billingOrganizationId ? organizationRepository.findById(billingOrganizationId) : null,
+    ]);
+    if (!user) throw new Error('User not found');
+    if (billingOrganizationId && !organization) throw new Error('Billing organization not found');
+
+    // A zero draw writes no ledger row (nor member usage); the usage event below still records the call.
+    if (credits > 0) {
+      await creditService.deductCreditsWithOrgSupport(
+        {
+          type: 'text_to_speech_usage',
+          user,
+          organization,
+          credits,
+          model,
+          sessionId,
+        },
+        {
+          db: {
+            users: userRepository,
+            organizations: organizationRepository,
+            creditTransactions: creditTransactionRepository,
+          },
+        }
+      );
+    }
+
+    const ownerId = organization?.id ?? userId;
+    const ownerType = organization ? CreditHolderType.Organization : CreditHolderType.User;
 
     // Dual-write usage event: analytics only, never billing.
     usageEventRepository
       .record({
         requestId: sessionId,
         userId,
-        ownerId: userId,
-        ownerType: CreditHolderType.User,
+        ownerId,
+        ownerType,
         sessionId,
         feature: 'text_to_speech',
         provider: vendor,

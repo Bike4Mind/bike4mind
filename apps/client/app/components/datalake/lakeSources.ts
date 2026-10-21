@@ -1,21 +1,26 @@
 import type { ComponentType } from 'react';
-import type { DataLakeOrigin, DataLakeStatus } from '@bike4mind/common';
+import type { DataLakeOrigin, DataLakeStatus, ISessionDocument } from '@bike4mind/common';
 import CloudIcon from '@mui/icons-material/Cloud';
 import GitHubIcon from '@mui/icons-material/GitHub';
 import DriveConnectAction from '@client/app/components/DataLakeWizard/steps/DriveConnectAction';
 import { DRIVE_PERSONAL_OWNER_ONLY_REASON } from '@client/app/components/DataLakeWizard/steps/DriveConnectUnavailableButton';
 import GitHubConnectAction from '@client/app/components/DataLakeWizard/steps/GitHubConnectAction';
 import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
-import { canConnectLakeDrive } from '@client/app/components/datalake/lakeVisibility';
+import { canConnectLakeConnector } from '@client/app/components/datalake/lakeVisibility';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
+import {
+  GITHUB_LAKE_ADMIN_FLAG,
+  GITHUB_PERSONAL_OWNER_ONLY_REASON,
+} from '@client/app/components/datalake/lakeSourceShared';
+
+export { GITHUB_PERSONAL_OWNER_ONLY_REASON } from '@client/app/components/datalake/lakeSourceShared';
 
 /** Must stay in sync with the server's LakeConnectorKind (server/dataLakes/assertLakeConnectorFree.ts). */
 export type LakeSourceKind = 'googleDrive' | 'github';
 
-export const GITHUB_ORG_ONLY_REASON = `GitHub repositories can only feed an organization ${DATA_LAKE}.`;
 export const LAKE_MANAGER_ONLY_REASON = `Only people who can manage this ${DATA_LAKE} can connect a source to it.`;
 
-/** The lake fields availability is decided from. Absent fields fail closed, as in canConnectLakeDrive. */
+/** The lake fields availability is decided from. Absent fields fail closed, as in canConnectLakeConnector. */
 export type LakeSourceLake = {
   organizationId?: string | null;
   canManage?: boolean;
@@ -26,6 +31,15 @@ export type LakeSourceLake = {
 
 /** An existing lake as a source's Panel gets it; `status` lets a synced source offer a chat with the lake. */
 export type LakeSourcePanelLake = LakeSourceLake & { id: string; status?: DataLakeStatus | null };
+
+/** What every source's Panel receives; a panel that starts a chat takes `onChatStarted`. */
+export type LakeSourcePanelProps = {
+  lake: LakeSourcePanelLake;
+  /** Lets a surface own lake-scoped session creation instead of using the default notebook flow. */
+  startChatForLake?: (dataLakeId: string) => Promise<void>;
+  /** Lets a surface embedding the panel handle a started chat itself instead of navigating away. */
+  onChatStarted?: (session: ISessionDocument) => void | Promise<void>;
+};
 
 export type LakeSourceAvailability =
   | { status: 'available' }
@@ -44,7 +58,7 @@ export type LakeSource = {
   /** Why this lake cannot take the source, or undefined when it can. Mirrors the server's connect gate. */
   unavailableReason: (lake: LakeSourceLake) => string | undefined;
   /** Connect/status control for an existing lake. */
-  Panel: ComponentType<{ lake: LakeSourcePanelLake }>;
+  Panel: ComponentType<LakeSourcePanelProps>;
 };
 
 const googleDrive: LakeSource = {
@@ -53,7 +67,7 @@ const googleDrive: LakeSource = {
   hint: 'Sync a Drive folder into this lake',
   Icon: CloudIcon,
   unavailableReason: lake => {
-    if (canConnectLakeDrive(lake)) return undefined;
+    if (canConnectLakeConnector(lake)) return undefined;
     return lake.organizationId ? LAKE_MANAGER_ONLY_REASON : DRIVE_PERSONAL_OWNER_ONLY_REASON;
   },
   Panel: DriveConnectAction,
@@ -64,10 +78,10 @@ const github: LakeSource = {
   label: 'GitHub',
   hint: 'Sync a repository into this lake',
   Icon: GitHubIcon,
-  adminFlag: 'EnableDataLakeGitHub',
+  adminFlag: GITHUB_LAKE_ADMIN_FLAG,
   unavailableReason: lake => {
-    if (!lake.organizationId) return GITHUB_ORG_ONLY_REASON;
-    return lake.canManage ? undefined : LAKE_MANAGER_ONLY_REASON;
+    if (canConnectLakeConnector(lake)) return undefined;
+    return lake.organizationId ? LAKE_MANAGER_ONLY_REASON : GITHUB_PERSONAL_OWNER_ONLY_REASON;
   },
   Panel: GitHubConnectAction,
 };

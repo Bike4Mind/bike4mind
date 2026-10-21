@@ -14,6 +14,7 @@ import { Request } from 'express';
 import { sessionService } from '@bike4mind/services';
 import { Session as SessionModel, sessionRepository } from '@bike4mind/database/auth';
 import { logEvent } from '@server/utils/analyticsLog';
+import { unpublishUserArtifactsBySource } from '@server/services/publish/purgeUserPublishedArtifacts';
 
 const handler = baseApi()
   /**
@@ -67,13 +68,18 @@ const handler = baseApi()
         'This API key is read-only for notebooks; notebooks:write is required'
       );
       const userId = req.user?.id;
-      if (!req.ability?.can(Permission.delete, SessionModel)) {
+      if (!userId || !req.ability?.can(Permission.delete, SessionModel)) {
         return res.status(403).send({ message: 'Forbidden' });
       }
-      const deleteResult = await SessionModel.deleteMany({
+      const ownedFilter = {
         userId,
         ...accessibleBy(req.ability, Permission.delete).ofType(SessionModel),
-      });
+      };
+      // Published replies are snapshots that outlive their notebook, so take them down first: a
+      // retry after a failed delete still finds the notebooks and finishes the job.
+      const sessionIds = (await SessionModel.find(ownedFilter).select('_id').lean()).map(s => String(s._id));
+      await unpublishUserArtifactsBySource(userId, { kind: 'reply', sessionIds }, { logger: req.logger });
+      const deleteResult = await SessionModel.deleteMany(ownedFilter);
 
       await logEvent({
         userId,

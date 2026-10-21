@@ -27,7 +27,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getPublishedArtifactsStorage: () => ({
     download: mockDownload,
     upload: mockUpload,
@@ -137,7 +137,7 @@ describe('finalize - embed allowlist preserve-on-republish', () => {
   it('rejects an allowlist when the PRESERVED previous artifact is gated (public draft, but gate survives)', async () => {
     // A re-publish keeps the prior access gate, so "open public" must account for it -
     // a public-visibility draft against a gated artifact is NOT open-public.
-    mockFindOne.mockResolvedValue({ publicId: 'pub1', accessGate: { kind: 'passphrase' } });
+    mockFindOne.mockResolvedValue({ publicId: 'pub1', ownerId: 'owner1', accessGate: { kind: 'passphrase' } });
     setManifest(manifest({ visibility: 'public', embedOrigins: ['https://example.com'] }));
     const { res, promise } = run({ draftId: DRAFT_ID });
     await promise;

@@ -263,6 +263,28 @@ describe('persistRunAsQuest creditsUsed persistence', () => {
   });
 });
 
+describe('persistRunAsQuest message attachments', () => {
+  it("records the run's per-message attachments on a Quest it has to create", async () => {
+    findOneAndUpdateMock.mockResolvedValue(null);
+    stubExecution({ messageFileIds: ['file-csv'] });
+
+    await persistRunAsQuest(EXECUTION_ID, 'reply', logger);
+
+    const [doc] = createMock.mock.calls[0];
+    expect(doc.fabFileIds).toEqual(['file-csv']);
+  });
+
+  it('leaves the dispatch-time attachments alone when patching the existing Quest', async () => {
+    findOneAndUpdateMock.mockResolvedValue({ _id: 'q1' });
+    stubExecution({ messageFileIds: ['file-csv'] });
+
+    await persistRunAsQuest(EXECUTION_ID, 'reply', logger);
+
+    const [, update] = findOneAndUpdateMock.mock.calls[0];
+    expect(update.$set).not.toHaveProperty('fabFileIds');
+  });
+});
+
 describe('persistRunAsQuest agent artifact persistence', () => {
   const CREATED_AT = new Date(1700000000000);
 

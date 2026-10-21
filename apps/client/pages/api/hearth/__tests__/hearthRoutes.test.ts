@@ -93,7 +93,7 @@ vi.mock('@server/middlewares/rateLimit', () => ({
 }));
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: () => vi.fn() }));
 vi.mock('@server/middlewares/requireUser', () => ({ requireUser: vi.fn() }));
-vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: featureGateMock }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: featureGateMock }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: sendToClientMock }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'wss://test' } } }));
 vi.mock('@bike4mind/database', () => ({

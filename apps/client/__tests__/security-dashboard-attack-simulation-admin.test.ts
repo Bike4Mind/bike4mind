@@ -41,11 +41,8 @@ vi.mock('@aws-sdk/client-lambda', () => ({
   }),
 }));
 
-const mockLogAudit = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-vi.mock('@server/utils/auditLog', () => ({
-  logAuditEvent: mockLogAudit,
-  AdminConfigAuditEvents: { SECURITY_SCAN_SCHEDULE_TRIGGERED: 'SECURITY_SCAN_SCHEDULE_TRIGGERED' },
-}));
+const mockRecordAdminAction = vi.hoisted(() => vi.fn().mockResolvedValue(null));
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: mockRecordAdminAction }));
 
 vi.mock('@bike4mind/observability', () => ({
   Logger: vi.fn(function () {
@@ -159,7 +156,7 @@ describe('POST /api/admin/security-dashboard/run-attack-simulation', () => {
     expect(json).toHaveBeenCalledWith(expect.objectContaining({ queued: true, runId: expect.any(String) }));
   });
 
-  it('emits a SECURITY_SCAN_SCHEDULE_TRIGGERED audit event', async () => {
+  it('records a security.attack_simulation.run audit entry', async () => {
     const req = {
       user: adminUser,
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
@@ -167,17 +164,13 @@ describe('POST /api/admin/security-dashboard/run-attack-simulation', () => {
     const { res } = makeRes();
     await postHandler(req, res);
 
-    expect(mockLogAudit).toHaveBeenCalledWith(
+    expect(mockRecordAdminAction).toHaveBeenCalledWith(
+      req,
       expect.objectContaining({
-        userId: 'admin-1',
-        action: 'SECURITY_SCAN_SCHEDULE_TRIGGERED',
-        metadata: expect.objectContaining({
-          scanType: 'attack-simulation',
-          stage: 'dev',
-          trigger: 'manual',
-        }),
-      }),
-      expect.anything()
+        action: 'security.attack_simulation.run',
+        target: expect.objectContaining({ kind: 'system', id: 'attack-simulation' }),
+        details: expect.objectContaining({ stage: 'dev', trigger: 'manual' }),
+      })
     );
   });
 

@@ -1,5 +1,7 @@
 import { z } from 'zod';
+import { BillingOrganizationIdSchema } from './billingOrganization';
 import type { ApiErrorCode } from '../apiErrorCodes';
+import { GENERATION_OUTPUT_AVAILABILITIES, type GenerationOutputAvailability } from '../generation/types';
 import { ASPECT_RATIOS, RESOLUTION_TIERS, VIDEO_MODES } from '../video/types';
 import { VIDEO_VALIDATION_ERROR_CODES } from '../video/validate';
 import {
@@ -77,13 +79,12 @@ export const CreateVideoGenerationBodySchema = z.strictObject({
   resolution: z.enum(RESOLUTION_TIERS).optional(),
   input_image_file_id: z.string().min(1).optional().describe('An image file you own, for image_to_video.'),
   audio: z.boolean().optional(),
+  organization_id: BillingOrganizationIdSchema,
 });
 export type CreateVideoGenerationBody = z.infer<typeof CreateVideoGenerationBodySchema>;
 
-// Whether a succeeded job's output can be downloaded now, later, or never: the one field that tells a client
-// whether to keep re-reading the job for a url. Must stay in sync with signOutputUrl in apps/client.
-export const VIDEO_OUTPUT_AVAILABILITIES = ['ready', 'pending_scan', 'unavailable'] as const;
-export type VideoOutputAvailability = (typeof VIDEO_OUTPUT_AVAILABILITIES)[number];
+export const VIDEO_OUTPUT_AVAILABILITIES = GENERATION_OUTPUT_AVAILABILITIES;
+export type VideoOutputAvailability = GenerationOutputAvailability;
 
 export const VideoGenerationSchema = z.object({
   id: z.string(),

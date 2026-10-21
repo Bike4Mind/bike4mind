@@ -11,11 +11,22 @@
  * that touch alarm/dashboard code).
  */
 
-import { modelDiscoveryCronEnabled, modelDiscoveryFunction, modelDiscoveryStalenessFunction } from './cron';
+import {
+  modelDiscoveryCronEnabled,
+  modelDiscoveryFunction,
+  modelDiscoveryStalenessFunction,
+  voiceHoldSweepCron,
+} from './cron';
 import { whatsNewGenerationQueueSubscription, webhookDeliveryQueueSubscription } from './queues';
 import { subscribeQueryRoute, unsubscribeQueryRoute } from './subscriberFanout';
 import { dlqAlarmTopic } from './dlqAlarms';
-import { isMonitoredStage as _isMonitoredStage, QUESTS_NAMESPACE, QUEST_METRICS } from '@bike4mind/infra';
+import {
+  isMonitoredStage as _isMonitoredStage,
+  QUESTS_NAMESPACE,
+  QUEST_METRICS,
+  VOICE_NAMESPACE,
+  VOICE_METRICS,
+} from '@bike4mind/infra';
 
 const MONITORED_STAGES = ['dev', 'production'] as const;
 const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process.env.ENABLE_MONITORING);
@@ -97,6 +108,37 @@ if (isMonitoredStage) {
     alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'AgentExecutor',
+      Severity: 'High',
+    },
+  });
+
+  /**
+   * Alarm: Ungranted Credit Purchases
+   *
+   * Fires when the daily reconciliation finds a succeeded Stripe credit purchase with no
+   * purchase transaction, a transaction whose balance increment never applied, or a
+   * transaction whose owner no longer exists (see UngrantedReason in the cron). The Slack
+   * post from the cron is best-effort; this alarm is the signal that cannot fail quietly. The metric is emitted once a day (0 when clean), so
+   * the period is one day.
+   *
+   * Metric emitted by: apps/workers/src/cron/creditPurchaseReconciliation.ts
+   * Namespace: Lumina5/CreditPurchases / UngrantedPurchases
+   */
+  new aws.cloudwatch.MetricAlarm('ungrantedCreditPurchases', {
+    name: `${$app.name}-${$app.stage}-ungranted-credit-purchases`,
+    alarmDescription: 'Stripe credit purchase succeeded but no credits were granted',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'UngrantedPurchases',
+    namespace: 'Lumina5/CreditPurchases',
+    dimensions: { Stage: $app.stage },
+    period: 86400, // matches the daily cron
+    statistic: 'Maximum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'CreditPurchases',
       Severity: 'High',
     },
   });
@@ -760,7 +802,7 @@ if (isMonitoredStage) {
   });
 
   /**
-   * The dimension set server/modelDiscovery/metrics.ts stamps on every datum.
+   * The dimension set apps/workers/src/modelDiscovery/metrics.ts stamps on every datum.
    * CloudWatch keys a custom metric by namespace + name + the exact dimension
    * set and never rolls up, so an alarm that omits these watches an empty
    * series and sits in INSUFFICIENT_DATA forever. Host is the hosted lambda's
@@ -776,7 +818,7 @@ if (isMonitoredStage) {
    * evaluation periods is three scheduled runs; a period with no run at all
    * does not breach, which keeps a disabled or preview stage quiet.
    *
-   * Metric emitted by: server/modelDiscovery/metrics.ts
+   * Metric emitted by: apps/workers/src/modelDiscovery/metrics.ts
    * Namespace: Lumina5/ModelDiscovery / RunFailures
    */
   new aws.cloudwatch.MetricAlarm('modelDiscoveryRunFailures', {
@@ -972,7 +1014,7 @@ if (isMonitoredStage) {
    *
    * Routed to dlqAlarmTopic (Slack-subscribed) so alerts reach on-call directly.
    *
-   * Metric emitted by: server/modelDiscovery/metrics.ts -> buildDiscoveryMetricData
+   * Metric emitted by: apps/workers/src/modelDiscovery/metrics.ts -> buildDiscoveryMetricData
    * Namespace: Lumina5/ModelDiscovery / AggregatorJoinCoverage
    * Dimensions: { Stage, Host: 'hosted', Aggregator } -- all three required;
    * omitting Aggregator would watch an empty series (INSUFFICIENT_DATA forever).
@@ -1085,7 +1127,7 @@ if (isMonitoredStage) {
    * noise (e.g. a browser tab closed mid-upload). Threshold 10 in one sample is a systemic
    * problem, not a one-off.
    *
-   * Metric emitted by: server/utils/cloudwatch.ts -> recordStuckBatchGauge, wired from
+   * Metric emitted by: packages/server-utils/src/utils/cloudwatch.ts -> recordStuckBatchGauge, wired from
    * apps/workers/src/cron/dataLakeBatchReconcile.ts's runStuckBatchSweep.
    * Namespace: Lumina5/DataLakeBatch / StuckBatches
    */
@@ -1128,7 +1170,7 @@ if (isMonitoredStage) {
    * reachable by ordinary use rather than by an unusual overlap. Until now nothing watched it, and
    * the only other trace was a logger.warn nothing alarms on.
    *
-   * Metric emitted by: server/utils/cloudwatch.ts -> recordTaxonomyTagsApplySkipped, wired from
+   * Metric emitted by: packages/server-utils/src/utils/cloudwatch.ts -> recordTaxonomyTagsApplySkipped, wired from
    * pages/api/data-lakes/batches/[batchId]/apply-taxonomy.ts.
    * Namespace: Lumina5/DataLakeBatch / TaxonomyTagsApplySkipped
    */
@@ -1287,7 +1329,7 @@ if (isMonitoredStage) {
    * readable off ChunkRescueRuns's `outcome` dimension instead of by inference from a silent
    * counter - alarming on the counter's absence would page every quiet day.
    *
-   * Metric emitted by: server/utils/cloudwatch.ts -> recordChunkRescueSweep, wired from
+   * Metric emitted by: packages/server-utils/src/utils/cloudwatch.ts -> recordChunkRescueSweep, wired from
    * apps/workers/src/cron/dataLakeBatchReconcile.ts's rescue sweep.
    * Namespace: Lumina5/DataLakeBatch / ChunkRescueFailures, dimension Stage=<this stage>. The
    * emitter writes both a stage-less and a `{ Stage }`-scoped stream (a dimensioned metric is a
@@ -1332,7 +1374,7 @@ if (isMonitoredStage) {
    * individualLogGroups, so its logger.error is neither Slacked nor alarmed, and the function has
    * no AWS/Lambda Errors alarm either - the throw is caught, so the invocation succeeds.
    *
-   * Metric emitted by: server/utils/cloudwatch.ts -> recordChunkRescueSweep, with the 'failed'
+   * Metric emitted by: packages/server-utils/src/utils/cloudwatch.ts -> recordChunkRescueSweep, with the 'failed'
    * outcome supplied by apps/workers/src/cron/dataLakeBatchReconcile.ts's catch.
    * Namespace: Lumina5/DataLakeBatch / ChunkRescueRuns, dimensions outcome=failed + Stage=<this
    * stage>. Unlike the stage rollups elsewhere in this file, the scoped Runs stream keeps
@@ -1376,7 +1418,7 @@ if (isMonitoredStage) {
    * Routed to the shared dlqAlarmTopic (not a dedicated topic) to reuse its existing
    * Slack-forwarding subscription rather than duplicating that wiring for a single alarm.
    *
-   * Metric emitted by: server/utils/cloudwatch.ts -> recordFeedbackDeliveryFailure, wired
+   * Metric emitted by: packages/server-utils/src/utils/cloudwatch.ts -> recordFeedbackDeliveryFailure, wired
    * from server/integrations/slack/slack.ts's postFeedbackToSlack and
    * pages/api/feedback/index.ts's email path.
    * Namespace: Lumina5/FeedbackDelivery / DeliveryFailed. Reads the coarse `{ Stage }`-only
@@ -1415,7 +1457,7 @@ if (isMonitoredStage) {
    * 'nonprod_unconfigured') do not emit the rollup this reads - see
    * buildFeedbackDeliverySkippedMetrics - so this alarm never pages for a setting an admin chose.
    *
-   * Metric emitted by: server/utils/cloudwatch.ts -> recordFeedbackDeliverySkipped, wired from
+   * Metric emitted by: packages/server-utils/src/utils/cloudwatch.ts -> recordFeedbackDeliverySkipped, wired from
    * the same two call sites as feedbackDeliveryFailures above.
    * Namespace: Lumina5/FeedbackDelivery / DeliverySkipped, Stage-scoped identically.
    */
@@ -1473,26 +1515,211 @@ if (isMonitoredStage) {
   });
 
   /**
-   * Alarm: Session Reuse Revoked
+   * Alarm: Quest callback delivery exhausted its retries
    *
-   * Fires on any occurrence of a refresh token being presented after its rotation window,
-   * which causes the session to be revoked. Each event is a presumed token theft: both
-   * the legitimate user and any attacker are logged out. Any single occurrence warrants
-   * investigation.
+   * A generation callback whose claim was lost or crashed on every redispatch was moved to
+   * `failed`. Steady state is 0. Webhook delivery failures never reach this metric (the delivery
+   * handler marks them failed itself; the generation-callback DLQ alarm covers them).
+   * Single period: each reclaim resets dispatchedAt for the whole cohort, so exhaustions land in
+   * one sweep run and a multi-period window would rarely see consecutive datapoints.
+   *
+   * Metric emitted by: apps/workers/src/cron/questTimeoutSweep.ts -> failExhaustedCallbacks.
+   * Namespace: QUESTS_NAMESPACE, dimensioned by Stage only (the sweep emits { Stage }).
+   */
+  new aws.cloudwatch.MetricAlarm('questCallbackLimitReached', {
+    name: `${$app.name}-${$app.stage}-quest-callback-limit-reached`,
+    alarmDescription: 'Quest generation callbacks are failing: redispatch retries exhausted',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: QUEST_METRICS.TimeoutSweepCallbacksFailedLimitReached,
+    namespace: QUESTS_NAMESPACE,
+    period: 300, // 5 minutes
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    dimensions: { Stage: $app.stage },
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'Quests',
+      Severity: 'High',
+    },
+  });
+
+  /**
+   * Alarm: Quest callback past the redispatch horizon
+   *
+   * A callback whose last claim aged past the 72h redispatch horizon was failed. Steady state is
+   * ~0, so non-zero after the one-time historical backlog drain means a claim went unswept for
+   * 72h (the sweep was down or erroring and has since resumed). A sweep that is down right now
+   * emits nothing, which notBreaching reads as OK. Fires on a single period: any occurrence is a
+   * signal. The historical backlog was already drained when the sweep shipped, so deploying this
+   * alarm does not page.
+   *
+   * Metric emitted by: apps/workers/src/cron/questTimeoutSweep.ts -> failExhaustedCallbacks.
+   */
+  new aws.cloudwatch.MetricAlarm('questCallbackHorizonPassed', {
+    name: `${$app.name}-${$app.stage}-quest-callback-horizon-passed`,
+    alarmDescription: 'Quest generation callbacks aged past the 72h redispatch horizon and were failed',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: QUEST_METRICS.TimeoutSweepCallbacksFailedHorizonPassed,
+    namespace: QUESTS_NAMESPACE,
+    period: 300, // 5 minutes
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    dimensions: { Stage: $app.stage },
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'Quests',
+      Severity: 'High',
+    },
+  });
+
+  /**
+   * Alarm: Quest callback re-enqueued after a lost claim
+   *
+   * The sweep re-enqueued callbacks stuck at `dispatched` whose queue message never arrived - a
+   * message lost after its claim, distinct from a claim never made. Some rate is normal; a
+   * sustained one means the queue is dropping claimed callbacks. Three periods to ride out a
+   * single stale re-send.
+   *
+   * Metric emitted by: apps/workers/src/cron/questTimeoutSweep.ts -> redispatchStaleCallbacks.
+   */
+  new aws.cloudwatch.MetricAlarm('questStaleCallbackReenqueued', {
+    name: `${$app.name}-${$app.stage}-quest-stale-callback-reenqueued`,
+    alarmDescription: 'Quest generation callbacks are being re-enqueued after their claim message was lost',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 3,
+    metricName: QUEST_METRICS.TimeoutSweepStaleCallbacksReenqueued,
+    namespace: QUESTS_NAMESPACE,
+    period: 300, // 5 minutes
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    dimensions: { Stage: $app.stage },
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'Quests',
+      Severity: 'High',
+    },
+  });
+
+  /**
+   * Alarm: Stale voice credit hold settled by the sweep
+   *
+   * The stale-hold sweep settled a voice hold no client ever ended. Steady state is 0: a
+   * non-zero count means the client hold leak is back. A single genuine browser crash can also
+   * trip it, hence Medium.
+   *
+   * Metric emitted by: apps/workers/src/cron/voiceHoldSweep.ts -> handler.
+   * Namespace: VOICE_NAMESPACE, dimensioned by Stage only (the handler emits { Stage }).
+   */
+  new aws.cloudwatch.MetricAlarm('voiceStaleHoldsSettled', {
+    name: `${$app.name}-${$app.stage}-voice-stale-holds-settled`,
+    alarmDescription:
+      'The stale voice hold sweep settled a credit hold no client ended: the voice hold leak may be back',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: VOICE_METRICS.HoldSweepSettled,
+    namespace: VOICE_NAMESPACE,
+    period: 300, // 5 minutes, one sweep run
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    dimensions: { Stage: $app.stage },
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'Voice',
+      Severity: 'Medium',
+    },
+  });
+
+  /**
+   * Alarm: Stale voice hold sweep cannot settle a hold
+   *
+   * A hold's settlement threw, or the whole run did (database unreachable, query error). The hold
+   * stays charged and the next run retries it, so failures in two of three runs are a stuck
+   * sweep, not a blip. Two of three rather than three in a row: a period with no run reads as
+   * not breaching and would reset the streak.
+   *
+   * Metric emitted by: apps/workers/src/cron/voiceHoldSweep.ts -> handler.
+   */
+  new aws.cloudwatch.MetricAlarm('voiceHoldSweepFailures', {
+    name: `${$app.name}-${$app.stage}-voice-hold-sweep-failures`,
+    alarmDescription: 'The stale voice hold sweep is failing to settle credit holds',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 3,
+    datapointsToAlarm: 2,
+    metricName: VOICE_METRICS.HoldSweepFailed,
+    namespace: VOICE_NAMESPACE,
+    period: 300, // 5 minutes
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    dimensions: { Stage: $app.stage },
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'Voice',
+      Severity: 'High',
+    },
+  });
+
+  /**
+   * Alarm: Stale voice hold sweep Lambda errors
+   *
+   * A timeout, OOM or init crash never reaches the handler's emit, so it shows up here and nowhere
+   * else. A run that throws also counts in voiceHoldSweepFailures. Same 2-of-3 rule as that alarm.
+   */
+  // The sweep cron only exists on scheduled stages; an ENABLE_MONITORING preview has no Lambda to watch.
+  if (voiceHoldSweepCron) {
+    new aws.cloudwatch.MetricAlarm('voiceHoldSweepLambdaErrors', {
+      name: `${$app.name}-${$app.stage}-voice-hold-sweep-lambda-errors`,
+      alarmDescription: 'The stale voice hold sweep Lambda is erroring (timeout, OOM or crash)',
+      comparisonOperator: 'GreaterThanThreshold',
+      evaluationPeriods: 3,
+      datapointsToAlarm: 2,
+      metricName: 'Errors',
+      namespace: 'AWS/Lambda',
+      period: 300,
+      statistic: 'Sum',
+      threshold: 0,
+      treatMissingData: 'notBreaching',
+      dimensions: { FunctionName: voiceHoldSweepCron.nodes.function.name },
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: {
+        Application: 'Voice',
+        Severity: 'High',
+      },
+    });
+  }
+
+  /**
+   * Alarm: Session Reuse Revoked Burst
+   *
+   * Fires when 3 or more sessions are revoked for refresh-token reuse within an hour. A single
+   * revocation is already contained by the revoke itself (whoever holds the stale token is signed
+   * out), and on production most single events have been benign: a second client on the user's
+   * own network holding a stale cookie, at a baseline of roughly one every three days. A burst is
+   * the signal worth a page - a client regression stranding tokens at scale, or tokens taken in
+   * bulk. Individual events stay queryable without paging: the metric, the
+   * `[auth] session_reuse_revoked` log line (user, request IP vs issuing IP, user agent, idle time)
+   * and the UserAuthAuditLog row.
    *
    * Metric emitted by: server/utils/authAudit.ts -> recordSessionReuseRevoked()
    * Namespace: Lumina5/AuthSecurity / SessionReuseRevoked
    */
-  new aws.cloudwatch.MetricAlarm('sessionReuseRevoked', {
-    name: `${$app.name}-${$app.stage}-session-reuse-revoked`,
-    alarmDescription: 'Refresh token reuse detected outside recovery window - presumed token theft; session revoked',
-    comparisonOperator: 'GreaterThanThreshold',
+  new aws.cloudwatch.MetricAlarm('sessionReuseRevokedBurst', {
+    name: `${$app.name}-${$app.stage}-session-reuse-revoked-burst`,
+    alarmDescription:
+      'Burst of refresh-token reuse revocations (>=3 in 1h) - possible bulk token theft or a client regression stranding tokens',
+    comparisonOperator: 'GreaterThanOrEqualToThreshold',
     evaluationPeriods: 1,
     metricName: 'SessionReuseRevoked',
     namespace: 'Lumina5/AuthSecurity',
-    period: 300, // 5 minutes
+    period: 3600, // 1 hour
     statistic: 'Sum',
-    threshold: 0, // Any occurrence is worth investigating
+    threshold: 3,
     treatMissingData: 'notBreaching',
     alarmActions: [dlqAlarmTopic.arn],
     tags: {

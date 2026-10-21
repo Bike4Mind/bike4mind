@@ -1,23 +1,27 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
-import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import {
   dataLakeRepository,
   fabFileRepository,
   isDriveSyncClaimLive,
   orgGoogleDriveConnectionRepository,
 } from '@bike4mind/database';
-import { driveConnectionOwnerOf, isDriveDisconnectStalled, isSameDriveConnectionOwner } from '@bike4mind/common';
-import type { DriveConnectionOwner, IDataLakeDocument, IOrgGoogleDriveConnectionDocument } from '@bike4mind/common';
-import type { DriveDisconnectPurgePayload } from '@server/queueHandlers/driveDisconnectPurge';
+import { lakeConnectionOwnerOf, isDriveDisconnectStalled, isSameLakeConnectionOwner } from '@bike4mind/common';
+import type { LakeConnectionOwner, IDataLakeDocument, IOrgGoogleDriveConnectionDocument } from '@bike4mind/common';
+import type { DriveDisconnectPurgePayload } from '@bike4mind/server-utils/dataLakes/driveDisconnectPurgePayload';
 import { listDeletableDriveOrphans } from '@server/integrations/google/drive/connectorOrphanFiles';
 import {
-  authorizeLakeDriveAccess,
-  authorizeLakeDriveRead,
-} from '@server/integrations/google/drive/authorizeLakeDriveAccess';
-import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
-import { sendToQueue } from '@server/utils/sqs';
-import { NotFoundError } from '@server/utils/errors';
+  DRIVE_LAKE_POLL_INTERVAL_MS,
+  isDriveLakePollScheduled,
+} from '@bike4mind/server-utils/integrations/google/drive/drivePollSchedule';
+import {
+  authorizeLakeConnectorAccess,
+  authorizeLakeConnectorRead,
+} from '@server/dataLakes/authorizeLakeConnectorAccess';
+import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { Request } from 'express';
 
 /**
@@ -29,7 +33,7 @@ import { Request } from 'express';
  * `fileCount` rides along so the disconnect-confirmation dialog can warn how many documents a
  * disconnect will delete without a separate round trip.
  */
-function toSafeConnection(c: IOrgGoogleDriveConnectionDocument, fileCount: number) {
+function toSafeConnection(c: IOrgGoogleDriveConnectionDocument, fileCount: number, pollEnabled: boolean) {
   return {
     id: c.id,
     driveFolderId: c.driveFolderId,
@@ -40,10 +44,28 @@ function toSafeConnection(c: IOrgGoogleDriveConnectionDocument, fileCount: numbe
     lastError: c.lastError ?? null,
     lastUsedAt: c.lastUsedAt ?? null,
     connectedAt: c.connectedAt ?? null,
+    // Stamped when ANY sync run ends (manual Re-sync, initial connect or the poll), failed runs too:
+    // with a lastError it is the last ATTEMPT. lastUsedAt is the last Drive API call, not a sync.
+    lastPolledAt: c.lastPolledAt ?? null,
+    syncSchedule: syncScheduleOf(c, pollEnabled),
     fileCount,
     disconnecting: !!c.disconnectRequestedAt,
     disconnectStalled: !!c.disconnectRequestedAt && isDriveDisconnectStalled(c.disconnectRequestedAt),
   };
+}
+
+type DriveSyncSchedule = { mode: 'automatic'; intervalMs: number } | { mode: 'paused' } | { mode: 'manual' };
+
+/**
+ * Whether the scheduled poll will pick this connection up. Mirrors findDueForPoll's filter (enabled +
+ * status 'connected'; a live 'syncing' claim returns to 'connected' when its run ends, a stale one
+ * never does), so a connection the poll skips until someone acts reads as paused, not automatic.
+ */
+function syncScheduleOf(c: IOrgGoogleDriveConnectionDocument, pollEnabled: boolean): DriveSyncSchedule {
+  if (!pollEnabled) return { mode: 'manual' };
+  const pollable = c.status === 'connected' || (c.status === 'syncing' && isDriveSyncClaimLive(c));
+  if (!c.enabled || !pollable) return { mode: 'paused' };
+  return { mode: 'automatic', intervalMs: DRIVE_LAKE_POLL_INTERVAL_MS };
 }
 
 async function findLake(req: Request): Promise<IDataLakeDocument> {
@@ -59,18 +81,18 @@ async function findLake(req: Request): Promise<IDataLakeDocument> {
  * Resolve the lake and assert the caller may manage its Drive connection - an org owner/manager on an
  * org lake, the creator on a personal one (the same gate as drive-sync).
  */
-async function resolveLake(req: Request): Promise<{ lake: IDataLakeDocument; owner: DriveConnectionOwner }> {
+async function resolveLake(req: Request): Promise<{ lake: IDataLakeDocument; owner: LakeConnectionOwner }> {
   const lake = await findLake(req);
-  const owner = await authorizeLakeDriveAccess(req.user, lake);
+  const owner = await authorizeLakeConnectorAccess(req.user, lake);
   return { lake, owner };
 }
 
-/** Same lookup for the status read, which an appointed org admin may also make (see authorizeLakeDriveRead). */
+/** Same lookup for the status read, which an appointed org admin may also make (see authorizeLakeConnectorRead). */
 async function resolveLakeForRead(
   req: Request
-): Promise<{ lake: IDataLakeDocument; owner: DriveConnectionOwner; canManage: boolean }> {
+): Promise<{ lake: IDataLakeDocument; owner: LakeConnectionOwner; canManage: boolean }> {
   const lake = await findLake(req);
-  const { owner, canManage } = await authorizeLakeDriveRead(req.user, lake);
+  const { owner, canManage } = await authorizeLakeConnectorRead(req.user, lake);
   return { lake, owner, canManage };
 }
 
@@ -84,13 +106,13 @@ async function resolveLakeForRead(
  * revoking anything, and the folder would stay unclaimable by anyone.
  *
  * findByDataLakeIdAny is deliberately global (server-side only). The tenant boundary is
- * the authorizeLakeDrive* gate resolveLake/resolveLakeForRead ran; the comparison below is defence in
+ * the authorizeLakeConnector* gate resolveLake/resolveLakeForRead ran; the comparison below is defence in
  * depth against inconsistent data - both sides derive from the same lake - and is NOT what scopes the
  * caller. A route that copies this finder needs the authorization, not just the comparison.
  */
-async function findLakeConnection(lakeId: string, owner: DriveConnectionOwner) {
+async function findLakeConnection(lakeId: string, owner: LakeConnectionOwner) {
   const conn = await orgGoogleDriveConnectionRepository.findByDataLakeIdAny(lakeId);
-  if (conn && !isSameDriveConnectionOwner(driveConnectionOwnerOf(conn), owner)) {
+  if (conn && !isSameLakeConnectionOwner(lakeConnectionOwnerOf(conn), owner)) {
     throw new NotFoundError('Drive connection not found');
   }
   return conn;
@@ -127,8 +149,11 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     // The confirm number must equal what the purge removes, so it folds in the gate-cleared orphans
     // (files this connection unpicked and left alive) the purge sweeps the same way - the member
     // count alone under-reports exactly the rows this change is about.
-    const orphans = await listDeletableDriveOrphans(lake, conn.id, req.logger);
-    return res.json({ connection: toSafeConnection(conn, fileCount + orphans.length), canManage });
+    const [orphans, pollEnabled] = await Promise.all([
+      listDeletableDriveOrphans(lake, conn.id, req.logger),
+      isDriveLakePollScheduled(),
+    ]);
+    return res.json({ connection: toSafeConnection(conn, fileCount + orphans.length, pollEnabled), canManage });
   })
   .delete(async (req: Request, res) => {
     assertDataLakeWriteScope(req);

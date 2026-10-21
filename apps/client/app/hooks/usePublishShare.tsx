@@ -29,6 +29,7 @@ interface ShareState {
   markdown?: string;
   defaultVisibility: PublishVisibility;
   resolveExisting?: () => Promise<ExistingPublication | null>;
+  resolvePublished?: () => Promise<PublishResult | null>;
   orgOption?: { label: string; hint: string };
   incompleteWarning?: string;
 }
@@ -52,6 +53,11 @@ interface PublishAndShareOpts {
    * new". Runs only after the dialog opens, so it never publishes anything.
    */
   resolveExisting?: () => Promise<ExistingPublication | null>;
+  /**
+   * Optional lookup for a source with at most one publication (a chat reply). When it finds one,
+   * the dialog opens onto that live page so visibility changes act on it.
+   */
+  resolvePublished?: () => Promise<PublishResult | null>;
   /**
    * When set, the dialog offers a "Team" (organization) visibility choice. Pass only when the
    * caller is in an org ("Team") account context and the publish callback can produce an
@@ -88,6 +94,7 @@ export function usePublishShare() {
       markdown: opts.markdown,
       defaultVisibility: opts.defaultVisibility ?? 'public',
       resolveExisting: opts.resolveExisting,
+      resolvePublished: opts.resolvePublished,
       orgOption: opts.orgOption,
       incompleteWarning: opts.incompleteWarning,
     });
@@ -104,6 +111,7 @@ export function usePublishShare() {
       markdown={state.markdown}
       defaultVisibility={state.defaultVisibility}
       resolveExisting={state.resolveExisting}
+      resolvePublished={state.resolvePublished}
       orgOption={state.orgOption}
       incompleteWarning={state.incompleteWarning}
     />

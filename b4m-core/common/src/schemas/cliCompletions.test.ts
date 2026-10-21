@@ -5,11 +5,20 @@
 
 import { describe, it, expect } from 'vitest';
 import {
+  COMPLETION_SSE_ERROR_CODES,
   CompletionRequestSchema,
+  CompletionSseErrorEventSchema,
+  CompletionStreamEventSchema,
   CompletionToolSchema,
+  isCompletionServerTool,
+  isToolChangeBlockType,
+  isToolChangeMessage,
+  ToolChangeBlockSchema,
+  ToolChangeMessageContentSchema,
   ResponseFormatSchema,
   normalizeCompletionRequest,
 } from './cliCompletions';
+import { QUEST_ERROR_CODES } from '../types/entities/SessionTypes';
 
 describe('ResponseFormatSchema', () => {
   it('accepts text mode', () => {
@@ -72,6 +81,82 @@ describe('CompletionToolSchema', () => {
         toolSchema: { name: 'add', description: '', parameters: { type: 'string' } },
       })
     ).toThrow();
+  });
+});
+
+describe('CompletionToolSchema tool search', () => {
+  const customTool = {
+    toolSchema: { name: 'get_weather', description: 'Weather', parameters: { type: 'object' } },
+  };
+
+  it('keeps defer_loading and cache_control on a custom tool', () => {
+    const parsed = CompletionToolSchema.parse({
+      toolSchema: { ...customTool.toolSchema, defer_loading: true, cache_control: { type: 'ephemeral' } },
+    });
+    expect(parsed).toEqual({
+      toolSchema: { ...customTool.toolSchema, defer_loading: true, cache_control: { type: 'ephemeral' } },
+    });
+    expect(isCompletionServerTool(parsed)).toBe(false);
+  });
+
+  it('parses a plain custom tool to the same shape as before', () => {
+    expect(CompletionToolSchema.parse(customTool)).toEqual(customTool);
+  });
+
+  it.each([
+    ['tool_search_tool_regex_20251119', 'tool_search_tool_regex'],
+    ['tool_search_tool_bm25_20251119', 'tool_search_tool_bm25'],
+  ])('accepts the %s server tool', (type, name) => {
+    const parsed = CompletionToolSchema.parse({ serverTool: { type, name } });
+    expect(parsed).toEqual({ serverTool: { type, name } });
+    expect(isCompletionServerTool(parsed)).toBe(true);
+  });
+
+  it.each([
+    ['an unknown server tool type', { type: 'web_search_20260209', name: 'web_search' }],
+    ['a name that does not match the type', { type: 'tool_search_tool_regex_20251119', name: 'tool_search_tool_bm25' }],
+    ['a missing name', { type: 'tool_search_tool_bm25_20251119' }],
+  ])('rejects %s', (_label, serverTool) => {
+    expect(CompletionToolSchema.safeParse({ serverTool }).success).toBe(false);
+  });
+
+  it('rejects a non-boolean defer_loading', () => {
+    expect(
+      CompletionToolSchema.safeParse({ toolSchema: { ...customTool.toolSchema, defer_loading: 'yes' } }).success
+    ).toBe(false);
+  });
+
+  it('accepts a mixed tools[] in the request body', () => {
+    const out = CompletionRequestSchema.parse({
+      model: 'claude-opus-5-5',
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [
+        { toolSchema: { ...customTool.toolSchema, defer_loading: true } },
+        { serverTool: { type: 'tool_search_tool_regex_20251119', name: 'tool_search_tool_regex' } },
+      ],
+    });
+    expect(out.tools).toHaveLength(2);
+  });
+});
+
+describe('CompletionStreamEventSchema provider_block', () => {
+  const block = { type: 'server_tool_use', id: 'srvtoolu_1', name: 'tool_search_tool_regex', input: { query: 'x' } };
+
+  it('accepts a provider_block frame', () => {
+    expect(CompletionStreamEventSchema.parse({ type: 'provider_block', provider: 'anthropic', block })).toEqual({
+      type: 'provider_block',
+      provider: 'anthropic',
+      block,
+    });
+  });
+
+  it('rejects a provider_block frame from an unknown provider or without a block', () => {
+    expect(CompletionStreamEventSchema.safeParse({ type: 'provider_block', provider: 'openai', block }).success).toBe(
+      false
+    );
+    expect(CompletionStreamEventSchema.safeParse({ type: 'provider_block', provider: 'anthropic' }).success).toBe(
+      false
+    );
   });
 });
 
@@ -162,6 +247,20 @@ describe('CompletionRequestSchema', () => {
     expect(out.temperature).toBe(0.2);
     expect(out.max_tokens).toBe(512);
     expect(out.tools).toHaveLength(1);
+  });
+});
+
+describe('CompletionRequestSchema model length', () => {
+  const messages = [{ role: 'user', content: 'hi' }];
+
+  it('accepts a model id of exactly 256 characters', () => {
+    expect(CompletionRequestSchema.safeParse({ model: 'm'.repeat(256), messages }).success).toBe(true);
+  });
+
+  it('rejects a model id over 256 characters on the model field', () => {
+    const result = CompletionRequestSchema.safeParse({ model: 'm'.repeat(257), messages });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.map(i => i.path)).toEqual([['model']]);
   });
 });
 
@@ -403,9 +502,98 @@ describe('CompletionRequestSchema options.thinking', () => {
     expect(parsed.options?.thinking).toEqual({ enabled: true });
   });
 
-  it('rejects a non-positive budget', () => {
+  it('rejects a budget below the API minimum of 1024', () => {
     expect(() =>
-      CompletionRequestSchema.parse({ ...base, options: { thinking: { enabled: true, budget_tokens: 0 } } })
+      CompletionRequestSchema.parse({ ...base, options: { thinking: { enabled: true, budget_tokens: 1023 } } })
     ).toThrow();
+    expect(
+      CompletionRequestSchema.parse({ ...base, options: { thinking: { enabled: true, budget_tokens: 1024 } } }).options
+        ?.thinking
+    ).toEqual({ enabled: true, budget_tokens: 1024 });
+  });
+});
+
+describe('CompletionSseErrorEventSchema', () => {
+  it('accepts the provider classifiers alongside the billing ones', () => {
+    for (const code of [
+      'insufficient_credits',
+      'spend_cap_exceeded',
+      'provider_error',
+      'provider_rejected',
+      'content_blocked',
+    ]) {
+      expect(CompletionSseErrorEventSchema.safeParse({ type: 'error', message: 'm', code }).success).toBe(true);
+    }
+  });
+
+  it('rejects a code outside the frame vocabulary', () => {
+    const frame = { type: 'error', message: 'm', code: 'provider_not_configured' };
+    expect(CompletionSseErrorEventSchema.safeParse(frame).success).toBe(false);
+  });
+
+  // QUEST_ERROR_CODES is persisted on quests; the frame widens its own copy instead.
+  it('leaves the persisted quest vocabulary unwidened', () => {
+    expect([...QUEST_ERROR_CODES]).toEqual(['insufficient_credits', 'spend_cap_exceeded']);
+    expect([...COMPLETION_SSE_ERROR_CODES]).toEqual([
+      ...QUEST_ERROR_CODES,
+      'provider_error',
+      'provider_rejected',
+      'content_blocked',
+    ]);
+  });
+});
+
+describe('CompletionRequestSchema thinking budget', () => {
+  it('rejects a thinking budget past MAX_THINKING_BUDGET_TOKENS', () => {
+    const parsed = CompletionRequestSchema.safeParse({
+      model: 'claude',
+      messages: [{ role: 'user', content: 'hi' }],
+      options: { thinking: { enabled: true, budget_tokens: 10_000_000 } },
+    });
+    expect(parsed.success).toBe(false);
+  });
+});
+
+describe('ToolChangeBlockSchema', () => {
+  const ref = { type: 'tool_reference', name: 'get_weather' };
+
+  it('accepts a tool_addition and a tool_removal naming a tool', () => {
+    expect(ToolChangeBlockSchema.safeParse({ type: 'tool_addition', tool: ref }).success).toBe(true);
+    expect(ToolChangeBlockSchema.safeParse({ type: 'tool_removal', tool: ref }).success).toBe(true);
+  });
+
+  it.each([
+    ['an inline definition', { type: 'tool_addition', tool: { ...ref, description: 'x', input_schema: {} } }],
+    ['an MCP reference', { type: 'tool_addition', tool: { type: 'mcp_tool_reference', name: 'get_weather' } }],
+    ['an empty name', { type: 'tool_addition', tool: { type: 'tool_reference', name: '' } }],
+    ['the tool_search tool_name spelling', { type: 'tool_addition', tool: { type: 'tool_reference', tool_name: 'a' } }],
+    ['an unknown block type', { type: 'tool_swap', tool: ref }],
+    ['an extra block key', { type: 'tool_addition', tool: ref, cache_control: { type: 'ephemeral' } }],
+  ])('rejects %s', (_label, block) => {
+    expect(ToolChangeBlockSchema.safeParse(block).success).toBe(false);
+  });
+
+  it('requires a non-empty array of blocks for a message', () => {
+    expect(ToolChangeMessageContentSchema.safeParse([]).success).toBe(false);
+    expect(ToolChangeMessageContentSchema.safeParse([{ type: 'text', text: 'hi' }]).success).toBe(false);
+    expect(ToolChangeMessageContentSchema.safeParse([{ type: 'tool_removal', tool: ref }]).success).toBe(true);
+  });
+
+  it('recognises a tool change block by type alone', () => {
+    expect(isToolChangeBlockType({ type: 'tool_addition' })).toBe(true);
+    expect(isToolChangeBlockType({ type: 'text' })).toBe(false);
+    expect(isToolChangeBlockType(null)).toBe(false);
+    expect(isToolChangeBlockType('tool_addition')).toBe(false);
+  });
+});
+
+describe('isToolChangeMessage', () => {
+  const content = [{ type: 'tool_addition', tool: { type: 'tool_reference', name: 'get_weather' } }];
+
+  it('is true only for a system message holding tool change blocks', () => {
+    expect(isToolChangeMessage({ role: 'system', content })).toBe(true);
+    expect(isToolChangeMessage({ role: 'user', content })).toBe(false);
+    expect(isToolChangeMessage({ role: 'system', content: 'be brief' })).toBe(false);
+    expect(isToolChangeMessage({ role: 'system', content: [{ type: 'text', text: 'be brief' }] })).toBe(false);
   });
 });

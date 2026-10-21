@@ -115,8 +115,14 @@ class GenerationJobRepository extends BaseRepository<IGenerationJobDocument> imp
     );
   }
 
-  async markSubmitAttempted(id: string, at: Date) {
-    await this.jobModel.updateOne({ _id: id }, { $set: { submitAttemptedAt: at } });
+  async markSubmitAttempted(id: string, at: Date, { markRunning }: { markRunning: boolean }) {
+    return toJob(
+      await this.jobModel.findOneAndUpdate(
+        { _id: id, cancelRequested: { $ne: true } },
+        { $set: { submitAttemptedAt: at, ...(markRunning && { state: 'running' }) } },
+        { new: true }
+      )
+    );
   }
 
   // Every engine step ends here: one write that applies the step's result and releases the lease.
@@ -130,10 +136,13 @@ class GenerationJobRepository extends BaseRepository<IGenerationJobDocument> imp
     );
   }
 
-  async requestCancel(id: string) {
+  async requestCancel(id: string, { beforeSubmitOnly }: { beforeSubmitOnly: boolean }) {
+    const cancellable = beforeSubmitOnly
+      ? { state: 'pending', submitAttemptedAt: null }
+      : { state: { $in: CANCELLABLE } };
     return toJob(
       await this.jobModel.findOneAndUpdate(
-        { _id: id, state: { $in: CANCELLABLE } },
+        { _id: id, ...cancellable },
         { $set: { cancelRequested: true } },
         { new: true }
       )

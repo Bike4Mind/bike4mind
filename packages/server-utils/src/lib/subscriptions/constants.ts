@@ -1,0 +1,19 @@
+export const isTestMode = process.env.NEXT_PUBLIC_SEED_STAGE_NAME !== 'production';
+
+// Account-tied Stripe price; sourced per-stage from NEXT_PUBLIC_* env vars with no
+// brand fallback. Empty when unconfigured == org checkout inactive.
+export const ORGANIZATION_SUBSCRIPTION_PRICE_ID = isTestMode
+  ? (process.env.NEXT_PUBLIC_STRIPE_PRICE_ORG_SUB_TEST ?? '')
+  : (process.env.NEXT_PUBLIC_STRIPE_PRICE_ORG_SUB_PROD ?? '');
+
+// Seat floor/ceiling and credits-per-seat live in common so the persistence layer can enforce the
+// ceiling too (OrganizationModel.addMemberRaisingSeats). They are only the DEFAULTS of the
+// teamPlan* admin settings: server code reads getTeamPlanSettings(), client code useTeamPlanSettings().
+export {
+  ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
+  ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
+  ORGANIZATION_SUBSCRIPTION_CREDITS_PER_SEAT,
+} from '@bike4mind/common';
+
+/** Shown wherever a Team purchase entry point is disabled because the enableTeamPlan setting is off. */
+export const TEAM_PLAN_UNAVAILABLE_MESSAGE = 'Team plans are not available right now.';

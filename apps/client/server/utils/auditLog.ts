@@ -5,7 +5,7 @@ import {
   AdminOrgAuditEvents,
   DataLakeAuditEvents,
   EmailAuditEvents,
-} from '@server/utils/auditLogEvents';
+} from '@bike4mind/server-utils/utils/auditLogEvents';
 
 // Re-export so existing call sites continue to import these names from `auditLog`.
 // The canonical definitions live in `auditLogEvents.ts` to avoid an import cycle

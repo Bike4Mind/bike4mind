@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ModelBackend, getTextModelCost, usdToCredits, type ModelInfo } from '@bike4mind/common';
+import {
+  ChatModels,
+  ModelBackend,
+  getTextModelCost,
+  usdToCredits,
+  type CompletionTool,
+  type ModelInfo,
+} from '@bike4mind/common';
 import {
   PREFLIGHT_RESERVATION_OUTPUT_TOKENS,
   PREFLIGHT_RESERVATION_REASONING_OUTPUT_TOKENS,
@@ -78,6 +85,18 @@ const XAI_MODEL_INFO = {
   pricing: CACHE_READ_PRICING,
 } as unknown as ModelInfo;
 
+// cache_read on the lower bracket only: the adapters forward nothing (their gate needs it on every
+// tier), so the hold must stay uncached even though the request's tier carries a cache rate.
+const MIXED_LADDER_MODEL_ID = 'reservation-test-gemini-mixed-ladder';
+const MIXED_LADDER_MODEL_INFO = {
+  ...GEMINI_MODEL_INFO,
+  id: MIXED_LADDER_MODEL_ID,
+  pricing: {
+    200_000: { input: 5 / 1_000_000, output: 25 / 1_000_000, cache_read: 0.5 / 1_000_000 },
+    2_097_152: { input: 10 / 1_000_000, output: 50 / 1_000_000 },
+  },
+} as unknown as ModelInfo;
+
 // Literal rates (per token) so the tier test asserts a figure not derived from getTextModelCost.
 const TIERED_MODEL_ID = 'reservation-test-tiered';
 const TIERED_MODEL_INFO = {
@@ -88,6 +107,10 @@ const TIERED_MODEL_INFO = {
     200_000: { input: 10 / 1_000_000, output: 20 / 1_000_000 },
   },
 } as unknown as ModelInfo;
+
+// A direct Anthropic id that serves native tool search, so a deferred tool stays deferred.
+const TOOL_SEARCH_MODEL_ID = ChatModels.CLAUDE_5_5_OPUS;
+const TOOL_SEARCH_MODEL_INFO = { ...MODEL_INFO, id: TOOL_SEARCH_MODEL_ID } as unknown as ModelInfo;
 
 // Same pricing, but reasoning tokens bill inside the output budget, so this one must
 // hold the larger reasoning figure. 'adaptive' is what real reasonsWithinOutputBudget
@@ -117,7 +140,9 @@ vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
     BEDROCK_MODEL_INFO,
     GEMINI_MODEL_INFO,
     XAI_MODEL_INFO,
+    MIXED_LADDER_MODEL_INFO,
     TIERED_MODEL_INFO,
+    TOOL_SEARCH_MODEL_INFO,
   ]),
   getLlmByModel: vi.fn(() => ({
     currentModel: '',
@@ -222,6 +247,110 @@ describe('executeCompletion - pre-flight reservation size', () => {
     expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expectedReasoningHold);
   });
 
+  describe('tool definitions', () => {
+    const tool = (name: string, descriptionChars: number, deferLoading = false): CompletionTool => ({
+      toolSchema: {
+        name,
+        description: 'x'.repeat(descriptionChars),
+        parameters: { type: 'object' },
+        ...(deferLoading ? { defer_loading: true } : {}),
+      },
+    });
+    // What the provider is sent: the schema as given, minus nothing when defer_loading is absent.
+    const toolTokens = (...tools: CompletionTool[]) =>
+      Math.ceil(
+        tools.reduce((sum, t) => sum + JSON.stringify((t as { toolSchema: unknown }).toolSchema).length, 0) / 2.5
+      );
+    const holdFor = (model: ModelInfo, inputTokens: number) =>
+      usdToCredits(getTextModelCost(model, inputTokens, reservationOutputTokens(MAX_TOKENS)));
+
+    it('grows the hold with the size of the tool schemas', async () => {
+      const small = tool('small', 1_000);
+      const large = tool('large', 100_000);
+
+      const smallRun = buildDb();
+      await executeCompletion({ ...baseParams, db: smallRun.db, options: { ...baseParams.options, tools: [small] } });
+      const largeRun = buildDb();
+      await executeCompletion({ ...baseParams, db: largeRun.db, options: { ...baseParams.options, tools: [large] } });
+
+      const smallHold = holdFor(MODEL_INFO, INPUT_TOKENS + toolTokens(small));
+      const largeHold = holdFor(MODEL_INFO, INPUT_TOKENS + toolTokens(large));
+      expect(largeHold).toBeGreaterThan(smallHold);
+      expect(smallHold).toBeGreaterThan(expectedHold);
+      expect(smallRun.users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -smallHold);
+      expect(largeRun.users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -largeHold);
+    });
+
+    it('leaves a deferred tool out of the hold on a model that serves tool search', async () => {
+      const kept = tool('kept', 1_000);
+      const deferred = tool('deferred', 100_000, true);
+      const { db, users } = buildDb();
+
+      await executeCompletion({
+        ...baseParams,
+        model: TOOL_SEARCH_MODEL_ID,
+        db,
+        options: { ...baseParams.options, tools: [kept, deferred] },
+      });
+
+      const expected = holdFor(TOOL_SEARCH_MODEL_INFO, INPUT_TOKENS + toolTokens(kept));
+      const withDeferred = holdFor(TOOL_SEARCH_MODEL_INFO, INPUT_TOKENS + toolTokens(kept, deferred));
+      expect(withDeferred).toBeGreaterThan(expected);
+      expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
+    });
+
+    it('counts a deferred tool where defer_loading is not honoured, since it is sent as a plain tool', async () => {
+      const kept = tool('kept', 1_000);
+      const deferred = tool('deferred', 100_000, true);
+      const { db, users } = buildDb();
+
+      await executeCompletion({ ...baseParams, db, options: { ...baseParams.options, tools: [kept, deferred] } });
+
+      // defer_loading is dropped before the tool is sent, so it is no longer part of the estimate's input.
+      const sent = (schema: CompletionTool) => {
+        const { defer_loading: _deferLoading, ...rest } = (schema as { toolSchema: Record<string, unknown> })
+          .toolSchema;
+        return { toolSchema: rest } as unknown as CompletionTool;
+      };
+      const expected = holdFor(MODEL_INFO, INPUT_TOKENS + toolTokens(kept, sent(deferred)));
+      expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
+    });
+
+    it('counts server-executed tools, which arrive as serverTools instead of options.tools', async () => {
+      const serverTool = {
+        toolSchema: { name: 'search', description: 'x'.repeat(100_000), parameters: { type: 'object' } },
+        toolFn: async () => '',
+      } as unknown as NonNullable<Parameters<typeof executeCompletion>[0]['serverTools']>[number];
+      const { db, users } = buildDb();
+
+      await executeCompletion({ ...baseParams, db, serverTools: [serverTool] });
+
+      const expected = holdFor(MODEL_INFO, INPUT_TOKENS + toolTokens(serverTool as unknown as CompletionTool));
+      expect(expected).toBeGreaterThan(expectedHold);
+      expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
+    });
+
+    it('counts a server-executed tool flagged defer_loading on a model that does not serve tool search', async () => {
+      const serverTool = {
+        toolSchema: {
+          name: 'search',
+          description: 'x'.repeat(100_000),
+          parameters: { type: 'object' },
+          defer_loading: true,
+        },
+        toolFn: async () => '',
+      } as unknown as NonNullable<Parameters<typeof executeCompletion>[0]['serverTools']>[number];
+      const { db, users } = buildDb();
+
+      await executeCompletion({ ...baseParams, db, serverTools: [serverTool] });
+
+      // serverTools skip prepareWireTools, so the flag reaches the provider and the tool is sent in full.
+      const expected = holdFor(MODEL_INFO, INPUT_TOKENS + toolTokens(serverTool as unknown as CompletionTool));
+      expect(expected).toBeGreaterThan(expectedHold);
+      expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
+    });
+  });
+
   describe('cached conversation context', () => {
     // A small explicit budget keeps the output hold from drowning the input side under test.
     const ROUND_MAX_TOKENS = 1_024;
@@ -306,6 +435,25 @@ describe('executeCompletion - pre-flight reservation size', () => {
       expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -usdToCredits(usd));
     });
 
+    it('prices tool schemas as plain input alongside the cached conversation split', async () => {
+      const { db, users } = buildDb();
+      const tools: CompletionTool[] = [
+        { toolSchema: { name: 'big', description: 'x'.repeat(25_000), parameters: { type: 'object' } } },
+      ];
+      await executeCompletion({
+        ...roundParams,
+        db,
+        messages: toolLoop(true),
+        options: { ...roundParams.options, tools },
+      });
+
+      const toolTokens = Math.ceil(JSON.stringify((tools[0] as { toolSchema: unknown }).toolSchema).length / 2.5);
+      const expected = usdToCredits(getTextModelCost(MODEL_INFO, 8_000 + toolTokens, OUTPUT, 30_000, 30_000));
+      const withoutTools = usdToCredits(getTextModelCost(MODEL_INFO, 8_000, OUTPUT, 30_000, 30_000));
+      expect(expected).toBeGreaterThan(withoutTools);
+      expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
+    });
+
     it('prices the first round (no assistant message) fully uncached', async () => {
       const { db, users } = buildDb();
       const messages = [
@@ -326,17 +474,16 @@ describe('executeCompletion - pre-flight reservation size', () => {
       expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
     });
 
-    it.each([
-      ['Bedrock (this path never enables its caching)', BEDROCK_MODEL_ID, BEDROCK_MODEL_INFO],
-      ['Gemini (not an auto-caching backend)', GEMINI_MODEL_ID, GEMINI_MODEL_INFO],
-      ['xAI (its adapter reports no cache reads)', XAI_MODEL_ID, XAI_MODEL_INFO],
-    ])('leaves a %s conversation uncached despite a published cache_read', async (_name, id, info) => {
-      const { db, users } = buildDb();
-      await executeCompletion({ ...roundParams, model: id, db, messages: toolLoop(true) });
+    it.each([['Bedrock (the hold never discounts it)', BEDROCK_MODEL_ID, BEDROCK_MODEL_INFO]])(
+      'leaves a %s conversation uncached despite a published cache_read',
+      async (_name, id, info) => {
+        const { db, users } = buildDb();
+        await executeCompletion({ ...roundParams, model: id, db, messages: toolLoop(true) });
 
-      const expected = usdToCredits(getTextModelCost(info, 68_000, OUTPUT));
-      expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
-    });
+        const expected = usdToCredits(getTextModelCost(info, 68_000, OUTPUT));
+        expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
+      }
+    );
 
     it('leaves a backend without a published cache_read rate unchanged', async () => {
       const { db, users } = buildDb();
@@ -350,6 +497,8 @@ describe('executeCompletion - pre-flight reservation size', () => {
       ['OpenAI', OPENAI_CACHED_MODEL_ID, OPENAI_CACHED_MODEL_INFO],
       ['Kimi', KIMI_CACHED_MODEL_ID, KIMI_CACHED_MODEL_INFO],
       ['DeepSeek', DEEPSEEK_CACHED_MODEL_ID, DEEPSEEK_CACHED_MODEL_INFO],
+      ['Gemini', GEMINI_MODEL_ID, GEMINI_MODEL_INFO],
+      ['xAI', XAI_MODEL_ID, XAI_MODEL_INFO],
     ])('prices %s (auto-caching, published cache_read) up to the last assistant message', async (_name, id, info) => {
       const { db, users } = buildDb();
       await executeCompletion({ ...roundParams, model: id, db, messages: toolLoop(false) });
@@ -357,6 +506,17 @@ describe('executeCompletion - pre-flight reservation size', () => {
       const expected = usdToCredits(getTextModelCost(info, 38_000, OUTPUT, 30_000, 0));
       const uncached = usdToCredits(getTextModelCost(info, 68_000, OUTPUT));
       expect(expected).toBeLessThan(uncached);
+      expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
+    });
+
+    it('holds the uncached amount when only one tier of a cache-forwarding backend publishes cache_read', async () => {
+      const { db, users } = buildDb();
+      await executeCompletion({ ...roundParams, model: MIXED_LADDER_MODEL_ID, db, messages: toolLoop(false) });
+
+      const expected = usdToCredits(getTextModelCost(MIXED_LADDER_MODEL_INFO, 68_000, OUTPUT));
+      // The discounted figure the reservation held before the adapter gate was mirrored.
+      const discounted = usdToCredits(getTextModelCost(MIXED_LADDER_MODEL_INFO, 38_000, OUTPUT, 30_000, 0));
+      expect(discounted).toBeLessThan(expected);
       expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
     });
 

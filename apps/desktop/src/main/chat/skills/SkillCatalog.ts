@@ -5,8 +5,9 @@ import {
   filterAIVisibleSkills,
   filterUserVisibleSkills,
   type CustomCommand,
+  type RemoteSkillSource,
 } from '@bike4mind/cli/skills';
-import type { SkillSummary, SkillsState } from '@shared/skills';
+import type { SkillSource, SkillSummary, SkillsState } from '@shared/skills';
 import type { ProjectTrustStore } from './ProjectTrustStore';
 
 /**
@@ -18,10 +19,17 @@ import type { ProjectTrustStore } from './ProjectTrustStore';
  * checkout. This class is the desktop's adapter onto it: it decides WHICH root to scan and
  * whether that root is trusted, and turns the result into the summaries the composer draws.
  *
- * Remote `/api/skills` skills are deliberately not wired: the store takes a RemoteSkillSource
- * and none is passed, so the desktop is local-only. Adding them later is a constructor
- * argument, not a rewrite.
+ * The signed-in account's `/api/skills` skills come from the CLI's RemoteSkillSource, handed to
+ * the store, so the local-wins merge and the owner/reserved-name filter are the CLI's too. They
+ * are the user's own, so they load in every posture: no project, untrusted and trusted alike.
  */
+
+/**
+ * The signed-in account's skill source, or null when signed out. Called on every read, so a
+ * sign-out or account switch takes effect on the next one. `key` identifies the account and
+ * keys every cache below.
+ */
+export type RemoteSkills = () => { key: string; source: RemoteSkillSource } | null;
 
 /**
  * How long a scan is reused before the directories are walked again.
@@ -40,21 +48,26 @@ interface Cached {
 
 export class SkillCatalog {
   private readonly cache = new Map<string, Cached>();
-  private trustRevision = 0;
+  private readonly inFlight = new Map<string, Promise<CustomCommand[]>>();
+  private changes = 0;
 
-  constructor(private readonly trust: ProjectTrustStore) {}
+  constructor(
+    private readonly trust: ProjectTrustStore,
+    private readonly remote: RemoteSkills = () => null
+  ) {}
 
   /**
-   * Bumped by `setTrusted`, and by nothing else.
+   * Moves on a trust decision (`setTrusted`), a Skill Market import (`invalidateAccount`) or a
+   * change of signed-in account, and nothing else.
    *
    * The skills a model is SHOWN are snapshotted per session, because the system prompt sits in
    * the provider's cached prefix and must not move between rounds (see SkillsPromptCache). That
    * snapshot would otherwise outlive the one change to this catalog a user makes mid-session and
-   * expects to see: trusting the project they are working in. This counter is what the snapshot
-   * keys on, so a trust decision reaches the next turn and an ordinary skill edit does not.
+   * expects to see: trusting the project they are working in, or importing a skill. This is what
+   * the snapshot keys on, so those reach the next turn and a skill edit does not.
    */
-  get revision(): number {
-    return this.trustRevision;
+  get revision(): string {
+    return `${this.changes}:${this.remote()?.key ?? 'none'}`;
   }
 
   /**
@@ -106,25 +119,53 @@ export class SkillCatalog {
     if (trusted) await this.trust.trust(root);
     else await this.trust.revoke(root);
     this.cache.clear();
-    this.trustRevision++;
+    this.changes++;
   }
 
-  private async load(root: string | null, trusted: boolean): Promise<CustomCommand[]> {
-    const key = `${trusted ? 'trusted' : 'untrusted'}:${root ?? ''}`;
-    const cached = this.cache.get(key);
-    if (cached && Date.now() - cached.at < CACHE_MS) return cached.commands;
+  /**
+   * The account's skills just changed from this app (a Skill Market import or update), so the next
+   * read refetches them inside RemoteSkillSource's TTL instead of waiting it out.
+   */
+  invalidateAccount(): void {
+    this.remote()?.source.invalidate();
+    this.cache.clear();
+    this.changes++;
+  }
 
+  private load(root: string | null, trusted: boolean): Promise<CustomCommand[]> {
+    const account = this.remote();
+    const key = `${trusted ? 'trusted' : 'untrusted'}:${root ?? ''}:${account?.key ?? 'none'}`;
+    const cached = this.cache.get(key);
+    if (cached && Date.now() - cached.at < CACHE_MS) return Promise.resolve(cached.commands);
+
+    // The picker and the first turn of a conversation read a cold or past-TTL catalog at the same
+    // moment. Both would otherwise build their own store and each hit /api/skills; the first
+    // read's promise is shared until it settles.
+    const running = this.inFlight.get(key);
+    if (running) return running;
+
+    const loading = this.scan(key, root, trusted, account?.source).finally(() => this.inFlight.delete(key));
+    this.inFlight.set(key, loading);
+    return loading;
+  }
+
+  private async scan(
+    key: string,
+    root: string | null,
+    trusted: boolean,
+    remoteSource: RemoteSkillSource | undefined
+  ): Promise<CustomCommand[]> {
     // A session with no project still needs a root for the constructor, and the default is
     // process.cwd() - for a packaged Electron app, wherever the user happened to launch it
     // from. The home directory is passed instead, and `setProjectTrusted` is never called for
     // it, so its project directories are not scanned and only ~/.claude/skills loads.
-    const store = new CustomCommandStore(root ?? homedir());
+    const store = new CustomCommandStore(root ?? homedir(), { remoteSource });
     // Honestly, not to make a test pass: false for an untrusted root is the whole gate, and
     // false for "no project" is what keeps repo skills out of a Chat session.
     store.setProjectTrusted(trusted);
     await store.loadCommands();
 
-    const commands = store.getAllCommands().filter(command => command.source !== 'remote');
+    const commands = store.getAllCommands();
     this.cache.set(key, { at: Date.now(), commands });
     return commands;
   }
@@ -136,8 +177,14 @@ function toSummary(command: CustomCommand): SkillSummary {
     ...(command.displayName ? { displayName: command.displayName } : {}),
     description: command.description,
     ...(command.argumentHint ? { argumentHint: command.argumentHint } : {}),
-    // The store only yields 'global' | 'project' here; 'remote' was filtered out above.
-    source: command.source === 'project' ? 'project' : 'global',
+    source: skillSource(command),
+    ...(command.untrusted ? { imported: true } : {}),
     filePath: command.filePath,
   };
+}
+
+/** The renderer's label for where a command came from; `remote` is the signed-in account's. */
+export function skillSource(command: CustomCommand): SkillSource {
+  if (command.source === 'project') return 'project';
+  return command.source === 'remote' ? 'account' : 'global';
 }

@@ -43,10 +43,10 @@ export function lakeVisibilityLabelShort(lake: LakeVisibilityScope): string {
 }
 
 /**
- * Whether to offer the Drive connect control for a lake.
+ * Whether to offer a connector's (Google Drive, GitHub) connect control for a lake.
  *
- * Mirrors the server gate (authorizeLakeDriveAccess): an org lake needs an org owner/manager, a
- * personal lake needs its CREATOR - the connection syncs on that user's own Google grant, and lake
+ * Mirrors the server gate (authorizeLakeConnectorAccess): an org lake needs an org owner/manager, a
+ * personal lake needs its CREATOR - a Drive connection syncs on that user's own Google grant, and lake
  * membership (and the ingest's admin-actor writes) is anchored to `createdByUserId`, not the
  * effective owner, so a personal lake gates on `isCreator` rather than `isOwn`. The status route 404s
  * outside the gate, so offering it there is a control that can only fail; an appointed org admin is
@@ -57,7 +57,7 @@ export function lakeVisibilityLabelShort(lake: LakeVisibilityScope): string {
  *
  * Absent fields fail closed: an unknown manage or creator status renders no control.
  */
-export const canConnectLakeDrive = (lake: {
+export const canConnectLakeConnector = (lake: {
   organizationId?: string | null;
   canManage?: boolean;
   isCreator?: boolean;

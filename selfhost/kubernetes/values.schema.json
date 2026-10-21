@@ -1,7 +1,10 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema#",
   "type": "object",
-  "required": ["existingSecret", "images"],
+  "required": [
+    "existingSecret",
+    "images"
+  ],
   "properties": {
     "existingSecret": {
       "type": "string",
@@ -11,7 +14,17 @@
     },
     "images": {
       "type": "object",
-      "required": ["app", "chatcompletion", "ws", "subscriberFanout", "minio", "mc", "mongo", "sqs", "mail"],
+      "required": [
+        "app",
+        "chatcompletion",
+        "ws",
+        "subscriberFanout",
+        "minio",
+        "mc",
+        "mongo",
+        "sqs",
+        "mail"
+      ],
       "properties": {
         "app": {
           "type": "string",
@@ -88,7 +101,11 @@
       }
     },
     "imagePullPolicy": {
-      "enum": ["IfNotPresent", "Always", "Never"]
+      "enum": [
+        "IfNotPresent",
+        "Always",
+        "Never"
+      ]
     },
     "initializationRevision": {
       "type": "string",
@@ -138,6 +155,18 @@
               "pattern": ":latest$"
             }
           }
+        }
+      }
+    },
+    "externalMongo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
         }
       }
     }

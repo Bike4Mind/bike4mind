@@ -1,6 +1,7 @@
 import { baseApi } from './baseApi';
 import {
   BadRequestError,
+  deprecationHeaders,
   isZodError,
   type EndpointContract,
   type PathParamsOf,
@@ -92,8 +93,18 @@ export function nextRouteForContract<C extends EndpointContract>(
     }
   };
 
-  // Prepended first so it runs BEFORE validation: a malformed body still counts
-  // against the limiter (see the function-doc note on ordering).
+  // Ahead of everything else in the prelude so a validation failure or a rate-limit
+  // rejection still tells the caller the endpoint is going away.
+  const deprecation = contract.deprecated;
+  if (deprecation) {
+    prelude.push((_req, res, next) => {
+      for (const [name, value] of Object.entries(deprecationHeaders(deprecation))) res.setHeader(name, value);
+      next();
+    });
+  }
+
+  // Ahead of validation (behind only the deprecation headers, which reject nothing):
+  // a malformed body still counts against the limiter (see the function-doc note on ordering).
   if (rateLimit) {
     prelude.push(rateLimit as unknown as Handler);
   }
@@ -181,8 +192,8 @@ export function nextRouteForContract<C extends EndpointContract>(
   //     caller's own `.use(...)`, so a flood of malformed bodies would 422 without
   //     ever touching a caller-mounted limiter. Registering per method puts the
   //     prelude right before the terminal handler, so caller `.use(...)` middleware
-  //     runs ahead of validation. (The `rateLimit` option instead lives at the FRONT
-  //     of the prelude, so it beats validation without a caller having to remember the
+  //     runs ahead of validation. (The `rateLimit` option instead sits at the front
+  //     of the prelude, behind only the deprecation headers, so it beats validation without a caller having to remember the
   //     ordering.)
   //  2. A `use`-mounted validator matches every method. baseApi's `allowedMethods`
   //     guard already 405s an undeclared method ahead of everything, but a validator

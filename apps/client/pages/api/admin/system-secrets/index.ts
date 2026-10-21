@@ -13,9 +13,9 @@
 import { systemSecretRepository } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError } from '@server/utils/errors';
-import { encryptSecret, isValidEncryptionKey } from '@server/security/secretEncryption';
-import { Config } from '@server/utils/config';
+import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { encryptSecret, isValidEncryptionKey } from '@bike4mind/server-utils/security/secretEncryption';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import {
   clearSecretCache,
   RESOLVABLE_SECRETS,

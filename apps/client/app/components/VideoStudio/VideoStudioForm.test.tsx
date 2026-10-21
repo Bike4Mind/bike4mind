@@ -3,6 +3,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IFabFileDocument, VideoModel } from '@bike4mind/common';
 import { estimateVideoCostCredits, VIDEO_MODEL_CATALOG } from '@bike4mind/common';
+import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { formatCredits } from '@client/app/utils/formatUsd';
 
@@ -39,10 +40,15 @@ vi.mock('@client/app/components/Agent/ImageBrowserModal', () => ({
 import { discreteModel, optionalAudioModel, rangeModel } from '@client/app/hooks/data/__test__/videoGenerationFixtures';
 import VideoStudioForm from './VideoStudioForm';
 
+const settings = vi.hoisted(() => ({ enforceCredits: true }));
+vi.mock('@client/app/hooks/data/settings', () => ({
+  useGetSettingsValue: (key: string) => (key === 'enforceCredits' ? settings.enforceCredits : undefined),
+}));
+
 const appTheme = extendTheme({ ...getThemeConfig() });
 const onSubmit = vi.fn();
 
-const tree = (models: VideoModel[]) => (
+const tree = (models: readonly [VideoModel, ...VideoModel[]]) => (
   <CssVarsProvider theme={appTheme}>
     <VideoStudioForm models={models} isSubmitting={false} onSubmit={onSubmit} />
   </CssVarsProvider>
@@ -66,7 +72,11 @@ const grokEstimate = (durationSeconds: number) =>
     })
   );
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  settings.enforceCredits = true;
+  useSelectedAccount.setState({ selectedAccount: null });
+});
 
 describe('VideoStudioForm duration control', () => {
   it('renders a slider bounded by a range model', () => {
@@ -74,22 +84,22 @@ describe('VideoStudioForm duration control', () => {
     const slider = screen.getByTestId('video-form-duration-slider');
     expect(slider).toHaveAttribute('min', '1');
     expect(slider).toHaveAttribute('max', '15');
-    expect(screen.queryByTestId('video-form-duration-option-4')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('video-form-duration-4-btn')).not.toBeInTheDocument();
   });
 
   it('renders one choice per value for a discrete model', () => {
     render(tree([discreteModel]));
     expect(screen.queryByTestId('video-form-duration-slider')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByTestId('video-form-duration-option-8'));
-    expect(screen.getByTestId('video-form-duration-option-8')).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByTestId('video-form-duration-option-4')).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(screen.getByTestId('video-form-duration-8-btn'));
+    expect(screen.getByTestId('video-form-duration-8-btn')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('video-form-duration-4-btn')).toHaveAttribute('aria-pressed', 'false');
   });
 });
 
 describe('VideoStudioForm model switch', () => {
   it('clamps the duration and says what changed', () => {
     render(tree([discreteModel, optionalAudioModel]));
-    fireEvent.click(screen.getByTestId('video-form-duration-option-8'));
+    fireEvent.click(screen.getByTestId('video-form-duration-8-btn'));
     pickModel('Synthetic Optional Audio');
     expect(screen.getByTestId('video-form-changes')).toHaveTextContent('Duration changed from 8s to 6s.');
     expect(screen.getByTestId('video-form-duration-slider')).toHaveValue('6');
@@ -166,5 +176,34 @@ describe('VideoStudioForm submit', () => {
     expect(onSubmit).toHaveBeenCalledWith(
       expect.objectContaining({ mode: 'image_to_video', input_image_file_id: 'img-1' })
     );
+  });
+});
+
+describe('video form payer note', () => {
+  const select = (name: string, personal: boolean) =>
+    useSelectedAccount.setState({ selectedAccount: { id: 'acct-1', name, personal, credits: 100 } });
+
+  it('names the selected organization', () => {
+    select('Acme', false);
+    render(tree([discreteModel, rangeModel]));
+    expect(screen.getByTestId('video-form-payer-note')).toHaveTextContent('Paid from Acme credits');
+  });
+
+  it('names personal credits', () => {
+    select('Me', true);
+    render(tree([discreteModel, rangeModel]));
+    expect(screen.getByTestId('video-form-payer-note')).toHaveTextContent('Paid from your personal credits');
+  });
+
+  it('is hidden with no selection', () => {
+    render(tree([discreteModel, rangeModel]));
+    expect(screen.queryByTestId('video-form-payer-note')).not.toBeInTheDocument();
+  });
+
+  it('is hidden when credits are not enforced', () => {
+    settings.enforceCredits = false;
+    select('Acme', false);
+    render(tree([discreteModel, rangeModel]));
+    expect(screen.queryByTestId('video-form-payer-note')).not.toBeInTheDocument();
   });
 });

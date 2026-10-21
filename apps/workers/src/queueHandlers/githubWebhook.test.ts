@@ -52,7 +52,7 @@ vi.mock('@bike4mind/database', () => ({
   cacheRepository: { findByKey: vi.fn(), createOrUpdate: vi.fn() },
 }));
 
-vi.mock('@server/integrations/github/handlers', () => ({
+vi.mock('@workers/integrations/github/handlers', () => ({
   createHandlerRegistry: vi.fn().mockReturnValue({}),
   getHandler: mockGetHandler,
 }));
@@ -68,7 +68,7 @@ vi.mock('@server/queueHandlers/utils', () => ({
       fn(event, ctx, logger),
 }));
 
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   emitWebhookDeliveryMetric: mockEmitWebhookDeliveryMetric,
   WebhookMetrics: {
     DELIVERY_ATTEMPTED: 'DeliveryAttempted',
@@ -118,7 +118,6 @@ function makeSubscriber(userId: string, idSuffix: string = userId) {
 
 const mockOrg = {
   userId: 'org-owner',
-  managerId: 'org-manager',
   users: [{ userId: 'user-a' }, { userId: 'user-b' }, { userId: 'user-c' }],
 };
 

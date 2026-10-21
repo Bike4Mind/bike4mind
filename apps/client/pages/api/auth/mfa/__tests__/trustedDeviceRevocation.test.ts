@@ -24,11 +24,18 @@ const mockRevokeAllForUser = vi.fn();
 const mockFindById = vi.fn();
 const mockRemovePasskeys = vi.fn();
 vi.mock('@bike4mind/database', () => ({
+  realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
   userRepository: { findById: (...a: any[]) => mockFindById(...a) },
   adminSettingsRepository: { findBySettingName: vi.fn(() => Promise.resolve(null)) },
   authSessionRepository: {},
   trustedDeviceRepository: { revokeAllForUser: (...a: any[]) => mockRevokeAllForUser(...a) },
   passkeyCredentialRepository: { removeAllForUser: (...a: any[]) => mockRemovePasskeys(...a) },
+  withTransaction: (fn: () => unknown) => fn(),
+}));
+// parseAdminActionReason and isSameUserId stay real; the audit write needs a database, so it is stubbed.
+vi.mock('@server/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),
+  recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
 }));
 
 const mockDisableMFA = vi.fn();
@@ -43,7 +50,13 @@ vi.mock('@bike4mind/services', () => ({
   userService: { revokeUserSessions: vi.fn(() => Promise.resolve()) },
 }));
 
-vi.mock('@bike4mind/common', () => ({ redactUserSecretsForSelf: (user: unknown) => user }));
+const mockReadEnforceMfa = vi.fn(() => Promise.resolve(false));
+vi.mock('@server/auth/signInSecondFactor', () => ({ readEnforceMfa: () => mockReadEnforceMfa() }));
+
+vi.mock('@bike4mind/common', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/common')>()),
+  redactUserSecretsForSelf: (user: unknown) => user,
+}));
 
 import disableHandler from '@pages/api/auth/mfa/disable';
 import forceResetHandler from '@pages/api/auth/mfa/force-reset';
@@ -132,7 +145,10 @@ describe('/api/auth/mfa/force-reset', () => {
   });
 
   it("revokes the target user's trusts so a stolen cookie cannot outlive the reset", async () => {
-    const { req, res } = makeReqRes({ id: 'admin-1', isAdmin: true }, { userId: 'target-1' });
+    const { req, res } = makeReqRes(
+      { id: 'admin-1', isAdmin: true },
+      { userId: 'target-1', reason: 'Lost authenticator' }
+    );
 
     await forceResetHandler(req as any, res as any);
 
@@ -147,7 +163,10 @@ describe('/api/auth/mfa/force-reset', () => {
   });
 
   it('revokes nothing for a non-admin caller', async () => {
-    const { req, res } = makeReqRes({ id: 'user-9', isAdmin: false }, { userId: 'target-1' });
+    const { req, res } = makeReqRes(
+      { id: 'user-9', isAdmin: false },
+      { userId: 'target-1', reason: 'Lost authenticator' }
+    );
 
     await forceResetHandler(req as any, res as any);
 
@@ -157,7 +176,10 @@ describe('/api/auth/mfa/force-reset', () => {
   });
 
   it("removes the target user's passkeys so none can satisfy MFA after the reset", async () => {
-    const { req, res } = makeReqRes({ id: 'admin-1', isAdmin: true }, { userId: 'target-1' });
+    const { req, res } = makeReqRes(
+      { id: 'admin-1', isAdmin: true },
+      { userId: 'target-1', reason: 'Lost authenticator' }
+    );
 
     await forceResetHandler(req as any, res as any);
 

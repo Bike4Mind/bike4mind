@@ -1,10 +1,12 @@
-import type { IUserApiKeyRepository, IUserRepository } from '@bike4mind/common';
+import type { IRealtimeConnectionRepository, IUserApiKeyRepository, IUserRepository } from '@bike4mind/common';
 import { entersBlockedState, type AccountStateFields } from './accountState';
+import { endRealtimeConnections } from '../authSessionService/endRealtimeConnections';
 
 export interface FlagDisputePendingAdapters {
   db: {
     users: Pick<IUserRepository, 'update'>;
     userApiKeys: Pick<IUserApiKeyRepository, 'deactivateAllByUserId'>;
+    realtimeConnections: Pick<IRealtimeConnectionRepository, 'endConnections'>;
   };
 }
 
@@ -23,6 +25,7 @@ export async function flagDisputePending(
   const deactivatedKeys = entersBlockedState(user, { ...user, disputePending: true });
   if (deactivatedKeys) {
     await db.userApiKeys.deactivateAllByUserId(user.id);
+    await endRealtimeConnections({ userId: user.id }, { db });
   }
   await db.users.update({ id: user.id, disputePending: true });
   return { deactivatedKeys };

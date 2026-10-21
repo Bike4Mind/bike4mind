@@ -47,10 +47,6 @@ function flattenContent(content: IMessage['content']): string {
  * @param session - The session this turn belongs to. Only used for
  *   `createCompactedSession`'s summary-message formatting (and workflow
  *   handoff parity); its `messages` are not read or mutated.
- * @param initialMessageCount - Length of the protected prefix (system +
- *   previousMessages + current query) passed into the matching `agent.run()`
- *   call. Must match exactly - it is the boundary below which messages are
- *   never touched, so the turn's own query is never summarized away.
  *
  * Workflow state (decisions/blockers) needs no flush here: this handler only
  * rewrites the in-flight `IMessage[]` working history and discards the
@@ -59,10 +55,11 @@ function flattenContent(content: IMessage['content']): string {
  */
 export function createReactiveCompactionHandler(
   agent: ReActAgent,
-  session: Session,
-  initialMessageCount: number
-): (messages: IMessage[]) => Promise<IMessage[] | null> {
-  return async messages => {
+  session: Session
+): (messages: IMessage[], initialMessageCount: number) => Promise<IMessage[] | null> {
+  // initialMessageCount comes from the agent: the protected prefix (system + previousMessages +
+  // current query) is never touched, so the turn's own query is never summarized away.
+  return async (messages, initialMessageCount) => {
     const cutIndex = findIterationBoundary(messages, PRESERVE_RECENT_ITERATIONS, initialMessageCount);
     const toSummarize = messages.slice(initialMessageCount, cutIndex);
     if (toSummarize.length === 0) return null;

@@ -1,3 +1,5 @@
+import type { GenerationProviderJobHandle } from '../generation';
+
 export const VIDEO_MODES = ['text_to_video', 'image_to_video'] as const;
 export type VideoMode = (typeof VIDEO_MODES)[number];
 
@@ -11,12 +13,7 @@ export type ResolutionTier = (typeof RESOLUTION_TIERS)[number];
 export const VIDEO_PROVIDER_IDS = ['test', 'gemini-omni', 'xai', 'veo'] as const;
 export type VideoProviderId = (typeof VIDEO_PROVIDER_IDS)[number];
 
-// Opaque to everything but its adapter; persisted on the job as JSON. Re-exported by @bike4mind/utils/videoProviders.
-export type ProviderJobHandle = { provider: VideoProviderId; data: Record<string, unknown> };
-
-export type ProviderOutput =
-  | { kind: 'inline'; base64: string; contentType: string }
-  | { kind: 'url'; url: string; requiresAuth: boolean; contentType?: string };
+export type ProviderJobHandle = GenerationProviderJobHandle<VideoProviderId>;
 
 export type DurationCapability =
   { kind: 'range'; min: number; max: number; step: number } | { kind: 'discrete'; values: readonly number[] };

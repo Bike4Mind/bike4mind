@@ -9,6 +9,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
   findOne: vi.fn(),
+  getSettingsValue: vi.fn(),
+  getEffectiveLLMApiKeys: vi.fn(),
+  buildApiKeyTable: vi.fn((keys: Record<string, string>) => keys),
+  getAvailableModels: vi.fn(),
+  getLlmByModel: vi.fn(),
   updateOne: vi.fn(async () => ({})),
   orgFeedbackReport: vi.fn(),
   findMemberUserIds: vi.fn(async () => ({ userIds: ['u1'], aclOnly: [], stampOnly: [] })),
@@ -22,7 +27,7 @@ vi.mock('sst', () => ({
 }));
 
 vi.mock('@bike4mind/common', () => ({
-  ChatModels: { CLAUDE_4_5_HAIKU_BEDROCK: 'claude-haiku' },
+  ChatModels: { CLAUDE_4_5_HAIKU_BEDROCK: 'claude-haiku', CLAUDE_4_5_HAIKU: 'anthropic-haiku' },
   ORG_FEEDBACK_SUMMARY_JOB_TYPE: 'orgFeedbackSummary',
   ORG_FEEDBACK_SUMMARY_TAG_LIMIT: 20,
 }));
@@ -31,7 +36,7 @@ vi.mock('@bike4mind/database', () => ({
   OrgFeedbackSummaryJob: { findOne: h.findOne, updateOne: h.updateOne },
   orgFeedbackReport: h.orgFeedbackReport,
   apiKeyRepository: {},
-  adminSettingsRepository: {},
+  adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
 }));
 
 vi.mock('@bike4mind/database/infra', () => ({
@@ -41,11 +46,12 @@ vi.mock('@bike4mind/database/infra', () => ({
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
 vi.mock('@bike4mind/observability', () => ({ Logger: class {} }));
 vi.mock('@bike4mind/services', () => ({
-  apiKeyService: { getEffectiveLLMApiKeys: vi.fn(async () => ({ anthropic: 'k' })) },
+  apiKeyService: { getEffectiveLLMApiKeys: h.getEffectiveLLMApiKeys },
 }));
 vi.mock('@bike4mind/llm-adapters', () => ({
-  getAvailableModels: vi.fn(async () => [{ id: 'claude-haiku' }]),
-  getLlmByModel: vi.fn(() => ({ complete: h.complete })),
+  buildApiKeyTable: h.buildApiKeyTable,
+  getAvailableModels: h.getAvailableModels,
+  getLlmByModel: h.getLlmByModel,
 }));
 vi.mock('@bike4mind/fab-pipeline', () => ({
   S3Storage: class {
@@ -93,6 +99,10 @@ const REPORT = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.getSettingsValue.mockResolvedValue(undefined);
+  h.getEffectiveLLMApiKeys.mockResolvedValue({ anthropic: 'k' });
+  h.getAvailableModels.mockResolvedValue([{ id: 'claude-haiku' }, { id: 'anthropic-haiku' }]);
+  h.getLlmByModel.mockReturnValue({ complete: h.complete });
   h.findOne.mockResolvedValue({ summaryJobId: SUMMARY_JOB_ID, status: 'pending' });
   h.orgFeedbackReport.mockResolvedValue(REPORT);
   h.complete.mockImplementation(async (_model, _messages, _opts, onText) => {
@@ -101,6 +111,54 @@ beforeEach(() => {
 });
 
 describe('runOrgFeedbackSummary', () => {
+  it('keeps the default model when the summary setting is unset', async () => {
+    await run();
+
+    expect(h.complete.mock.calls[0][0]).toBe('claude-haiku');
+    expect(JSON.parse(h.upload.mock.calls[0][0]).model).toBe('claude-haiku');
+  });
+
+  it('uses the selected available provider model for generation and the stored artifact', async () => {
+    h.getSettingsValue.mockResolvedValue('anthropic-haiku');
+
+    await run();
+
+    expect(h.getSettingsValue).toHaveBeenCalledWith('OrgFeedbackSummaryModel');
+    expect(h.complete.mock.calls[0][0]).toBe('anthropic-haiku');
+    expect(h.getLlmByModel.mock.calls[0][1].modelInfo.id).toBe('anthropic-haiku');
+    expect(JSON.parse(h.upload.mock.calls[0][0]).model).toBe('anthropic-haiku');
+  });
+
+  it.each([
+    { provider: 'kimi', model: 'kimi-k3' },
+    { provider: 'deepseek', model: 'deepseek-flash' },
+  ])('passes the configured $provider key through to model discovery', async ({ provider, model }) => {
+    h.getSettingsValue.mockResolvedValue(model);
+    h.getEffectiveLLMApiKeys.mockResolvedValue({ [provider]: 'provider-key' });
+    h.getAvailableModels.mockImplementation(async (keys: Record<string, string>) =>
+      keys[provider] ? [{ id: model }] : []
+    );
+
+    await run();
+
+    expect(h.buildApiKeyTable).toHaveBeenCalledWith({ [provider]: 'provider-key' });
+    expect(h.getAvailableModels).toHaveBeenCalledWith({ [provider]: 'provider-key' });
+    expect(h.complete.mock.calls[0][0]).toBe(model);
+    expect(JSON.parse(h.upload.mock.calls[0][0]).model).toBe(model);
+  });
+
+  it('fails before inference when the explicitly selected model is unavailable', async () => {
+    h.getSettingsValue.mockResolvedValue('anthropic-haiku');
+    h.getAvailableModels.mockResolvedValue([{ id: 'claude-haiku' }]);
+
+    await expect(run()).rejects.toThrow('Summary model anthropic-haiku is not available');
+
+    expect(h.complete).not.toHaveBeenCalled();
+    expect(h.getLlmByModel).not.toHaveBeenCalled();
+    expect(h.upload).not.toHaveBeenCalled();
+    expect(frames().at(-1)?.status).toBe('failed');
+  });
+
   it('sends the LLM counts only - no member names', async () => {
     await run();
 
@@ -265,6 +323,13 @@ describe('runOrgFeedbackSummary', () => {
     await run();
 
     expect(h.complete).not.toHaveBeenCalled();
+    expect(h.getSettingsValue).not.toHaveBeenCalled();
+    expect(h.getEffectiveLLMApiKeys).not.toHaveBeenCalled();
+    expect(h.getAvailableModels).not.toHaveBeenCalled();
+    expect(h.getLlmByModel).not.toHaveBeenCalled();
+    expect(h.orgFeedbackReport).not.toHaveBeenCalled();
+    expect(h.upload).not.toHaveBeenCalled();
+    expect(h.updateOne).not.toHaveBeenCalled();
     expect(frames()).toEqual([
       {
         summaryJobId: SUMMARY_JOB_ID,

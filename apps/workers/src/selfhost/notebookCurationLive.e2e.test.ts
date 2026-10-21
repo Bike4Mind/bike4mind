@@ -16,13 +16,14 @@ import { User, Session, Quest, FabFile, NotebookCurationJob, CreditTransaction }
 import { Logger } from '@bike4mind/observability';
 import {
   createMongoReplSet,
+  settleAutoIndexBuilds,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 const { notify } = vi.hoisted(() => ({ notify: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: notify }));
 vi.mock('@server/middlewares/baseApi', () => ({ baseApi: () => ({ post: (fn: unknown) => fn }) }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: {
     get MONGODB_URI() {
       return process.env.NOTEBOOK_MONGO_URI;
@@ -49,7 +50,7 @@ vi.mock('sst', () => ({
 // Cross-process integration proof starts at the backend API route; no UI is imported.
 // eslint-disable-next-line no-restricted-imports
 import curate from '@pages/api/notebooks/curate';
-import * as storage from '@server/utils/storage';
+import * as storage from '@bike4mind/server-utils/utils/storage/index';
 import { S3Storage, createS3Client } from '@bike4mind/fab-pipeline';
 import { SelfHostWorker } from './selfHostWorker';
 import { dispatchSelfHostEvent } from './eventDispatch';
@@ -66,8 +67,13 @@ describe.skipIf(!enabled)('notebook live broker and object storage proof', () =>
   beforeAll(async () => {
     mongo = await createMongoReplSet();
     process.env.NOTEBOOK_MONGO_URI = mongo.getUri();
-    await mongoose.connect(mongo.getUri());
-    await Promise.all([NotebookCurationJob.init(), FabFile.init(), CreditTransaction.init()]);
+    await mongoose.connect(mongo.getUri(), { autoIndex: false });
+    await settleAutoIndexBuilds(mongoose);
+    await Promise.all([
+      NotebookCurationJob.createIndexes(),
+      FabFile.createIndexes(),
+      CreditTransaction.createIndexes(),
+    ]);
     try {
       await s3.send(new CreateBucketCommand({ Bucket: 'notebook-proof' }));
     } catch (error) {

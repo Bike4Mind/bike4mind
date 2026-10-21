@@ -3,9 +3,12 @@ import {
   DEFAULT_MAX_OUTPUT_TOKENS,
   FIELD_GROUPS,
   FIELD_GROUP_OF,
+  LIFECYCLE_DATE_KEYS,
+  LIFECYCLE_SUNSET_STATUSES,
   ModelBackend,
   ModelRecordWrite,
   groupsTouchedByPatch,
+  lifecycleStatusRank,
   type FieldGroup,
   type ICatalogContributor,
   type IModelCatalogRowInput,
@@ -51,13 +54,6 @@ const FEED_FORBIDDEN_GROUPS: readonly FieldGroup[] = ['dispatch', 'presentation'
  * for that group at merge time (PRESENTATION_PRECEDENCE in llm-adapters mergeCatalog.ts).
  */
 const FEED_CLAIMABLE_FIELDS: ReadonlySet<string> = new Set(['releaseDate']);
-
-/**
- * Statuses a model is on its way out in, and therefore not promotable. MUST STAY
- * IN SYNC WITH SUNSET_STATUSES in lifecyclePlan.ts, which decides what counts as
- * a transition; importing it would make the two modules circular.
- */
-const SUNSET_STATUSES: ReadonlySet<string> = new Set(['deprecated', 'legacy', 'retired']);
 
 /** Two aggregators inside this band agree; beyond it neither is trusted (sec 8). */
 export const PRICE_AGREEMENT_TOLERANCE = 0.1;
@@ -118,6 +114,8 @@ export interface CatalogWriteInput {
   priorDiscoveryGroups?: ReadonlyMap<string, readonly FieldGroup[]>;
   /** Contributors on that same superseded row, so a re-claim keeps its provenance. */
   priorContributors?: ReadonlyMap<string, readonly ICatalogContributor[]>;
+  /** planLifecycleSignals' providerUndated: the provider that reports each model undated this run. */
+  providerUndated?: ReadonlyMap<string, string>;
   operatorOwnedModelIds: ReadonlySet<string>;
   /** Models a seed row, operator row or adapter literal presents; discovery leaves those alone. */
   presentationOwnedElsewhere?: ReadonlySet<string>;
@@ -432,6 +430,10 @@ function planOne(
       claimsLifecycle = false;
     }
   }
+  const undatedBy = input.providerUndated?.get(candidate.modelId);
+  if (undatedBy && dropsFutureDeprecation(draft, base, contributed, candidate, input, undatedBy, dropped)) {
+    claimsLifecycle = true;
+  }
 
   const derivedGroups = new Set<FieldGroup>();
   const outputClaim = starvedByOutputClaim(draft, contributed, base.maxOutputTokens);
@@ -584,7 +586,7 @@ function planOne(
   // typed lifecycle reaches this overlay - planLifecycleSignals strips the
   // uncorroborated docs kind first - so the status is a source's claim rather
   // than a parse artifact.
-  if (decides && !SUNSET_STATUSES.has(record.lifecycle?.status ?? '')) {
+  if (decides && !LIFECYCLE_SUNSET_STATUSES.has(record.lifecycle?.status ?? '')) {
     decision = evaluatePromotion({
       record,
       policy: input.policy,
@@ -673,6 +675,9 @@ function planOne(
  * past, that date is what hides the model, so erasing it un-hides a sunset model
  * in every picker.
  *
+ * Status and dates only move toward sunset, as in foldLifecycle (llm-adapters mergeCatalog.ts):
+ * a claim that would step back is clamped and reported, or it would re-append every run.
+ *
  * Undefined means the block is refused: dates with no status anywhere have
  * nothing to hide the model at.
  */
@@ -684,22 +689,37 @@ function mergeLifecycle(
 ): Record<string, unknown> | undefined {
   const held = isPlainObject(base.lifecycle) ? base.lifecycle : {};
   const merged: Record<string, unknown> = { ...held, ...patch };
-  const heldStatus = statusOf(base);
+  const heldStatus = statusOf(base) ?? '';
   const claimed = typeof patch.status === 'string' ? patch.status : undefined;
   const source = candidate.sourceOfField.get('lifecycle') ?? DISCOVERY_CONTRIBUTOR;
 
-  // Leaving a sunset status is operator work. A feed that never marked the model
-  // deprecated (or that publishes a future date as if it were a state) would
-  // otherwise resurrect it into every picker - and, against the absence
-  // protocol, do it again on every run. The dates still merge; only the status
-  // claim is refused, and the disagreement is reported rather than swallowed.
-  if (heldStatus && SUNSET_STATUSES.has(heldStatus) && claimed && !SUNSET_STATUSES.has(claimed)) {
+  // Stepping back down the status order is operator work; dates still merge and the refusal is reported.
+  const heldRank = lifecycleStatusRank(heldStatus);
+  const claimedRank = lifecycleStatusRank(claimed);
+  if (claimed && heldRank !== undefined && (claimedRank === undefined || claimedRank < heldRank)) {
     merged.status = heldStatus;
+    const verb =
+      LIFECYCLE_SUNSET_STATUSES.has(heldStatus) && !LIFECYCLE_SUNSET_STATUSES.has(claimed) ? 'resurrect' : 'step back';
     dropped.push({
       source,
       modelId: candidate.modelId,
-      reason: `lifecycle status "${claimed}" would resurrect a model the catalog holds as "${heldStatus}"; kept "${heldStatus}"`,
+      reason: `lifecycle status "${claimed}" would ${verb} a model the catalog holds as "${heldStatus}"; kept "${heldStatus}"`,
     });
+  }
+
+  // The read path folds to the earliest date across sources, so a later date appended here would
+  // never take effect and would re-append on every run. Dates only move earlier.
+  for (const key of LIFECYCLE_DATE_KEYS) {
+    const inForce = held[key];
+    const claimedDate = patch[key];
+    if (typeof inForce === 'string' && typeof claimedDate === 'string' && claimedDate > inForce) {
+      merged[key] = inForce;
+      dropped.push({
+        source,
+        modelId: candidate.modelId,
+        reason: `lifecycle ${key} "${claimedDate}" is later than the "${inForce}" in force; kept "${inForce}"`,
+      });
+    }
   }
 
   if (typeof merged.status !== 'string') {
@@ -711,6 +731,60 @@ function mergeLifecycle(
     return undefined;
   }
   return merged;
+}
+
+/**
+ * A provider reporting the model in a non-sunset status with no deprecation date outranks a
+ * FUTURE date an aggregator reports or an earlier discovery row holds, which mergeLifecycle
+ * would otherwise carry forward forever. Removes the date from `draft` and credits the lifecycle
+ * group to the provider; returns whether it did.
+ *
+ * Left alone: a date already reached (the model is hidden, and un-hiding is operator work), a
+ * date under a sunset status, a date a provider supplied, and a held date the discovery row does
+ * not own (a seed's; operator rows never reach `base`).
+ */
+function dropsFutureDeprecation(
+  draft: Record<string, unknown>,
+  base: Record<string, unknown>,
+  contributed: Map<string, unknown>,
+  candidate: Candidate,
+  input: CatalogWriteInput,
+  provider: string,
+  dropped: DroppedSourceRecord[]
+): boolean {
+  const lifecycle = draft.lifecycle;
+  if (!isPlainObject(lifecycle)) return false;
+  const { deprecationDate: date, status } = lifecycle;
+  // isModelDeprecated hides a model from the day its date arrives, so a date of today has passed.
+  const today = input.runStartedAt.toISOString().slice(0, 10);
+  if (typeof date !== 'string' || date <= today) return false;
+  if (typeof status !== 'string' || LIFECYCLE_SUNSET_STATUSES.has(status)) return false;
+
+  const held = isPlainObject(base.lifecycle) ? base.lifecycle : {};
+  const heldDate = typeof held.deprecationDate === 'string' ? held.deprecationDate : undefined;
+  if (heldDate !== undefined) {
+    if (heldDate <= today) return false;
+    if (!input.priorDiscoveryGroups?.get(candidate.modelId)?.includes('lifecycle')) return false;
+  }
+
+  const incoming = contributed.get('lifecycle');
+  const incomingSource =
+    isPlainObject(incoming) && incoming.deprecationDate === date ? candidate.sourceOfField.get('lifecycle') : undefined;
+  if (incomingSource && input.contributions.some(c => c.name === incomingSource && c.kind === 'provider')) {
+    return false;
+  }
+
+  draft.lifecycle = omit(lifecycle, 'deprecationDate');
+  contributed.set('lifecycle', draft.lifecycle);
+  candidate.sourceOfField.set('lifecycle', provider);
+  const why = `${provider} reports the model "${status}" with no deprecation date`;
+  dropped.push({
+    source: incomingSource ?? provider,
+    modelId: candidate.modelId,
+    reason:
+      heldDate === date ? `held deprecationDate ${date} cleared: ${why}` : `deprecationDate ${date} refused: ${why}`,
+  });
+  return true;
 }
 
 /**

@@ -10,10 +10,13 @@ export default defineConfig({
     'src/dataLakeService/lakeGateWideningRule.ts',
     // Pure lake-RAG eval bank + grader, importable as '@bike4mind/services/evals/lakeRag'.
     'src/llm/evals/lakeRag/index.ts',
+    // Pure tool-calling scorecard, importable as '@bike4mind/services/evals/toolCalling'.
+    'src/llm/evals/toolCalling/index.ts',
     'src/apiKeyService/index.ts',
     'src/creditService/index.ts',
     'src/generationJobs/index.ts',
     'src/videoJobs/index.ts',
+    'src/musicJobs/index.ts',
     'src/agentProactiveMessagingService/index.ts',
     'src/cliCompletions.ts',
     'src/llm/index.ts',

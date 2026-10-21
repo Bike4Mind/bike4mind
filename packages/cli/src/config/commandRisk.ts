@@ -3,7 +3,7 @@ import { parse as shellParse } from 'shell-quote';
 /**
  * Parse-based shell command risk classification.
  *
- * Tool-name-based safety (see {@link ./toolSafety}) treats every `bash_execute`
+ * Descriptor-based tool policy (see tools/gateway/toolPolicy.ts) treats every `bash_execute`
  * call identically, so a destructive command hidden behind a wrapper
  * (`sh -c "rm -rf /"`, `sudo bash -c "..."`, `curl ... | sh`) is indistinguishable
  * from a benign `ls`. This module inspects the *command text* with a real shell

@@ -1,17 +1,9 @@
+import { elevenLabsContentTypeForFormat } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { GeneratedSound, SoundGenerationOptions, SoundGenerator } from './types';
 
 const SOUND_GENERATION_ENDPOINT = 'https://api.elevenlabs.io/v1/sound-generation';
 const DEFAULT_OUTPUT_FORMAT = 'mp3_44100_128';
-
-/** Maps an ElevenLabs `output_format` token to its MIME type. */
-function contentTypeForFormat(format: string): string {
-  if (format.startsWith('mp3')) return 'audio/mpeg';
-  if (format.startsWith('opus')) return 'audio/opus';
-  if (format.startsWith('pcm')) return 'audio/L16';
-  if (format.startsWith('ulaw')) return 'audio/basic';
-  return 'application/octet-stream';
-}
 
 /**
  * Default provider-fetch deadline. Same reasoning as the music generator's
@@ -53,6 +45,12 @@ export class ElevenLabsSoundGenerator implements SoundGenerator {
 
   async generate(text: string, options: SoundGenerationOptions = {}): Promise<GeneratedSound> {
     const format = options.format ?? DEFAULT_OUTPUT_FORMAT;
+    // The routes refuse an unsupported format before reserving credits; this guards any other caller
+    // from paying for audio that could not be labelled.
+    const contentType = elevenLabsContentTypeForFormat(format);
+    if (!contentType) {
+      throw new Error(`Unsupported ElevenLabs sound output format: ${format}`);
+    }
     const url = new URL(SOUND_GENERATION_ENDPOINT);
     url.searchParams.set('output_format', format);
 
@@ -77,6 +75,6 @@ export class ElevenLabsSoundGenerator implements SoundGenerator {
     }
 
     const audio = Buffer.from(await res.arrayBuffer());
-    return { audio, contentType: contentTypeForFormat(format) };
+    return { audio, contentType };
   }
 }

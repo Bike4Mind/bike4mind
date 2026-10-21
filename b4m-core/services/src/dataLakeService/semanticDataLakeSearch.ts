@@ -208,9 +208,10 @@ export interface SemanticSearchScanAccounting {
    */
   annModelsQueried: number;
   /**
-   * Scoped files per lake, keyed by the lake's `datalake:<slug>` meta-tag (or `prefix:<p>` for a
-   * registry lake that stamps none); the empty-string key holds files attributable to no lake -
-   * the caller's own and shared files, which `collectScopedFiles` admits via `includeShared`.
+   * Scoped files per lake, keyed by the lake's `datalake:<slug>` meta-tag (also for a registry
+   * lake paired through `lakes`; `prefix:<p>` for an unpaired registry prefix); the empty-string key
+   * holds files attributable to no lake - the caller's own and shared files, which
+   * `collectScopedFiles` admits via `includeShared`.
    *
    * This is what makes "which lakes were searched" checkable rather than assumed: the caller's
    * `dataLakeTags` says which lakes were REQUESTED, and a lake missing here (or present with 0)
@@ -378,10 +379,12 @@ export interface SemanticDataLakeSearchParams {
    */
   vectorSearchEnabled?: boolean;
   /**
-   * The caller's resolved lakes, used ONLY to attribute a scoped file back to one lake so
-   * supersession can group per lake (see supersession.ts). Never a second way to resolve access:
-   * this module still takes its scope from `dataLakeTags`/`dataLakeTagPrefixes` exactly as before,
-   * and omitting this simply means nothing is attributable and nothing collapses.
+   * The caller's resolved lakes. Used to attribute a scoped file back to one lake so supersession
+   * can group per lake (see supersession.ts), and to pair a registry lake's open prefix with its
+   * meta-tag so fair ordering gives that lake one share, not two (see lakeFairOrder.ts). Never a
+   * second way to resolve access: this module still takes its scope from
+   * `dataLakeTags`/`dataLakeTagPrefixes` exactly as before. Omitting it means nothing is
+   * attributable, nothing collapses, and a registry lake's prefix arm stays its own bucket.
    */
   lakes?: AttributableLake[];
   /**
@@ -1655,7 +1658,7 @@ async function lakeScopedSearch(
   // `fileName asc` sort over the union, and the chunk budget below is spent sequentially down
   // this order - so without the interleave a lake sorting late contributes nothing, and adding it
   // to a session leaves retrieval byte-identical. See lakeFairOrder.ts.
-  const orderScopes = lakeOrderScopes({ dataLakeTags, dataLakeTagPrefixes, lakeMemberships });
+  const orderScopes = lakeOrderScopes({ dataLakeTags, dataLakeTagPrefixes, lakeMemberships, lakes: params.lakes });
   const { ordered: scopedFiles, filesByLake } = orderFilesFairlyAcrossLakes(
     admitted,
     orderScopes,

@@ -155,11 +155,12 @@ async function pollQuest(questId: string, deps: ImageGenerationDeps): Promise<Qu
 /**
  * Where to download each generated image from.
  *
- * `files` is the server's own resolution and is preferred. It is empty when the deployment has
- * no CDN base configured in the environment the API route reads, in which case the same base
- * from serverConfig (which the client already fetched for the completions endpoint) still
- * resolves the bare names on `images`. Names that neither path can place are reported rather
- * than dropped, so a generation that succeeded is never presented as if nothing happened.
+ * `files` is the server's own resolution and is preferred: each entry carries a short-lived
+ * presigned URL (or, on self-host without a browser-reachable storage endpoint, a same-origin
+ * proxy URL). The `${cdnUrl}/generated/` fallback applies only to an older server that leaves
+ * `files` empty, resolving the bare names on `images` from the serverConfig base. Names that
+ * neither path can place are reported rather than dropped, so a generation that succeeded is
+ * never presented as if nothing happened.
  */
 export function resolveImageUrls(quest: QuestPoll, cdnUrl: string): { urls: string[]; unreachable: string[] } {
   const fromFiles = (quest.files ?? []).filter(file => file.isImage && file.url).map(file => file.url);

@@ -1,4 +1,6 @@
 existingSecret: ''
+externalMongo:
+  enabled: false
 images:
   app: ''
   chatcompletion: ''
@@ -25,6 +27,7 @@ config:
   APP_URL: http://localhost:3000
   WEBSOCKET_URL: ws://localhost:3001
   CHAT_COMPLETION_PUBLIC_URL: http://localhost:8788
+  S3_PRESIGN_ENDPOINT: http://localhost:19000
 resources:
   app:
     requests: { cpu: 100m, memory: 512Mi }

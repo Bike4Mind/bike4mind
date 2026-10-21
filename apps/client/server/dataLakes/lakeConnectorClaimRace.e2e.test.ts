@@ -10,7 +10,7 @@ import {
   orgGitHubLakeConnectionRepository,
   orgGoogleDriveConnectionRepository,
 } from '@bike4mind/database';
-import { ConflictError } from '@server/utils/errors';
+import { ConflictError } from '@bike4mind/server-utils/utils/errors';
 import { withConnectionId, withLakeConnectorClaim } from './assertLakeConnectorFree';
 
 /**
@@ -127,7 +127,7 @@ describe('withLakeConnectorClaim (real mongod, concurrent connect)', () => {
 
     await expect(connectDrive(lakeId)).rejects.toThrow(/already connected to a GitHub repository/i);
 
-    expect(await orgGitHubLakeConnectionRepository.release(github.id, ORG)).toBe(true);
+    expect(await orgGitHubLakeConnectionRepository.release(github.id, { kind: 'organization', organizationId: ORG })).toBe(true);
     expect(await LakeConnectorClaim.countDocuments({ lakeId })).toBe(0);
 
     const drive = await connectDrive(lakeId);

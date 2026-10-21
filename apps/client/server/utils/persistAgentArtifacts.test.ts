@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { collectDagChildArtifactBlocks } from '@server/queueHandlers/agentExecutor.dagArtifacts';
+import { collectDagChildArtifactBlocks } from '@server/utils/agentDagArtifacts';
 import {
   MAX_AGENT_ARTIFACTS_PER_RUN,
   buildAgentArtifactPayloads,
@@ -154,6 +154,42 @@ describe('buildAgentArtifactPayloads', () => {
 
     expect(payloads).toHaveLength(1);
     expect(payloads[0].type).toBe('react');
+  });
+
+  it('promotes a mermaid fence and a loose-rule ts component, like a chat reply does', () => {
+    const payloads = build(
+      [
+        '```mermaid\nflowchart TD\n  A[Start] --> B[End]\n```',
+        '```ts\nexport default function App(){ return <div/> }\n```',
+      ].join('\n\n')
+    );
+
+    expect(payloads.map(p => p.type).sort()).toEqual(['mermaid', 'react']);
+  });
+
+  it('numbers a mixed explicit-plus-fenced reply in one parse order, not explicit tags first', () => {
+    // The old flow listed explicit tags, then promoted fences (foo_0, mermaid_1 here). One parse
+    // over the converted reply replaced that, so the `_{index}` suffix of a mixed reply written
+    // before this change is reminted on a re-persist.
+    const payloads = build([reactArtifact('foo'), '```mermaid\nflowchart TD\n  A[Start] --> B[End]\n```'].join('\n\n'));
+
+    expect(payloads.map(p => p.id)).toEqual([
+      `artifact_mermaid_mermaid-flowchart_${QUEST_CREATED_AT_MS}_0`,
+      `artifact_react_foo_${QUEST_CREATED_AT_MS}_1`,
+    ]);
+  });
+
+  it('numbers a promoted html fence and a later explicit svg tag in one parse order', () => {
+    const html = '```html\n<!DOCTYPE html>\n<html><body><h1>Page</h1></body></html>\n```';
+    const svg =
+      '<artifact identifier="logo" type="image/svg+xml" title="Logo">\n<svg xmlns="http://www.w3.org/2000/svg"><circle r="5"/></svg>\n</artifact>';
+    const payloads = build([html, svg].join('\n\n'));
+
+    // Last-to-first through the reply: parseArtifacts sorts by descending startIndex.
+    expect(payloads.map(p => p.id)).toEqual([
+      `artifact_svg_logo_${QUEST_CREATED_AT_MS}_0`,
+      `artifact_html_html-page_${QUEST_CREATED_AT_MS}_1`,
+    ]);
   });
 });
 
@@ -348,6 +384,8 @@ describe('persistAgentArtifacts', () => {
     const count = vi.fn().mockResolvedValue(1);
     vi.doMock('@bike4mind/database', () => ({
       artifactRepository: { count },
+      artifactContentRepository: {},
+      artifactVersionRepository: {},
       adminSettingsRepository: { getSettingsValue: vi.fn().mockResolvedValue(true) },
     }));
     vi.resetModules();

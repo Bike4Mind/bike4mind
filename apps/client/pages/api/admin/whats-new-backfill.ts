@@ -3,13 +3,13 @@ import { randomUUID } from 'crypto';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { AdminSettings, ModalModel } from '@bike4mind/database';
-import { ForbiddenError } from '@server/utils/errors';
-import { sendToQueue } from '@server/utils/sqs';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { Resource } from 'sst';
 import { collectDataForDate } from '@server/services/whatsNewDataCollector';
 import { Logger } from '@bike4mind/observability';
-import type { WhatsNewGenerationPayload } from '@server/whatsNew/whatsNewGeneration.types';
-import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
+import type { WhatsNewGenerationPayload } from '@bike4mind/server-utils/whatsNew/whatsNewGeneration.types';
+import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { ApiKeyScope, WHATS_NEW_DEFAULT_REPOSITORY, WHATS_NEW_DEFAULT_TARGET_BRANCH } from '@bike4mind/common';
 
 // Rate limiting - 3 requests per minute to allow retries after gateway timeouts

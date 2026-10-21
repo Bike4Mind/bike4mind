@@ -53,7 +53,7 @@ const ProjectEditModal: FC<ProjectEditModalProps> = ({ project, children, onSucc
     resolver: zodResolver(
       z.object({
         name: z.string().min(1, 'Project name is required.'),
-        description: z.string().min(1, 'Please write a description for the Project.'),
+        description: z.string(),
       }) as any
     ),
   });

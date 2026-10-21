@@ -1,6 +1,6 @@
 import type { TFunction } from 'i18next';
 import type { IChatHistoryItemDocument } from '@bike4mind/common';
-import { getSendBlockedLabel, type SendBlockedReason } from './sendBlockedReason';
+import { getBlockedSendToastLabel, type SendBlockedReason } from './sendBlockedReason';
 
 interface SendPromptViaComposerParams {
   prompt?: string;
@@ -36,7 +36,7 @@ export async function sendPromptViaComposer({
   handleSendClick,
 }: SendPromptViaComposerParams): Promise<boolean> {
   if (sendBlockedReason) {
-    if (shouldToastBlockedSend(sendBlockedReason)) toastInfo(getSendBlockedLabel(sendBlockedReason, t));
+    if (shouldToastBlockedSend(sendBlockedReason)) toastInfo(getBlockedSendToastLabel(sendBlockedReason, t));
     return false;
   }
   let sent = true;

@@ -36,7 +36,7 @@ function ProjectSessionList({ project, onNotebookClick, favoriteSessions, suppre
           />
         ))
       ) : (
-        <Typography level="body-xs" sx={{ color: 'neutral.softDisabledColor', py: 1, px: '12px' }}>
+        <Typography level="body-xs" sx={{ color: 'text.tertiary', py: 1, px: '12px' }}>
           No notebooks
         </Typography>
       )}

@@ -1,4 +1,4 @@
-import Bike4MindIcon from '@client/app/components/svgs/icons/Bike4MindIcon';
+import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useGetUserOrganizations } from '@client/app/hooks/data/organizations';
@@ -9,6 +9,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { green, greenAlpha } from '@client/app/utils/themes/colors';
 import { FIELD_TOOLTIPS } from '@client/app/components/help/fieldTooltips';
+import { formatCreditAmount } from '@client/app/utils/formatCredits';
 
 type Account = {
   id: string;
@@ -274,9 +275,9 @@ const AccountSelector = () => {
                     padding: '14px 12px',
                     cursor: 'help',
                   }}
-                  startDecorator={<Bike4MindIcon size="14" />}
+                  startDecorator={<CreditIcon sx={{ fontSize: 14, color: 'var(--Icon-color)' }} />}
                 >
-                  <Box component="span">{account.credits.toLocaleString()}</Box>
+                  <Box component="span">{formatCreditAmount(account.credits)}</Box>
                 </Chip>
               </Tooltip>
             </Option>

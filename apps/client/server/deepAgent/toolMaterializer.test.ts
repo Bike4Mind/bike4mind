@@ -25,11 +25,15 @@ vi.mock('@bike4mind/services/llm', async importOriginal => {
   };
 });
 vi.mock('@bike4mind/database', () => ({
-  userRepository: { findById: vi.fn().mockResolvedValue({ _id: 'owner-1', id: 'owner-1' }) },
+  userRepository: {
+    findById: vi.fn().mockResolvedValue({ _id: 'owner-1', id: 'owner-1' }),
+    incrementCurrentStorage: vi.fn().mockResolvedValue(undefined),
+  },
   // Lakes disabled, so the save tool answers right after its adapter gate without writing.
   adminSettingsRepository: { getSettingsValue: vi.fn().mockResolvedValue(false) },
   apiKeyRepository: {},
   dataLakeRepository: {
+    findByDatalakeTags: vi.fn().mockResolvedValue([]),
     findBySlug: vi.fn(),
     findBySlugAmongIds: vi.fn(),
     setStats: vi.fn(),
@@ -38,7 +42,10 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeAccessGrantRepository: { listActiveByLakes: vi.fn().mockResolvedValue([]), listByLake: vi.fn() },
   fallbackLakeSettingsRepository: {},
   // ToolContext.db.organizations is required since #1674 (org membership set).
-  organizationRepository: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+  organizationRepository: {
+    findMembershipOrgIds: vi.fn().mockResolvedValue([]),
+    incrementCurrentStorage: vi.fn().mockResolvedValue(undefined),
+  },
   fabFileChunkRepository: {},
   fabFileRepository: {},
   imageModerationIncidentRepository: {},
@@ -55,8 +62,10 @@ vi.mock('@bike4mind/llm-adapters', async importOriginal => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return { ...actual, getAvailableModels: vi.fn().mockResolvedValue([]) };
 });
-vi.mock('./resolveBackend', () => ({ buildSystemApiKeyTable: vi.fn().mockResolvedValue({}) }));
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/deepAgent/resolveBackend', () => ({
+  buildSystemApiKeyTable: vi.fn().mockResolvedValue({}),
+}));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({}),
   getGeneratedImageStorage: () => ({}),
 }));
@@ -114,6 +123,13 @@ describe('createDeepAgentToolMaterializer', () => {
       config?: { web_search?: { imageUrlSigningSecret?: string } };
     };
     expect(opts?.config?.web_search?.imageUrlSigningSecret).toBe('test-secret');
+  });
+
+  it('marks the tool deps as internal-origin with no api key', async () => {
+    await materialize()(['dice_roll'], 'owner-1');
+    const toolDeps = buildSharedToolsSpy.mock.calls[0]?.[0] as { authOrigin?: string; apiKeyId?: string };
+    expect(toolDeps.authOrigin).toBe('internal');
+    expect(toolDeps.apiKeyId).toBeUndefined();
   });
 
   it('wires the owner lookup edit_image needs for generated-image keys', async () => {

@@ -13,79 +13,34 @@
 import { useCallback, useEffect, useImperativeHandle, useRef, useState, forwardRef } from 'react';
 import { Box, IconButton, Tooltip, useTheme } from '@mui/joy';
 import CloseIcon from '@mui/icons-material/Close';
-import MicTwoToneIcon from '@mui/icons-material/MicTwoTone';
-import { keyframes } from '@mui/system';
+import MicIcon from '@mui/icons-material/MicNoneOutlined';
 import { api } from '@client/app/contexts/ApiContext';
 import { useAudioAnalyzer } from '@client/app/hooks/useAudioAnalyzer';
-import { grayAlpha, green } from '@client/app/utils/themes/colors';
+import { grayAlpha } from '@client/app/utils/themes/colors';
+import { AnimatedText, VoiceStatusPill, fadeIn } from './VoiceStatusPill';
+import { toolbarIconSx } from '@client/app/components/Session/toolbarIconSx';
 
-// Animations (matching VoiceInlineIndicator)
-
-const fadeIn = keyframes`
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: translateY(0); }
-`;
-
-const letterWave = keyframes`
-  0% { opacity: 1; }
-  100% { opacity: 0.5; }
-`;
-
-/** Renders each character with a staggered opacity wave animation. */
-const AnimatedText: React.FC<{ text: string; color: string }> = ({ text, color }) => (
-  <Box component="span" sx={{ display: 'inline-flex', flexShrink: 0, fontSize: 'var(--joy-fontSize-xs)', color }}>
-    {text.split('').map((char, i) => (
-      <Box
-        key={i}
-        component="span"
-        sx={{
-          animation: `${letterWave} 0.75s infinite alternate`,
-          animationDelay: `${i * 0.1}s`,
-        }}
-      >
-        {char}
-      </Box>
-    ))}
-  </Box>
-);
-
-// MiniEqualizer (matching VoiceInlineIndicator)
-
-const MiniEqualizer: React.FC<{ stream: MediaStream | null }> = ({ stream }) => {
+/** The shared status pill fed from the dictation's own microphone stream. */
+const RecordingPill = forwardRef<
+  HTMLDivElement,
+  { stream: MediaStream | null; onCancel: () => void; stretch?: boolean }
+>(function RecordingPill({ stream, onCancel, stretch, ...rest }, ref) {
+  const theme = useTheme();
   const audioData = useAudioAnalyzer(stream);
-
-  const indices = [0, 2, 5, 7, 10, 12, 14];
-  const bars = indices.map(i => audioData.frequencyBars[i] ?? 0);
-
   return (
-    <Box
-      sx={{
-        display: 'flex',
-        alignItems: 'flex-end',
-        justifyContent: 'center',
-        gap: '2px',
-        width: '28px',
-        height: '20px',
-        flexShrink: 0,
-      }}
-      data-testid="voice-record-equalizer"
-    >
-      {bars.map((intensity, i) => (
-        <Box
-          key={i}
-          sx={{
-            width: '3px',
-            borderRadius: '1.5px',
-            backgroundColor: green[500],
-            height: audioData.isActive ? `${Math.max(3, Math.round(intensity * 20))}px` : '6px',
-            transition: 'height 0.06s ease-out',
-            opacity: audioData.isActive ? 1 : 0.5,
-          }}
-        />
-      ))}
-    </Box>
+    <VoiceStatusPill
+      ref={ref}
+      {...rest}
+      label="Recording"
+      bars={audioData.frequencyBars}
+      isActive={audioData.isActive}
+      onClick={onCancel}
+      stretch={stretch}
+      endDecorator={<CloseIcon sx={{ fontSize: 20, color: theme.palette.text.tertiary }} />}
+      data-testid="voice-record-cancel-pill"
+    />
   );
-};
+});
 
 // VoiceRecordButton
 
@@ -94,6 +49,8 @@ interface IProps {
   onRecordingEnd: (prompt: string) => void;
   onRecordingError: () => void;
   disabled?: boolean;
+  /** Recording and transcribing fill the row's free space (a collapsed toolbar, SessionToolbar). */
+  stretch?: boolean;
 }
 
 export interface VoiceRecordButtonRef {
@@ -102,7 +59,7 @@ export interface VoiceRecordButtonRef {
 }
 
 export const VoiceRecordButton = forwardRef<VoiceRecordButtonRef, IProps>(
-  ({ onRecordingStart, onRecordingEnd, onRecordingError, disabled = false }, ref) => {
+  ({ onRecordingStart, onRecordingEnd, onRecordingError, disabled = false, stretch = false }, ref) => {
     const theme = useTheme();
     const [permission, setPermission] = useState(false);
     const [stream, setStream] = useState<MediaStream | null>(null);
@@ -204,8 +161,11 @@ export const VoiceRecordButton = forwardRef<VoiceRecordButtonRef, IProps>(
 
         // Step 3: trigger transcription against the uploaded object.
         const response = await api.post<{ text: string }>('/api/ai/transcribe', { fileKey });
-        if (response?.data?.text) {
-          onRecordingEnd(response.data.text);
+        const text = response?.data?.text?.trim();
+        if (text) {
+          onRecordingEnd(text);
+        } else {
+          onRecordingError();
         }
       } catch (error) {
         console.error('Transcription error:', error);
@@ -268,6 +228,8 @@ export const VoiceRecordButton = forwardRef<VoiceRecordButtonRef, IProps>(
             borderRadius: '6px',
             backgroundColor: theme.palette.mode === 'dark' ? theme.palette.border.solid : grayAlpha[150][20],
             animation: `${fadeIn} 0.2s ease-out`,
+            // Fills the space the hidden model, Tools and Agents leave in a collapsed row (SessionToolbar).
+            ...(stretch && { flex: '1 1 auto', minWidth: 0 }),
           }}
           data-testid="voice-record-transcribing"
         >
@@ -285,32 +247,14 @@ export const VoiceRecordButton = forwardRef<VoiceRecordButtonRef, IProps>(
             alignItems: 'center',
             gap: 1,
             animation: `${fadeIn} 0.2s ease-out`,
+            // Fills the space the hidden model, Tools and Agents leave in a collapsed row (SessionToolbar).
+            ...(stretch && { flex: '1 1 auto', minWidth: 0 }),
           }}
           data-testid="voice-record-strip"
         >
           {/* Recording pill with animated text + green equalizer + cancel */}
           <Tooltip title="Cancel recording" placement="top">
-            <Box
-              onClick={cancelRecording}
-              sx={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 0.75,
-                padding: '4px 8px 4px 10px',
-                minHeight: '32px',
-                borderRadius: '6px',
-                cursor: 'pointer',
-                backgroundColor: theme.palette.mode === 'dark' ? theme.palette.border.solid : grayAlpha[150][20],
-                '&:hover': {
-                  backgroundColor: theme.palette.mode === 'dark' ? '#363B40' : grayAlpha[150][30],
-                },
-              }}
-              data-testid="voice-record-cancel-pill"
-            >
-              <AnimatedText text="Recording" color={theme.palette.text.tertiary} />
-              <MiniEqualizer stream={stream} />
-              <CloseIcon sx={{ fontSize: 20, color: theme.palette.text.tertiary }} />
-            </Box>
+            <RecordingPill stream={stream} onCancel={cancelRecording} stretch={stretch} />
           </Tooltip>
         </Box>
       );
@@ -334,7 +278,7 @@ export const VoiceRecordButton = forwardRef<VoiceRecordButtonRef, IProps>(
           data-testid="voice-record-btn"
           disabled={disabled}
         >
-          <MicTwoToneIcon sx={{ fontSize: '18px' }} />
+          <MicIcon sx={[{ fontSize: '18px' }, toolbarIconSx()]} />
         </IconButton>
       </Tooltip>
     );

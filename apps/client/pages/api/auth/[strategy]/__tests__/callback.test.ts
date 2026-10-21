@@ -29,7 +29,13 @@ vi.mock('@server/auth/tokenGenerator', () => ({
   },
 }));
 vi.mock('@server/auth/jwtStateStore', () => ({ verifyStateToken: vi.fn() }));
-vi.mock('@server/auth/authSuccessRedirect', () => ({ authSuccessRedirectQuery: () => '' }));
+
+const mockResolveSecondFactor = vi.fn();
+const mockLogSignInSuccess = vi.fn().mockResolvedValue(undefined);
+vi.mock('@server/auth/signInSecondFactor', () => ({
+  resolveSecondFactor: (...a: any[]) => mockResolveSecondFactor(...a),
+  logSignInSuccess: (...a: any[]) => mockLogSignInSuccess(...a),
+}));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn().mockResolvedValue(undefined) }));
 
@@ -37,14 +43,32 @@ const mockEmitSignup = vi.fn().mockResolvedValue([]);
 vi.mock('@server/analytics/signupEvents', () => ({
   emitSignupForSourceProducts: (...a: any[]) => mockEmitSignup(...a),
 }));
+const mockRecordSignupAcquisition = vi.fn().mockResolvedValue({ isSynthetic: false });
+const mockEmitSignupFunnelEvents = vi.fn().mockResolvedValue(undefined);
+vi.mock('@server/analytics/funnel', () => ({
+  recordSignupAcquisition: (...a: any[]) => mockRecordSignupAcquisition(...a),
+  emitSignupFunnelEvents: (...a: any[]) => mockEmitSignupFunnelEvents(...a),
+}));
 
 const mockIssueBrowserSession = vi.fn().mockResolvedValue({ accessToken: 'jwt-access', sid: 'sid' });
 vi.mock('@server/auth/issueSession', () => ({
   issueBrowserSession: (...a: any[]) => mockIssueBrowserSession(...a),
 }));
 
+const mockStampSourceTag = vi.fn().mockResolvedValue(undefined);
+vi.mock('@server/utils/auth/oauthSourceTag', () => ({
+  stampOAuthSourceTag: (...a: unknown[]) => mockStampSourceTag(...a),
+}));
+
 // Import after mocks are registered.
 import { logEvent } from '@server/utils/analyticsLog';
+import { verifyStateToken, type VerifyResult, type BaseStatePayload } from '@server/auth/jwtStateStore';
+import { logAuthAudit } from '@server/utils/authAudit';
+
+const stateNaming = (clientId: string): VerifyResult<BaseStatePayload & { clientId: string }> => ({
+  valid: true,
+  payload: { handle: 'h', createdAt: 0, aud: 'google-oauth-state', iss: 'test', clientId },
+});
 import handler from '@pages/api/auth/[strategy]/callback';
 
 function makeReqRes(headers: Record<string, string> = {}) {
@@ -73,6 +97,7 @@ async function runCallback(err: unknown, user: unknown, info: unknown, headers?:
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockResolveSecondFactor.mockResolvedValue({ kind: 'satisfied', trustedDevice: null });
 });
 
 describe('[strategy]/callback - !user branch sanitized reason', () => {
@@ -183,6 +208,29 @@ describe('[strategy]/callback - signup credited to the source product', () => {
   // enough to emit - see readConsentedAcquisitionTouches.
   const touchCookie = `${touch}; b4m-consent-decision=granted`;
 
+  it.each(['google', 'github'])('emits one complete signup funnel for %s', async strategy => {
+    const { req, res } = makeReqRes();
+    req.query.strategy = strategy;
+    let passportCallback: Promise<unknown> | undefined;
+    mockAuthenticate.mockImplementation((_strategy: string, _opts: any, cb: any) => () => {
+      passportCallback = cb(null, {
+        id: 'u-new',
+        isBanned: false,
+        isNewUser: true,
+        emailVerified: true,
+        signupCreditsGranted: 100,
+      });
+    });
+
+    await handler(req, res, vi.fn());
+    await passportCallback;
+
+    expect(mockEmitSignupFunnelEvents).toHaveBeenCalledTimes(1);
+    expect(mockEmitSignupFunnelEvents).toHaveBeenCalledWith(
+      expect.objectContaining({ method: strategy, emailVerified: true, creditsGranted: 100 })
+    );
+  });
+
   it("sends a new account's touches, read from its own cookies, with the provider as the method", async () => {
     const res = await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, {
       cookie: touchCookie,
@@ -196,11 +244,30 @@ describe('[strategy]/callback - signup credited to the source product', () => {
     expect(res._getRedirectUrl()).toMatch(/isNewUser=1/);
   });
 
+  it("persists a new account's acquisition with the provider as the signup method", async () => {
+    await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, { cookie: touchCookie });
+
+    expect(mockRecordSignupAcquisition).toHaveBeenCalledWith(
+      expect.objectContaining({ user: expect.objectContaining({ id: 'u-new' }), method: 'github' })
+    );
+  });
+
+  it('keeps a synthetic new account out of the signup emit and the ad conversion fragment', async () => {
+    mockRecordSignupAcquisition.mockResolvedValueOnce({ isSynthetic: true });
+    const res = await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, {
+      cookie: touchCookie,
+    });
+
+    expect(mockEmitSignup).not.toHaveBeenCalled();
+    expect(res._getRedirectUrl()).not.toMatch(/isNewUser=1/);
+  });
+
   it('sends nothing for a returning user', async () => {
     await runCallback(null, { id: 'u-old', isBanned: false }, undefined, { cookie: touchCookie });
 
     expect(mockIssueBrowserSession).toHaveBeenCalled();
     expect(mockEmitSignup).not.toHaveBeenCalled();
+    expect(mockRecordSignupAcquisition).not.toHaveBeenCalled();
   });
 
   // The REGISTER log and the emit are separate statements; folding the emit into the log's
@@ -270,5 +337,118 @@ describe('[strategy]/callback - signup credited to the source product', () => {
     // a suppressed visitor. The account is recorded in Mongo by the REGISTER log above, which
     // is a different system.
     expect(mockEmitSignup).toHaveBeenCalledWith({ userId: 'u-new', touches: {}, method: 'github' });
+  });
+});
+
+describe('[strategy]/callback - OAuth client source tag', () => {
+  it('stamps a new account with the clientId from the verified state token', async () => {
+    vi.mocked(verifyStateToken).mockReturnValueOnce(stateNaming('b4m_sat_0123abcd'));
+    await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined);
+    expect(mockStampSourceTag).toHaveBeenCalledWith('u-new', 'b4m_sat_0123abcd');
+  });
+
+  it('never stamps a returning user, even when the state names a client', async () => {
+    vi.mocked(verifyStateToken).mockReturnValueOnce(stateNaming('b4m_sat_0123abcd'));
+    await runCallback(null, { id: 'u-old', isBanned: false }, undefined);
+    expect(mockStampSourceTag).not.toHaveBeenCalled();
+  });
+
+  it('passes no clientId when the state token does not verify', async () => {
+    vi.mocked(verifyStateToken).mockReturnValueOnce({ valid: false, reason: 'invalid', message: 'bad' });
+    const res = await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined);
+    expect(mockStampSourceTag).toHaveBeenCalledWith('u-new', undefined);
+    expect(res._getRedirectUrl()).toMatch(/^\/auth\/success/);
+  });
+});
+
+describe('[strategy]/callback - second factor gate', () => {
+  it('hands an enrolled user to the MFA challenge without minting a session or logging a login', async () => {
+    mockResolveSecondFactor.mockResolvedValue({ kind: 'challenge', mfaToken: 'pending-tok', passkeyAvailable: true });
+
+    const res = await runCallback(null, { id: 'u-mfa', isBanned: false }, undefined);
+
+    expect(res._getRedirectUrl()).toMatch(/^\/auth\/success/);
+    expect(res._getRedirectUrl()).toContain('#mfaToken=pending-tok&userId=u-mfa&mfa=verify&passkey=1');
+    expect(res._getRedirectUrl()).not.toContain('#token=');
+    expect(mockIssueBrowserSession).not.toHaveBeenCalled();
+    expect(mockLogSignInSuccess).not.toHaveBeenCalled();
+  });
+
+  it('keeps the requested redirectTo ahead of the MFA handoff fragment', async () => {
+    vi.mocked(verifyStateToken).mockReturnValueOnce({
+      valid: true,
+      payload: {
+        handle: 'h',
+        createdAt: 0,
+        aud: 'github-oauth-state',
+        iss: 'test',
+        redirectTo: '/projects/p1?tab=files',
+      },
+    });
+    mockResolveSecondFactor.mockResolvedValue({ kind: 'challenge', mfaToken: 'pending-tok', passkeyAvailable: false });
+
+    const res = await runCallback(null, { id: 'u-mfa', isBanned: false }, undefined);
+
+    const location = res._getRedirectUrl();
+    const expectedQuery = `/auth/success?redirectTo=${encodeURIComponent('/projects/p1?tab=files')}`;
+    expect(location.startsWith(expectedQuery)).toBe(true);
+    expect(location.indexOf(expectedQuery)).toBeLessThan(location.indexOf('#mfaToken='));
+  });
+
+  it('tells the second-factor step where the sign-in started so its completion can be audited', async () => {
+    mockResolveSecondFactor.mockResolvedValue({ kind: 'challenge', mfaToken: 'pending-tok', passkeyAvailable: false });
+
+    await runCallback(null, { id: 'u-mfa', isBanned: false }, undefined);
+
+    expect(mockResolveSecondFactor).toHaveBeenCalledWith(expect.anything(), expect.anything(), {
+      origin: { strategy: 'github', createdVia: 'oauth' },
+    });
+  });
+
+  it('omits the passkey flag when the challenged user has no passkey', async () => {
+    mockResolveSecondFactor.mockResolvedValue({ kind: 'challenge', mfaToken: 'pending-tok', passkeyAvailable: false });
+
+    const res = await runCallback(null, { id: 'u-mfa', isBanned: false }, undefined);
+
+    expect(res._getRedirectUrl()).toContain('&mfa=verify');
+    expect(res._getRedirectUrl()).not.toContain('passkey=1');
+  });
+
+  it('sends a user who owes enrollment to MFA setup and still carries the new-account signup fragment', async () => {
+    mockResolveSecondFactor.mockResolvedValue({ kind: 'enroll', mfaToken: 'pending-tok' });
+
+    const res = await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined);
+
+    const redirectUrl = res._getRedirectUrl();
+    expect(redirectUrl).toContain('#mfaToken=pending-tok&userId=u-new&mfa=setup');
+    expect(redirectUrl).toContain('isNewUser=1&signupMethod=github');
+    expect(mockIssueBrowserSession).not.toHaveBeenCalled();
+    expect(mockLogSignInSuccess).not.toHaveBeenCalled();
+  });
+
+  it('records a new provider binding even when the second factor is still owed', async () => {
+    mockResolveSecondFactor.mockResolvedValue({ kind: 'challenge', mfaToken: 'pending-tok', passkeyAvailable: false });
+
+    await runCallback(null, { id: 'u-link', isBanned: false, isNewOAuthLink: true }, undefined);
+
+    expect(logAuthAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ userId: 'u-link', event: 'oauth_link', strategy: 'github' })
+    );
+  });
+
+  it('mints the session and logs the sign-in with the trusted device that satisfied the factor', async () => {
+    const trustedDevice = { id: 'td-1', label: 'Laptop' };
+    mockResolveSecondFactor.mockResolvedValue({ kind: 'satisfied', trustedDevice });
+
+    const res = await runCallback(null, { id: 'u-ok', isBanned: false }, undefined);
+
+    expect(mockIssueBrowserSession).toHaveBeenCalled();
+    expect(mockLogSignInSuccess).toHaveBeenCalledWith(expect.anything(), {
+      userId: 'u-ok',
+      strategy: 'github',
+      trustedDevice,
+    });
+    expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
   });
 });

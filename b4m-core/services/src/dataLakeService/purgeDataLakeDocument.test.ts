@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { STORAGE_CHARGE_STAMP_CUTOFF } from '@bike4mind/common';
 import { purgeDataLakeDocument } from './purgeDataLakeDocument';
 
 const LAKE = {
@@ -13,6 +14,7 @@ const FILE = {
   fileName: 'q3.pdf',
   userId: 'owner-1',
   tags: [{ name: 'datalake:sales', strength: 1 }],
+  storageChargedAt: new Date('2026-10-10T00:00:00Z'),
 };
 
 const OWNER = { userId: 'owner-1', isAdmin: false };
@@ -455,6 +457,41 @@ describe('purgeDataLakeDocument', () => {
     expect(onPurged).toHaveBeenCalledWith(expect.objectContaining({ fileSize: 0 }));
   });
 
+  it('reports no bytes to return for a stored object that was never charged', async () => {
+    const db = makeDb({ filePath: 'uploads/q3.pdf', fileSize: 27707, storageChargedAt: undefined, status: 'pending' });
+    const onPurged = vi.fn(async () => {});
+    await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage: makeStorage(), onPurged });
+    expect(onPurged).toHaveBeenCalledWith(expect.objectContaining({ fileSize: 0 }));
+  });
+
+  // A `complete` row from before the stamping release was charged by the upload event, so it refunds
+  // in full - a stamp-only rule would drop these.
+  it('reports the full charged size for a legacy pre-stamp complete row', async () => {
+    const db = makeDb({
+      filePath: 'uploads/q3.pdf',
+      fileSize: 27707,
+      storageChargedAt: undefined,
+      status: 'complete',
+      createdAt: new Date(STORAGE_CHARGE_STAMP_CUTOFF.getTime() - 1000),
+    });
+    const onPurged = vi.fn(async () => {});
+    await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage: makeStorage(), onPurged });
+    expect(onPurged).toHaveBeenCalledWith(expect.objectContaining({ fileSize: 27707 }));
+  });
+
+  it('reports no bytes for a post-stamp complete row that was never charged', async () => {
+    const db = makeDb({
+      filePath: 'uploads/q3.pdf',
+      fileSize: 27707,
+      storageChargedAt: undefined,
+      status: 'complete',
+      createdAt: new Date(STORAGE_CHARGE_STAMP_CUTOFF.getTime() + 1000),
+    });
+    const onPurged = vi.fn(async () => {});
+    await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage: makeStorage(), onPurged });
+    expect(onPurged).toHaveBeenCalledWith(expect.objectContaining({ fileSize: 0 }));
+  });
+
   it('keeps the receipt to its declared fields, so recomputeLakeStats extras cannot ride along', async () => {
     const db = makeDb();
     db.fabFiles.computeDataLakeStats = vi.fn(async () => ({
@@ -572,6 +609,82 @@ describe('purgeDataLakeDocument', () => {
     expect(receipt.verified).toBe(false);
     expect(onPurged).toHaveBeenCalledWith(expect.objectContaining({ fileSize: 0 }));
     expect(logger.error).toHaveBeenCalled();
+  });
+
+  it("keeps an evidence-held file's stored objects and row, and reports every object as still stored", async () => {
+    // The row delete is refused for a blocked file, so deleting its bytes first would leave a held
+    // row over evidence that is gone. Same rule as fabFileService/deleteStoredObjects.ts.
+    const db = makeDb({
+      filePath: 'uploads/evidence-v2.png',
+      versions: [{ filePath: 'uploads/evidence-v1.png' }],
+      moderationStatus: 'blocked',
+      blockReason: 'explicit',
+    });
+    const storage = makeStorage();
+    const onPurged = vi.fn(async () => {});
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+    const receipt = await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage, onPurged, logger });
+
+    expect(storage.delete).not.toHaveBeenCalled();
+    expect(db.fabFiles.hardDeleteOneById).not.toHaveBeenCalled();
+    expect(db.fabFileChunks.deleteManyByFabFileId).not.toHaveBeenCalled();
+    expect(receipt).toMatchObject({
+      storageObjectDeleted: false,
+      documentDeleted: false,
+      storageObjectsTotal: 2,
+      storageObjectsRemaining: 2,
+      heldForModeration: true,
+      verified: false,
+    });
+    expect(onPurged).toHaveBeenCalledWith(expect.objectContaining({ fileSize: 0 }));
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('legal hold'),
+      expect.objectContaining({ fabFileId: 'file-1' })
+    );
+  });
+
+  it('keeps a held document with no stored keys without attempting downstream deletion', async () => {
+    const db = makeDb({ moderationStatus: 'blocked', blockReason: 'explicit' });
+    const storage = makeStorage();
+
+    const receipt = await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage });
+
+    expect(db.fabFiles.hardDeleteOneById).not.toHaveBeenCalled();
+    expect(db.fabFileChunks.deleteManyByFabFileId).not.toHaveBeenCalled();
+    expect(db.dataLakeFindings.deleteForPurgedDocument).not.toHaveBeenCalled();
+    expect(db.sessions.findAllWithKnowledgeId).not.toHaveBeenCalled();
+    expect(receipt).toMatchObject({
+      heldForModeration: true,
+      documentDeleted: false,
+      verified: false,
+      storageObjectsTotal: 0,
+    });
+  });
+
+  it("still deletes an unsupported_format block's stored objects, matching the user-delete path", async () => {
+    const db = makeDb({
+      filePath: 'uploads/photo.heic',
+      moderationStatus: 'blocked',
+      blockReason: 'unsupported_format',
+    });
+    const storage = makeStorage();
+
+    const receipt = await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage });
+
+    expect(storage.delete).toHaveBeenCalledWith('uploads/photo.heic');
+    expect(receipt.heldForModeration).toBe(false);
+  });
+
+  it('treats a block with no recorded reason as held', async () => {
+    const db = makeDb({ filePath: 'uploads/evidence.png', moderationStatus: 'blocked' });
+    const storage = makeStorage();
+
+    const receipt = await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage });
+
+    expect(storage.delete).not.toHaveBeenCalled();
+    expect(receipt).toMatchObject({ heldForModeration: true, storageObjectsRemaining: 1 });
   });
 
   it('deletes every prior version object, not just the current filePath', async () => {

@@ -214,6 +214,13 @@ export function bedrockFoundationIdOf(modelId: string): string | null {
   return isBedrockRegionProfileId(modelId) ? stripBedrockRegionPrefix(modelId) : null;
 }
 
+/**
+ * Agentic models (deep research, computer use) that need a dedicated API or a mandatory tool,
+ * so a plain text call fails. Discovery types them as text, hence the id match.
+ */
+export const isDedicatedApiModel = (modelId: string): boolean =>
+  /(?:^|[-_.:/\s])(?:deep-research|computer-use)(?:[-_.:/\s]|$)/i.test(modelId);
+
 const VENDOR_BY_BACKEND: Record<ModelBackend, string> = {
   [ModelBackend.OpenAI]: 'openai',
   [ModelBackend.Anthropic]: 'anthropic',

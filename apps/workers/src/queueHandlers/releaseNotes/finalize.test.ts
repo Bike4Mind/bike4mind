@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { scrubCustomerText, type ReleaseNotesJobPr } from '@bike4mind/common';
-import { finalizeReleaseNote } from './finalize';
+import { finalizeReleaseNote, findGenericCopy } from './finalize';
 import type { ReleaseNoteDraft } from './generate';
 
 const logger = { warn: vi.fn(), info: vi.fn(), error: vi.fn() };
@@ -20,7 +20,8 @@ const draft = (overrides: Partial<ReleaseNoteDraft> = {}): ReleaseNoteDraft => (
   ...overrides,
 });
 const config = { embargoHours: 12, denylist: [] as string[] };
-const run = (d: ReleaseNoteDraft, c = config, p = payload()) => finalizeReleaseNote(d, p, c, logger as never);
+const run = (d: ReleaseNoteDraft, c = config, p = payload(), lastAttempt = false) =>
+  finalizeReleaseNote(d, p, c, logger as never, { lastAttempt });
 
 describe('scrubCustomerText', () => {
   it.each([
@@ -156,5 +157,142 @@ describe('finalizeReleaseNote', () => {
 
     expect(result.kind === 'ok' && result.note.status).toBe('hidden');
     expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('feat/fix'), expect.anything());
+  });
+});
+
+describe('generic and hype copy', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  // Headlines the model actually published to production before this check existed.
+  it.each([
+    'Exciting New Features and Important Fixes in Your AI Workspace',
+    'Exciting New Features and Important Fixes in Our Latest Update!',
+    'Exciting Updates: New Features and Improvements in Your AI Workspace',
+    'Exciting Updates and Fixes in Your AI Workspace',
+    'Updates and improvements',
+    'Powerful search for everyone',
+  ])('rejects the headline %j', headline => {
+    expect(findGenericCopy('headline', headline)).not.toEqual([]);
+  });
+
+  // Short filler with no "and" in it: only the whole-headline rule catches these.
+  it.each(['Bug fixes', 'Minor updates', 'Various improvements', "What's new", 'bug fixes.'])(
+    'rejects the bare filler headline %j',
+    headline => {
+      expect(findGenericCopy('headline', headline)).not.toEqual([]);
+    }
+  );
+
+  // One word between the two nouns used to defeat the "X and Y" rule.
+  it.each(['Bug fixes and performance improvements', 'Performance improvements and bug fixes'])(
+    'rejects the headline %j',
+    headline => {
+      expect(findGenericCopy('headline', headline)).not.toEqual([]);
+    }
+  );
+
+  it.each([
+    'New Federated-Admin Endpoint Streamlines Admin Console Access',
+    'Share skills with your team in the Skill Market',
+    'Search improvements for scanned PDFs',
+    'Desktop app updates itself in the background',
+    'Fixes for stuck chat spinners',
+    'Calendar sync fixes and Slack improvements',
+    'Bug fixes for PDF export stalls',
+    "See what's new in the Skill Market",
+  ])('accepts the specific headline %j', headline => {
+    expect(findGenericCopy('headline', headline)).toEqual([]);
+  });
+
+  it('flags hype and exclamation marks in the summary but not generic nouns', () => {
+    expect(findGenericCopy('summary', 'This release adds new features and fixes.')).toEqual([]);
+    expect(findGenericCopy('summary', 'An amazing release!')).toHaveLength(2);
+  });
+
+  it('asks for a rewrite with the reasons before the last attempt', () => {
+    const result = run(draft({ headline: 'Exciting updates and fixes' }));
+
+    expect(result).toEqual({ kind: 'repair', reasons: [expect.stringContaining('Exciting'), expect.anything()] });
+  });
+
+  it('builds the headline from the most important item on the last attempt', () => {
+    const items = [
+      { ...item('Exports are smaller.'), importance: 3 },
+      { ...item('Share skills with your team in the Skill Market.'), importance: 1 },
+    ];
+    const result = run(draft({ headline: 'New features in your AI workspace', items }), config, payload(), true);
+
+    expect(result.kind === 'ok' && result.note.headline).toBe('Share skills with your team in the Skill Market');
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('still generic'), expect.anything());
+  });
+
+  it('drops a hype summary but keeps a specific headline on the last attempt', () => {
+    const result = run(draft({ summary: 'An incredible release.' }), config, payload(), true);
+
+    expect(result.kind === 'ok' && result.note).toMatchObject({ headline: 'Faster search', summary: '' });
+  });
+
+  it('caps a long fallback headline at 120 characters', () => {
+    const result = run(draft({ headline: 'This release', items: [item('a'.repeat(200))] }), config, payload(), true);
+
+    expect(result.kind === 'ok' && result.note.headline).toHaveLength(120);
+  });
+
+  it('does not split an astral character when it truncates the fallback headline', () => {
+    const text = 'a'.repeat(116) + String.fromCodePoint(0x1f600) + 'z'.repeat(10);
+    const result = run(draft({ headline: 'This release', items: [item(text)] }), config, payload(), true);
+
+    expect(result.kind).toBe('ok');
+    if (result.kind !== 'ok') return;
+    expect(result.note.headline.endsWith('...')).toBe(true);
+    const before = result.note.headline.slice(0, -3);
+    const last = before.charCodeAt(before.length - 1);
+    expect(last < 0xd800 || last > 0xdbff).toBe(true);
+  });
+
+  it('prefers the most important item even when it ends in an exclamation mark the fallback strips', () => {
+    const items = [
+      { ...item('Share skills with your team in the Skill Market!'), importance: 1 },
+      { ...item('Tooltips show on hover.'), importance: 3 },
+    ];
+    const result = run(draft({ headline: 'New features', items }), config, payload(), true);
+
+    expect(result.kind === 'ok' && result.note.headline).toBe('Share skills with your team in the Skill Market');
+  });
+
+  it('leaves no space before the ellipsis when it truncates the fallback headline', () => {
+    const text = 'a'.repeat(115) + ' ' + String.fromCodePoint(0x1f600) + 'z'.repeat(10);
+    const result = run(draft({ headline: 'This release', items: [item(text)] }), config, payload(), true);
+
+    expect(result.kind === 'ok' && result.note.headline).toBe('a'.repeat(115) + '...');
+  });
+
+  it('skips an item whose text reads as hype when building the fallback headline', () => {
+    const items = [
+      { ...item('Voice mode works seamlessly across devices.'), importance: 1 },
+      { ...item('Share skills with your team in the Skill Market.'), importance: 2 },
+    ];
+    const result = run(draft({ headline: 'New features', items }), config, payload(), true);
+
+    expect(result.kind === 'ok' && result.note.headline).toBe('Share skills with your team in the Skill Market');
+  });
+
+  it('falls back to the most important item when no item reads as a specific headline', () => {
+    const items = [{ ...item('Yahoo! Mail import is here.'), importance: 1 }];
+    const result = run(draft({ headline: 'New features', items }), config, payload(), true);
+
+    expect(result.kind === 'ok' && result.note.headline).toBe('Yahoo! Mail import is here');
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('specific headline'), expect.anything());
+  });
+
+  it('checks the denylist before generic copy, so a denylist hit still asks for a rewrite', () => {
+    const result = run(
+      draft({ headline: 'Exciting Acme news' }),
+      { embargoHours: 0, denylist: ['acme'] },
+      payload(),
+      true
+    );
+
+    expect(result).toEqual({ kind: 'repair', reasons: ['the headline must not mention "acme"'] });
   });
 });

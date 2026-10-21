@@ -130,6 +130,27 @@ describe('adapterPriceLadders', () => {
   it('memoizes', async () => {
     expect(await adapterPriceLadders()).toBe(await adapterPriceLadders());
   });
+
+  // Per-1M prices as [input, output], by max-prompt-token threshold.
+  const listPrices: Array<[string, Record<number, [number, number]>]> = [
+    [ChatModels.GEMINI_2_5_FLASH, { 1_048_576: [0.3, 2.5] }],
+    [ChatModels.GEMINI_2_5_FLASH_LITE, { 1_048_576: [0.1, 0.4] }],
+    [ChatModels.GEMINI_3_FLASH_PREVIEW, { 2_097_152: [0.5, 3] }],
+    [ChatModels.GPT5_2_CHAT_LATEST, { 128_000: [1.75, 14] }],
+    [ChatModels.GEMINI_3_1_PRO_PREVIEW, { 200_000: [2, 12], 2_097_152: [4, 18] }],
+    [ChatModels.GEMINI_3_PRO_PREVIEW, { 200_000: [2, 12], 2_097_152: [4, 18] }],
+    [ChatModels.GPT5_4, { 272_000: [2.5, 15], 1_050_000: [5, 22.5] }],
+  ];
+
+  it.each(listPrices)('prices %s at its expected rates, tier for tier', async (id, expected) => {
+    const ladder = (await adapterPriceLadders()).get(id) ?? {};
+
+    expect(Object.keys(ladder)).toEqual(Object.keys(expected));
+    for (const [threshold, [input, output]] of Object.entries(expected)) {
+      expect(ladder[threshold]?.input, `${id} input at ${threshold}`).toBeCloseTo(input / 1_000_000, 12);
+      expect(ladder[threshold]?.output, `${id} output at ${threshold}`).toBeCloseTo(output / 1_000_000, 12);
+    }
+  });
 });
 
 describe('adapterBuildPricedModelIds', () => {

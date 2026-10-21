@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { Logger } from '@bike4mind/observability';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, BadRequestError } from '@server/utils/errors';
+import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import {
   integrationHealthCheckRepository,
@@ -11,7 +11,7 @@ import {
 } from '@bike4mind/database';
 import type { IntegrationName, CircuitBreakerMode } from '@bike4mind/database';
 import { getHealthSummary, runAllProbes, runProbe } from '@server/services/integrationHealthService';
-import { getStatus, clearCache } from '@server/services/integrationCircuitBreaker';
+import { getStatus, clearCache } from '@bike4mind/server-utils/services/integrationCircuitBreaker';
 import { getAllBreakerStates, resetBreaker } from '@server/services/mcpCircuitBreakers';
 
 const ensureAdmin = (isAdmin?: boolean | null) => {
@@ -82,7 +82,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         throw new BadRequestError(`Invalid integration: ${integration}`);
       }
 
-      const result = await runProbe(integration as IntegrationName, logger);
+      const result = await runProbe(integration as IntegrationName);
 
       return res.json({
         status: result.status,

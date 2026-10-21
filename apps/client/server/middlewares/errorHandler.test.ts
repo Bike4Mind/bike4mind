@@ -1,20 +1,29 @@
 import { describe, it, expect, vi } from 'vitest';
-import { API_KEY_USER_CAP_ERROR_CODE, ApiErrorSchema, BadGatewayError, BadRequestError } from '@bike4mind/common';
+import {
+  API_KEY_USER_CAP_ERROR_CODE,
+  ApiErrorSchema,
+  BadGatewayError,
+  BadRequestError,
+  StorageLimitError,
+  TooManyRequestsError,
+  parseStorageLimitErrorInfo,
+} from '@bike4mind/common';
 import { z } from 'zod';
-import errorHandler from './errorHandler';
+import errorHandler, { buildErrorBody } from './errorHandler';
 
 function makeReqRes() {
   const json = vi.fn();
   const status = vi.fn(() => ({ json }));
   // any: lightweight stand-ins for Express req/res - only the fields errorHandler() touches
-  const res = { status, json } as any;
+  const set = vi.fn();
+  const res = { status, json, set } as any;
   const req = {
     method: 'POST',
     url: '/api/chat',
     requestId: 'trace-err-1',
     logger: { error: vi.fn(), warn: vi.fn() },
   } as any;
-  return { req, res, status, json };
+  return { req, res, status, json, set };
 }
 
 describe('errorHandler — request_id in the error envelope', () => {
@@ -93,6 +102,24 @@ describe('errorHandler - the body carries no keys the envelope does not document
       name: 'BadRequestError',
       request_id: 'trace-err-1',
     });
+  });
+
+  it('serves a storage refusal as a 400 carrying its code and byte counts, whatever the message says', () => {
+    const info = {
+      errorCode: 'storage_limit_exceeded',
+      used_bytes: 900,
+      limit_bytes: 1000,
+      requested_bytes: 200,
+      owner: 'user',
+    } as const;
+    for (const message of ['File size exceeds storage limit', 'Reworded entirely']) {
+      const { req, res, status, json } = makeReqRes();
+      errorHandler(new StorageLimitError(message, info), req, res);
+      expect(status).toHaveBeenCalledWith(400);
+      const body = json.mock.calls[0][0];
+      expect(body).toMatchObject({ ...info, error: message, request_id: 'trace-err-1' });
+      expect(parseStorageLimitErrorInfo(body)).toEqual(info);
+    }
   });
 
   // The HTTPError branch is the only one that reaches `additionalInfo`, so without a
@@ -253,5 +280,36 @@ describe('errorHandler - expected upstream failures', () => {
     const { req, res } = makeReqRes();
     errorHandler(new BadGatewayError('provider down'), req, res);
     expect(req.logger.error).toHaveBeenCalled();
+  });
+});
+
+describe('errorHandler - rate-limit info on a 429', () => {
+  it('sets Retry-After and the rate-limit headers, and keeps the body as it was', () => {
+    const { req, res, status, json, set } = makeReqRes();
+    errorHandler(
+      new TooManyRequestsError('slow down', { retryAfter: 12, rateLimitHeaders: { 'X-RateLimit-Limit-Minute': 10 } }),
+      req,
+      res
+    );
+    expect(status).toHaveBeenCalledWith(429);
+    expect(set).toHaveBeenCalledWith({ 'Retry-After': '12', 'X-RateLimit-Limit-Minute': '10' });
+    expect(json).toHaveBeenCalledWith(expect.objectContaining({ retryAfter: 12, error: 'slow down' }));
+  });
+});
+
+describe('buildErrorBody', () => {
+  it('builds the envelope from an explicit request id, with additionalInfo unable to shadow it', () => {
+    expect(
+      buildErrorBody({
+        error: 'out of credits',
+        requestId: 'r-1',
+        additionalInfo: { errorCode: 'insufficient_credits', error: 'shadowed', request_id: 'shadowed' },
+      })
+    ).toEqual({ errorCode: 'insufficient_credits', error: 'out of credits', request_id: 'r-1' });
+  });
+
+  it('adds the deprecated name only when given', () => {
+    expect(Object.keys(buildErrorBody({ error: 'x', requestId: 'r' }))).toEqual(['error', 'request_id']);
+    expect(buildErrorBody({ error: 'x', requestId: 'r', name: 'BadRequestError' }).name).toBe('BadRequestError');
   });
 });

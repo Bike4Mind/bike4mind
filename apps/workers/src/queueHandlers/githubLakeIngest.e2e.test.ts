@@ -3,17 +3,26 @@ import mongoose from 'mongoose';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
 import {
   createMongoReplSet,
+  settleAutoIndexBuilds,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 import {
   DataLakeModel,
   FabFile,
   OrgGitHubLakeConnection,
+  Organization,
   User,
+  buildLacksContentPrefixTagFilter,
   fabFileRepository,
   orgGitHubLakeConnectionRepository,
 } from '@bike4mind/database';
-import { DATALAKE_TAG_STRENGTH, FabFileSourceType, KnowledgeType } from '@bike4mind/common';
+import {
+  DATALAKE_TAG_STRENGTH,
+  FabFileSourceType,
+  KnowledgeType,
+  satisfiesTagPrefix,
+  UNCATEGORIZED_TAG_SUFFIX,
+} from '@bike4mind/common';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -31,9 +40,11 @@ const h = vi.hoisted(() => ({
 vi.mock('@server/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...a: unknown[]) => unknown) => fn,
 }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ upload: h.upload, delete: h.storageDelete }) }));
-vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({ finalizeBatchIfComplete: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
+  getFilesStorage: () => ({ upload: h.upload, delete: h.storageDelete }),
+}));
+vi.mock('@server/dataLakes/dataLakeBatchProgress', () => ({ finalizeBatchIfComplete: vi.fn() }));
 vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
   getSettingByName: async (key: string) =>
@@ -80,9 +91,9 @@ const setRepo = (entries: [string, string][]) => {
   for (const [path, content] of entries) h.files.set(path, content);
 };
 
-const connect = (lakeId: string, userId: string) =>
+const connect = (lakeId: string, userId: string, organizationId: string) =>
   orgGitHubLakeConnectionRepository.create({
-    organizationId: 'org-gh-e2e',
+    organizationId,
     targetDataLakeId: lakeId,
     installationId: 111,
     accountLogin: 'acme',
@@ -95,28 +106,37 @@ const connect = (lakeId: string, userId: string) =>
 async function seed() {
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const user = await User.create({ username: `gh-lake-e2e-${suffix}`, name: 'GitHub Lake E2E' });
+  // A real org: an org lake's files are billed to it, and the quota gate refuses an org that does not exist.
+  const organization = await Organization.create({ name: `GitHub Lake E2E ${suffix}`, userId: user.id });
+  const organizationId = String(organization._id);
   const lake = await DataLakeModel.create({
     name: `gh-lake-${suffix}`,
     slug: `gh-lake-${suffix}`,
     fileTagPrefix: `gh-${suffix}:`,
     datalakeTag: `datalake:gh-${suffix}`,
     createdByUserId: user.id,
-    organizationId: 'org-gh-e2e',
+    organizationId,
     origin: 'connector-fed',
     status: 'active',
   });
-  const connection = await connect(lake.id, user.id);
+  const connection = await connect(lake.id, user.id, organizationId);
   return {
     userId: user.id as string,
+    organizationId,
     lakeId: lake.id as string,
     datalakeTag: lake.datalakeTag as string,
+    prefix: lake.fileTagPrefix as string,
     connectionId: connection.id,
   };
 }
 
+const tagNamesByPath = (files: { githubPath?: string | null; tags?: { name: string }[] }[]) =>
+  Object.fromEntries(files.map(f => [f.githubPath, (f.tags ?? []).map(t => t.name).sort()]));
+
 beforeAll(async () => {
   mongo = await createMongoReplSet();
-  await mongoose.connect(mongo.getUri());
+  await mongoose.connect(mongo.getUri(), { autoIndex: false });
+  await settleAutoIndexBuilds(mongoose);
   await OrgGitHubLakeConnection.createIndexes();
 });
 afterAll(async () => {
@@ -152,10 +172,11 @@ afterEach(async () => {
 
 describe('githubLakeIngest end to end', () => {
   it('first ingest creates the filtered files, every one stamped', async () => {
-    const { lakeId, datalakeTag, connectionId } = await seed();
+    const { lakeId, datalakeTag, prefix, connectionId } = await seed();
     setRepo([
       ['README.md', '# Docs\n'],
       ['src/index.ts', 'export const a = 1;\n'],
+      ['src/a/b.ts', 'export const b = 1;\n'],
       ['logo.png', 'not text'],
       ['node_modules/pkg/index.js', 'vendored'],
     ]);
@@ -163,7 +184,13 @@ describe('githubLakeIngest end to end', () => {
     await run({ connectionId });
 
     const live = await fabFileRepository.findByGitHubConnectionIdInDataLake(connectionId, datalakeTag);
-    expect(live.map(f => f.githubPath).sort()).toEqual(['README.md', 'src/index.ts']);
+    expect(live.map(f => f.githubPath).sort()).toEqual(['README.md', 'src/a/b.ts', 'src/index.ts']);
+    for (const names of Object.values(tagNamesByPath(live))) expect(satisfiesTagPrefix(names, prefix)).toBe(true);
+    expect(tagNamesByPath(live)).toEqual({
+      'README.md': [datalakeTag, `${prefix}${UNCATEGORIZED_TAG_SUFFIX}`].sort(),
+      'src/index.ts': [datalakeTag, `${prefix}src`].sort(),
+      'src/a/b.ts': [datalakeTag, `${prefix}src:a`].sort(),
+    });
     for (const f of live) {
       expect(f.githubConnectionId).toBe(connectionId);
       expect(f.githubBlobSha).toBe(h.blobSha(h.files.get(f.githubPath!)!));
@@ -179,7 +206,7 @@ describe('githubLakeIngest end to end', () => {
   });
 
   it('a re-sync after edit, add and delete leaves the new content and deletes the old copies', async () => {
-    const { datalakeTag, connectionId } = await seed();
+    const { datalakeTag, prefix, connectionId } = await seed();
     setRepo([
       ['README.md', '# Docs\n'],
       ['src/index.ts', 'export const a = 1;\n'],
@@ -200,6 +227,15 @@ describe('githubLakeIngest end to end', () => {
     expect(after.map(f => f.githubPath).sort()).toEqual(['README.md', 'docs/new.md']);
     expect(after.find(f => f.githubPath === 'README.md')?.githubBlobSha).toBe(h.blobSha('# Docs v2\n'));
     for (const f of after) expect(f.githubConnectionId).toBe(connectionId);
+    // The replacement copy is tagged exactly as a first sync would tag it, so a re-sync never
+    // drops a file out of its folder or into the lake's untagged bucket.
+    expect(tagNamesByPath(after)).toEqual({
+      'README.md': [datalakeTag, `${prefix}${UNCATEGORIZED_TAG_SUFFIX}`].sort(),
+      'docs/new.md': [datalakeTag, `${prefix}docs`].sort(),
+    });
+    expect(
+      await FabFile.countDocuments({ _id: { $in: after.map(f => f.id) }, ...buildLacksContentPrefixTagFilter(prefix) })
+    ).toBe(0);
     for (const retired of [oldReadme, oldIndex]) {
       const row = await FabFile.findById(retired.id).setOptions({ includeDeleted: true });
       expect(row?.deletedAt).toBeTruthy();
@@ -208,6 +244,62 @@ describe('githubLakeIngest end to end', () => {
     expect(await orgGitHubLakeConnectionRepository.findById(connectionId)).toMatchObject({
       lastSyncedCommitSha: 'commit-2',
     });
+  });
+
+  it('a moved file is re-tagged under its new directory', async () => {
+    const { datalakeTag, prefix, connectionId } = await seed();
+    setRepo([['docs/a.md', 'moving\n']]);
+    await run({ connectionId });
+
+    setRepo([['examples/a.md', 'moving\n']]);
+    h.headSha.value = 'commit-2';
+    await run({ connectionId, manual: true });
+
+    const after = await fabFileRepository.findByGitHubConnectionIdInDataLake(connectionId, datalakeTag);
+    expect(tagNamesByPath(after)).toEqual({ 'examples/a.md': [datalakeTag, `${prefix}examples`].sort() });
+  });
+
+  it('a manual sync heals an unchanged copy stamped before folder tagging, keeping user tags', async () => {
+    const { datalakeTag, prefix, connectionId } = await seed();
+    setRepo([
+      ['docs/x.md', 'legacy\n'],
+      ['README.md', '# Docs\n'],
+    ]);
+    await run({ connectionId });
+    const stamp = `${prefix}${UNCATEGORIZED_TAG_SUFFIX}`;
+    await FabFile.updateOne(
+      { githubConnectionId: connectionId, githubPath: 'docs/x.md' },
+      {
+        $set: {
+          tags: [
+            { name: datalakeTag, strength: DATALAKE_TAG_STRENGTH },
+            { name: stamp, strength: 1 },
+            { name: 'user-tag', strength: 1 },
+          ],
+        },
+      }
+    );
+    const before = await FabFile.find({ githubConnectionId: connectionId }).lean();
+    const batchCount = () => mongoose.models.DataLakeBatch.countDocuments({});
+    const batchesBefore = await batchCount();
+    h.upload.mockClear();
+
+    await run({ connectionId, manual: true });
+
+    const after = await fabFileRepository.findByGitHubConnectionIdInDataLake(connectionId, datalakeTag);
+    expect(tagNamesByPath(after)).toEqual({
+      'docs/x.md': [datalakeTag, `${prefix}docs`, 'user-tag'].sort(),
+      'README.md': [datalakeTag, stamp].sort(),
+    });
+    expect(after.map(f => f.id).sort()).toEqual(before.map(f => String(f._id)).sort());
+    expect(await batchCount()).toBe(batchesBefore);
+    expect(h.upload).not.toHaveBeenCalled();
+
+    const healedAt = (await FabFile.findOne({ githubPath: 'docs/x.md', githubConnectionId: connectionId }).lean())
+      ?.updatedAt;
+    await run({ connectionId, manual: true });
+    const rerun = await FabFile.findOne({ githubPath: 'docs/x.md', githubConnectionId: connectionId }).lean();
+    expect(rerun?.updatedAt).toEqual(healedAt);
   });
 
   it('a non-manual re-sync with no new commit is a no-op', async () => {
@@ -257,7 +349,7 @@ describe('githubLakeIngest end to end', () => {
   });
 
   it('disconnect purges the connection s files, so a reconnect re-sync leaves no orphaned copy', async () => {
-    const { userId, lakeId, datalakeTag, connectionId } = await seed();
+    const { userId, organizationId, lakeId, datalakeTag, connectionId } = await seed();
     setRepo([
       ['README.md', '# Docs\n'],
       ['src/index.ts', 'export const a = 1;\n'],
@@ -280,7 +372,7 @@ describe('githubLakeIngest end to end', () => {
     // which the reconnect's first sync can no longer see to retire.
     setRepo([['src/index.ts', 'export const a = 1;\n']]);
     h.headSha.value = 'commit-2';
-    const { id: reconnectedId } = await connect(lakeId, userId);
+    const { id: reconnectedId } = await connect(lakeId, userId, organizationId);
     await run({ connectionId: reconnectedId });
 
     const live = await FabFile.find({ tags: { $elemMatch: { name: datalakeTag } }, archivedAt: null });

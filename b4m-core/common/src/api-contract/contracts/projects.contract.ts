@@ -6,15 +6,16 @@ import {
   ListProjectsResponseSchema,
   ProjectIdParamSchema,
   ProjectResourceSchema,
+  UpdateProjectRequestSchema,
 } from '../../schemas/projectPublic';
 import { PaginationQuerySchema } from '../../schemas/pagination';
 import { ApiErrorSchema, ScopeForbiddenErrorSchema } from '../../schemas/chat';
 
 /**
  * The integrator-facing subset of the project API. Each route is a `/api/v1` twin of an SPA route
- * under `/api/projects/*` and reuses its service logic; the SPA routes are unchanged. Update, delete
- * and every sub-resource (files, sessions, members, invites, system prompts) are deliberately not
- * published yet.
+ * under `/api/projects/*` and reuses its service logic; the SPA routes are unchanged. The
+ * sub-resources (files, sessions, members, invites, system prompts) are deliberately not published:
+ * `session_ids`/`file_ids` on the project resource cover reading what a project groups.
  */
 
 // projects:write is accepted for reads so a key that creates projects can read back what it wrote
@@ -119,4 +120,62 @@ export const createProjectContract = defineEndpoint({
     429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
   },
   codeSample: { authToken: 'b4m_live_<key>', streaming: false, body: CREATE_EXAMPLE },
+});
+
+const OWNER_ONLY_404 =
+  'No project with that id is yours. A project shared with you, one that does not exist, a deleted ' +
+  'project and a malformed id are all reported as 404, so project ids cannot be probed through this ' +
+  'endpoint.';
+
+const UPDATE_EXAMPLE = { description: 'Sources and notes for the Q4 market analysis.' };
+
+export const updateProjectContract = defineEndpoint({
+  method: 'patch',
+  path: '/api/v1/projects/{id}',
+  operationId: 'updateProject',
+  summary: 'Update a project',
+  description:
+    'Renames a project you own or changes its description. Omitted fields are left unchanged, and an empty ' +
+    'body changes nothing. Only the owner can update a project. Unknown body fields are rejected.',
+  tags: ['Projects'],
+  auth: 'apiKeyOrJwt',
+  scopes: [ApiKeyScope.WRITE_PROJECTS],
+  pathParams: ProjectIdParamSchema,
+  request: UpdateProjectRequestSchema,
+  requestExample: UPDATE_EXAMPLE,
+  emitsRateLimitHeaders: true,
+  responses: {
+    200: { description: 'The updated project.', schema: ProjectResourceSchema },
+    403: { description: 'The API key lacks `projects:write`.', schema: ScopeForbiddenErrorSchema },
+    404: { description: OWNER_ONLY_404, schema: ApiErrorSchema },
+    422: {
+      description: 'Request body failed validation, or you already have a live project with this `name`.',
+      schema: ApiErrorSchema,
+    },
+    429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
+  },
+  codeSample: { authToken: 'b4m_live_<key>', streaming: false, body: UPDATE_EXAMPLE },
+});
+
+export const deleteProjectContract = defineEndpoint({
+  method: 'delete',
+  path: '/api/v1/projects/{id}',
+  operationId: 'deleteProject',
+  summary: 'Delete a project',
+  description:
+    'Deletes a project you own. The sessions and files it grouped are kept, but the access the project ' +
+    'granted is revoked: members lose access to your content, and you lose access to sessions and files ' +
+    'members added to it. Only the owner can delete a project.',
+  tags: ['Projects'],
+  auth: 'apiKeyOrJwt',
+  scopes: [ApiKeyScope.WRITE_PROJECTS],
+  pathParams: ProjectIdParamSchema,
+  emitsRateLimitHeaders: true,
+  responses: {
+    204: { description: 'The project was deleted.', noBody: true },
+    403: { description: 'The API key lacks `projects:write`.', schema: ScopeForbiddenErrorSchema },
+    404: { description: OWNER_ONLY_404, schema: ApiErrorSchema },
+    429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
+  },
+  codeSample: { authToken: 'b4m_live_<key>', streaming: false },
 });

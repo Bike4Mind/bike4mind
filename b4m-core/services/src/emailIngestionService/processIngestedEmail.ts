@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import { Logger } from '@bike4mind/observability';
 import { UnauthorizedError } from '@bike4mind/utils';
 import { validateSenderAuthorization, extractEmails } from './validateSender';
+import { authenticateSender } from './authenticateSender';
 import { processAttachments } from './processAttachments';
 import { processEmailBody } from './processEmailBody';
 import type { IIngestedEmailDocument } from '@bike4mind/common';
@@ -125,7 +126,7 @@ async function storeEmail(
  * Main email ingestion orchestration
  *
  * This function coordinates the entire email ingestion process:
- * 1. Validates sender authorization
+ * 1. Authenticates the sender (SPF/DKIM/DMARC) and validates sender authorization
  * 2. Stores email metadata in database
  * 3. Processes attachments and uploads to fabFiles
  * 4. Processes email body and creates fabFile if substantial
@@ -154,7 +155,17 @@ export async function processIngestedEmail(
 
   Logger.info('Starting email ingestion process');
 
-  // 1. Validate sender authorization
+  // 1. Authenticate the From address before trusting it, then validate sender authorization
+  const authentication = authenticateSender(parsedEmail.from, parsedEmail.senderAuthentication);
+  if (!authentication.authenticated) {
+    Logger.warn('Rejected inbound email that failed sender authentication', {
+      reason: authentication.reason,
+      from: extractEmails(parsedEmail.from),
+      messageId: parsedEmail.messageId,
+    });
+    throw new UnauthorizedError('Sender failed email authentication');
+  }
+
   const validated = await validateSenderAuthorization(parsedEmail, adapters.db.users, options?.platformDomain);
 
   if (!validated) {
@@ -193,30 +204,24 @@ export async function processIngestedEmail(
           fabFiles: adapters.db.fabFiles,
           adminSettings: adapters.db.adminSettings,
           users: adapters.db.users,
+          organizations: adapters.db.organizations,
           dataLakes: adapters.db.dataLakes,
         },
-      },
-      validated.organizationId
+      }
     );
 
     // 4. Process email body and create fabFile if substantial
     Logger.info('Processing email body...');
-    const bodyData = await processEmailBody(
-      parsedEmail,
-      validated.userId,
-      emailId,
-      options?.isNewsletter || false,
-      {
-        storage: adapters.storage,
-        db: {
-          fabFiles: adapters.db.fabFiles,
-          adminSettings: adapters.db.adminSettings,
-          users: adapters.db.users,
-          dataLakes: adapters.db.dataLakes,
-        },
+    const bodyData = await processEmailBody(parsedEmail, validated.userId, emailId, options?.isNewsletter || false, {
+      storage: adapters.storage,
+      db: {
+        fabFiles: adapters.db.fabFiles,
+        adminSettings: adapters.db.adminSettings,
+        users: adapters.db.users,
+        organizations: adapters.db.organizations,
+        dataLakes: adapters.db.dataLakes,
       },
-      validated.organizationId
-    );
+    });
 
     // 5. Update email with fabFile information
     Logger.info('Updating email with fabFile references...');

@@ -23,10 +23,18 @@ import {
   countTagPathsByTagSet,
   normalizeTagPrefix,
   REBUILD_PENDING_STALE_MS,
+  STORAGE_CHARGED_FILTER,
+  PERSONAL_STORAGE_FILTER,
+  type FabFileChargeState,
+  LAKE_INGEST_SOURCE_TYPES,
+  type StorageUsageGroup,
+  type OrganizationStorageUploaderGroup,
   UNCATEGORIZED_TAG_SUFFIX,
+  chargedBytes,
   type CitableFabFileFields,
   type CitableFabFileFieldsWithTags,
   type FabFileTypeFilter,
+  LegalHoldError,
 } from '@bike4mind/common';
 import mongoose, { Model, PipelineStage, Schema } from 'mongoose';
 import { getAtlasIndexForModel, getAtlasIndexStatus as getAtlasIndexStatusForModel } from '@bike4mind/fab-pipeline';
@@ -778,7 +786,7 @@ const METADATA_ONLY_PROJECTION = { content: 0, chunks: 0, vector: 0, presignedUr
  * dropped upstream of the withhold that exists to name it.
  *
  * Reachable, not theoretical: `findCitableFieldsByIds` backs `createReachableSourcesResolver`
- * (apps/client/server/memory/lakeSourceReachability.ts), which passes a session-derived filter, and
+ * (packages/server-utils/src/memory/lakeSourceReachability.ts), which passes a session-derived filter, and
  * `retrievalVectorizedOnly` is settable per session through the session-create schema. No in-tree
  * path sets it by default, which is the only reason this is latent rather than live - do not read
  * that as a guarantee.
@@ -793,6 +801,42 @@ const CITABLE_PROJECTION =
   '_id deletedAt archivedAt chunkCount vectorizedChunkCount embeddingModel fileName vectorized createdAt';
 
 /** Row cap for unbounded metadata listings. */
+const CHARGE_STATE_PROJECTION = {
+  userId: 1,
+  organizationId: 1,
+  fileSize: 1,
+  storageChargedAt: 1,
+  status: 1,
+  createdAt: 1,
+} as const;
+
+type ChargeStateRow = {
+  _id: unknown;
+  userId: unknown;
+  organizationId?: string | null;
+  fileSize?: number | null;
+  storageChargedAt?: Date | null;
+  status?: string | null;
+  createdAt?: Date | null;
+};
+
+const toChargeState = (row: ChargeStateRow): FabFileChargeState => ({
+  userId: String(row.userId),
+  organizationId: row.organizationId ?? undefined,
+  fileSize: row.fileSize ?? undefined,
+  storageChargedAt: row.storageChargedAt ?? undefined,
+  status: row.status ?? undefined,
+  createdAt: row.createdAt ?? undefined,
+});
+
+/** A sweep's per-row result: the owner fields plus the bytes it was charged (chargedBytes). */
+const toSweptFile = (row: ChargeStateRow): DataLakeSweptFile => ({
+  id: String(row._id),
+  userId: String(row.userId),
+  ...(row.organizationId ? { organizationId: row.organizationId } : {}),
+  fileSize: chargedBytes(row),
+});
+
 const METADATA_PAGE_CAP = 500;
 
 /** In-flight per-document resets in resetChunkStateByIds. Kept near the connection pool size
@@ -841,6 +885,23 @@ const failedFileFields = (errorMessage: string): { error: string; isVectorizing:
   isVectorizing: false,
 });
 
+/**
+ * One arm of "a rebuild was stamped and has not committed": `in-flight`, for a stamp inside
+ * REBUILD_PENDING_STALE_MS (countRebuildingFilesByScope), and `stale`, for an older one
+ * (findConvergencePausedFilesByScope's STALE-PENDING arm). Both also require an empty `error`, which
+ * is what splits them from countFailedFilesByScope. One predicate because the two arms are
+ * complements by construction, and that complementarity is the whole reason the three counts can be
+ * read side by side: two hand-written copies 150 lines apart are free to drift.
+ *
+ * Each caller computes its own `cutoff`, so the arms are cut at slightly different instants - a file
+ * landing in the milliseconds between them is counted by both once, and by the stale arm alone on
+ * every read after that.
+ */
+const rebuildPendingArm = (cutoff: Date, arm: 'in-flight' | 'stale') => ({
+  chunkRebuildRequestedAt: arm === 'in-flight' ? { $gte: cutoff } : { $lt: cutoff },
+  error: { $in: [null, ''] },
+});
+
 export class FabFileRepository extends BaseRepository<IFabFileDocument> implements IFabFileRepository {
   shareable: IFabFileRepository['shareable'];
   constructor(
@@ -859,6 +920,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       type?: FabFileTypeFilter;
       shared?: boolean;
       curated?: boolean;
+      generated?: boolean;
       fileIds?: string[];
       restrictToFileIds?: string[];
     },
@@ -1155,6 +1217,34 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return res.modifiedCount;
   }
 
+  /**
+   * One newest-first (`_id` descending) page of the files a user owns, for the public list. Owned-only, excluding
+   * archived files, matching the default view of GET /api/files; shares are left to the by-id read.
+   * `search` is a case-insensitive substring match on `fileName`, the same clause GET /api/files
+   * builds (buildFabFileSearchQuery), so the two doors agree on what a name search finds.
+   */
+  async listOwnedBeforeId(
+    userId: string,
+    { beforeId, limit, search }: { beforeId?: string; limit: number; search?: string }
+  ) {
+    const conditions: Record<string, unknown> = { userId, deletedAt: null, archivedAt: null };
+    if (search) conditions.fileName = { $regex: escapeRegex(search), $options: 'i' };
+    if (beforeId !== undefined) {
+      if (!mongoose.isObjectIdOrHexString(beforeId)) throw new Error(`Invalid file cursor id: ${beforeId}`);
+      conditions._id = { $lt: convertId(beforeId) };
+    }
+
+    const result = await this.fabFileModel
+      .find(conditions)
+      .select('fileName mimeType fileSize moderationStatus createdAt')
+      .sort({ _id: -1 })
+      .limit(limit + 1)
+      .exec();
+
+    const hasMore = result.length > limit;
+    return { data: result.slice(0, limit).map(doc => doc.toJSON()), hasMore };
+  }
+
   async findByUserId(userId: string): Promise<IFabFileDocument[]> {
     const result = await this.fabFileModel.find({ userId, deletedAt: null });
     return result.map(d => d.toJSON());
@@ -1166,15 +1256,121 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
    * integer. `$ifNull` makes a missing or null `fileSize` count as 0, matching the
    * `|| 0` the load-all-and-reduce caller used to apply (the schema types `fileSize`
    * as a Number, so a non-numeric value is unreachable). Same live-file filter
-   * as findByUserId; mirrors the aggregate shape in computeDataLakeStats.
+   * as findByUserId, narrowed to rows counted as charged (STORAGE_CHARGED_FILTER, the Mongo form of
+   * the isStorageCharged every refund site uses), so recalc agrees with the counter. Mirrors the
+   * aggregate shape in computeDataLakeStats.
    */
   async sumFileSizeByUserId(userId: string): Promise<number> {
+    return this.sumChargedFileSize({ userId, ...PERSONAL_STORAGE_FILTER });
+  }
+
+  async sumFileSizeByOrganizationId(organizationId: string): Promise<number> {
+    // Restates the partial index's filter so the planner can use it; a bare equality match scans.
+    return this.sumChargedFileSize({ organizationId: { $eq: organizationId, $type: 'string' } });
+  }
+
+  private async sumChargedFileSize(owner: Record<string, unknown>): Promise<number> {
     const [row] = await this.fabFileModel.aggregate<{ total: number }>([
-      { $match: { userId, deletedAt: null } },
+      { $match: { ...owner, deletedAt: null, ...STORAGE_CHARGED_FILTER } },
       { $group: { _id: null, total: { $sum: { $ifNull: ['$fileSize', 0] } } } },
       { $project: { _id: 0, total: 1 } },
     ]);
     return row?.total ?? 0;
+  }
+
+  /**
+   * sumFileSizeByUserId's rows, grouped for the storage breakdown - the groups sum to exactly what
+   * it returns. Bounded by the `{ userId, deletedAt, archivedAt, _id }` index's equality prefix.
+   * Lake ids are kept only for the lake-ingest sources and mime types only for generated files, so
+   * the group count does not grow with the user's file count.
+   */
+  async summarizeChargedStorageByUserId(
+    userId: string,
+    options: { maxTimeMS?: number } = {}
+  ): Promise<StorageUsageGroup[]> {
+    const aggregate = this.fabFileModel.aggregate<StorageUsageGroup>([
+      { $match: { userId, ...PERSONAL_STORAGE_FILTER, deletedAt: null, ...STORAGE_CHARGED_FILTER } },
+      {
+        $group: {
+          _id: {
+            sourceType: { $ifNull: ['$sourceType', null] },
+            sourceLakeId: {
+              $cond: [{ $in: ['$sourceType', LAKE_INGEST_SOURCE_TYPES] }, { $ifNull: ['$sourceLakeId', null] }, null],
+            },
+            mimeType: {
+              $cond: [
+                { $eq: ['$sourceType', FabFileSourceType.TOOL_GENERATED] },
+                { $ifNull: ['$mimeType', null] },
+                null,
+              ],
+            },
+            archived: { $ne: [{ $ifNull: ['$archivedAt', null] }, null] },
+          },
+          bytes: { $sum: { $ifNull: ['$fileSize', 0] } },
+          fileCount: { $sum: 1 },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          sourceType: '$_id.sourceType',
+          sourceLakeId: '$_id.sourceLakeId',
+          mimeType: '$_id.mimeType',
+          archived: '$_id.archived',
+          bytes: 1,
+          fileCount: 1,
+        },
+      },
+    ]);
+    if (options.maxTimeMS) aggregate.option({ maxTimeMS: options.maxTimeMS });
+    return aggregate.exec();
+  }
+
+  /**
+   * sumFileSizeByOrganizationId's rows, grouped by uploader. Bounded by the partial
+   * `{ organizationId, deletedAt }` index; the group count is at most the org's uploader count.
+   */
+  async summarizeChargedStorageByOrganizationId(
+    organizationId: string,
+    { limit, maxTimeMS }: { limit: number; maxTimeMS?: number }
+  ): Promise<OrganizationStorageUploaderGroup[]> {
+    const aggregate = this.fabFileModel.aggregate<OrganizationStorageUploaderGroup>([
+      // Restates the partial index's filter so the planner can use it; a bare equality match scans.
+      {
+        $match: {
+          organizationId: { $eq: organizationId, $type: 'string' },
+          deletedAt: null,
+          ...STORAGE_CHARGED_FILTER,
+        },
+      },
+      { $group: { _id: '$userId', bytes: { $sum: { $ifNull: ['$fileSize', 0] } }, fileCount: { $sum: 1 } } },
+      { $sort: { bytes: -1, _id: 1 } },
+      { $limit: limit },
+      { $project: { _id: 0, userId: { $toString: '$_id' }, bytes: 1, fileCount: 1 } },
+    ]);
+    if (maxTimeMS) aggregate.option({ maxTimeMS });
+    return aggregate.exec();
+  }
+
+  async findChargeState(id: string): Promise<FabFileChargeState | null> {
+    const row = await this.fabFileModel.findOne({ _id: id, deletedAt: null }, CHARGE_STATE_PROJECTION).lean();
+    return row ? toChargeState(row) : null;
+  }
+
+  async commitContentRewrite(
+    id: string,
+    set: Record<string, unknown>,
+    filter: Record<string, unknown> = {}
+  ): Promise<FabFileChargeState | null> {
+    // new: false is load-bearing - the caller's storage delta is computed from the pre-image.
+    const pre = await this.fabFileModel
+      .findOneAndUpdate(
+        { ...filter, _id: id, deletedAt: null },
+        { $set: { ...set, storageChargedAt: new Date() } },
+        { new: false, projection: CHARGE_STATE_PROJECTION }
+      )
+      .lean();
+    return pre ? toChargeState(pre) : null;
   }
 
   async findByBatchId(batchId: string): Promise<IFabFileDocument[]> {
@@ -2707,6 +2903,25 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return docs.map(d => ({ id: d._id.toString(), userId: String(d.userId) }));
   }
 
+  // Unindexed on embeddingModel; callers reach it only when a keyless substitution fires.
+  async hasVectorizedFileInEmbeddingSpace(embeddingModel: string): Promise<boolean> {
+    const hit = await this.fabFileModel.exists({
+      embeddingModel,
+      vectorizedChunkCount: { $gt: 0 },
+      // Only a COMPLETED file's label is authoritative. Chunking writes the requested model with an
+      // explicit null stamp, and a non-final vectorize message raises the count while leaving the
+      // label and the stamp alone - so an in-flight file (explicit null stamp) must not match its own
+      // substitution, or it would refuse every later message on the keyless stage the fallback exists
+      // for. A file completed before the stamp field existed carries NO stamp at all, yet its label
+      // is the space it settled in, so an absent stamp counts as settled too; only an explicit null
+      // excludes. The completion stamp writes the real label and this timestamp in one transaction,
+      // and re-chunking rewrites the label to the requested model and clears the stamp.
+      $or: [{ chunkEmbeddingModelStampedAt: { $ne: null } }, { chunkEmbeddingModelStampedAt: { $exists: false } }],
+      deletedAt: null,
+    });
+    return hit !== null;
+  }
+
   /**
    * The lake's convergence-stranded files: everything the kill switch left with NO searchable
    * passage, by either arm. `error:null` on both, so countFailedFilesByScope cannot see them.
@@ -2748,10 +2963,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
             // rebuild that failed TERMINALLY keeps its stamp, and re-driving it would repeat the
             // same deterministic failure every wave. Those files are reported by
             // countFailedFilesByScope instead, which is the split this door already relies on.
-            {
-              chunkRebuildRequestedAt: { $lt: new Date(Date.now() - REBUILD_PENDING_STALE_MS) },
-              error: { $in: [null, ''] },
-            },
+            rebuildPendingArm(new Date(Date.now() - REBUILD_PENDING_STALE_MS), 'stale'),
           ],
           // Keeps a REPAIRED file out of the wave. `$not: {$gt: 0}` deliberately also matches a null
           // or absent count, so a legacy file carrying the marker is offered the repair rather than
@@ -2899,6 +3111,18 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       status: { $ne: 'pending' },
       chunkCount: { $lte: 0 },
       error: { $nin: [null, ''] },
+    });
+  }
+
+  async countRebuildingFilesByScope(scope: DataLakeMembershipScope): Promise<number> {
+    // Reset, not yet committed, and not past REBUILD_PENDING_STALE_MS: older stamps are reported by
+    // findConvergencePausedFilesByScope and errored ones by countFailedFilesByScope, so the three
+    // counts never overlap.
+    return this.fabFileModel.countDocuments({
+      ...buildDataLakeMembershipFilter(scope),
+      deletedAt: null,
+      archivedAt: null,
+      ...rebuildPendingArm(new Date(Date.now() - REBUILD_PENDING_STALE_MS), 'in-flight'),
     });
   }
 
@@ -3158,8 +3382,10 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // the 'restoring' state concurrently would otherwise both claim to have revived every row.
     // includeDeleted: the soft-delete plugin's pre('find') hook otherwise ANDs `deletedAt: null`
     // onto the filter, which contradicts the stamp bound and matches nothing.
-    // userId/fileSize are carried through so the caller can credit each file's own owner's quota.
-    const candidates = await this.fabFileModel.find(base, null, { includeDeleted: true }).select('_id userId fileSize');
+    // userId and charged bytes are carried through so the caller can re-charge each file's own owner.
+    const candidates = await this.fabFileModel
+      .find(base, null, { includeDeleted: true })
+      .select('_id userId organizationId fileSize storageChargedAt status createdAt');
     const restored: DataLakeSweptFile[] = [];
     for (const candidate of candidates) {
       // An aggregation-pipeline $set so one atomic write covers both fields: a row stamped by THIS
@@ -3177,11 +3403,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
         },
       ]);
       if (result.modifiedCount === 1) {
-        restored.push({
-          id: candidate._id.toString(),
-          userId: String(candidate.userId),
-          fileSize: candidate.fileSize ?? 0,
-        });
+        restored.push(toSweptFile(candidate));
       }
     }
     return restored;
@@ -3190,7 +3412,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   async softDeleteByDataLakeTag(scope: DataLakeMembershipScope, at: Date = new Date()): Promise<DataLakeSweptFile[]> {
     const docs = await this.fabFileModel.find(
       { ...buildDataLakeMembershipFilter(scope), deletedAt: null },
-      { _id: 1, userId: 1, fileSize: 1 }
+      { _id: 1, userId: 1, organizationId: 1, fileSize: 1, storageChargedAt: 1, status: 1, createdAt: 1 }
     );
     if (docs.length === 0) return [];
     // Per-row conditional write, not a bulk updateMany + read-back-by-stamp-equality: a bulk write
@@ -3207,7 +3429,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     for (const doc of docs) {
       const result = await this.fabFileModel.updateOne({ _id: doc._id, deletedAt: null }, { $set: { deletedAt: at } });
       if (result.modifiedCount === 1) {
-        flipped.push({ id: doc._id.toString(), userId: String(doc.userId), fileSize: doc.fileSize ?? 0 });
+        flipped.push(toSweptFile(doc));
       }
     }
     return flipped;
@@ -3215,14 +3437,39 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
 
   async hardDeleteByIds(fabFileIds: string[]): Promise<string[]> {
     if (fabFileIds.length === 0) return [];
+    // Blocked files are legal-hold evidence (18 U.S.C. section 2258A). Pre-check catches the
+    // common case. The deleteMany filter below is the safety net for the narrow window where
+    // a concurrent scan transitions a file to 'blocked' between the two calls.
+    const blocked = await this.fabFileModel
+      .find({ _id: { $in: fabFileIds }, moderationStatus: 'blocked' }, { _id: 1 })
+      .setOptions({ includeDeleted: true })
+      .lean();
+    if (blocked.length > 0) {
+      const ids = blocked.map(d => String(d._id)).join(', ');
+      throw new LegalHoldError(`Cannot hard-delete FabFiles with moderationStatus 'blocked' (legal hold): ${ids}`);
+    }
     // hardDelete bypasses the soft-delete plugin's deleteMany override (phase-2 purge).
-    await this.fabFileModel.deleteMany({ _id: { $in: fabFileIds } }, { hardDelete: true } as Record<string, unknown>);
+    // The moderationStatus guard here is the belt to the pre-check's suspenders.
+    await this.fabFileModel.deleteMany({ _id: { $in: fabFileIds }, moderationStatus: { $ne: 'blocked' } }, {
+      hardDelete: true,
+    } as Record<string, unknown>);
     return fabFileIds;
   }
 
   async hardDeleteWithChunks(fabFileId: string, chunkBatchSize = 1000): Promise<void> {
     if (!Number.isInteger(chunkBatchSize) || chunkBatchSize < 1 || chunkBatchSize > 1000) {
       throw new Error('Cleanup chunk batch size must be between 1 and 1000');
+    }
+    // Guard before the chunk deletion loop: a blocked file with >1000 chunks would otherwise
+    // lose its first chunk batches before hardDeleteOneById fires the legal-hold check inside
+    // the final transaction. Checking here is a belt-and-suspenders measure -- the atomic check
+    // inside hardDeleteOneById still applies -- but it prevents partial chunk destruction.
+    const candidate = await this.fabFileModel
+      .findOne({ _id: fabFileId }, { moderationStatus: 1 })
+      .setOptions({ includeDeleted: true })
+      .lean();
+    if (candidate?.moderationStatus === 'blocked') {
+      throw new LegalHoldError(`Cannot hard-delete FabFile ${fabFileId}: moderationStatus is 'blocked' (legal hold)`);
     }
     for (;;) {
       const chunks = await FabFileChunk.find({ fabFileId }, { _id: 1 })
@@ -3250,12 +3497,27 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   }
 
   async hardDeleteOneById(fabFileId: string): Promise<boolean> {
-    // findOneAndDelete, not deleteMany: it is the delete and the claim in one round trip, so of two
-    // concurrent purges of the same document exactly one is told it did the deleting.
+    // Blocked files are legal-hold evidence (18 U.S.C. section 2258A). The moderationStatus guard
+    // is folded into findOneAndDelete atomically so a concurrent scan that transitions the file
+    // from 'pending' -> 'blocked' between a pre-check and the delete cannot slip through.
     const doc = await this.fabFileModel
-      .findOneAndDelete({ _id: fabFileId }, { hardDelete: true } as Record<string, unknown>)
+      .findOneAndDelete({ _id: fabFileId, moderationStatus: { $ne: 'blocked' } }, { hardDelete: true } as Record<
+        string,
+        unknown
+      >)
       .setOptions({ includeDeleted: true });
-    return !!doc;
+    if (!doc) {
+      // Null means either the file does not exist or it is blocked. Check which.
+      const existing = await this.fabFileModel
+        .findOne({ _id: fabFileId }, { moderationStatus: 1 })
+        .setOptions({ includeDeleted: true })
+        .lean();
+      if (existing?.moderationStatus === 'blocked') {
+        throw new LegalHoldError(`Cannot hard-delete FabFile ${fabFileId}: moderationStatus is 'blocked' (legal hold)`);
+      }
+      return false;
+    }
+    return true;
   }
 
   async hardDeleteByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]> {
@@ -3288,13 +3550,18 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     if (fabFileIds.length === 0) return [];
     // includeDeleted is the whole point: every caller's ids are soft-deleted rows (see the interface).
     const docs = await this.fabFileModel
-      .find({ _id: { $in: convertIds(fabFileIds) } }, { filePath: 1, 'versions.filePath': 1 })
+      .find(
+        { _id: { $in: convertIds(fabFileIds) } },
+        { filePath: 1, 'versions.filePath': 1, moderationStatus: 1, blockReason: 1 }
+      )
       .setOptions({ includeDeleted: true })
       .lean();
     return docs.map(d => ({
       id: d._id.toString(),
       filePath: d.filePath ?? undefined,
       versions: (d.versions ?? []).map(v => ({ filePath: v.filePath })),
+      moderationStatus: d.moderationStatus ?? undefined,
+      blockReason: d.blockReason ?? undefined,
     }));
   }
 
@@ -3442,6 +3709,36 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       { new: false, projection: 'userId tags' }
     );
     return prior ? prior.toJSON() : null;
+  }
+
+  async setOwnerOrganizationIfUnchanged(
+    fabFileId: string,
+    expected: Pick<IFabFileDocument, 'organizationId' | 'fileSize' | 'storageChargedAt' | 'status' | 'tags'>,
+    nextOrganizationId: string | undefined
+  ): Promise<boolean> {
+    // `null` matches a missing field; status alone also accepts missing, since a hydrated read fills
+    // in the schema's 'pending' default for a legacy row. Tombstones are excluded (already refunded).
+    // The owner derives from the tags, so the stored tag-name set must still equal the read, or a
+    // removal could unstamp a file a concurrent join just put in another lake of the same org.
+    const tagNames = [
+      ...new Set(
+        (expected.tags ?? []).map(tag => tag?.name).filter((name): name is string => typeof name === 'string')
+      ),
+    ];
+    const result = await this.fabFileModel.updateOne(
+      {
+        _id: fabFileId,
+        ...(expected.organizationId ? { organizationId: expected.organizationId } : PERSONAL_STORAGE_FILTER),
+        fileSize: expected.fileSize ?? null,
+        storageChargedAt: expected.storageChargedAt ?? null,
+        status: expected.status === 'pending' ? { $in: ['pending', null] } : (expected.status ?? null),
+        // `$all: []` matches nothing, so an untagged read relies on the $not arm alone.
+        ...(tagNames.length ? { 'tags.name': { $all: tagNames } } : {}),
+        tags: { $not: { $elemMatch: { name: { $type: 'string', $nin: tagNames } } } },
+      },
+      nextOrganizationId ? { $set: { organizationId: nextOrganizationId } } : { $unset: { organizationId: '' } }
+    );
+    return result.modifiedCount > 0;
   }
 
   async pullTagsByFabFileId(fabFileId: string, tagNames: string[]): Promise<number> {
@@ -3596,6 +3893,8 @@ const DispatchedNotificationSchema = new Schema<{ channel: string; at: Date }>(
 const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
   {
     userId: { type: String, required: true },
+    // Owning org (see IFabFile.organizationId); absent = personal, owned by userId.
+    organizationId: { type: String },
     fileName: { type: String, required: true },
     fileSize: { type: Number },
     // Extracted TEXT length, not bytes; see IFabFile. Absent until something extracts the file.
@@ -3663,12 +3962,18 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     // bumps it on any write, so an unrelated edit would reset the staleness clock. Only meaningful
     // while moderationStatus === 'scanning'.
     moderationClaimedAt: { type: Date, required: false },
+    // ETag of the object version the moderation verdict covers - see IFabFile.moderationETag.
+    moderationETag: { type: String, required: false },
+    moderationRevision: { type: Number, required: false },
+    // See IFabFile.clientUpload and apps/client/server/s3/uploadSizeGate.ts.
+    clientUpload: { type: Boolean, required: false },
+    uploadRejectedAt: { type: Date, required: false },
     // Failed-attempt bookkeeping for the rescue sweep's fairness ordering and backoff - see
     // IFabFile.moderationAttempts / .moderationLastAttemptAt. Left unset (not defaulted to 0) so
     // "never failed" sorts ahead of any attempted row without a backfill.
     moderationAttempts: { type: Number, required: false },
     moderationLastAttemptAt: { type: Date, required: false },
-    // See IFabFile.storageChargedAt and server/s3/storageCharge.ts.
+    // See IFabFile.storageChargedAt and packages/server-utils/src/s3/storageCharge.ts.
     storageChargedAt: { type: Date, required: false },
     error: { type: String, required: false },
     presignedUrl: { type: String },
@@ -3767,6 +4072,8 @@ FabFileSchema.index({ deletedAt: 1, userId: 1, createdAt: 1 });
 FabFileSchema.index({ deletedAt: 1, userId: 1, createdAt: -1 });
 FabFileSchema.index({ deletedAt: 1, createdAt: -1, userId: 1 });
 FabFileSchema.index({ deletedAt: 1, filePath: 1 });
+// Landing events also find rejected tombstones, without a deletedAt equality prefix. Pre-built by 20260921235981_ensure-fabfile-filepath-index.
+FabFileSchema.index({ filePath: 1 });
 
 // Optimize permission and sharing queries
 FabFileSchema.index({ isChunk: 1, 'users.permissions': 1, 'users.userId': 1 });
@@ -3857,6 +4164,19 @@ FabFileSchema.index(
 
 // Moderation queue / audit lookups
 FabFileSchema.index({ userId: 1, moderationStatus: 1 });
+
+// Org storage truth (sumFileSizeByOrganizationId). Partial so personal files, the large majority,
+// carry no entry. Pre-built by 20260921235970_ensure-fabfile-owner-organization-index.
+FabFileSchema.index(
+  { organizationId: 1, deletedAt: 1 },
+  { partialFilterExpression: { organizationId: { $type: 'string' } } }
+);
+
+// Public v1 file list (listOwnedBeforeId): equality on the owned/live/unarchived filter, then the
+// `_id` keyset (scanned in reverse for newest first), so each page streams in order instead of sorting the user's whole file set.
+// Pre-built by 20260921235994_ensure-fabfile-owned-keyset-index rather than left to autoIndex: prod
+// runs DocumentDB, where the build takes a foreground lock on a cold Lambda boot.
+FabFileSchema.index({ userId: 1, deletedAt: 1, archivedAt: 1, _id: 1 });
 
 // Serves both moderation rescue sweep queries (moderationRescueSweep.ts): the stale-'pending'
 // selection and the stale-'scanning' reclaim. The status + deletedAt equality prefix is what keeps

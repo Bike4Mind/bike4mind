@@ -2,7 +2,7 @@ import { sessionService, dataLakeService } from '@bike4mind/services';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { decodeCursor, encodeCursor } from '@server/utils/cursorPagination';
-import { UnprocessableEntityError } from '@server/utils/errors';
+import { UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
 import {
   agentRepository,
   dataLakeAccessGrantRepository,
@@ -17,7 +17,7 @@ import {
   activityRepository,
 } from '@bike4mind/database';
 import { logEvent } from '@server/utils/analyticsLog';
-import { isValidObjectId } from '@server/utils/objectId';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import {
   SessionEvents,
@@ -27,6 +27,7 @@ import {
   listSessionsContract,
   type ISessionDocument,
   type SessionResponse,
+  ApiKeyScope,
   BadRequestError,
   ForbiddenError,
   NotFoundError,
@@ -36,8 +37,23 @@ import {
 import { surfaceAccessForRequest } from '@server/entitlements/surfaceAccess';
 import { projectService } from '@bike4mind/services';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
-import { ActivityType } from '@client/config/activities';
+import { ActivityType } from '@bike4mind/server-utils/config/activityType';
+import { holdsApiKeyScope } from '@server/middlewares/apiKeyScopeGate';
 import { CreateSessionRequestBody } from '../../../../types/api';
+import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
+
+/**
+ * The only fields a key holding `ai:generate` WITHOUT `notebooks:write` may set. Everything else
+ * (project, lake, files, agents, retrieval, tools, surface, prompts) can attach the session to
+ * shared content, so it stays behind notebooks:write. An allowlist, so a new schema field is
+ * denied to these keys until someone adds it here.
+ */
+const BARE_SESSION_FIELDS: ReadonlySet<string> = new Set([
+  'name',
+  'lastUsedModel',
+  'temperature',
+  'autoNamePlaceholder',
+]);
 
 /** See the cap check in the handler - bounds a sequential, two-reads-per-id authorization loop. */
 const MAX_PREAUTHORIZED_LAKES = 10;
@@ -47,6 +63,13 @@ export const createSessionRouter = nextRouteForContract(createSessionContract).p
   const userId = req.user.id;
   const body = req.validated;
   const { projectId } = body;
+
+  // The route gate admits ai:generate so a generate-only key can open a bare session. Anything
+  // beyond that needs notebooks:write; a JWT caller has no apiKeyInfo and is unaffected.
+  const setFields = Object.keys(body).filter(k => body[k as keyof typeof body] != null);
+  if (setFields.some(k => !BARE_SESSION_FIELDS.has(k)) && !holdsApiKeyScope(req, [ApiKeyScope.WRITE_NOTEBOOKS])) {
+    throw new ForbiddenError('Insufficient API key permissions', { required_scopes: [ApiKeyScope.WRITE_NOTEBOOKS] });
+  }
 
   // corpusGroundingMode is resolved server-side from the lake (resolveLakeSessionDefaults) whenever
   // a lake is named, never client-supplied for one: strip it unconditionally when `dataLakeId` is
@@ -184,10 +207,8 @@ export const createSessionRouter = nextRouteForContract(createSessionContract).p
         (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScope(req),
       // The attachment door's lake arms, so a supplied lake file passes the access check.
       resolveAttachmentLakeAccess: async () =>
-        (await import('@server/queueHandlers/agentExecutor.attachmentLakeAccess')).createAttachmentLakeAccess(
-          req.user,
-          req.logger
-        )(),
+        (await import('@server/dataLakes/attachmentLakeAccess')).createAttachmentLakeAccess(req.user, req.logger)(),
+      workspaceSessionSettings: premiumWorkspaceSessionSettings,
     },
     { origin: resolveSessionOrigin(req) }
   );

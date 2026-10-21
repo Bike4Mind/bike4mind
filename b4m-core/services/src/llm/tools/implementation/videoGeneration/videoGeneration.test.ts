@@ -19,7 +19,7 @@ describe('video_generation tool', () => {
     const result = JSON.parse(await tool.toolFn({ model: 'test-video', prompt: 'a cat' }));
     expect(result).toEqual({ jobId: 'job1', estimatedSeconds: 8 });
     expect(createJob.mock.calls[0][0]).toMatchObject({ source: 'agent', questId: 'q1', user: { id: 'u1' } });
-    expect(statusUpdate).toHaveBeenCalledWith({ videoJobIds: ['job1'] });
+    expect(statusUpdate).toHaveBeenCalledWith({ generationJobs: [{ id: 'job1', kind: 'video' }] });
   });
 
   it('sends image-to-video when an input image id is given', async () => {
@@ -62,6 +62,26 @@ describe('video_generation tool', () => {
     expect(text).toContain('insufficient_credits');
     expect(text).toContain('Not enough credits');
     expect(statusUpdate).not.toHaveBeenCalled();
+  });
+
+  it('refuses to report an idempotent replay of a job that already ended without a video', async () => {
+    const createJob = vi.fn().mockResolvedValue({
+      ok: true,
+      created: false,
+      job: { id: 'job1', state: 'cancelled' },
+    });
+    const { tool, statusUpdate } = build(createJob);
+    const text = await tool.toolFn({ model: 'test-video', prompt: 'x' });
+    expect(text).toBe('Video generation failed (cancelled): an identical request already ended without a video.');
+    expect(statusUpdate).not.toHaveBeenCalled();
+  });
+
+  it('still reports an idempotent replay of a job that already succeeded', async () => {
+    const createJob = vi.fn().mockResolvedValue({ ok: true, created: false, job: { id: 'job1', state: 'succeeded' } });
+    const { tool, statusUpdate } = build(createJob);
+    const result = JSON.parse(await tool.toolFn({ model: 'test-video', prompt: 'x' }));
+    expect(result).toEqual({ jobId: 'job1', estimatedSeconds: 8 });
+    expect(statusUpdate).toHaveBeenCalledWith({ generationJobs: [{ id: 'job1', kind: 'video' }] });
   });
 
   it('derives a stable idempotency key per quest and request', async () => {

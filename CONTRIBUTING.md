@@ -281,16 +281,29 @@ Two notes specific to fork PRs:
 - CI for first-time contributors requires a maintainer to approve the workflow run — this is standard GitHub security, not a judgment on your PR. It happens quickly after triage.
 - Some internal automation (e.g. the AI review bot) doesn't run on fork PRs because it requires repository secrets. Maintainers will run those stages after initial review where relevant. Preview environments are unaffected by fork status — see below — since a maintainer triggers them out-of-band from an internal pipeline.
 
+### Restricted terms
+
+The **Restricted Terms** check blocks a maintainer-configured list of restricted terms from PR text and diffs: the PR title, body and branch name, every commit message, and the lines your PR adds. Maintainers keep the list in a repository secret, so it is not published. When the check fails, its log names only where the hit is (for example a commit or a file and line), never the matched text. Edit or reword that spot (rewrite the commit message if the hit is there) and push again. If you cannot tell what matched, ask a maintainer on the PR.
+
+Two details the location tells you:
+
+- A hit named `commit <sha> ...` is in that commit's own diff, which stays in the branch history even if a later commit removes the line. Squash or rewrite that commit; editing the file in a new commit does not clear it.
+- A file GitHub cannot show a diff for (binary, or too large) is checked in full at the commit being checked (for binary files, its readable text), not line by line.
+
 ### Fixing a dependency advisory
 
 The **Dependency Audit Gate** check runs `pnpm audit` on your PR and on the commit it targets, and fails only on high/critical advisories that your PR's dependency changes introduce. Advisories already on `main` show as warnings and in the job summary; a scheduled audit of `main` tracks those in a single `Dependency audit: high/critical advisories on main` issue. The gate is not a required check, but please don't merge with it red.
 
 To fix a failing gate (or the tracking issue):
 
-1. Raise the floor in `pnpm.overrides` in the root `package.json` to the patched version, keyed by the vulnerable range (e.g. `"shell-quote@<1.11.0": "^1.11.0"`).
+1. Raise the floor in `overrides` in the root `pnpm-workspace.yaml` to the patched version, keyed by the vulnerable range (e.g. `"shell-quote@<1.11.0": "^1.11.0"`).
 2. Update the lockfile with `pnpm install --lockfile-only`, then confirm it is consistent with `pnpm install --frozen-lockfile --lockfile-only`. Run `node scripts/check-pnpm-overrides.mjs` after an install that changed overrides (the Lockfile Integrity check runs it too).
 3. Run the gate locally: `pnpm audit --json > r.json; PACKAGES_JSON_REPORT_PATH=r.json node scripts/audit-gate.mjs`.
 4. Only if no patched version exists, or the vulnerable code path is not reachable, add the GHSA id to `scripts/audit-allowlist.json` instead, and explain why in the PR.
+
+When the scheduled audit finds advisories on `main`, it also opens an auto-fix PR from the `ci/dependency-audit-autofix` branch that applies steps 1 and 2. A human reviews its lockfile diff and merges it; prefer that PR over writing the same bump by hand.
+
+The auto-fix only raises a floor within the installed major. Anything else (a major bump, no patched release, a range or line override) is listed in the tracking issue between `<!-- dependency-audit-skipped -->` markers, one `GHSA | package | severity | reason` line each (the reason is everything after the third ` | `). An empty block means nothing was skipped; a missing block means the run could not tell.
 
 ### Preview deploys
 

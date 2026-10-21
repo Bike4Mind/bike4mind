@@ -1,7 +1,7 @@
 import { useAcceptDocument, useRefuseDocument } from '@client/app/hooks/data/invites';
 import { fetchInvite } from '@client/app/utils/invitesAPICalls';
 import CheckIcon from '@mui/icons-material/Check';
-import ConstructionOutlinedIcon from '@mui/icons-material/ConstructionOutlined';
+import HandymanOutlinedIcon from '@mui/icons-material/HandymanOutlined';
 import DoDisturbIcon from '@mui/icons-material/DoDisturb';
 import GroupIcon from '@mui/icons-material/Group';
 import HomeIcon from '@mui/icons-material/Home';
@@ -35,7 +35,7 @@ const DOCUMENT_ICONS = {
   Group: <GroupIcon />,
   Organization: <HomeIcon />,
   Session: <NoteAltOutlinedIcon />,
-  Tool: <ConstructionOutlinedIcon />,
+  Tool: <HandymanOutlinedIcon />,
   Project: <HubIconIcon />,
 };
 

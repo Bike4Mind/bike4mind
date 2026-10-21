@@ -1,4 +1,4 @@
-import { DEFAULT_MUSIC_MODEL_ID } from '@bike4mind/common';
+import { DEFAULT_MUSIC_LENGTH_MS, DEFAULT_MUSIC_MODEL_ID, elevenLabsContentTypeForFormat } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { GeneratedMusic, MusicGenerationOptions, MusicGenerator } from './types';
 
@@ -18,15 +18,6 @@ const DEFAULT_OUTPUT_FORMAT = 'mp3_44100_128';
  */
 export const MUSIC_GENERATION_TIMEOUT_MS = 45_000;
 
-/** Maps an ElevenLabs `output_format` token to its MIME type. */
-function contentTypeForFormat(format: string): string {
-  if (format.startsWith('mp3')) return 'audio/mpeg';
-  if (format.startsWith('opus')) return 'audio/opus';
-  if (format.startsWith('pcm')) return 'audio/L16';
-  if (format.startsWith('ulaw')) return 'audio/basic';
-  return 'application/octet-stream';
-}
-
 export interface ElevenLabsMusicGeneratorConfig {
   apiKey: string;
   logger: Logger;
@@ -40,8 +31,9 @@ export interface ElevenLabsMusicGeneratorConfig {
  * Generates background music via the ElevenLabs `POST /v1/music` API.
  * See https://elevenlabs.io/docs/api-reference/music.
  *
- * `music_length_ms` is always sent when a length is provided so the generated
- * track length is deterministic and matches what the caller was billed for.
+ * `music_length_ms` is always sent (DEFAULT_MUSIC_LENGTH_MS when omitted, the same
+ * default the cost calculator's callers bill) so the generated track length is
+ * deterministic and never left to the provider's auto-duration.
  */
 export class ElevenLabsMusicGenerator implements MusicGenerator {
   private readonly apiKey: string;
@@ -61,6 +53,12 @@ export class ElevenLabsMusicGenerator implements MusicGenerator {
 
   async generate(prompt: string, options: MusicGenerationOptions = {}): Promise<GeneratedMusic> {
     const format = options.format ?? DEFAULT_OUTPUT_FORMAT;
+    // The routes refuse an unsupported format before reserving credits; this guards any other caller
+    // from paying for audio that could not be labelled.
+    const contentType = elevenLabsContentTypeForFormat(format);
+    if (!contentType) {
+      throw new Error(`Unsupported ElevenLabs music output format: ${format}`);
+    }
     const url = new URL(MUSIC_GENERATION_ENDPOINT);
     url.searchParams.set('output_format', format);
 
@@ -73,7 +71,7 @@ export class ElevenLabsMusicGenerator implements MusicGenerator {
       body: JSON.stringify({
         prompt,
         model_id: options.modelId ?? DEFAULT_MUSIC_MODEL_ID,
-        ...(options.lengthMs !== undefined ? { music_length_ms: options.lengthMs } : {}),
+        music_length_ms: options.lengthMs ?? DEFAULT_MUSIC_LENGTH_MS,
         ...(options.forceInstrumental !== undefined ? { force_instrumental: options.forceInstrumental } : {}),
       }),
       signal: AbortSignal.timeout(this.timeoutMs),
@@ -92,6 +90,6 @@ export class ElevenLabsMusicGenerator implements MusicGenerator {
       this.logger.error('ElevenLabs music generation returned an empty body', { status: res.status });
       throw new Error('ElevenLabs music generation returned no audio');
     }
-    return { audio, contentType: contentTypeForFormat(format) };
+    return { audio, contentType };
   }
 }

@@ -26,7 +26,7 @@ const ENQUEUE_MUTATION = `mutation($id: ID!, $sha: GitObjectID!) {
 function pullRequestFields(number: string, threads: string, queue: string): string {
   return `id number title url state isDraft mergedAt
       author { login }
-      headRefName headRefOid baseRefName additions deletions
+      headRefName headRefOid baseRefName baseRefOid additions deletions
       mergeable mergeStateStatus reviewDecision
       autoMergeRequest { enabledAt }
       isMergeQueueEnabled mergeQueueEntry { state position }
@@ -247,6 +247,7 @@ function parseRepository(
     headRefName: str(pr.headRefName),
     headSha: str(pr.headRefOid),
     baseRefName: str(pr.baseRefName),
+    baseSha: str(pr.baseRefOid),
     additions: num(pr.additions),
     deletions: num(pr.deletions),
     mergeable: parseMergeable(pr.mergeable),

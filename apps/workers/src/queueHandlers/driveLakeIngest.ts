@@ -8,7 +8,9 @@ import {
   dataLakeBatchRepository,
   fabFileRepository,
   lakeMembershipChangeEventRepository,
+  lakeSkippedFileRepository,
   orgGoogleDriveConnectionRepository,
+  organizationRepository,
 } from '@bike4mind/database';
 import {
   BATCH_NON_TERMINAL_STATUSES,
@@ -16,12 +18,15 @@ import {
   KnowledgeType,
   FabFileSourceType,
   type IUserDocument,
-  driveConnectionOwnerForLake,
-  driveConnectionOwnerOf,
+  lakeConnectionOwnerForLake,
+  lakeConnectionOwnerOf,
   isLakeIngestable,
-  isSameDriveConnectionOwner,
+  isSameLakeConnectionOwner,
+  isStorageLimitError,
+  storageOwnerOf,
+  type LakeSkippedFileReason,
 } from '@bike4mind/common';
-import { BadRequestError, checkStorageLimit, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import { BadRequestError, checkStorageLimitForOwner, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { dataLakeService } from '@bike4mind/services';
 import defineAbilitiesFor from '@server/auth/ability';
 import {
@@ -30,18 +35,25 @@ import {
   ingestLakeFile,
   settleLakeIngestBatch,
 } from '@workers/queueHandlers/lakeIngestShared';
-import { MAX_FILE_SIZE_DEFAULT_MB } from '@server/utils/maxFileSizeDefault';
+import { MAX_FILE_SIZE_DEFAULT_MB } from '@bike4mind/server-utils/utils/maxFileSizeDefault';
 import {
   disableDriveConnectionForLake,
   getValidConnectionDriveAccessToken,
+  isTerminalDriveGrantError,
+  releaseDriveConnection,
 } from '@server/integrations/google/drive/common';
 import {
   createDriveClient,
+  isDriveAuthError,
   isDriveRateLimitError,
   listChanges,
   getStartPageToken,
   isDriveInvalidCursorError,
   isFolder,
+  probeConnectedFolder,
+  REJECTED_DRIVE_TOKEN_MESSAGE,
+  UNREACHABLE_FOLDER_MESSAGES,
+  type ConnectedFolderReachability,
   type DriveChange,
   type DriveFile,
 } from '@server/integrations/google/drive/driveClient';
@@ -53,12 +65,18 @@ import {
   DriveWalkTimeBudgetExceededError,
   type WalkedDriveFile,
 } from '@server/integrations/google/drive/driveContent';
-import { finalizeBatchIfComplete } from '@server/queueHandlers/dataLakeBatchProgress';
-import { sendToQueue } from '@server/utils/sqs';
+import {
+  MAX_INGEST_CANDIDATES,
+  MAX_INGEST_FILE_BYTES,
+  driveIngestSkipReason,
+} from '@bike4mind/server-utils/integrations/google/drive/driveIngestLimits';
+import { finalizeBatchIfComplete } from '@server/dataLakes/dataLakeBatchProgress';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { Resource } from 'sst';
 import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
 import { z, ZodError } from 'zod';
+import { storageOwnerTransferDb } from '@server/files/storageOwnerTransferDb';
 
 const Payload = z.object({
   connectionId: z.string(),
@@ -88,13 +106,6 @@ const Payload = z.object({
 export const MAX_INGEST_REDRIVES = 12;
 const INGEST_REDRIVE_DELAY_SECONDS = 90;
 
-// Per-file hard cap. Files are fetched and uploaded ONE at a time (only one buffer is ever live),
-// so this bounds peak memory well under the ingest queue Lambda's 1024 MB default. An oversized
-// file is skipped-and-counted (before the download when the size is known up front), so the failure
-// mode is a skipped file rather than an OOM that kills the whole run mid-loop. A streaming path for
-// genuinely large files is the "very large folders" follow-up.
-const MAX_INGEST_FILE_BYTES = 50 * 1024 * 1024;
-
 // Stop starting another file once the invocation has less than this left, and yield to a continuation
 // slice instead of being killed mid-file. Sized for the slowest realistic single file: a
 // MAX_INGEST_FILE_BYTES download plus its upload, plus a retire that may run a full deleteFabFile
@@ -123,32 +134,6 @@ const DEFAULT_RUN_BUDGET_MS = 9 * 60_000;
 // holds because the chunk pipeline each upload enqueues has drained by then - the same durability the
 // claim's staleness bound leans on, and the reason a chained claim must not be stolen mid-chain.
 export const MAX_INGEST_SLICES = 20;
-
-// Cap on the un-sliceable part of a sync: the folder walk and the diff against this connection's
-// stored set, both of which hold a full listing in memory in EVERY slice and must complete inside one
-// invocation before any file is touched - a folder-wide constant regardless of how small any one
-// slice's delta is. This is NO LONGER a throughput bound on the ingestable count - the deadline guard
-// above yields to a continuation slice rather than timing out mid-loop, so that count is bounded by
-// MAX_INGEST_SLICES x a slice's throughput (tens of thousands of files) and not by one invocation.
-// Checked against walked.length and existingDocs.length (see the enforcement below), not the delta
-// between them - gating on the delta would let a folder with a huge stable listing and a tiny delta
-// pay the walk+diff cost on every slice with the cap never tripping. Enforced up front, before any
-// membership write, so an over-cap folder is refused with nothing changed. Beyond it the folder should
-// be split into subfolders connected separately.
-//
-// Memory headroom at this value is not yet independently measured. findByDriveConnectionIdInDataLake
-// has no projection or limit, so existingDocs at the cap hydrates up to 20000 full FabFile documents
-// (previously 1500, ~13x) on the ingest queue Lambda's 1024 MB default (infra/queues.ts sets no
-// override for it, unlike most of its siblings there). If that turns out to be tight, either project
-// the query down to the fields the diff actually reads (driveFileId, md5Checksum, modifiedTime) or set
-// an explicit memory override on the Lambda - both are cheaper than lowering this constant.
-//
-// Also, indirectly, a bound on the size of ONE batch document: every candidate a chain ingests gets a
-// manifest entry in `files[]` on this same DataLakeBatch doc, and both claimFileStatus's positional
-// update and every finalize check read the whole document. Raising this constant further raises that
-// document's worst-case size (and, with failedFileNames also accumulating, moves it closer to the 16MB
-// BSON ceiling) as well as the walk+diff cost the comment above is about.
-export const MAX_INGEST_CANDIDATES = 20000;
 
 /**
  * Has a Drive file changed since it was ingested? `md5Checksum` is exact, but Google Editors files
@@ -188,6 +173,11 @@ export type DriveChangeClassification = {
    * orphan is left to the disconnect sweep. See the header for why the split matters.
    */
   unconfirmedRemovalIds: string[];
+  /**
+   * driveFileIds never ingested (no tracked copy) that are gone or no longer under the root. Nothing
+   * to unpick, but a file the sync skipped has a not-ingested row (ILakeSkippedFile) that must go.
+   */
+  untrackedGoneIds: string[];
   /**
    * Entries this run could not DECIDE: the ancestry lookup hit a transient Drive failure, so neither
    * "under the root" nor "moved out" was proven and the entry was left unapplied. Non-zero means this
@@ -255,6 +245,7 @@ export async function classifyDriveChanges(
   const changed: WalkedDriveFile[] = [];
   const removedFileIds: string[] = [];
   const unconfirmedRemovalIds: string[] = [];
+  const untrackedGoneIds: string[] = [];
   const ancestryCache = new Map<string, string[] | null>();
   let ambiguous = 0;
 
@@ -296,7 +287,11 @@ export async function classifyDriveChanges(
       continue;
     }
 
-    if (gone || !file || isFolder(file)) continue; // never tracked; nothing to remove or add
+    if (gone) {
+      untrackedGoneIds.push(fileId);
+      continue;
+    }
+    if (!file || isFolder(file)) continue; // never tracked; nothing to remove or add
     let underRoot: boolean;
     try {
       underRoot = await isUnderRoot(drive, file.parents, rootFolderId, ancestryCache);
@@ -314,10 +309,12 @@ export async function classifyDriveChanges(
       // (cursor invalidation, or an explicit Re-sync) fills in the real path - relativePath is
       // display metadata, not an identity key (dedup and diff are keyed on driveFileId throughout).
       adds.push(toWalkedDriveFile(file));
+    } else {
+      untrackedGoneIds.push(fileId);
     }
   }
 
-  return { adds, changed, removedFileIds, unconfirmedRemovalIds, ambiguous };
+  return { adds, changed, removedFileIds, unconfirmedRemovalIds, untrackedGoneIds, ambiguous };
 }
 
 /**
@@ -573,11 +570,29 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
     const lake = await dataLakeRepository.findById(connection.targetDataLakeId);
     if (!lake) {
-      logger.warn('[driveLakeIngest] target data lake not found; dropping', { connectionId });
+      logger.warn('[driveLakeIngest] target data lake not found; retiring the connection', {
+        connectionId,
+        dataLakeId: connection.targetDataLakeId,
+      });
       // Same reasoning as the connection-not-found exit above: a continuation reaching here still
       // owns an adopted batch that needs settling.
       if (resumeBatchId) await settleChainedBatch(resumeBatchId);
-      await releaseClaim(null);
+      // A soft-deleted lake still has its document (status 'deleted', handled below), so a missing one
+      // is gone for good. Tear the connection down the way the lake purge does
+      // (releaseDriveConnectionForLake): releasing the claim back to 'connected' would re-poll it
+      // forever and keep its globally unique driveFolderId claimed by a lake nobody can reach.
+      const retired = await releaseDriveConnection(connectionId, lakeConnectionOwnerOf(connection)).catch(
+        (e: unknown) => {
+          logger.warn('[driveLakeIngest] could not release the connection of a missing lake', {
+            connectionId,
+            error: e instanceof Error ? e.message : String(e),
+          });
+          return false;
+        }
+      );
+      // Not retired (a throw, or no row matched the owner): hand the claim back so the next poll retries
+      // the teardown rather than stranding the row 'syncing'. A no-op if a concurrent purge deleted it.
+      if (!retired) await releaseClaim(null);
       return;
     }
     // A non-ingestable lake is a no-op here, not a failure.
@@ -604,11 +619,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       await releaseClaim(null);
       return;
     }
-    // The connect door (authorizeLakeDriveAccess) only binds a connection to a lake of the same owner -
+    // The connect door (authorizeLakeConnectorAccess) only binds a connection to a lake of the same owner -
     // the lake's org, or for a personal lake its creator. Re-checked here because the admin-actor
     // membership writes below are justified by exactly that, and a mismatched row must not ride it.
-    const connectionOwner = driveConnectionOwnerOf(connection);
-    if (!isSameDriveConnectionOwner(connectionOwner, driveConnectionOwnerForLake(lake))) {
+    const connectionOwner = lakeConnectionOwnerOf(connection);
+    if (!isSameLakeConnectionOwner(connectionOwner, lakeConnectionOwnerForLake(lake))) {
       logger.warn('[driveLakeIngest] connection owner does not match the target lake; dropping', { connectionId });
       if (resumeBatchId) await settleChainedBatch(resumeBatchId);
       await releaseClaim('This Drive connection no longer matches its data lake owner. Reconnect the folder.');
@@ -623,10 +638,28 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     }
     const ability = defineAbilitiesFor(user as unknown as IUserDocument);
 
+    // A revoked/expired grant reaches this run at one of two token resolutions - the fetch below or the
+    // probe's forced refresh - and both exits do the same thing: the connection is already
+    // credential_error (which ends the claim), so log, settle the adopted batch, and stop rather than
+    // let SQS redeliver into the DLQ. Mirrors drive-sync.ts's retry-on-401 policy (getFolderAccessAsUser):
+    // keep the two in sync.
+    const stopOnRevokedGrant = async () => {
+      logger.warn('[driveLakeIngest] Drive grant was revoked; connection marked credential_error', { connectionId });
+      if (resumeBatchId) await settleChainedBatch(resumeBatchId);
+    };
+
     // An org connection's own token, else (every personal connection) the connecting user's live grant.
-    // A credential failure marks the connection credential_error and throws so SQS retries -> DLQ.
-    const accessToken = await getValidConnectionDriveAccessToken(connectionId, connectionOwner);
-    const drive = createDriveClient(accessToken);
+    // A terminal grant failure has already marked the connection credential_error (which ends the claim),
+    // so the run stops here like the probe's revoked-grant exit below; only a transient one throws for SQS.
+    let accessToken: string;
+    try {
+      accessToken = await getValidConnectionDriveAccessToken(connectionId, connectionOwner);
+    } catch (e) {
+      if (!isTerminalDriveGrantError(e)) throw e;
+      await stopOnRevokedGrant();
+      return;
+    }
+    let drive = createDriveClient(accessToken);
 
     // 1) Resolve this run's Drive-side signal: an incremental `changes.list` pull (scoped to what
     //    happened since the stored cursor) whenever the connection already carries one and the caller
@@ -656,7 +689,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
      * Callers MUST return immediately after awaiting this: the claim is released and the batch settled.
      */
     const deferDriveSync = async (
-      phase: 'incremental_pull' | 'folder_walk',
+      phase: 'folder_probe' | 'incremental_pull' | 'folder_walk',
       reason: 'rate_limited' | 'time_budget_exceeded',
       err: unknown
     ) => {
@@ -702,6 +735,71 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         );
       }
     };
+
+    // Probe the connected folder itself before either mode: the incremental changes feed is Drive-wide
+    // and never touches the root, so an un-shared or trashed folder would otherwise poll as a healthy,
+    // empty delta forever. A definite "gone" parks the connection in needs_reconnect (excluded from
+    // findDueForPoll and claimForSync) until the user re-picks the folder, which heals it via
+    // drive-sync's updateCredential.
+    //
+    // A 401 (or a revoked-scope 403, isDriveAuthError) is Drive rejecting the token itself, which a grant
+    // revoked at Google does well before a cached user token's expiresAt. One retry through a forced
+    // refresh lets Google's invalid_grant decide: that marks the connection credential_error (and ends
+    // the claim) inside getValidConnectionDriveAccessToken, so the run stops here rather than retrying
+    // through SQS to the DLQ.
+    const probeFolder = async (): Promise<ConnectedFolderReachability> => {
+      try {
+        return await probeConnectedFolder(drive, connection.driveFolderId);
+      } catch (e) {
+        if (!isDriveAuthError(e)) throw e;
+        drive = createDriveClient(
+          await getValidConnectionDriveAccessToken(connection.id, connectionOwner, { forceRefresh: true })
+        );
+        return probeConnectedFolder(drive, connection.driveFolderId);
+      }
+    };
+    let folderReachability: ConnectedFolderReachability;
+    try {
+      folderReachability = await probeFolder();
+    } catch (e) {
+      if (isTerminalDriveGrantError(e)) {
+        await stopOnRevokedGrant();
+        return;
+      }
+      // probeFolder already retried a rejected token on a fresh one, so this one is Drive refusing the grant itself.
+      if (isDriveAuthError(e)) {
+        logger.warn('[driveLakeIngest] Drive rejected a freshly refreshed token; needs reconnect', { connectionId });
+        await orgGoogleDriveConnectionRepository.updateHealth(connectionId, {
+          status: 'credential_error',
+          lastError: REJECTED_DRIVE_TOKEN_MESSAGE,
+        });
+        if (resumeBatchId) await settleChainedBatch(resumeBatchId);
+        return;
+      }
+      if (!isDriveRateLimitError(e)) throw e;
+      await deferDriveSync('folder_probe', 'rate_limited', e);
+      return;
+    }
+    if (!folderReachability.reachable) {
+      logger.warn('[driveLakeIngest] connected Drive folder is no longer reachable; needs reconnect', {
+        connectionId,
+        reason: folderReachability.reason,
+      });
+      if (resumeBatchId) await settleChainedBatch(resumeBatchId);
+      // This run still holds the claim (set above), so the release is guarded like any other exit.
+      const parked = await orgGoogleDriveConnectionRepository.releaseSyncClaim(
+        connectionId,
+        ingestClaimToken,
+        UNREACHABLE_FOLDER_MESSAGES[folderReachability.reason],
+        'needs_reconnect'
+      );
+      if (!parked) {
+        logger.warn('[driveLakeIngest] claim was taken away before parking; leaving the new owner alone', {
+          connectionId,
+        });
+      }
+      return;
+    }
 
     if (!forceFullWalk && connection.syncCursor) {
       try {
@@ -829,6 +927,13 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         });
         pendingSyncCursor = undefined;
       }
+      // A skipped file has no FabFile, so its departure arrives as `untrackedGoneIds`, never in
+      // `removed`. Tracked removals are cleared too, in case a row outlived its file's ingest.
+      await lakeSkippedFileRepository.clearSources(lake.id, 'google_drive', [
+        ...classified.untrackedGoneIds,
+        ...classified.removedFileIds,
+        ...classified.unconfirmedRemovalIds,
+      ]);
       walkedIds = new Set(existingByDriveId.keys());
       for (const id of removedIds) walkedIds.delete(id);
       for (const id of unconfirmedIds) walkedIds.delete(id);
@@ -859,6 +964,12 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           existing: existingDocs.length,
         });
         removed = [];
+      }
+      // Stricter than the guard above: an empty walk never prunes the not-ingested list, even with
+      // no ingested files to protect - a folder whose every file was skipped would otherwise lose
+      // its whole list on one blip and only regain it on the next full walk.
+      if (walked.length > 0) {
+        await lakeSkippedFileRepository.pruneMissing(lake.id, 'google_drive', seenIds);
       }
     }
 
@@ -900,7 +1011,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
     // A trusted system reconcile acts as admin for membership writes (canManageLake): the connection
     // was authorized at connect time by an org owner/manager, or for a personal lake by its creator
-    // (authorizeLakeDriveAccess; the owner match above re-asserts it). Pass the resolved lake
+    // (authorizeLakeConnectorAccess; the owner match above re-asserts it). Pass the resolved lake
     // itself (not a hand-projection) so `organizationId` reaches the org-manageable manage rung.
     const membershipActor = { userId: connection.connectedBy, isAdmin: true };
     // Every membership write in this handler is the Drive connector sync itself, not a person at
@@ -976,7 +1087,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           membershipActor,
           lake,
           doc.id,
-          { db: { fabFiles: fabFileRepository, ...membershipAuditDb }, logger },
+          { db: { ...storageOwnerTransferDb, ...membershipAuditDb }, logger },
           { origin: 'connector' }
         );
         unpicked++;
@@ -1107,11 +1218,24 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
       // Idempotent per driveFileId within this chain (recordSkippedDriveFile), so a file that keeps
       // failing the same deterministic gate on every slice (see skip()'s own callers) is counted and
-      // subtracted exactly once instead of once per slice.
-      const skip = async (driveFileId: string, reason: string, extra?: Record<string, unknown>) => {
-        const recorded = await dataLakeBatchRepository.recordSkippedDriveFile(batch.id, driveFileId);
+      // subtracted exactly once instead of once per slice. The lake-level skip list is written
+      // regardless of `recorded`: a false there is a chain de-dup, not "not skipped".
+      const skip = async (file: WalkedDriveFile, reason: LakeSkippedFileReason, size = file.size) => {
+        await lakeSkippedFileRepository.recordSkip({
+          dataLakeId: lake.id,
+          sourceKind: 'google_drive',
+          sourceId: file.id,
+          // Drive allows an empty name; the id still identifies the file.
+          name: file.name || file.id,
+          relativePath: file.relativePath,
+          relativePathIsPartial: syncMode === 'incremental',
+          mimeType: file.mimeType,
+          size,
+          reason,
+        });
+        const recorded = await dataLakeBatchRepository.recordSkippedDriveFile(batch.id, file.id);
         if (recorded) skipped++;
-        logger.info('[driveLakeIngest] skipping file', { driveFileId, reason, recorded, ...extra });
+        logger.info('[driveLakeIngest] skipping file', { driveFileId: file.id, reason, recorded, size });
       };
 
       // Resolved once per run, not per file - the loop can walk hundreds of candidates.
@@ -1128,6 +1252,12 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // currentStorageSize is a snapshot read once per run, so several files that each pass the
       // storage check individually would otherwise overshoot the quota together.
       let acceptedBytes = 0;
+      // An org lake's files are stamped with, and billed to, the lake's org (ingestLakeFile), so the
+      // quota gate measures that org's pool; a personal lake's measure the connecting user's.
+      const quotaOwner = { user, organizationId: lake.organizationId || undefined };
+      const reclaimOwner = storageOwnerOf({ userId: user.id, organizationId: quotaOwner.organizationId });
+      let quotaOrganizationOnce: ReturnType<typeof organizationRepository.findById> | undefined;
+      const loadQuotaOrganization = (id: string) => (quotaOrganizationOnce ??= organizationRepository.findById(id));
       for (const [index, file] of candidates.entries()) {
         // Yield rather than get killed, checked BEFORE starting a file so the run never dies between
         // creating a FabFile and uploading its bytes - including before the FIRST file: a slice whose
@@ -1143,13 +1273,9 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         // Native binaries carry a size, so skip the oversized ones BEFORE spending a Drive download.
         // Editors exports have no size here; they are bounded by Drive's own ~10 MB export cap
         // (surfaced as export_too_large) plus the post-fetch guard below.
-        if (file.size != null && file.size > MAX_INGEST_FILE_BYTES) {
-          await skip(file.id, 'oversized', { size: file.size });
-          continue;
-        }
-
-        if (file.size != null && file.size >= maxFileSize) {
-          await skip(file.id, 'exceeds_max_file_size', { size: file.size });
+        const sizeSkipReason = driveIngestSkipReason(file.size, maxFileSize);
+        if (sizeSkipReason) {
+          await skip(file, sizeSkipReason);
           continue;
         }
 
@@ -1172,11 +1298,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
             });
             break;
           }
-          await skip(file.id, result.reason);
+          await skip(file, result.reason);
           continue;
         }
         if (result.bytes.length > MAX_INGEST_FILE_BYTES) {
-          await skip(file.id, 'oversized_after_fetch', { size: result.bytes.length });
+          await skip(file, 'oversized_after_fetch', result.bytes.length);
           continue;
         }
 
@@ -1185,21 +1311,24 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         // Both size checks above only see file.size, which Drive omits for Docs/Sheets exports;
         // this pair is the backstop that still catches those once the real byte count is known.
         if (bytes.length >= maxFileSize) {
-          await skip(file.id, 'exceeds_max_file_size', { size: bytes.length });
+          await skip(file, 'exceeds_max_file_size', bytes.length);
           continue;
         }
 
-        // Checked against the user, not the connection's org: objectCreated debits the
-        // uploading user, and this handler's own reclaim path deducts from that same counter,
-        // so an org-scoped check here could never fire.
-        // Retires so far this run are already deleted, but their bytes are only staged in the
-        // retirer until flushReclaimedStorage after the loop - credit them now.
-        const stagedReclaim = stagedReclaimFor(user.id);
+        // Checked against the file's owner-to-be (quotaOwner), the same counter objectCreated will
+        // charge and this handler's reclaim path refunds. Retires so far this run are already
+        // deleted, but their bytes are only staged in the retirer until flushReclaimedStorage after
+        // the loop - credit the ones that return to this same owner now.
+        const stagedReclaim = stagedReclaimFor(reclaimOwner);
         try {
-          await checkStorageLimit(user, Math.max(0, acceptedBytes + bytes.length - stagedReclaim));
+          await checkStorageLimitForOwner(
+            quotaOwner,
+            Math.max(0, acceptedBytes + bytes.length - stagedReclaim),
+            loadQuotaOrganization
+          );
         } catch (error) {
-          if (!(error instanceof BadRequestError)) throw error;
-          await skip(file.id, 'storage_limit', { size: bytes.length });
+          if (!isStorageLimitError(error)) throw error;
+          await skip(file, 'storage_limit', bytes.length);
           continue;
         }
 
@@ -1240,7 +1369,6 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         });
         uploaded++;
         acceptedBytes += bytes.length;
-
         // Edited file: its fresh replacement is now durably uploaded, so retire the superseded copy
         // (see retireSupersededCopy in lakeIngestShared.ts, and the header for the invariants it keeps). Done PER-FILE right
         // after the upload, not batched at the end: a later file throwing then leaves every
@@ -1252,6 +1380,8 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           await retireSupersededCopy(staleCopy, fabFile.id);
           retired++;
         }
+        // After the retire, so a throw here cannot strand an edit half-reconciled (see above).
+        await lakeSkippedFileRepository.clearSources(lake.id, 'google_drive', [file.id]);
       }
 
       logger.info('[driveLakeIngest] uploaded; pipeline will chunk+vectorize', {

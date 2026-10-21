@@ -1,11 +1,13 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
-import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeResearchService } from '@bike4mind/services';
 import {
   dataLakeRepository,
   dataLakeResearchConfigRepository,
   dataLakeResearchRunRepository,
+  organizationRepository,
+  userRepository,
   withTransaction,
 } from '@bike4mind/database';
 import { InternalServerError } from '@bike4mind/utils';
@@ -13,7 +15,7 @@ import { Request } from 'express';
 import { Resource } from 'sst';
 import { z } from 'zod';
 import { assertLakeResearchManage } from '@server/dataLakes/assertLakeResearchManage';
-import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { queueResearchRun } from '@server/dataLakes/queueResearchRun';
 
@@ -78,6 +80,8 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
           db: {
             dataLakeResearchConfigs: dataLakeResearchConfigRepository,
             dataLakeResearchRuns: dataLakeResearchRunRepository,
+            users: userRepository,
+            organizations: organizationRepository,
             ...lakeConfigAuditDb,
           },
           logger: req.logger,

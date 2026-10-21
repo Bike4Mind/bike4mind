@@ -9,6 +9,7 @@ import { useUsageBySource } from '../hooks/useUsageBySource';
 const SOURCE_COLORS: Record<string, string> = {
   web: '#0088FE',
   cli: '#00C49F',
+  desktop: '#A05195',
   agent: '#FFBB28',
   api: '#FF8042',
   system: '#8884D8',
@@ -24,7 +25,7 @@ const WINDOW_OPTIONS = [
 
 /**
  * Admin widget: completion activity grouped by request surface
- * (web / cli / api / agent / system), as event counts and distinct users.
+ * (web / cli / desktop / api / agent / system), as event counts and distinct users.
  *
  * Sources `metadata.source` on CounterLog. Buckets without a source (legacy
  * events pre-instrumentation) are excluded server-side.

@@ -10,7 +10,7 @@
  */
 
 import { ChatModels, type QuestComplexity } from '@bike4mind/common';
-import { ICompletionOptionTools } from './llm/backend';
+import type { ICompletionOptionTools } from '@bike4mind/llm-adapters/backend';
 
 // Length limit constants to prevent oversized data from LLMs.
 // Database schema allows up to 2000 for goal and description.

@@ -20,6 +20,7 @@
     "ios",
     "android",
     "**/*.test.ts",
+    "../../packages/server-utils/**/*.test.ts",
     "**/*.test.tsx",
     "**/*.fixture.ts",
     ".next/standalone",
@@ -34,6 +35,9 @@
     "**/*.ts",
     "**/*.tsx",
     "../scripts/migrate/migrations/manageDatabase.ts",
+    // tsx (Dockerfile.chatcompletion) applies strict and target only to files this includes, and
+    // the chatcompletion server loads @bike4mind/server-utils from source.
+    "../../packages/server-utils/src/**/*.ts",
     ".next/types/**/*.ts"
   ]
 }

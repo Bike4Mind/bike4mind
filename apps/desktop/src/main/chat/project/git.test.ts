@@ -6,6 +6,7 @@ import {
   branchCheckouts,
   checkoutBranch,
   currentBranch,
+  defaultBaseBranch,
   git,
   GitError,
   parseWorktreePorcelain,
@@ -180,5 +181,69 @@ describe('readable git errors', () => {
     expect(refusal).toBeInstanceOf(GitError);
     expect((refusal as GitError).message).not.toMatch(/^fatal:/i);
     expect((refusal as GitError).message).toMatch(/nope/);
+  });
+});
+
+describe('defaultBaseBranch', () => {
+  /** Records `origin/HEAD` as pointing at `target`, with no remote to fetch from. */
+  async function pointOriginHeadAt(directory: string, target: string): Promise<void> {
+    await git(directory, ['update-ref', `refs/remotes/origin/${target}`, 'HEAD']);
+    await git(directory, ['symbolic-ref', 'refs/remotes/origin/HEAD', `refs/remotes/origin/${target}`]);
+  }
+
+  const cases: Array<{ name: string; setup: (directory: string) => Promise<void>; expected: string }> = [
+    { name: 'main when nothing else is known', setup: async () => {}, expected: 'main' },
+    {
+      name: 'the remote default when it is not main',
+      setup: async directory => {
+        await git(directory, ['branch', 'trunk']);
+        await pointOriginHeadAt(directory, 'trunk');
+      },
+      expected: 'trunk',
+    },
+    {
+      name: 'master when there is no main',
+      setup: async directory => {
+        await git(directory, ['branch', '-m', 'main', 'master']);
+      },
+      expected: 'master',
+    },
+    {
+      name: 'the checked-out branch when main and master are both absent',
+      setup: async directory => {
+        await git(directory, ['checkout', '--quiet', '-b', 'develop']);
+        await git(directory, ['branch', '-D', 'main']);
+      },
+      expected: 'develop',
+    },
+    {
+      name: 'main on a detached HEAD',
+      setup: async directory => {
+        await git(directory, ['checkout', '--quiet', '--detach']);
+      },
+      expected: 'main',
+    },
+  ];
+
+  it.each(cases)('answers $name', async ({ setup, expected }) => {
+    const directory = await repository();
+    await setup(directory);
+
+    expect(await defaultBaseBranch(directory)).toBe(expected);
+  });
+
+  it('answers a local branch, not the dangling remote default, so the UI can show it', async () => {
+    const directory = await repository();
+    await git(directory, ['update-ref', 'refs/remotes/origin/ghost', 'HEAD']);
+    await git(directory, ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/ghost']);
+
+    expect(await defaultBaseBranch(directory)).toBe('main');
+  });
+
+  it('is empty for a repository with no commits', async () => {
+    const directory = await realpath(await mkdtemp(join(tmpdir(), 'b4m-git-')));
+    await git(directory, ['init', '--initial-branch=main', '--quiet']);
+
+    expect(await defaultBaseBranch(directory)).toBe('');
   });
 });

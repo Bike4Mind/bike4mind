@@ -218,6 +218,58 @@ describe('proxy security blocking', () => {
     const response = proxy(req);
     expect(response.status).toBe(400);
   });
+
+  describe('logged source address', () => {
+    function blockTraversal(headers: Record<string, string>): string {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      proxy({
+        nextUrl: { pathname: '/../etc/passwd', hostname: 'app.bike4mind.com' },
+        url: 'https://app.bike4mind.com/../etc/passwd',
+        method: 'GET',
+        headers: new Headers(headers),
+      } as unknown as NextRequest);
+      return String(warn.mock.calls.at(-1)?.[0]);
+    }
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+      vi.unstubAllEnvs();
+    });
+
+    it('logs the CloudFront viewer address, not the client-supplied x-forwarded-for', () => {
+      const line = blockTraversal({
+        'cloudfront-viewer-address': '198.51.100.7:51234',
+        'x-forwarded-for': '203.0.113.66',
+      });
+      expect(line).toContain('from 198.51.100.7');
+      expect(line).not.toContain('203.0.113.66');
+    });
+
+    it('logs unknown when only x-forwarded-for is present', () => {
+      expect(blockTraversal({ 'x-forwarded-for': '203.0.113.66' })).toContain('from unknown');
+    });
+
+    it('applies the same rule to the malformed-encoding line', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      proxy({
+        nextUrl: { pathname: '/%25zz', hostname: 'app.bike4mind.com' },
+        url: 'https://app.bike4mind.com/%25zz',
+        method: 'GET',
+        headers: new Headers({ 'x-forwarded-for': '203.0.113.66' }),
+      } as unknown as NextRequest);
+      const line = String(warn.mock.calls.at(-1)?.[0]);
+      expect(line).toContain('malformed URL encoding');
+      expect(line).toContain('from unknown');
+    });
+
+    it('logs the trusted x-forwarded-for hop on self-host', () => {
+      vi.stubEnv('B4M_SELF_HOST', 'true');
+      vi.stubEnv('TRUSTED_PROXY_HOPS', '1');
+      const line = blockTraversal({ 'x-forwarded-for': '203.0.113.66, 198.51.100.7' });
+      expect(line).toContain('from 198.51.100.7');
+      expect(line).not.toContain('203.0.113.66');
+    });
+  });
 });
 
 describe('proxy CSP for the pdf.js worker', () => {
@@ -390,5 +442,73 @@ describe('proxy origin verification', () => {
     const response = proxy(makeRequest('https://app.bike4mind.com/api/health')) as unknown as Forwarded;
     expect(response.status).toBe(200);
     expect(response.forwardedRequestHeaders).toBeUndefined();
+  });
+});
+
+describe('proxy configured object-store origin', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  const policy = () => proxy(makeRequest('https://app.example.invalid/home')).headers.get('Content-Security-Policy')!;
+  const directives = (csp: string) =>
+    Object.fromEntries(
+      csp
+        .split(';')
+        .filter(part => part.trim())
+        .map(part => {
+          const [name, ...sources] = part.trim().split(/\s+/);
+          return [name, sources];
+        })
+    );
+
+  it.each([
+    [' http://127.0.0.1:19000/ ', 'http://127.0.0.1:19000'],
+    ['https://objects.example.invalid/prefix?value=1#fragment', 'https://objects.example.invalid'],
+    ['https://user:fixture@objects.example.invalid:443/path', 'https://objects.example.invalid'],
+  ])('adds only the normalized object-store origin for %s', (configured, origin) => {
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', '');
+    const baseline = directives(policy());
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', configured);
+    const actual = directives(policy());
+    expect(Object.keys(actual)).toEqual(Object.keys(baseline));
+    for (const [name, sources] of Object.entries(baseline)) {
+      expect(actual[name]).toEqual(
+        ['connect-src', 'img-src', 'media-src'].includes(name) ? [...sources, origin] : sources
+      );
+    }
+  });
+
+  it('keeps the complete default policy unchanged when unset or blank', () => {
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', undefined);
+    const baseline = policy();
+    for (const blank of ['', '   ']) {
+      vi.stubEnv('S3_PRESIGN_ENDPOINT', blank);
+      expect(policy()).toBe(baseline);
+    }
+  });
+
+  it.each([
+    'not-a-url',
+    'ftp://objects.example.invalid',
+    'https://objects.example.invalid;extra',
+    'https://objects.example.invalid\n.other',
+    'https://*.example.invalid',
+    'https://objects,example.invalid',
+    'https://objects.example.invalid\u0001',
+    'https://objects.example.invalid\u007f',
+  ])('omits invalid configuration with a value-free diagnostic: %s', configured => {
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', '');
+    const baseline = policy();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', configured);
+    expect(policy()).toBe(baseline);
+    expect(warn).toHaveBeenCalledExactlyOnceWith('[csp] ignoring invalid S3_PRESIGN_ENDPOINT');
+  });
+
+  it.each(['/api/files', '/p/example', '/embed/chat'])('preserves policy exclusions for %s', path => {
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', 'https://objects.example.invalid');
+    expect(proxy(makeRequest(`https://app.example.invalid${path}`)).headers.get('Content-Security-Policy')).toBeNull();
   });
 });

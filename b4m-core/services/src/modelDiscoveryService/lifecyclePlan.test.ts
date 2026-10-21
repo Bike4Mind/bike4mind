@@ -150,6 +150,41 @@ describe('planLifecycleSignals', () => {
 
     expect(signals.contributions[0].records[0]).toBe(record);
   });
+
+  describe('providerUndated', () => {
+    const active = (patch: Record<string, unknown> = {}, evidence?: 'typed' | 'docs'): DiscoveredModel => ({
+      modelId: 'claude-x',
+      patch: { lifecycle: { status: 'active', ...patch } },
+      ...(evidence ? { lifecycleEvidence: evidence } : {}),
+    });
+
+    it('names the provider that reports a model active with no deprecation date, docs-tier included', () => {
+      const docs = planLifecycleSignals({ contributions: [provider('anthropic', [active({}, 'docs')])] });
+      const typed = planLifecycleSignals({ contributions: [provider('bedrock', [active({}, 'typed')])] });
+
+      expect(docs.providerUndated).toEqual(new Map([['claude-x', 'anthropic']]));
+      // The docs claim itself still never reaches the overlay.
+      expect(docs.contributions[0].records[0].patch).not.toHaveProperty('lifecycle');
+      expect(typed.providerUndated).toEqual(new Map([['claude-x', 'bedrock']]));
+    });
+
+    it('ignores an aggregator, a dated or sunset claim, and a source whose parser shifted', () => {
+      const signals = planLifecycleSignals({
+        contributions: [
+          aggregator('litellm', [active({}, 'typed')]),
+          provider('openai', [{ ...active({ deprecationDate: '2027-01-01' }, 'typed'), modelId: 'dated' }]),
+          provider('bedrock', [{ ...deprecated('typed'), modelId: 'sunset' }]),
+        ],
+      });
+      const shifted = planLifecycleSignals({
+        contributions: [provider('anthropic', [active({}, 'docs')])],
+        droppedDocsSources: new Set(['anthropic']),
+      });
+
+      expect(signals.providerUndated.size).toBe(0);
+      expect(shifted.providerUndated.size).toBe(0);
+    });
+  });
 });
 
 describe('detectParserRowShifts', () => {
@@ -364,6 +399,37 @@ describe('planLifecycle typed transitions', () => {
     const result = typedRun({ status: 'active', deprecationDate: '2026-12-01' }, { base: held });
 
     expect(result.dateChanges).toEqual([]);
+  });
+
+  it('reports a held future date a docs-tier provider claim cleared', () => {
+    const held = new Map([active('gpt-5', { lifecycle: { status: 'active', deprecationDate: '2026-12-01' } })]);
+    const signals = planLifecycleSignals({
+      contributions: [
+        provider('openai', [
+          { modelId: 'gpt-5', patch: { id: 'gpt-5', lifecycle: { status: 'active' } }, lifecycleEvidence: 'docs' },
+        ]),
+      ],
+    });
+    const result = plan({
+      catalogPlan: planCatalogWrites({
+        contributions: signals.contributions,
+        base: held,
+        coveredBackends: new Set<string>([ModelBackend.OpenAI]),
+        priorDiscoveryGroups: new Map([['gpt-5', ['identity', 'lifecycle']]]),
+        providerUndated: signals.providerUndated,
+        operatorOwnedModelIds: new Set(),
+        credentials: testCredentials(),
+        policy: 'priced',
+        runStartedAt: RUN_AT,
+      }),
+      base: held,
+      docs: signals.docs,
+    });
+
+    expect(result.rows[0].patch.lifecycle).toEqual({ status: 'active' });
+    expect(result.dateChanges).toEqual([
+      expect.objectContaining({ modelId: 'gpt-5', previousDeprecationDate: '2026-12-01', deprecationDate: undefined }),
+    ]);
   });
 
   it('credits the heuristic for a typed sunset it computed a successor for', () => {

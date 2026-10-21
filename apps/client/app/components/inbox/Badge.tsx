@@ -2,53 +2,23 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { useGetInbox } from '@client/app/hooks/data/inbox';
 import { useGetUserInvites } from '@client/app/hooks/data/invites';
 import { Badge } from '@mui/joy';
-import { FC, ReactNode, useMemo, useCallback } from 'react';
-import { SubscriptionCallbackFunction } from '@client/app/hooks/useCollection';
-import { useQueryClient } from '@tanstack/react-query';
-import { IInviteDocument } from '@bike4mind/common';
-import { useSubscribeCollection } from '@client/app/utils/react-query';
-import debounce from 'lodash/debounce';
+import { FC, ReactNode, useMemo } from 'react';
 
-const InboxBadge: FC<{ children: ReactNode }> = ({ children }) => {
+/**
+ * Whether the inbox has an unread message or a pending invite. Reads the same cached inbox and invites
+ * queries as the inbox itself, so calling it from several places adds no requests.
+ */
+export function useInboxHasUnread(): boolean {
   const { currentUser } = useUser();
-  const queryClient = useQueryClient();
   const userEmail = currentUser?.email;
 
   const { data: inbox } = useGetInbox(currentUser?.id || '');
+  // Kept fresh by InboxProvider's debounced invalidate of ['invites', 'inbox'] (contexts/InboxContext.tsx);
+  // its callers (the sidenav header's Inbox bell) sit inside that provider, so this holds no invites
+  // subscription of its own.
   const { data: invites } = useGetUserInvites(currentUser?.id || '');
 
-  const debounceFetch = useMemo(
-    () =>
-      debounce(
-        () => {
-          queryClient.invalidateQueries({ queryKey: ['invites', 'inbox'] });
-        },
-        1000 * 60 * 2
-      ), // 2 mins to match the cache time of the invites and inbox query
-    [queryClient]
-  );
-
-  // Subscribe to the invites collection to invalidate the query less frequently
-  useSubscribeCollection(
-    'invites',
-    useMemo(() => ({}), []),
-    useCallback<SubscriptionCallbackFunction<IInviteDocument>>(
-      (type, data) => {
-        if (!userEmail) return;
-
-        // Only handle invites that involve the current user
-        const isRelevantToUser = data.recipients?.pending?.includes(userEmail);
-
-        // Only invalidate for relevant changes
-        if ((type === 'insert' || type === 'update') && isRelevantToUser) {
-          debounceFetch();
-        }
-      },
-      [userEmail, debounceFetch]
-    )
-  );
-
-  const hasUnread = useMemo(() => {
+  return useMemo(() => {
     const unreadInbox = inbox?.some(item => {
       // Only count messages that would actually be displayed in the message list
       // Skip messages without sender data (except SYSTEM messages)
@@ -58,11 +28,21 @@ const InboxBadge: FC<{ children: ReactNode }> = ({ children }) => {
       return !item.readAt;
     });
     const pendingInvites = invites?.filter(invite => invite?.recipients?.pending?.includes(userEmail || ''));
-    return unreadInbox || (pendingInvites && pendingInvites.length > 0);
+    return !!unreadInbox || (!!pendingInvites && pendingInvites.length > 0);
   }, [inbox, invites, userEmail]);
+}
+
+const InboxBadge: FC<{ children: ReactNode }> = ({ children }) => {
+  const hasUnread = useInboxHasUnread();
 
   return (
-    <Badge size={'sm'} color={'danger'} invisible={!hasUnread}>
+    <Badge
+      size={'sm'}
+      color={'danger'}
+      invisible={!hasUnread}
+      data-testid="inbox-badge"
+      data-unread={hasUnread ? 'true' : 'false'}
+    >
       {children}
     </Badge>
   );

@@ -40,6 +40,30 @@ describe('resolveTtsProvider', () => {
     );
   });
 
+  // getEffectiveApiKey resolves the user's own key and then the admin-provisioned one, but only
+  // for the key type it is handed - so each vendor has to ask for its own or a request would
+  // draw on the other vendor's key.
+  it('asks for the key type that belongs to the provider', async () => {
+    mocks.getEffectiveApiKey.mockResolvedValue('a-key');
+    mocks.getVoiceId.mockResolvedValue('stored-voice');
+
+    await resolveTtsProvider({ provider: 'openai', userId: 'u1', requestedVoice: 'nova' });
+    await resolveTtsProvider({ provider: 'elevenlabs', userId: 'u1', requestedVoice: 'a-voice' });
+
+    expect(mocks.getEffectiveApiKey).toHaveBeenNthCalledWith(
+      1,
+      'u1',
+      { type: 'openai', nullIfMissing: true },
+      expect.anything()
+    );
+    expect(mocks.getEffectiveApiKey).toHaveBeenNthCalledWith(
+      2,
+      'u1',
+      { type: 'elevenlabs', nullIfMissing: true },
+      expect.anything()
+    );
+  });
+
   describe('openai', () => {
     it('throws when no effective key is configured', async () => {
       mocks.getEffectiveApiKey.mockResolvedValue(null);

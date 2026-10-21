@@ -219,10 +219,22 @@ const PHRASES: Record<string, ToolPhrases> = {
     active: 'Reading a session...',
   },
   session_spawn: {
-    didAlone: 'Started a session',
+    didAlone: 'Suggested a session',
     toAlone: 'start a session',
-    many: n => `Started ${n} sessions`,
-    active: 'Starting a session...',
+    many: n => `Suggested ${n} sessions`,
+    active: 'Suggesting a session...',
+  },
+  session_suggestion_update: {
+    didAlone: 'Updated a suggested session',
+    toAlone: 'update a suggested session',
+    many: n => `Updated suggested sessions ${n} times`,
+    active: 'Updating a suggested session...',
+  },
+  session_suggestion_dismiss: {
+    didAlone: 'Withdrew a suggested session',
+    toAlone: 'withdraw a suggested session',
+    many: n => `Withdrew ${n} suggested sessions`,
+    active: 'Withdrawing a suggested session...',
   },
   session_send: {
     didAlone: 'Messaged a session',
@@ -287,6 +299,20 @@ const PHRASES: Record<string, ToolPhrases> = {
     toAlone: 'read a web page',
     many: n => `Read ${n} web pages`,
     active: 'Reading a web page...',
+  },
+  browser_tabs: {
+    didAlone: 'Changed browser tabs',
+    toAlone: 'change browser tabs',
+    many: n => `Changed browser tabs ${n} times`,
+    active: 'Switching tabs...',
+  },
+  browser_scroll: {
+    did: 'Scrolled to',
+    didAlone: 'Scrolled the page',
+    to: 'scroll to',
+    toAlone: 'scroll the page',
+    many: n => `Scrolled ${n} times`,
+    active: 'Scrolling...',
   },
   generate_video: {
     didAlone: 'Started a video',

@@ -6,7 +6,6 @@ import {
   defineAbilitiesFor,
   fabFileChunkRepository,
   fabFileRepository,
-  imageModerationIncidentRepository,
   organizationRepository,
   questRepository,
   Session,
@@ -19,12 +18,14 @@ import { RekognitionImageModerationService } from '@bike4mind/utils/imageModerat
 import { Logger } from '@bike4mind/observability';
 import { logEvent } from '@server/utils/analyticsLog';
 import { ImageEditService } from '@bike4mind/services/llm/ImageEdit';
-import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
+import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
 import { fabFilesService } from '@bike4mind/services';
-import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
-import { createAttachmentLakeAccess } from '@server/queueHandlers/agentExecutor.attachmentLakeAccess';
+import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
+import { createAttachmentLakeAccess } from '@server/dataLakes/attachmentLakeAccess';
 import type { IUserDocument } from '@bike4mind/common';
 import { Resource } from 'sst';
+import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
 
 let _imageEdit: ImageEditService | undefined;
 export const getImageEdit = (): ImageEditService => {
@@ -46,7 +47,7 @@ export const getImageEdit = (): ImageEditService => {
         creditTransactions: creditTransactionRepository,
         usageEvents: usageEventRepository,
         organizations: organizationRepository,
-        imageModerationIncidents: imageModerationIncidentRepository,
+        imageModerationIncidents,
       },
       imageProcessorLambdaName: Resource.ImageProcessor.name,
       imageModerationService: new RekognitionImageModerationService(Logger.globalInstance),
@@ -77,6 +78,7 @@ export const getImageEdit = (): ImageEditService => {
       logEvent: logEvent,
       storage: getGeneratedImageStorage(),
       fabFileStorage: filesStorage,
+      saveGeneratedAsset: saveGeneratedAssetToFiles,
       abilityGetter: defineAbilitiesFor,
     });
   }

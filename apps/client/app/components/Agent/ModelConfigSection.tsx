@@ -85,7 +85,7 @@ const ModelConfigSection: React.FC<ModelConfigSectionProps> = ({
             disabled={readOnly}
             data-testid="model-config-model-select"
           >
-            <Option value="">System Default (GPT-4.1 Mini)</Option>
+            <Option value="">System Default</Option>
             {Object.entries(groupedModels).map(([backend, models]) => [
               <Option key={`header-${backend}`} value={`__header_${backend}`} disabled>
                 <ListItemDecorator>

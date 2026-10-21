@@ -13,6 +13,8 @@ import {
   JIRA_DELETE_ISSUE,
   JIRA_UPLOAD_ATTACHMENT,
   JIRA_DELETE_ATTACHMENT,
+  JIRA_ADD_WATCHER,
+  JIRA_REMOVE_WATCHER,
   CONFLUENCE_CREATE_PAGE,
   CONFLUENCE_UPDATE_PAGE,
   CONFLUENCE_DELETE_PAGE,
@@ -22,6 +24,7 @@ import {
   CONFLUENCE_DELETE_ATTACHMENT,
 } from '@bike4mind/mcp/atlassian/constants';
 import { RestrictionPreviewItem } from '@bike4mind/common';
+import { escapeSlackMrkdwn } from '../SlackClient';
 
 /**
  * Slack preview truncation limits. Section blocks have a 3000 char limit, so
@@ -66,13 +69,31 @@ function buildPreviewMessage(
 }
 
 /**
+ * Renders a value on one card line. Values reach the card from tool params, so a newline in one
+ * must not start a new quoted row that reads like another field of the action.
+ */
+function toSlackInline(text: string): string {
+  return escapeSlackMrkdwn(text.replace(/\s+/g, ' '));
+}
+
+/**
+ * "Label (id)" for a tool-resolved label next to the id that executes; the bare id when no label was resolved.
+ */
+function labelWithId(label: unknown, id: unknown): string {
+  const idText = id === undefined || id === null || id === '' ? 'Unknown' : String(id);
+  const text = label ? `${String(label)} (${idText})` : idText;
+  return toSlackInline(text);
+}
+
+/**
  * Format attachment upload preview (DRY for both Jira and Confluence)
  */
 function formatAttachmentUploadPreview(params: Record<string, unknown>, target: 'jira' | 'confluence'): string {
-  const filename = String(params.filename || params.display_filename || 'Unknown file');
+  // Only executed values (and the page title the tool looked up from pageId) are shown, never a model label.
+  const filename = toSlackInline(String(params.filename || 'Unknown file'));
 
   if (target === 'jira') {
-    const issueKey = String(params.issueKey || params.display_issue_key || 'Unknown');
+    const issueKey = toSlackInline(String(params.issueKey || 'Unknown'));
     return buildPreviewMessage(
       '📎',
       'Jira Attachment Upload',
@@ -83,16 +104,17 @@ function formatAttachmentUploadPreview(params: Record<string, unknown>, target: 
       'upload this attachment'
     );
   } else {
-    const pageId = String(params.pageId || params.display_page_id || '');
-    const pageTitle = String(params.display_page_title || pageId || 'Unknown');
-    const comment = params.comment || params.display_comment;
+    const pageId = String(params.pageId || '');
+    const pageTitle = params.display_page_title ? String(params.display_page_title) : '';
+    const pageLabel = pageTitle && pageTitle !== pageId ? `${pageTitle} (${pageId})` : pageId || 'Unknown';
+    const comment = params.comment ? toSlackInline(String(params.comment)) : undefined;
     return buildPreviewMessage(
       '📎',
       'Confluence Attachment Upload',
       [
-        { label: 'Page', value: pageTitle },
+        { label: 'Page', value: toSlackInline(pageLabel) },
         { label: 'File', value: filename },
-        { label: 'Comment', value: comment ? String(comment) : undefined },
+        { label: 'Comment', value: comment },
       ],
       'upload this attachment'
     );
@@ -103,14 +125,15 @@ function formatAttachmentUploadPreview(params: Record<string, unknown>, target: 
  * Format attachment deletion preview (DRY for both Jira and Confluence)
  */
 function formatAttachmentDeletePreview(params: Record<string, unknown>, target: 'jira' | 'confluence'): string {
-  // Prefer display names over IDs for better UX
-  const filename = String(params.display_filename || params.filename || params.attachmentId || 'Unknown');
+  // display_filename is the name the delete tool fetched for attachmentId; a model-supplied filename is ignored.
+  const attachmentId = String(params.attachmentId || 'Unknown');
+  const filename = params.display_filename ? String(params.display_filename) : '';
   const targetLabel = target === 'jira' ? 'Jira' : 'Confluence';
 
   return buildPreviewMessage(
     '⚠️',
     `${targetLabel} Attachment Deletion`,
-    [{ label: 'File', value: filename }],
+    [{ label: 'File', value: toSlackInline(filename ? `${filename} (${attachmentId})` : attachmentId) }],
     'DELETE this attachment',
     'This action cannot be undone!'
   );
@@ -465,6 +488,20 @@ export function formatPreviewFromParams(tool: string, params: Record<string, unk
       ].join('\n');
     }
 
+    case JIRA_ADD_WATCHER:
+    case JIRA_REMOVE_WATCHER: {
+      const adding = tool === JIRA_ADD_WATCHER;
+      const user = params.displayName ? `${params.displayName} (${params.userIdentifier})` : params.userIdentifier;
+      return [
+        `\u{1F441}\u{FE0F} *Preview: Jira ${adding ? 'Add' : 'Remove'} Watcher*`,
+        '',
+        `> *Issue:* ${params.issueKey}`,
+        `> *${adding ? 'Add' : 'Remove'} watcher:* ${user}`,
+        '',
+        `Click \u2705 Confirm to ${adding ? 'add' : 'remove'} this watcher, or \u274C Cancel to abort.`,
+      ].join('\n');
+    }
+
     case CONFLUENCE_CREATE_PAGE: {
       // Handle both spaceId and spaceKey (AI may use either)
       const space = params.spaceId || params.spaceKey || 'Unknown';
@@ -546,19 +583,19 @@ export function formatPreviewFromParams(tool: string, params: Record<string, unk
       return formatAttachmentDeletePreview(params, 'confluence');
 
     case TOOL_ADD_ISSUE_TO_PROJECT: {
-      const projectName = params.display_project_name || 'GitHub Project';
-      const issueTitle = params.display_issue_title || 'Issue';
-      const repository = params.display_repository;
+      // display_* here were resolved by the tool from project_id/issue_node_id, not supplied by the model.
+      const projectLabel = labelWithId(params.display_project_name, params.project_id);
+      const issueLabel = labelWithId(params.display_issue_title, params.issue_node_id);
 
       const lines = [
         '📋 *Preview: Add Issue to GitHub Project*',
         '',
-        `> *Target Project:* ${projectName}`,
-        `> *Issue:* ${issueTitle}`,
+        `> *Target Project:* ${projectLabel}`,
+        `> *Issue:* ${issueLabel}`,
       ];
 
-      if (repository) {
-        lines.push(`> *Repository:* ${repository}`);
+      if (params.display_repository) {
+        lines.push(`> *Repository:* ${toSlackInline(String(params.display_repository))}`);
       }
 
       lines.push(
@@ -572,42 +609,25 @@ export function formatPreviewFromParams(tool: string, params: Record<string, unk
     }
 
     case TOOL_UPDATE_PROJECT_ITEM_FIELDS: {
-      // Handle both single and batch field updates
-      const projectName = params.display_project_name || 'GitHub Project';
-      const issueTitle = params.display_issue_title || 'Issue';
+      // display_* here were resolved by the tool from the ids that execute; field_name/new_value/current_value
+      // are model-authored and deliberately not read.
       const updates = Array.isArray(params.updates) ? params.updates : [];
-
-      if (updates.length === 0 && params.field_name) {
-        // Single field update (old API)
-        const fieldName = String(params.field_name || 'field');
-        const newValue = String(params.new_value || params.display_new_value || 'value');
-        const currentValue = String(params.current_value || params.display_current_value || '');
-
-        return [
-          '📋 *Preview: Update GitHub Project Field*',
-          '',
-          `> *Project:* ${projectName}`,
-          `> *Issue:* ${issueTitle}`,
-          '>',
-          `> *${fieldName}:* ${currentValue ? `${currentValue} → ${newValue}` : `→ ${newValue}`}`,
-          '',
-          'Click ✅ Confirm to update this field, or ❌ Cancel to abort.',
-        ].join('\n');
-      }
-
-      // Batch updates
-      const fieldLines = updates.map((update: any) => {
-        const fieldName = update.field_name || 'Field';
-        const newValue = update.new_value || String(update.value);
-        const currentValue = update.current_value;
-        return `> *${fieldName}:* ${currentValue ? `${currentValue} → ${newValue}` : `→ ${newValue}`}`;
+      const fieldLines = updates.map((update: unknown) => {
+        const entry = typeof update === 'object' && update !== null ? (update as Record<string, unknown>) : {};
+        const fieldLabel = labelWithId(entry.display_field_name, entry.field_id);
+        const value = toSlackInline(String(entry.display_value ?? entry.value ?? ''));
+        return `> *${fieldLabel}:* -> ${value}`;
       });
+      const repository = params.display_repository
+        ? [`> *Repository:* ${toSlackInline(String(params.display_repository))}`]
+        : [];
 
       return [
         '📋 *Preview: Update GitHub Project Fields*',
         '',
-        `> *Project:* ${projectName}`,
-        `> *Issue:* ${issueTitle}`,
+        `> *Project:* ${labelWithId(params.display_project_name, params.project_id)}`,
+        `> *Item:* ${labelWithId(params.display_issue_title, params.item_id)}`,
+        ...repository,
         '>',
         `> *Updates (${updates.length} fields):*`,
         ...fieldLines,
@@ -810,8 +830,7 @@ export function buildAttachmentDownloadButtons(
   const elements: SlackBlockKitElement[] = [];
 
   // Create a section with accessory button for each attachment
-  for (let i = 0; i < displayAttachments.length; i++) {
-    const att = displayAttachments[i];
+  for (const att of displayAttachments) {
     // Build the description line: size + author + date
     const parts = [att.sizeFormatted];
     if (att.author) parts.push(`by ${att.author}`);
@@ -822,8 +841,9 @@ export function buildAttachmentDownloadButtons(
       }
     }
     const description = parts.join(' • ');
-    // Use compact questId:index reference (Slack overflow values limited to 75 chars)
-    const ref = `${questId}:${i}`;
+    // Use a compact questId:attachmentId reference (Slack overflow values are length-limited).
+    // The id, not the list position: the stored list can change while the message is still on screen.
+    const ref = `${questId}:${att.attachmentId}`;
 
     elements.push({
       type: 'section',

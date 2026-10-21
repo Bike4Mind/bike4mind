@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { Logger } from '@bike4mind/observability';
 import { classifyStage, isPlaceholderValue } from '@bike4mind/common';
 import type {
@@ -9,14 +9,17 @@ import type {
 } from '@bike4mind/common';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
-import { buildEmailMirrorMessage, type EmailMirrorPayload } from './emailMirror';
+import {
+  buildEmailMirrorMessage,
+  type EmailMirrorPayload,
+} from '@bike4mind/server-utils/integrations/slack/emailMirror';
 import { buildFeedbackSlackMessage, type FeedbackPromptMetaInput } from './feedbackMessage';
-import type { FeedbackDeepLinks } from '@server/utils/feedbackDeepLinks';
+import type { FeedbackDeepLinks } from '@bike4mind/server-utils/utils/feedbackDeepLinks';
 import {
   recordFeedbackDeliverySuccess,
   recordFeedbackDeliveryFailure,
   recordFeedbackDeliverySkipped,
-} from '@server/utils/cloudwatch';
+} from '@bike4mind/server-utils/utils/cloudwatch';
 
 /** Channel-specific Slack incoming-webhook settings (each maps to a dedicated Slack channel). */
 type SlackChannelSettingKey =
@@ -88,7 +91,13 @@ export function resolveFeedbackSlackRoute(
     : { kind: 'skip', stageClass, reason: 'nonprod_unconfigured' };
 }
 
-export async function postMessageToSlack(message: string): Promise<void> {
+/**
+ * Posts to the LiveOps channel, swallowing errors as before, but reports whether a message was
+ * actually delivered (true) or the post was unconfigured/failed (false). A caller that must not lose
+ * the signal - e.g. deduping an alert as "sent" - needs to tell the two apart; everyone else ignores
+ * the result.
+ */
+export async function postMessageToSlack(message: string): Promise<boolean> {
   try {
     // Generic / operational notifications route to the LiveOps channel.
     const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
@@ -98,7 +107,7 @@ export async function postMessageToSlack(message: string): Promise<void> {
       Logger.error(
         'Error posting message to Slack: no SlackLiveopsWebhookUrl / SlackDefaultWebhookUrl set in admin settings or config'
       );
-      return;
+      return false;
     }
 
     await axios.post(
@@ -108,8 +117,10 @@ export async function postMessageToSlack(message: string): Promise<void> {
         headers: { 'Content-Type': 'application/json' },
       }
     );
+    return true;
   } catch (error) {
     Logger.error('Error posting message to Slack:', error);
+    return false;
   }
 }
 

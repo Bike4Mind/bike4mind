@@ -8,6 +8,7 @@ interface SquareSlideToggleProps {
   disabled?: boolean;
   width?: number;
   height?: number;
+  'aria-label'?: string;
   'data-testid'?: string;
 }
 
@@ -17,6 +18,7 @@ const SquareSlideToggle: React.FC<SquareSlideToggleProps> = ({
   disabled = false,
   width = 50,
   height = 30,
+  'aria-label': ariaLabel,
   'data-testid': dataTestId,
 }) => {
   const muiTheme = useTheme();
@@ -26,6 +28,7 @@ const SquareSlideToggle: React.FC<SquareSlideToggleProps> = ({
       type="button"
       role="switch"
       aria-checked={checked}
+      aria-label={ariaLabel}
       data-testid={dataTestId}
       onClick={disabled ? undefined : () => onChange({ target: { checked: !checked } })}
       style={{

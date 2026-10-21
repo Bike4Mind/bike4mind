@@ -12,8 +12,8 @@ import {
   memoryPrincipalKeyRepository,
 } from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
-import { createLedgerMemoryStore } from '@server/memory/ledgerMemoryStore';
-import { createKeyProvider } from '@server/memory/factCipher';
+import { createLedgerMemoryStore } from '@bike4mind/server-utils/memory/ledgerMemoryStore';
+import { createKeyProvider } from '@bike4mind/server-utils/memory/factCipher';
 
 const { evaluate, send, receive, remove } = vi.hoisted(() => ({
   evaluate: vi.fn(),
@@ -30,7 +30,11 @@ vi.mock('@bike4mind/services/llm', () => ({
     evaluate = evaluate;
   },
 }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: send, receiveFromQueue: receive, deleteFromQueue: remove }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({
+  sendToQueue: send,
+  receiveFromQueue: receive,
+  deleteFromQueue: remove,
+}));
 vi.mock('sst', () => ({ Resource: { lakeMemoryQueue: { url: 'http://sqs/lake-memory' } } }));
 vi.mock('@server/queueHandlers/utils', () => ({
   dispatchWithLogger:

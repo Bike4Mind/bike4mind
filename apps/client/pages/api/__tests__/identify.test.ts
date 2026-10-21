@@ -3,24 +3,21 @@
  * Integration test for GET /api/identify.
  *
  * Drives the real next-connect chain `baseApi` assembles (same approach as
- * ai/__tests__/generate-image.integration.test.ts) to prove the two properties
- * that keep an API key from being traded for account control: a key-authenticated
- * caller mints no browser session and sets no refresh cookie, and no caller of
- * either kind receives the raw User document.
+ * ai/__tests__/generate-image.integration.test.ts) to prove the properties that keep
+ * identify from being traded for account control: no caller (API key, full session or
+ * a session still awaiting its second factor) is minted a browser session or refresh
+ * cookie, and no caller receives the raw User document.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 
-const { mockValidate, mockUserFindById, mockRateLimit, mockIssueSession, mockFindByKeyName, mockVerifyToken } =
-  vi.hoisted(() => ({
-    mockValidate: vi.fn(),
-    mockUserFindById: vi.fn(),
-    mockRateLimit: vi.fn(),
-    mockIssueSession: vi.fn(),
-    mockFindByKeyName: vi.fn(),
-    mockVerifyToken: vi.fn(),
-  }));
+const { mockValidate, mockUserFindById, mockRateLimit, mockIssueSession } = vi.hoisted(() => ({
+  mockValidate: vi.fn(),
+  mockUserFindById: vi.fn(),
+  mockRateLimit: vi.fn(),
+  mockIssueSession: vi.fn(),
+}));
 
 const RATE_LIMIT_HEADERS = {
   'X-RateLimit-Limit-Minute': '60',
@@ -82,16 +79,9 @@ vi.mock('@bike4mind/database', async orig => {
   };
 });
 
-vi.mock('@bike4mind/database/infra', () => ({
-  secretRotationRepository: { findByKeyNameWithSecret: (...a: unknown[]) => mockFindByKeyName(...a) },
-}));
-
+// Tripwire: identify must never reach a session mint, whoever the caller is.
 vi.mock('@server/auth/issueSession', () => ({
   issueBrowserSession: (...a: unknown[]) => mockIssueSession(...a),
-}));
-
-vi.mock('@server/auth/tokenGenerator', () => ({
-  authTokenGenerator: { verifyToken: (...a: unknown[]) => mockVerifyToken(...a) },
 }));
 
 // The per-user throttle is backed by the `caches` collection; this test has no Mongo.
@@ -114,18 +104,21 @@ vi.mock('@server/auth/auth', async orig => {
 
 import handler from '../identify';
 import { ApiKeyScope } from '@bike4mind/common';
-import { configureSecretsAtRest, encryptAtRest, generateEncryptionKey } from '@bike4mind/utils/security';
 
 const VALID_KEY = 'b4m_live_0123456789abcdef0123456789abcdef';
 
-function fire({ apiKey, bearer }: { apiKey?: string; bearer?: string } = {}) {
+function fire({
+  apiKey,
+  bearer,
+  authorization = bearer ? `Bearer ${bearer}` : undefined,
+}: { apiKey?: string; bearer?: string; authorization?: string } = {}) {
   const { req, res } = createMocks(
     {
       method: 'GET',
       url: '/api/identify',
       headers: {
         ...(apiKey ? { 'x-api-key': apiKey } : {}),
-        ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
+        ...(authorization ? { authorization } : {}),
       },
     },
     { eventEmitter: EventEmitter }
@@ -160,8 +153,6 @@ describe('GET /api/identify', () => {
     mockUserFindById.mockResolvedValue(USER);
     mockRateLimit.mockResolvedValue({ allowed: true, retryAfter: undefined, headers: RATE_LIMIT_HEADERS });
     mockIssueSession.mockResolvedValue({ accessToken: 'jwt-access', sid: 'sid-1' });
-    mockFindByKeyName.mockResolvedValue(null);
-    mockVerifyToken.mockReturnValue({ exp: Math.floor(Date.now() / 1000) + 3600 });
   });
 
   describe('api-key caller', () => {
@@ -220,56 +211,48 @@ describe('GET /api/identify', () => {
   });
 
   describe('jwt caller', () => {
-    it('still mints a session when no token is presented', async () => {
-      const { req, res } = fire();
-      await handler(req, res);
+    function fireAs(user: typeof USER & { mfaPending?: boolean }, options?: Parameters<typeof fire>[0]) {
+      const fired = fire(options);
+      fired.req.user = user;
+      return fired;
+    }
 
-      expect(res._getStatusCode()).toBe(200);
-      expect(mockIssueSession).toHaveBeenCalledTimes(1);
-      expect(res._getJSONData().accessToken).toBe('jwt-access');
-      expect(mockValidate).not.toHaveBeenCalled();
-    });
-
-    it('re-issues a session when the presented token has expired', async () => {
-      mockVerifyToken.mockReturnValue({ exp: Math.floor(Date.now() / 1000) - 10 });
-      const { req, res } = fire({ bearer: 'expired-jwt' });
-      await handler(req, res);
-
-      expect(res._getStatusCode()).toBe(200);
-      expect(mockIssueSession).toHaveBeenCalledTimes(1);
-      expect(res._getJSONData().accessToken).toBe('jwt-access');
-    });
-
-    it('keeps a live token as-is', async () => {
-      const { req, res } = fire({ bearer: 'live-jwt' });
+    it.each([
+      ['a full session', USER],
+      ['a session awaiting its second factor', { ...USER, mfaPending: true }],
+    ])('echoes the token and mints nothing for %s', async (_label, user) => {
+      const { req, res } = fireAs(user, { bearer: 'live-jwt' });
       await handler(req, res);
 
       expect(res._getStatusCode()).toBe(200);
       expect(mockIssueSession).not.toHaveBeenCalled();
       expect(res._getJSONData().accessToken).toBe('live-jwt');
+      expect(res.getHeader('set-cookie')).toBeUndefined();
+      expect(mockValidate).not.toHaveBeenCalled();
     });
 
-    // Regression guard: previousKey is stored encrypted at rest, so this reader must
-    // decryptAtRest it before handing it to the verifier. A plaintext fixture cannot
-    // catch a dropped decrypt (plaintext passes through); this holds real ciphertext and
-    // asserts the verifier receives the decrypted secret, not the stored blob.
-    it('decrypts the rotated previousKey before verifying a grace-window token', async () => {
-      const PREV_SECRET = 'the-outgoing-signing-secret';
-      configureSecretsAtRest(generateEncryptionKey());
-      try {
-        const ciphertext = encryptAtRest(PREV_SECRET);
-        // Fixture self-guard: this test is the proof the reader decrypts, so a fixture
-        // that ever degraded to plaintext must fail here rather than pass with the
-        // decrypt dropped (mirrors verifyWsAccessToken.test.ts).
-        expect(ciphertext).not.toBe(PREV_SECRET);
-        mockFindByKeyName.mockResolvedValue({ rotatedAt: new Date(), previousKey: ciphertext });
-        const { req, res } = fire({ bearer: 'live-jwt' });
-        await handler(req, res);
+    it('mints nothing when it reads no bearer token from the request', async () => {
+      const { req, res } = fireAs({ ...USER, mfaPending: true });
+      await handler(req, res);
 
-        expect(mockVerifyToken).toHaveBeenCalledWith('live-jwt', PREV_SECRET);
-      } finally {
-        configureSecretsAtRest(undefined);
-      }
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockIssueSession).not.toHaveBeenCalled();
+      expect(res._getJSONData().accessToken).toBeUndefined();
+      expect(res.getHeader('set-cookie')).toBeUndefined();
+    });
+
+    // The jwt strategy accepts any whitespace between scheme and token; the echoed token must
+    // be the one it authenticated, not an empty string from a single-space split.
+    it.each([
+      ['a doubled space', 'Bearer  live-jwt'],
+      ['a tab', 'Bearer\tlive-jwt'],
+      ['a lowercase scheme', 'bearer live-jwt'],
+    ])('echoes the authenticated token when the header uses %s', async (_label, authorization) => {
+      const { req, res } = fire({ authorization });
+      await handler(req, res);
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData().accessToken).toBe('live-jwt');
     });
 
     it('is sanitized too - the raw document never leaves this route', async () => {

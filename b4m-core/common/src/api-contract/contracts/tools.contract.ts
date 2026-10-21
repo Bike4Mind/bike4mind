@@ -11,8 +11,9 @@ import { ApiErrorSchema } from '../../schemas/chat';
  *
  * JWT-only (API keys are rejected): the handler runs `verifyJwtToken` only, so
  * `auth: 'jwtOnly'` and no `scopes`. Served by a Lambda Function URL in prod
- * (server/cli/tools.ts via defineLambdaRoute) and a thin Next route in local dev
- * (pages/api/ai/v1/tools.ts). Rate-limited to 100 requests/hour.
+ * (apps/workers/src/cli/tools.ts via defineLambdaRoute) and a thin Next route in
+ * local dev (apps/client/pages/api/ai/v1/tools.ts). Rate-limited to 100
+ * requests/hour.
  */
 export const executeToolContract = defineEndpoint({
   method: 'post',
@@ -20,7 +21,7 @@ export const executeToolContract = defineEndpoint({
   operationId: 'executeTool',
   summary: 'Execute a server-side tool',
   description:
-    'Runs one of the built-in server-side tools (`weather_info`, `web_search`, `web_fetch`) and ' +
+    'Runs one of the built-in server-side tools (`weather_info`, `web_search`, `web_fetch`, `decide`) and ' +
     'returns its result as JSON. Authenticate with a JWT access token only - API keys are NOT ' +
     'accepted on this endpoint. Rate-limited to 100 requests/hour per user, counted separately from ' +
     'other endpoints. `request_id` echoes the ' +

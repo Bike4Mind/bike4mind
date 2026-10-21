@@ -15,9 +15,9 @@ import { searchDataLakeContract, type DataLakeSearchResponse, type IDataLakeDocu
 import { dataLakeService } from '@bike4mind/services';
 import { adminSettingsRepository, dataLakeAccessGrantRepository, dataLakeRepository } from '@bike4mind/database';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { HTTPError, NotFoundError } from '@server/utils/errors';
+import { HTTPError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { toMemberAccessContext } from '@server/dataLakes/toAccessContext';
 import { resolveRetrievalLakeScope, type RetrievalLakeScope } from '@server/dataLakes/resolveRetrievalLakeScope';
 import { runLakeSemanticSearch } from '@server/dataLakes/runLakeSemanticSearch';

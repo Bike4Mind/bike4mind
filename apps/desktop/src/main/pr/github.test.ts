@@ -33,6 +33,7 @@ function response(overrides: Record<string, unknown> = {}) {
           headRefName: 'feat/widget-ladder',
           headRefOid: 'abc123',
           baseRefName: 'main',
+          baseRefOid: 'def456',
           additions: 157,
           deletions: 0,
           mergeable: 'MERGEABLE',
@@ -98,6 +99,9 @@ describe('parseSnapshot', () => {
       number: 611,
       title: 'feat: <b>ladder</b>',
       headRefName: 'feat/widget-ladder',
+      headSha: 'abc123',
+      baseRefName: 'main',
+      baseSha: 'def456',
       additions: 157,
       deletions: 0,
       state: 'OPEN',
@@ -269,6 +273,7 @@ describe('PrGithub', () => {
     expect(query).toContain('isRequired(pullRequestNumber: $p1)');
     expect(query).toContain('@include(if: $t1)');
     expect(query.match(/viewer \{ login \}/g)).toHaveLength(1);
+    expect(query).toContain('baseRefName baseRefOid');
   });
 });
 

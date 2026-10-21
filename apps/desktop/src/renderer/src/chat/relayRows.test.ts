@@ -1,24 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import { automaticSummary, displayText, relaySummary } from './relayRows';
 
-const from = { fromSessionId: 'abc', fromTitle: 'T25', hops: 1 };
+const from = { fromSessionId: 'abc', fromTitle: 'Docs pass', hops: 1 };
 
 describe('relaySummary', () => {
   it('names the sender before the message', () => {
     expect(relaySummary({ content: 'render replies as markdown', relay: from })).toBe(
-      'Received message from T25: render replies as markdown'
+      'Received message from Docs pass: render replies as markdown'
     );
   });
 
   it('flattens a multi-line message into the one line the row has', () => {
     expect(relaySummary({ content: 'first line\n\nsecond line', relay: from })).toBe(
-      'Received message from T25: first line second line'
+      'Received message from Docs pass: first line second line'
     );
   });
 
   it('clips a long message rather than letting it push the chevron off the row', () => {
     const summary = relaySummary({ content: 'x'.repeat(200), relay: from });
-    expect(summary).toBe(`Received message from T25: ${'x'.repeat(61)}...`);
+    expect(summary).toBe(`Received message from Docs pass: ${'x'.repeat(61)}...`);
   });
 
   // The sender is still named when the descriptor is missing: a row that says only "Received
@@ -28,16 +28,16 @@ describe('relaySummary', () => {
   });
 
   it('is just the header when the message is empty', () => {
-    expect(relaySummary({ content: '   ', relay: from })).toBe('Received message from T25');
+    expect(relaySummary({ content: '   ', relay: from })).toBe('Received message from Docs pass');
   });
 
   it('summarises the user-facing wording, not the model-facing one', () => {
     const summary = relaySummary({
-      content: 'The session you started, "T4" (e8d8981c-5829-4e70-a20a-8e82370ac565), has finished.',
-      display: 'The session "T4" has finished.',
+      content: 'The session you started, "XP engine" (e8d8981c-5829-4e70-a20a-8e82370ac565), has finished.',
+      display: 'The session "XP engine" has finished.',
       relay: from,
     });
-    expect(summary).toBe('Received message from T25: The session "T4" has finished.');
+    expect(summary).toBe('Received message from Docs pass: The session "XP engine" has finished.');
   });
 });
 

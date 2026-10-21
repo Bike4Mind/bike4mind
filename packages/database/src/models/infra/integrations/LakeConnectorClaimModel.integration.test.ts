@@ -137,12 +137,18 @@ describe('connector release() drops the matching claim', () => {
     expect(conn.id).toBe(presetId);
     await lakeConnectorClaimRepository.tryAcquire({ lakeId, kind: 'github', connectionId: conn.id });
 
-    expect(await orgGitHubLakeConnectionRepository.release(conn.id, 'org-2')).toBe(false);
+    expect(
+      await orgGitHubLakeConnectionRepository.release(conn.id, { kind: 'organization', organizationId: 'org-2' })
+    ).toBe(false);
     expect(await LakeConnectorClaim.countDocuments({ lakeId })).toBe(1);
-    expect(await orgGitHubLakeConnectionRepository.release(oid(), 'org-1')).toBe(false);
+    expect(
+      await orgGitHubLakeConnectionRepository.release(oid(), { kind: 'organization', organizationId: 'org-1' })
+    ).toBe(false);
     expect(await LakeConnectorClaim.countDocuments({ lakeId })).toBe(1);
 
-    expect(await orgGitHubLakeConnectionRepository.release(conn.id, 'org-1')).toBe(true);
+    expect(
+      await orgGitHubLakeConnectionRepository.release(conn.id, { kind: 'organization', organizationId: 'org-1' })
+    ).toBe(true);
     expect(await LakeConnectorClaim.countDocuments({ lakeId })).toBe(0);
   });
 

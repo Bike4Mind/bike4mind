@@ -1,5 +1,6 @@
 import type { z } from 'zod';
 import type { ResponseSpec } from '../types';
+import { ELEVENLABS_AUDIO_CONTENT_TYPES } from '../../elevenLabsAudioFormat';
 
 /**
  * Responses shared by the endpoints that return generated audio (TTS, music,
@@ -9,18 +10,8 @@ import type { ResponseSpec } from '../types';
  * three must agree.
  */
 
-/**
- * Every Content-Type the ElevenLabs generators map an `output_format` token to
- * (`contentTypeForFormat` in ElevenLabsMusicGenerator / ElevenLabsSoundGenerator).
- * Must stay in sync with those two mappings.
- */
-export const GENERATED_AUDIO_CONTENT_TYPES = [
-  'audio/mpeg',
-  'audio/opus',
-  'audio/L16',
-  'audio/basic',
-  'application/octet-stream',
-] as const;
+/** Every Content-Type the music and sound-effects binary encodings can return (TTS declares its own). */
+export const GENERATED_AUDIO_CONTENT_TYPES = ELEVENLABS_AUDIO_CONTENT_TYPES;
 
 /**
  * Where the browsable copy of the generated audio ended up. The binary encoding
@@ -39,9 +30,9 @@ export const GENERATED_AUDIO_SAVE_HEADERS = {
 export const GENERATED_AUDIO_DESCRIPTION =
   'The default `encoding: "binary"` returns the raw audio bytes; `encoding: "base64"` returns JSON. Audio ' +
   'over the ~4MB response ceiling is returned by signed URL (a `303` for binary, the `delivery: "url"` ' +
-  'variant for base64). Generated audio is saved to the file browser by default (opt out per-user via the ' +
-  'saveGeneratedAudio preference, or per-call with `preview`); the outcome is reported in the JSON save ' +
-  'fields and the `X-B4M-Audio-*` headers - fetch the saved copy from `fileUrl` / `X-B4M-Audio-File-Url`, ' +
+  'variant for base64). Generated audio is saved to the file browser unless the call sets `preview`; the ' +
+  'outcome is reported in the JSON save fields and the `X-B4M-Audio-*` headers - fetch the saved copy ' +
+  'from `fileUrl` / `X-B4M-Audio-File-Url`, ' +
   'since `GET /api/files/{id}` fails closed until moderation completes. Authenticate with an API key ' +
   '(`b4m_live_`) or a JWT.';
 

@@ -208,10 +208,19 @@ describe('describeChipRow once the session has run here', () => {
     const row = describeChipRow(project, lookup, true);
 
     expect(row.locked).toBe(true);
-    for (const chip of [row.folder, row.branch, row.worktree, row.addContext]) {
+    for (const chip of [row.folder, row.branch, row.worktree]) {
       expect(chip.enabled).toBe(false);
       expect(chip.tooltip).toMatch(/fixed once the session starts/i);
     }
+  });
+
+  /** A context folder is one more root, not where commands run, so the lock has no reason to cover it. */
+  it('keeps adding a context folder open, and names /add-dir', () => {
+    const row = describeChipRow(project, lookup, true);
+
+    expect(row.addContext.enabled).toBe(true);
+    expect(row.addContext.tooltip).not.toMatch(/fixed/i);
+    expect(row.addContext.tooltip).toContain('/add-dir');
   });
 
   /** Busy is timing and clears on its own; this one never does. They must not read alike. */

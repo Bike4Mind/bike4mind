@@ -8,6 +8,7 @@ const { mocks } = vi.hoisted(() => ({
     lean: vi.fn(),
     stamp: vi.fn(() => Promise.resolve()),
     parse: vi.fn(),
+    loadLiveOwner: vi.fn(),
   },
 }));
 
@@ -58,6 +59,7 @@ vi.mock('@server/services/publish/parsePublishPath', () => ({
 }));
 vi.mock('@server/services/publish/publishGateToken', () => ({ setGateProofCookie: () => true }));
 vi.mock('@server/services/publish/passphraseLockout', () => lockout);
+vi.mock('@server/services/publish/loadLiveOwner', () => ({ loadLiveOwner: mocks.loadLiveOwner }));
 vi.mock('bcryptjs', () => ({ default: { compare: () => Promise.resolve(true) } }));
 
 import handler from '../passphrase';
@@ -69,12 +71,17 @@ const run = (body: unknown) => {
 };
 
 const gated = () =>
-  mocks.lean.mockResolvedValue({ publicId: 'pub1', accessGate: { kind: 'passphrase', passphraseHash: 'h' } });
+  mocks.lean.mockResolvedValue({
+    publicId: 'pub1',
+    ownerId: 'o1',
+    accessGate: { kind: 'passphrase', passphraseHash: 'h' },
+  });
 
 beforeEach(() => {
   vi.restoreAllMocks(); // reset bcrypt.compare spy history between tests
   Object.values(mocks).forEach(m => (m as { mockReset?: () => void }).mockReset?.());
   mocks.stamp.mockResolvedValue(undefined);
+  mocks.loadLiveOwner.mockResolvedValue({ name: 'Owner' });
   lockout.checkLock.mockReset().mockResolvedValue({ locked: false, retryAfterMs: 0 });
   lockout.recordFailure.mockReset().mockResolvedValue({ locked: false, retryAfterMs: 0 });
   lockout.clear.mockReset().mockResolvedValue(undefined);
@@ -120,6 +127,20 @@ describe('POST /api/publish/gate/passphrase - projection safety (regression: Mon
 
     expect(res._getStatusCode()).toBe(204);
     expect(mocks.findOne.mock.calls[0][0]).toEqual({ __shareFilterFor: 'tok123', deletedAt: null });
+  });
+});
+
+describe('POST /api/publish/gate/passphrase - owner check', () => {
+  it('404s like the serve route when the owner account is gone, banned or suspended', async () => {
+    gated();
+    mocks.loadLiveOwner.mockResolvedValue(null);
+
+    const { res, promise } = run({ path: '/p/u/scope/slug', passphrase: 'hunter2secret' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(404);
+    expect(mocks.loadLiveOwner).toHaveBeenCalledWith('o1');
+    expect(lockout.checkLock).not.toHaveBeenCalled();
   });
 });
 

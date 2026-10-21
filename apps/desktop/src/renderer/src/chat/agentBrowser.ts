@@ -58,6 +58,8 @@ interface Rect {
 /** As much of a body child as this needs to know: `Element` satisfies it. */
 interface OverlayLayer {
   id: string;
+  getAttribute(name: string): string | null;
+  querySelector(selectors: string): unknown;
   getBoundingClientRect(): Rect;
 }
 
@@ -65,23 +67,36 @@ export function overlaps(a: Rect, b: Rect): boolean {
   return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 }
 
+const FOCUSABLE = 'a[href], button, input, select, textarea, [tabindex], [contenteditable]';
+
 /**
- * The layers drawn OVER the app - every modal, menu, tooltip and popper MUI portals out of the
- * React tree and appends to the body.
+ * A tooltip that only shows text. Nothing in one can go unanswered the way an approval or a
+ * menu can, so it is allowed to sit over the page rather than blank it.
+ *
+ * Checked by role AND content: every Base Popper root defaults to `role="tooltip"`, and a menu
+ * only escapes that because its listbox role wins the merge.
+ */
+function isPassive(layer: OverlayLayer): boolean {
+  return layer.getAttribute('role') === 'tooltip' && layer.querySelector(FOCUSABLE) === null;
+}
+
+/**
+ * The layers drawn OVER the app that the page must make way for - every modal, menu and popper
+ * MUI portals out of the React tree and appends to the body, less the passive tooltips.
  *
  * Found structurally rather than by class name: the one thing every such layer has in common is
  * that it is a child of the body and is not the app's own root, and that holds whether it came
  * from Joy, from a future component, or from a library that does its own portalling.
  *
  * This matters more than it looks. A `WebContentsView` is a native overlay: it paints above
- * everything the renderer draws, so an approval card, a model menu or a tooltip that happens to
- * fall over the pane would be INVISIBLE behind a web page, and an approval the user cannot see
- * is not a cosmetic bug. Anything that overlaps the pane therefore takes the pane off screen
- * for as long as it is up.
+ * everything the renderer draws, so an approval card or a model menu that happens to fall over
+ * the pane would be INVISIBLE behind a web page, and an approval the user cannot see is not a
+ * cosmetic bug. Anything interactive that overlaps the pane therefore takes the pane off screen
+ * for as long as it is up. Tooltips are kept off the page by {@link avoidPageModifier} instead.
  */
 export function overlayRects(children: readonly OverlayLayer[], rootId: string): Rect[] {
   return children
-    .filter(child => child.id !== rootId)
+    .filter(child => child.id !== rootId && !isPassive(child))
     .map(child => child.getBoundingClientRect())
     .filter(rect => rect.width > 0 && rect.height > 0);
 }
@@ -106,3 +121,44 @@ export function sameBounds(a: BrowserPaneBounds | null, b: BrowserPaneBounds | n
   if (a === null || b === null) return a === b;
   return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
 }
+
+/** Where the page is drawn right now, or null with no pane open. Kept current by BrowserPane. */
+let pageArea: Rect | null = null;
+
+export function reservePageArea(rect: Rect | null): void {
+  pageArea = rect;
+}
+
+/** Clear of the page's edge and of the window's, in CSS pixels. */
+const PAGE_GAP = 8;
+
+interface PopperState {
+  rects: { popper: { width: number; height: number }; reference: { x: number; width: number } };
+  modifiersData: { popperOffsets?: { x: number; y: number } };
+}
+
+/**
+ * A Popper modifier that slides a popper sideways off the page, set as the default for every
+ * tooltip and menu in theme.ts.
+ *
+ * After `preventOverflow`, so it has the last word on the x axis. The pane is pinned to the
+ * window's right edge, so left is always the way out - except for a popper anchored in the
+ * pane's own chrome, which would land a pane's width from its button and is left to hide the
+ * page instead. Offsets are document-relative, which is the viewport here: the app's document
+ * never scrolls.
+ */
+export const avoidPageModifier = {
+  name: 'avoidBrowserPage',
+  enabled: true,
+  phase: 'main' as const,
+  requiresIfExists: ['offset', 'flip', 'preventOverflow'],
+  fn({ state }: { state: PopperState }) {
+    const offsets = state.modifiersData.popperOffsets;
+    if (!pageArea || !offsets) return;
+    const { popper, reference } = state.rects;
+    if (reference.x + reference.width > pageArea.x) return;
+    const { width, height } = popper;
+    if (!overlaps({ x: offsets.x, y: offsets.y, width, height }, pageArea)) return;
+    offsets.x = Math.max(PAGE_GAP, pageArea.x - PAGE_GAP - width);
+  },
+};

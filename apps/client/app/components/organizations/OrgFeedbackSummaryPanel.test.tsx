@@ -133,8 +133,24 @@ describe('OrgFeedbackSummaryPanel', () => {
     renderPanel();
 
     const result = await screen.findByTestId('feedback-summary-result-text');
-    expect(result.querySelector('h2')).toHaveTextContent('Volume and Trend');
+    const headings = Array.from(result.querySelectorAll('h2'), heading => heading.textContent);
+    expect(headings).toEqual(['Feedback Summary', 'Volume and Trend']);
     expect(result.textContent).not.toContain('##');
+  });
+
+  it('never emits an h1, since the page already carries the screen h1', async () => {
+    h.get.mockResolvedValue({
+      data: {
+        status: 'completed',
+        summaryJobId: 'sum-1',
+        artifact: { ...ARTIFACT, summary: '# Feedback Summary\n\nSteady week.' },
+      },
+    });
+
+    renderPanel();
+
+    const result = await screen.findByTestId('feedback-summary-result-text');
+    expect(result.querySelector('h1')).toBeNull();
   });
 
   describe('stored by-tag counts', () => {

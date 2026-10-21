@@ -25,7 +25,6 @@ export interface MFAVerifyResponse {
 
 export interface RegenerateBackupCodesResponse {
   backupCodes: string[];
-  user: any;
 }
 
 /**
@@ -104,9 +103,9 @@ export function useCancelMFASetup() {
  * Hook to force reset MFA for a user (admin only)
  */
 export function useForceResetMFA() {
-  return useMutation<{ success: boolean; user: any }, Error, { userId: string }>({
-    mutationFn: async ({ userId }) => {
-      const response = await api.post('/api/auth/mfa/force-reset', { userId });
+  return useMutation<{ success: boolean; user: any }, Error, { userId: string; reason: string }>({
+    mutationFn: async ({ userId, reason }) => {
+      const response = await api.post('/api/auth/mfa/force-reset', { userId, reason });
       return response.data;
     },
   });

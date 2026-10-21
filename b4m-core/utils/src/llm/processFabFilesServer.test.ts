@@ -5,7 +5,7 @@ import { BadRequestError } from '../errors';
 const mockGetFileContent = vi.fn();
 vi.mock('../fabfile', () => ({ getFileContent: (...a: unknown[]) => mockGetFileContent(...a) }));
 
-import { processFabFilesServer } from './utils';
+import { processFabFilesServer, ATTACHMENT_END_DELIMITER } from './utils';
 
 const CHARS_PER_TOKEN = 3.5;
 const MAX_FILE_SIZE = 6000;
@@ -101,6 +101,23 @@ describe('processFabFilesServer attached-content budget', () => {
     );
 
     expect(emittedChars(userMessages)).toBeLessThanOrEqual(budget * CHARS_PER_TOKEN + 4 * FRAMING_ALLOWANCE_PER_FILE);
+  });
+
+  it.each([1, 2])('closes %s raw file(s) that have no trailing newline', async fileCount => {
+    mockGetFileContent.mockResolvedValue('every 1,000 miles.');
+    const { userMessages } = await processFabFilesServer(
+      embeddingFactory,
+      Array.from({ length: fileCount }, (_, index) => textFile(String(index))),
+      'summarize',
+      4000,
+      modelInfo,
+      async () => {},
+      deps()
+    );
+    const content = userMessages.map(message => message.content).join('');
+    expect(content).toContain('every 1,000 miles.');
+    expect(content.endsWith(ATTACHMENT_END_DELIMITER)).toBe(true);
+    expect(content.split(ATTACHMENT_END_DELIMITER)).toHaveLength(2);
   });
 
   it('ignores images when splitting the text budget', async () => {

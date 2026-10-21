@@ -169,6 +169,13 @@ export function detectMimeType(filename: string): string {
   return MIME_TYPE_MAP[ext] || 'application/octet-stream';
 }
 
+// Raw provider audio with no entry of its own in MIME_TYPE_MAP: ElevenLabs reports its `pcm_*` output formats as
+// audio/L16 and its `ulaw_*` ones as audio/basic (headerless, so not .au).
+const MIME_EXTENSION_ALIASES: Record<string, string> = {
+  'audio/l16': 'pcm',
+  'audio/basic': 'ulaw',
+};
+
 /**
  * Resolve a file extension (without leading dot) from a MIME type.
  *
@@ -188,7 +195,7 @@ export function extensionFromMimeType(mimeType: string): string | undefined {
   for (const [ext, mime] of Object.entries(MIME_TYPE_MAP)) {
     if (mime === normalized) return ext.slice(1); // strip leading dot
   }
-  return undefined;
+  return MIME_EXTENSION_ALIASES[normalized];
 }
 
 // Helper for parallel processing with concurrency limit

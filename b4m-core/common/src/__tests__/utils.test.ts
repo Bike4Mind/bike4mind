@@ -144,6 +144,11 @@ describe('extensionFromMimeType', () => {
     expect(extensionFromMimeType('IMAGE/PNG')).toBe('png');
   });
 
+  it('maps the raw ElevenLabs pcm and ulaw output types, so their audio can be saved', () => {
+    expect(extensionFromMimeType('audio/L16')).toBe('pcm');
+    expect(extensionFromMimeType('audio/basic')).toBe('ulaw');
+  });
+
   it('returns undefined for unknown or empty types', () => {
     expect(extensionFromMimeType('application/octet-stream')).toBeUndefined();
     expect(extensionFromMimeType('')).toBeUndefined();

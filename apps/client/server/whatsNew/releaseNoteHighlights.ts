@@ -1,8 +1,8 @@
 import { releaseNoteRepository, type IReleaseNoteDocument } from '@bike4mind/database';
-import { groupReleaseNoteItems } from '@client/app/utils/releaseNoteItems';
+import { groupReleaseNoteItems } from '@bike4mind/server-utils/app/utils/releaseNoteItems';
 import type { Logger } from '@bike4mind/observability';
 import { findDeniedInNote, loadReleaseNotesConfig } from '@server/releaseNotes/adminReleaseNotes';
-import type { ModalForHighlights } from './whatsNewHighlights.types';
+import type { ModalForHighlights } from '@bike4mind/server-utils/whatsNew/whatsNewHighlights.types';
 
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 

@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import type { IFabFileDocument } from '@bike4mind/common';
 import { useGetFabFilesBySessionId } from '@client/app/hooks/data/fabFiles';
-import { useWorkBenchFiles, useSystemPromptFiles } from '@client/app/contexts/SessionsContext';
+import { useSessions, useWorkBenchFiles, useSystemPromptFiles } from '@client/app/contexts/SessionsContext';
 
 /**
  * Custom hook to fetch and filter message files for a session
@@ -22,13 +22,20 @@ export function useMessageFiles(sessionId: string | null | undefined): IFabFileD
   // Get workbench files and system files
   const workBenchFiles = useWorkBenchFiles(sessionId || undefined);
   const { systemFiles } = useSystemPromptFiles();
+  // The session's knowledgeIds land a round-trip before the workbench hydrates from them
+  // (SessionsContext fetchFiles), and the session-files endpoint includes those ids - so
+  // without this, every pinned file shows as a message file until hydration finishes.
+  const { currentSession } = useSessions();
+  const pinnedIds = currentSession && currentSession.id === sessionId ? currentSession.knowledgeIds : undefined;
 
   // Filter out workbench and system files to get only message files
   return useMemo(() => {
     const workBenchFileIds = new Set(workBenchFiles.map((f: IFabFileDocument) => f.id));
     const systemFileIds = new Set(systemFiles.map((f: IFabFileDocument) => f.id));
+    const pinnedIdSet = new Set(pinnedIds ?? []);
     return allSessionFiles.filter(
-      (file: IFabFileDocument) => !workBenchFileIds.has(file.id) && !systemFileIds.has(file.id)
+      (file: IFabFileDocument) =>
+        !workBenchFileIds.has(file.id) && !systemFileIds.has(file.id) && !pinnedIdSet.has(file.id)
     );
-  }, [allSessionFiles, workBenchFiles, systemFiles]);
+  }, [allSessionFiles, workBenchFiles, systemFiles, pinnedIds]);
 }

@@ -30,11 +30,8 @@ vi.mock('@server/middlewares/baseApi', () => {
 const setMemberCreditDefault = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/services', () => ({ organizationService: { setMemberCreditDefault } }));
 vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: { marker: 'orgRepo' } }));
-const logAuditEvent = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-vi.mock('@server/utils/auditLog', () => ({
-  AdminOrgAuditEvents: { ORG_MEMBER_CREDIT_BUDGET_UPDATED: 'ORG_MEMBER_CREDIT_BUDGET_UPDATED' },
-  logAuditEvent,
-}));
+const recordAdminActionFromRequest = vi.hoisted(() => vi.fn().mockResolvedValue(null));
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest }));
 
 import '@pages/api/organizations/[id]/member-credit-budget';
 
@@ -67,13 +64,14 @@ describe('PUT /api/organizations/[id]/member-credit-budget', () => {
       { organizationId: 'org1', maxCreditsPerMember: 500 },
       { db: { organizations: { marker: 'orgRepo' } } }
     );
-    expect(logAuditEvent).toHaveBeenCalledWith(
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
       expect.objectContaining({
-        userId: 'owner1',
-        action: 'ORG_MEMBER_CREDIT_BUDGET_UPDATED',
-        metadata: { organizationId: 'org1', previous: 100, current: 500 },
-      }),
-      undefined
+        action: 'org.member_budget.updated',
+        actorScope: 'organization',
+        target: expect.objectContaining({ kind: 'organization', id: 'org1' }),
+        changes: [{ field: 'maxCreditsPerMember', before: 100, after: 500 }],
+      })
     );
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({ id: 'org1', maxCreditsPerMember: 500 });
@@ -89,6 +87,6 @@ describe('PUT /api/organizations/[id]/member-credit-budget', () => {
     setMemberCreditDefault.mockRejectedValue(new Error('Organization not found'));
     const { run } = put({ maxCreditsPerMember: 500 });
     await expect(run()).rejects.toThrow('Organization not found');
-    expect(logAuditEvent).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
   });
 });

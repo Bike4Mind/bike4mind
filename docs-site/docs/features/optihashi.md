@@ -42,7 +42,7 @@ OptiHashi exposes optimization capabilities as smart tools within notebooks:
 ## FAQ
 
 **How do I access OptiHashi?**
-OptiHashi appears in the sidebar when enabled for your account. You can also use the optimization smart tools directly in any notebook.
+OptiHashi appears in the sidebar when your account has access to it. You can also use the optimization smart tools directly in any notebook. To keep it out of your sidebar, turn off its **Show in sidebar** switch under Settings > Workspaces; a direct link still opens it.
 
 **What types of problems can OptiHashi solve?**
 OptiHashi specializes in scheduling and resource allocation problems -- shift scheduling, project planning, task assignment, and similar combinatorial optimization challenges.
@@ -53,4 +53,4 @@ Run time depends on problem complexity. Simple problems solve in seconds; larger
 ## Related
 
 - [Smart Tools](./smart-tools.md) -- using optimization tools in notebooks
-- [Profile Settings](./profile-settings.md) -- enabling OptiHashi
+- [Profile Settings](./profile-settings.md) -- showing or hiding OptiHashi in your sidebar

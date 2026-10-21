@@ -48,7 +48,9 @@ export interface PrBinding extends PrRef {
   autoArchive?: boolean;
   /** Auto-fix turns started for this PR, persisted so a relaunch does not refill the budget. */
   autoFixAttempts?: number;
-  /** Fingerprints of failures and comments auto-fix has already acted on. See autoFix.ts. */
+  /** The attempt budget granted when the auto-fix box was last ticked. See autoFixBudget. */
+  autoFixMax?: number;
+  /** Fingerprints of failures, conflicts and comments auto-fix has already acted on. See autoFix.ts. */
   autoFixHandled?: string[];
   /** The state at the last successful read; what an auto-archive transition is measured from. */
   lastState?: PrState;
@@ -131,6 +133,8 @@ export interface PrSnapshot extends PrRef {
   headRefName: string;
   headSha: string;
   baseRefName: string;
+  /** The base branch's head commit; with headSha it fingerprints a merge conflict for auto-fix. */
+  baseSha: string;
   additions: number;
   deletions: number;
   mergeable: PrMergeable;
@@ -195,6 +199,9 @@ export type PrGhStatus = 'ok' | 'missing' | 'unauthenticated';
 
 export type PrAutoFixStatus = 'off' | 'watching' | 'waiting' | 'started' | 'exhausted';
 
+/** The auto-fix checkbox's label; the auto-fix prompt quotes it so the agent knows what the user turned on. */
+export const AUTO_FIX_LABEL = 'Auto-fix CI, conflicts & comments';
+
 /** Everything the bar draws for one conversation, pushed main -> renderer on every change. */
 export interface PrBarState {
   sessionId: string;
@@ -215,7 +222,14 @@ export interface PrBarState {
     /** Set while the PR sits in its base branch's merge queue. */
     queued?: { position: number };
   };
-  autoFix: { status: PrAutoFixStatus; attempts: number; max: number; note?: string };
+  autoFix: {
+    status: PrAutoFixStatus;
+    attempts: number;
+    max: number;
+    note?: string;
+    /** The turn in flight was started for a merge conflict. */
+    conflicts?: boolean;
+  };
 }
 
 export type PrActionResult = { ok: true } | { ok: false; error: string };

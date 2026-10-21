@@ -169,7 +169,6 @@ describe('UserModel preferences', () => {
       preferences: {
         showSplashCards: true,
         showFunTools: false,
-        saveGeneratedAudio: true,
         notAPreference: true,
       },
     } as unknown as Parameters<typeof User.create>[0]);
@@ -177,7 +176,6 @@ describe('UserModel preferences', () => {
     const reloaded = await User.findById(user._id);
     expect(reloaded?.preferences?.showSplashCards).toBe(true);
     expect(reloaded?.preferences?.showFunTools).toBe(false);
-    expect(reloaded?.preferences?.saveGeneratedAudio).toBe(true);
     expect((reloaded?.preferences as Record<string, unknown>)?.notAPreference).toBeUndefined();
   });
 });

@@ -13,10 +13,10 @@ import { Logger } from '@bike4mind/observability';
 import { S3Storage } from '@bike4mind/fab-pipeline';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { sendToClient } from '@server/websocket/utils';
-import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
+import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { filterReadableQuests } from '@server/utils/sessionAccess';
-import { userCanAccessGeneratedImage } from '@server/utils/generatedImageAccess';
-import { resolveProxyTarget } from '@server/utils/appFileProxy';
+import { userCanAccessGeneratedImage } from '@bike4mind/server-utils/utils/generatedImageAccess';
+import { resolveProxyTarget } from '@bike4mind/server-utils/utils/appFileProxy';
 import { apiKeyService } from '@bike4mind/services';
 import {
   ChatModels,
@@ -26,8 +26,8 @@ import {
   type CitableSource,
 } from '@bike4mind/common';
 import { OrgFeedbackSummaryPayload, runOrgFeedbackSummary } from '@workers/queueHandlers/orgFeedbackSummary';
-import { getSubQuestStatusIcon } from '@client/shared/subQuestStatusPresentation';
-import { extractReplies } from '@client/shared/replyUtils';
+import { getSubQuestStatusIcon } from '@bike4mind/server-utils/shared/subQuestStatusPresentation';
+import { extractReplies } from '@bike4mind/server-utils/shared/replyUtils';
 import { z } from 'zod';
 import { Resource } from 'sst';
 import { createZipBuffer } from './createZipBuffer';
@@ -390,6 +390,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // Generate presigned URL and emit completed event so client receives download URL on retry
       const filename = `questmaster-${slug}-${dateStr}.zip`;
       const downloadUrl = await appFiles.getSignedUrl(finalZipKey, 'get', {
+        audience: 'browser',
         expiresIn: 3600,
         ResponseContentDisposition: `attachment; filename="${filename}"`,
       });
@@ -571,7 +572,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
             if (!accessible) throw new Error('Image is not available');
           } else {
             const allowed =
-              label === 'generatedImages' && exportUser ? await userCanAccessGeneratedImage(key, exportUser.id) : false;
+              label === 'generatedImages' && exportUser ? await userCanAccessGeneratedImage(key, exportUser) : false;
             if (!allowed) throw new Error('Image is not available');
           }
 
@@ -645,6 +646,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // Generate presigned download URL (1 hour expiry)
     const filename = `questmaster-${slug}-${dateStr}.zip`;
     const downloadUrl = await appFiles.getSignedUrl(finalZipKey, 'get', {
+      audience: 'browser',
       expiresIn: 3600,
       ResponseContentDisposition: `attachment; filename="${filename}"`,
     });

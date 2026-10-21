@@ -103,8 +103,28 @@ const DispatchProfileWrite = z.strictObject({
   betaHeaders: z.array(z.string()).optional(),
 });
 
+/** Lowest to furthest along the road to retirement; a fold across sources keeps the furthest. */
+const LIFECYCLE_STATUS_ORDER = ['discovered', 'active', 'legacy', 'deprecated', 'retired'] as const;
+
+/** 'unlisted' is deliberately unranked: a visibility flag, not a point on the road to retirement. */
+export const LIFECYCLE_STATUSES = [...LIFECYCLE_STATUS_ORDER, 'unlisted'] as const;
+type LifecycleStatus = (typeof LIFECYCLE_STATUSES)[number];
+
+/** Statuses a model is on its way out in, and therefore not promotable. */
+export const LIFECYCLE_SUNSET_STATUSES: ReadonlySet<string> = new Set<LifecycleStatus>([
+  'legacy',
+  'deprecated',
+  'retired',
+]);
+
+/** Position in LIFECYCLE_STATUS_ORDER, or undefined for an unranked, unknown or missing status. */
+export const lifecycleStatusRank = (status: unknown): number | undefined => {
+  const rank = (LIFECYCLE_STATUS_ORDER as readonly unknown[]).indexOf(status);
+  return rank === -1 ? undefined : rank;
+};
+
 const LifecycleWrite = z.strictObject({
-  status: z.enum(['discovered', 'active', 'legacy', 'deprecated', 'retired', 'unlisted']),
+  status: z.enum(LIFECYCLE_STATUSES),
   deprecationDate: CALENDAR_DATE.optional(),
   retirementDate: CALENDAR_DATE.optional(),
   /** Successor id; feeds resolveDeprecatedModelId ahead of the static map. */
@@ -112,6 +132,8 @@ const LifecycleWrite = z.strictObject({
   // Absence bookkeeping (miss counters) lives in ModelDiscoveryState, not here:
   // a per-run counter must not append a catalog row per run forever.
 });
+
+export const LIFECYCLE_DATE_KEYS = ['deprecationDate', 'retirementDate'] as const;
 
 /**
  * The canonical model record. One row's belief about one model, merged per

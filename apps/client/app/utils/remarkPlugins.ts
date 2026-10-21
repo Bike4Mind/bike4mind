@@ -1,4 +1,7 @@
+import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import type { Options } from 'react-markdown';
 
 /**
  * remark-gfm configured with single-tilde strikethrough DISABLED.
@@ -12,6 +15,17 @@ import remarkGfm from 'remark-gfm';
  * behavior stays consistent and the fix does not drift across surfaces.
  */
 export const remarkGfmNoSingleTilde: [typeof remarkGfm, { singleTilde: false }] = [remarkGfm, { singleTilde: false }];
+
+/**
+ * remark plugins for assistant replies. remark-breaks renders a single newline as a line break, so
+ * line-per-item text the model writes without blank lines (an email signature, an address) keeps
+ * its lines; it only rewrites soft breaks in prose, so code, tables and list structure are unchanged.
+ */
+export const assistantReplyRemarkPlugins: NonNullable<Options['remarkPlugins']> = [
+  remarkGfmNoSingleTilde,
+  remarkBreaks,
+  [remarkMath, { singleDollarTextMath: false }],
+];
 
 // Matches a single-dollar span with no nested/adjacent `$` and no newline, using pandoc's
 // delimiter shape as the gate: opening `$` not followed by whitespace, closing `$` not preceded

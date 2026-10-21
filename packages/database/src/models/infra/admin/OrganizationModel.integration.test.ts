@@ -48,9 +48,8 @@ describe('OrganizationModel - org-groups fields', () => {
 });
 
 describe('OrganizationModel - findIdsWithAdminRights (#1668 org-manageable data lakes)', () => {
-  it('returns orgs where the user is billing owner, manager, OR an appointed admin', async () => {
+  it('returns orgs where the user is billing owner OR an appointed admin', async () => {
     const owned = await Organization.create({ name: 'Owned', userId: 'u1', personal: false });
-    const managed = await Organization.create({ name: 'Managed', userId: 'other', managerId: 'u1', personal: false });
     const appointed = await Organization.create({
       name: 'Appointed',
       userId: 'other',
@@ -61,12 +60,35 @@ describe('OrganizationModel - findIdsWithAdminRights (#1668 org-manageable data 
     await Organization.create({ name: 'MemberOnly', userId: 'other', users: [{ userId: 'u1' }], personal: false });
 
     const ids = (await organizationRepository.findIdsWithAdminRights('u1')).sort();
-    expect(ids).toEqual([owned.id, managed.id, appointed.id].sort());
+    expect(ids).toEqual([owned.id, appointed.id].sort());
   });
 
   it('returns an empty list for a user who administers nothing', async () => {
     await Organization.create({ name: 'Someone else', userId: 'other', personal: false });
     expect(await organizationRepository.findIdsWithAdminRights('nobody')).toEqual([]);
+  });
+});
+
+describe('OrganizationModel - findIdsAdministeredBy', () => {
+  it('returns orgs the user owns or manages with a roster row, never a bare admin entry or a plain member', async () => {
+    const owned = await Organization.create({ name: 'Owned', userId: 'u1', personal: false });
+    const managed = await Organization.create({
+      name: 'Managed',
+      userId: 'other',
+      adminUserIds: ['u1'],
+      users: [{ userId: 'u1', permissions: ['read'] }],
+      personal: false,
+    });
+    await Organization.create({ name: 'AdminNoRow', userId: 'other', adminUserIds: ['u1'], personal: false });
+    await Organization.create({
+      name: 'MemberOnly',
+      userId: 'other',
+      users: [{ userId: 'u1', permissions: ['read'] }],
+      personal: false,
+    });
+
+    const ids = (await organizationRepository.findIdsAdministeredBy('u1')).sort();
+    expect(ids).toEqual([owned.id, managed.id].sort());
   });
 });
 
@@ -245,11 +267,10 @@ describe('OrganizationModel - setMemberMaxCredits', () => {
     expect(await organizationRepository.setMemberMaxCredits(org.id, 'member-1', 40)).toBe(false);
   });
 
-  it('reports false and writes nothing for a userDetails row whose user is no longer owner, manager or a member', async () => {
+  it('reports false and writes nothing for a userDetails row whose user is no longer owner or a member', async () => {
     const org = await Organization.create({
       name: 'Acme',
       userId: 'owner-1',
-      managerId: 'manager-1',
       personal: false,
       users: [{ userId: 'member-1', permissions: ['read'] }],
       userDetails: [{ id: 'removed-1', email: 'r@example.com', name: 'R', usedCredits: 4, lastCreditUsedAt: null }],
@@ -258,21 +279,6 @@ describe('OrganizationModel - setMemberMaxCredits', () => {
     expect(await organizationRepository.setMemberMaxCredits(org.id, 'removed-1', 40)).toBe(false);
     const reloaded = await Organization.findById(org.id);
     expect(reloaded?.userDetails?.[0]?.maxCredits ?? null).toBeNull();
-  });
-
-  it('still sets an override for the appointed manager, who has no users[] row', async () => {
-    const org = await Organization.create({
-      name: 'Acme',
-      userId: 'owner-1',
-      managerId: 'mgr-1',
-      personal: false,
-      users: [],
-      userDetails: [{ id: 'mgr-1', email: 'm@example.com', name: 'M', usedCredits: 0, lastCreditUsedAt: null }],
-    });
-
-    expect(await organizationRepository.setMemberMaxCredits(org.id, 'mgr-1', 40)).toBe(true);
-    const reloaded = await Organization.findById(org.id);
-    expect(reloaded?.userDetails?.[0]?.maxCredits).toBe(40);
   });
 
   it('still sets an override for the owner, who has no users[] row', async () => {

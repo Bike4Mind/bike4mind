@@ -35,6 +35,7 @@ vi.mock('sst', () => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  organizationRepository: {},
   Session,
   User,
   NotebookCurationJob,
@@ -69,7 +70,7 @@ vi.mock('@server/utils/eventBus', () => ({
   },
 }));
 
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: vi.fn(() => ({
     getSignedUrl: vi.fn(),
     upload: vi.fn(),

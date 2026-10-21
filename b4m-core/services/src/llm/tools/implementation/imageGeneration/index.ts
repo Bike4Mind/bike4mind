@@ -1,5 +1,6 @@
 import { Logger } from '@bike4mind/observability';
 import { ToolContext, ToolDefinition } from '../../base/types';
+import type { ImageToolCostInput, ImageToolFinishData } from '../../imageToolBilling';
 import {
   ApiKeyType,
   ImageModels,
@@ -26,14 +27,14 @@ import {
   getSettingsMap,
   getSettingsValue,
 } from '@bike4mind/utils';
-import { BFLImageService, downloadImageAsBuffer } from '@bike4mind/utils';
+import { BFLImageService, ImageModerationBlockedError, downloadImageAsBuffer } from '@bike4mind/utils';
 import { RekognitionImageModerationService } from '@bike4mind/utils/imageModeration';
 import { ImageGenerateParams } from 'openai/resources/images';
 import { getEffectiveApiKey } from '../../../../apiKeyService';
 import axios from 'axios';
 import { fileTypeFromBuffer } from 'file-type';
 import { v4 as uuidv4 } from 'uuid';
-import { persistGeneratedFileAsFabFile } from '../../helpers/persistGeneratedFile';
+import { saveGeneratedAssetFromTool } from '../../helpers/persistGeneratedFile';
 import { moderateImageOrThrow } from '../../../imageModerationGate';
 import { PRICEABLE_IMAGE_SIZES } from '../../../imageCostCalculator/OpenAIImageCostCalculator';
 import { resolveImageArgs } from './resolveImageArgs';
@@ -92,6 +93,7 @@ async function moderateToolImage(
       sessionId: context.sessionId,
       provider,
       model,
+      surface: 'generation',
     },
     logger: context.logger,
   });
@@ -100,12 +102,13 @@ async function moderateToolImage(
 export async function processAndStoreImages(
   images: string[],
   context: ToolContext,
-  model: string,
-  provider: string
+  { model, provider, prompt }: { model: string; provider: string; prompt: string }
 ): Promise<string[]> {
   await context.statusUpdate({}, 'Storing images...');
+  // Unique file names for an n>1 batch, which would otherwise share the Date.now() suffix.
+  const batchId = uuidv4();
   return Promise.all(
-    images.map(async image => {
+    images.map(async (image, index) => {
       const buffer = await downloadImageAsBuffer(image);
       const fileType = await fileTypeFromBuffer(buffer);
       // Default the extension when detection fails: a `${uuid}.undefined` filename would
@@ -120,15 +123,12 @@ export async function processAndStoreImages(
 
       const path = await context.imageGenerateStorage.upload(buffer, filename, {});
 
-      // Also persist as a session FabFile so the image is browsable in the Knowledge Base
-      // (the inline chat grid reads quest.images from the generated bucket; this makes the
-      // same image survive as a first-class, downloadable file). Best-effort - never blocks
-      // the image from rendering inline. Use a human-readable name (not the raw uuid storage
-      // key) so the Knowledge Base shows a sensible title.
-      await persistGeneratedFileAsFabFile(context, {
-        fileName: `generated-image-${filename.slice(0, 8)}.${ext}`,
-        mimeType: fileType?.mime ?? 'image/png',
-        content: buffer,
+      // The inline chat grid reads quest.images from the generated bucket; the FabFile copy is what the user
+      // keeps in Files. A failed save resolves with a reason rather than throwing, so it never blocks the image.
+      await saveGeneratedAssetFromTool(context, {
+        bytes: buffer,
+        contentType: mimeType,
+        generation: { generator: 'image', provider, modelId: model, jobId: `${batchId}-${index}`, prompt },
       });
 
       return path;
@@ -136,9 +136,14 @@ export async function processAndStoreImages(
   );
 }
 
-async function updateQuestAndReturnMarkdown(storedImageUrls: string[], context: ToolContext): Promise<string> {
-  // Call onFinish callback for credit deduction
-  await context.onFinish?.('image_generation', storedImageUrls);
+async function updateQuestAndReturnMarkdown(
+  storedImageUrls: string[],
+  costInput: ImageToolCostInput,
+  context: ToolContext
+): Promise<string> {
+  // onFinish is where both credit rails bill, so only a delivered image is charged.
+  const finishData: ImageToolFinishData = { ...costInput, paths: storedImageUrls };
+  await context.onFinish?.('image_generation', finishData);
 
   // Update the quest's images array AND return markdown for compatibility
   await context.statusUpdate({ images: storedImageUrls });
@@ -235,14 +240,9 @@ export const imageGenerationTool: ToolDefinition = {
               ? 'local-image'
               : 'openai';
 
-      // Call onStart callback for credit validation
-      await context.onStart?.('image_generation', {
-        model,
-        n,
-        size,
-        quality,
-        prompt,
-      });
+      // onStart only gates affordability; the charge waits for onFinish.
+      const costInput: ImageToolCostInput = { model, n, size, quality };
+      await context.onStart?.('image_generation', { ...costInput, prompt });
 
       await context.statusUpdate({}, 'Now painting image...');
 
@@ -257,9 +257,9 @@ export const imageGenerationTool: ToolDefinition = {
           safety_tolerance,
         });
 
-        const storedImageUrls = await processAndStoreImages(images, context, model, provider);
+        const storedImageUrls = await processAndStoreImages(images, context, { model, provider, prompt });
 
-        return updateQuestAndReturnMarkdown(storedImageUrls, context);
+        return updateQuestAndReturnMarkdown(storedImageUrls, costInput, context);
       } else if (isBFLModel) {
         const apiKey = await getEffectiveApiKey(context.userId, { type: ApiKeyType.bfl }, { db: context.db });
         const service = new BFLImageService(
@@ -285,9 +285,9 @@ export const imageGenerationTool: ToolDefinition = {
             safety_tolerance: safety_tolerance ?? BFL_SAFETY_TOLERANCE.DEFAULT,
           });
 
-          const storedImageUrls = await processAndStoreImages(images, context, model, provider);
+          const storedImageUrls = await processAndStoreImages(images, context, { model, provider, prompt });
 
-          return updateQuestAndReturnMarkdown(storedImageUrls, context);
+          return updateQuestAndReturnMarkdown(storedImageUrls, costInput, context);
         } catch (bflError) {
           // Log status + message only. Never log the raw AxiosError: its
           // `config.headers` carries the BFL `x-key`, which would leak the API
@@ -336,9 +336,9 @@ export const imageGenerationTool: ToolDefinition = {
           seed: seed,
         });
 
-        const storedImageUrls = await processAndStoreImages(images, context, model, provider);
+        const storedImageUrls = await processAndStoreImages(images, context, { model, provider, prompt });
 
-        return updateQuestAndReturnMarkdown(storedImageUrls, context);
+        return updateQuestAndReturnMarkdown(storedImageUrls, costInput, context);
       } else if (isLocalImageModel) {
         // Self-hosted Stable-Diffusion server (A1111-compatible REST API), gated
         // by IMAGE_GEN_BASE_URL. The env var is honored ONLY under B4M_SELF_HOST
@@ -363,9 +363,9 @@ export const imageGenerationTool: ToolDefinition = {
           ...resolveImageDimensions({ width, height, size }),
         });
 
-        const storedImageUrls = await processAndStoreImages(images, context, model, provider);
+        const storedImageUrls = await processAndStoreImages(images, context, { model, provider, prompt });
 
-        return updateQuestAndReturnMarkdown(storedImageUrls, context);
+        return updateQuestAndReturnMarkdown(storedImageUrls, costInput, context);
       } else {
         const apiKey = await getEffectiveApiKey(context.userId, { type: ApiKeyType.openai }, { db: context.db });
         const service = new OpenAIImageService(requireApiKey(apiKey, 'OpenAI', context.logger), context.logger);
@@ -389,13 +389,19 @@ export const imageGenerationTool: ToolDefinition = {
           // messages; return them as the tool result so the model can relay a clear reason instead
           // of the run dying with a generic "Agent execution failed".
           const message = openaiError instanceof Error ? openaiError.message : 'Unknown error';
-          console.error(`[ERROR] OpenAI image generation failed (model: ${model}): ${message}`);
+          if (openaiError instanceof ImageModerationBlockedError) {
+            Logger.globalInstance.warn(`[WARN] OpenAI image generation blocked by content policy (model: ${model})`, {
+              requestId: openaiError.requestId,
+            });
+          } else {
+            console.error(`[ERROR] OpenAI image generation failed (model: ${model}): ${message}`);
+          }
           return `Error: ${message}`;
         }
 
-        const storedImageUrls = await processAndStoreImages(images, context, model, provider);
+        const storedImageUrls = await processAndStoreImages(images, context, { model, provider, prompt });
 
-        return updateQuestAndReturnMarkdown(storedImageUrls, context);
+        return updateQuestAndReturnMarkdown(storedImageUrls, costInput, context);
       }
     },
     toolSchema: {

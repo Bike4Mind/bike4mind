@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractMcpPendingAction } from './mcpPendingAction';
+import { confirmingServerOf, extractMcpPendingAction, withoutConfirmPrompt } from './mcpPendingAction';
 
 const encodeToken = (payload: unknown) => Buffer.from(JSON.stringify(payload)).toString('base64');
 
@@ -56,6 +56,18 @@ describe('extractMcpPendingAction', () => {
     if (extraction.kind === 'rejected') expect(JSON.parse(extraction.result)).not.toHaveProperty('_confirmToken');
   });
 
+  it.each([
+    ['a read tool that echoed a token naming itself', 'github__get_issue', 'get_issue'],
+    ['a tool of the other confirming server', 'github__jira_create_issue', 'jira_create_issue'],
+  ])('rejects a token from %s', (_label, emittingTool, tool) => {
+    const echoed = encodeToken({ tool, params: {}, ts: 1 });
+
+    expect(extractMcpPendingAction(emittingTool, preview(echoed))).toMatchObject({
+      kind: 'rejected',
+      reason: 'untrusted-emitter',
+    });
+  });
+
   it.each(['notion__create_issue', 'create_issue', '__create_issue'])(
     'rejects a token from an emitter that is not a confirming server (%s)',
     emittingTool => {
@@ -91,5 +103,48 @@ describe('extractMcpPendingAction', () => {
     ['a result that only mentions the word', JSON.stringify({ text: 'what is a _confirmToken?' })],
   ])('leaves %s alone', (_label, result) => {
     expect(extractMcpPendingAction('github__create_issue', result)).toEqual({ kind: 'none' });
+  });
+});
+
+describe('confirmingServerOf', () => {
+  it.each([
+    ['github__list_issues', 'github'],
+    ['atlassian__jira_get_issue', 'atlassian'],
+    ['github__a__b', 'github'],
+    ['githubx__list_issues', undefined],
+    ['mcp__github__list_issues', undefined],
+    ['__github__list_issues', undefined],
+    ['github', undefined],
+    ['notion__create_page', undefined],
+  ])('maps %s to %s', (toolName, server) => {
+    expect(confirmingServerOf(toolName)).toBe(server);
+  });
+});
+
+describe('withoutConfirmPrompt', () => {
+  it('strips the token and replaces the button instruction in a preview', () => {
+    const forModel = JSON.parse(withoutConfirmPrompt(preview(validToken)) as string);
+
+    expect(forModel).not.toHaveProperty('_confirmToken');
+    expect(forModel.next_step).toMatch(/^Not executed/);
+    expect(forModel.next_step).not.toMatch(/click the/i);
+    expect(forModel.action).toBe('preview');
+  });
+
+  it('does not add a next_step the preview did not have', () => {
+    const forModel = JSON.parse(
+      withoutConfirmPrompt(JSON.stringify({ action: 'preview', _confirmToken: validToken })) as string
+    );
+
+    expect(forModel).toEqual({ action: 'preview' });
+  });
+
+  it.each([
+    ['a plain read result', 'issue #1: open'],
+    ['a JSON result without a token', JSON.stringify({ issues: [] })],
+    ['an unparseable result mentioning the token', '{ _confirmToken'],
+    ['a non-string result', 42],
+  ])('leaves %s alone', (_label, result) => {
+    expect(withoutConfirmPrompt(result)).toBe(result);
   });
 });

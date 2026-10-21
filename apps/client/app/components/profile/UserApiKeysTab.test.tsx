@@ -5,7 +5,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { ApiKeyScope } from '@bike4mind/common';
 import type { CreateUserApiKeyResponse, RotateCallbackSigningSecretResponse } from '@client/app/hooks/data/userApiKeys';
-import UserApiKeysTab from './UserApiKeysTab';
+import UserApiKeysTab, { keyTestPath } from './UserApiKeysTab';
 
 /**
  * The revoked-key hygiene half of the table: revoked rows are hidden behind a
@@ -43,6 +43,7 @@ const keyWithSigningSecret = {
 const h = vi.hoisted(() => ({
   keys: [] as any[],
   deleteMutate: vi.fn(),
+  revokeMutate: vi.fn(),
   createResult: { key: 'b4m_live_newkey123' } as Partial<CreateUserApiKeyResponse>,
   createMutate: vi.fn(),
   signingSecretMutate: vi.fn(),
@@ -56,6 +57,10 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@client/app/hooks/data/opti', () => ({ useOptiAccess: () => h.hasOptiAccess }));
+vi.mock('@client/app/hooks/data/productScopeAccess', () => ({
+  useOverwatchAccess: () => true,
+  useHearthEnabled: () => true,
+}));
 
 vi.mock('@client/app/hooks/data/userApiKeys', () => ({
   useGetUserApiKeys: () => ({ data: h.keys, isLoading: false, error: null, refetch: vi.fn() }),
@@ -67,7 +72,7 @@ vi.mock('@client/app/hooks/data/userApiKeys', () => ({
     isPending: false,
   }),
   useRotateUserApiKey: () => ({ mutate: vi.fn(), isPending: false }),
-  useRevokeUserApiKey: () => ({ mutate: vi.fn(), isPending: false }),
+  useRevokeUserApiKey: () => ({ mutate: h.revokeMutate, isPending: false }),
   useDeleteUserApiKey: () => ({ mutate: h.deleteMutate, isPending: false }),
   useBillingOrganizations: () => ({ data: [], isLoading: false }),
   useRotateCallbackSigningSecret: ({
@@ -158,6 +163,49 @@ describe('UserApiKeysTab - revoked keys', () => {
     fireEvent.click(screen.getByTestId('confirmation-confirm-btn'));
     expect(h.deleteMutate).toHaveBeenCalledWith('key-2');
   });
+
+  it('revokes a key only after the confirmation is accepted', () => {
+    h.revokeMutate.mockClear();
+    h.keys = [activeKey];
+    renderTab();
+
+    fireEvent.click(screen.getByTestId('api-key-revoke-key-1'));
+    expect(h.revokeMutate).not.toHaveBeenCalled();
+    expect(screen.getByTestId('confirmation-dialog')).toHaveTextContent('CI key');
+
+    fireEvent.click(screen.getByTestId('confirmation-confirm-btn'));
+    expect(h.revokeMutate).toHaveBeenCalledWith({ keyId: 'key-1', reason: 'Revoked by user' });
+  });
+});
+
+describe('keyTestPath', () => {
+  it('prefers /api/v1/me, falls back to a read the key holds, and gives up on write-only keys', () => {
+    expect(keyTestPath([ApiKeyScope.ME_READ, ApiKeyScope.READ_FILES])).toBe('/api/v1/me');
+    expect(keyTestPath([ApiKeyScope.AI_CHAT])).toBe('/api/v1/credits');
+    expect(keyTestPath([ApiKeyScope.READ_PROJECTS])).toBe('/api/v1/projects');
+    expect(keyTestPath([ApiKeyScope.WRITE_FILES])).toBeUndefined();
+  });
+});
+
+describe('UserApiKeysTab - scope chip state', () => {
+  beforeEach(() => {
+    h.keys = [activeKey];
+  });
+
+  it('exposes each scope and preset chip as a toggle button with aria-pressed', () => {
+    renderTab();
+    fireEvent.click(screen.getByText('Create API Key'));
+
+    const readFiles = screen.getByTestId(`api-key-scope-${ApiKeyScope.READ_FILES}`).querySelector('button')!;
+    const writeFiles = screen.getByTestId(`api-key-scope-${ApiKeyScope.WRITE_FILES}`).querySelector('button')!;
+    expect(readFiles).toHaveAttribute('aria-pressed', 'true');
+    expect(writeFiles).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByTestId('api-key-preset-read').querySelector('button')).toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.click(writeFiles);
+    expect(writeFiles).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('api-key-preset-read').querySelector('button')).toHaveAttribute('aria-pressed', 'false');
+  });
 });
 
 /**
@@ -190,7 +238,8 @@ describe('UserApiKeysTab - callback signing secret', () => {
     expect(screen.getByDisplayValue('whsec_fresh123')).toBeInTheDocument();
   });
 
-  it('shows a runnable test snippet that uses this origin and a Bearer header without repeating the key', () => {
+  it('shows a test snippet for an endpoint the new key can call, at this origin, without repeating the key', () => {
+    h.createResult = { key: 'b4m_live_newkey123', scopes: [ApiKeyScope.READ_FILES, ApiKeyScope.ME_READ] };
     h.keys = [activeKey];
     renderTab();
 
@@ -201,11 +250,25 @@ describe('UserApiKeysTab - callback signing secret', () => {
     fireEvent.click(screen.getByTestId('api-key-create-btn'));
 
     const snippet = screen.getByTestId('api-key-created-snippet').textContent!;
-    expect(snippet).toContain(`${window.location.origin}/api/chat`);
+    expect(snippet).toContain(`${window.location.origin}/api/v1/me`);
     expect(snippet).toContain('-H "Authorization: Bearer $B4M_API_KEY"');
+    expect(snippet).not.toContain('/api/chat');
     expect(snippet).not.toContain('X-API-Key');
-    expect(snippet).not.toContain('your-deployment.example.com');
     expect(snippet).not.toContain('b4m_live_newkey123');
+  });
+
+  it('omits the test snippet when no scope of the key opens a read endpoint', () => {
+    h.createResult = { key: 'b4m_live_newkey123', scopes: [ApiKeyScope.WRITE_FILES] };
+    h.keys = [activeKey];
+    renderTab();
+
+    fireEvent.click(screen.getByText('Create API Key'));
+    fireEvent.change(screen.getByTestId('api-key-name-input').querySelector('input')!, {
+      target: { value: 'New key' },
+    });
+    fireEvent.click(screen.getByTestId('api-key-create-btn'));
+
+    expect(screen.queryByTestId('api-key-created-snippet')).toBeNull();
   });
 
   it('does not render a signing secret block when the create response lacks one', () => {

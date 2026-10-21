@@ -12,6 +12,7 @@ export enum ApiKeyType {
   kimi = 'kimi',
   deepseek = 'deepseek',
   voyageai = 'voyageai',
+  typesafe = 'typesafe',
 }
 
 export interface IApiKey {

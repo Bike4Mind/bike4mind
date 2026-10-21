@@ -11,7 +11,7 @@ vi.mock('@bike4mind/database/auth', () => ({
 }));
 
 const mockAssertAccountStateUsable = vi.hoisted(() => vi.fn());
-vi.mock('@server/cli/auth', () => ({ assertAccountStateUsable: mockAssertAccountStateUsable }));
+vi.mock('@server/auth/assertAccountStateUsable', () => ({ assertAccountStateUsable: mockAssertAccountStateUsable }));
 
 const mockVerifyIdToken = vi.hoisted(() => vi.fn());
 vi.mock('@server/auth/verifyFederatedIdToken', () => ({

@@ -2,6 +2,7 @@ import { CssVarsProvider } from '@mui/joy/styles';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
 import type { PrBarState, PrDisplayState, PrState, PrSummary } from '@shared/pullRequest';
+import { EMPTY_SIDEBAR_SECTIONS } from '@shared/sidebarSections';
 import { PrStatusBar } from './PrStatusBar';
 import { SessionList } from './SessionList';
 
@@ -32,6 +33,7 @@ function barState(state: PrState, isDraft: boolean): PrBarState {
       headRefName: 'feat/widget-ladder',
       headSha: 'sha-1',
       baseRefName: 'main',
+      baseSha: 'base-1',
       additions: 1,
       deletions: 0,
       mergeable: 'MERGEABLE',
@@ -46,7 +48,7 @@ function barState(state: PrState, isDraft: boolean): PrBarState {
     gh: 'ok',
     refreshing: false,
     autoMerge: { mode: null },
-    autoFix: { status: 'off', attempts: 0, max: 3 },
+    autoFix: { status: 'off', attempts: 0, max: 5 },
   };
 }
 
@@ -87,9 +89,13 @@ export function renderSidebar(
         onCreate={() => {}}
         onOpenArtifacts={() => {}}
         onCreateInProject={() => {}}
+        onCreateInSection={() => {}}
         onDelete={() => {}}
         onTogglePin={() => {}}
         onToggleArchived={() => {}}
+        onRename={() => {}}
+        userSections={EMPTY_SIDEBAR_SECTIONS}
+        sectionActions={{ create: () => {}, rename: () => {}, remove: () => {}, move: () => {} }}
       />
     </CssVarsProvider>
   );

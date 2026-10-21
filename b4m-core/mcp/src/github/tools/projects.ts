@@ -15,6 +15,8 @@ import {
   LIST_ORG_PROJECTS_QUERY,
   LIST_PROJECT_FIELDS_QUERY,
   GET_PROJECT_ITEM_QUERY,
+  GET_ADD_TO_PROJECT_PREVIEW_QUERY,
+  GET_PROJECT_ITEM_PREVIEW_QUERY,
   ADD_PROJECT_ITEM_MUTATION,
   UPDATE_NUMBER_FIELD_MUTATION,
   UPDATE_DATE_FIELD_MUTATION,
@@ -214,50 +216,56 @@ export function registerProjectTools(server: McpServer) {
   // ADD ISSUE TO PROJECT - Add an issue to a GitHub Project
   server.tool(
     TOOL_ADD_ISSUE_TO_PROJECT,
-    'Add a GitHub issue to a project. This is required before you can update project fields on the issue. IMPORTANT: Include display parameters for human-readable preview.',
+    'Add a GitHub issue to a project. This is required before you can update project fields on the issue. The preview resolves the project and issue names from the ids.',
     {
       project_id: projectIdSchema,
       issue_node_id: issueNodeIdSchema,
-      // Display parameters for human-readable preview
-      display_project_name: z
-        .string()
-        .optional()
-        .describe('Human-readable project name for preview (e.g., "Project 1"). Get from list_org_projects.'),
-      display_issue_title: z
-        .string()
-        .optional()
-        .describe('Human-readable issue title for preview (e.g., "#2 - Login issue"). Get from get_issue.'),
-      display_repository: z
-        .string()
-        .optional()
-        .describe('Repository name for preview (e.g., "owner/repo"). Get from get_issue.'),
       ...confirmationParams,
     },
-    async ({
-      project_id,
-      issue_node_id,
-      display_project_name,
-      display_issue_title,
-      display_repository,
-      _executeFromButton,
-    }) => {
+    async ({ project_id, issue_node_id, _executeFromButton }) => {
       // SECURITY: Only execute if called from button handler
       const shouldExecute = _executeFromButton === true;
 
       if (!shouldExecute) {
-        // Build human-readable preview
-        const previewData: Record<string, string> = {
-          '🎯 Target Project': display_project_name || 'GitHub Project',
-          '📝 Issue': display_issue_title || 'Issue',
-        };
-
-        if (display_repository) {
-          previewData['📦 Repository'] = display_repository;
+        let resolved: AddToProjectPreviewQueryResult;
+        try {
+          resolved = await octokit.graphql(GET_ADD_TO_PROJECT_PREVIEW_QUERY, {
+            projectId: project_id,
+            contentId: issue_node_id,
+          });
+        } catch (error) {
+          console.error(`[${TOOL_ADD_ISSUE_TO_PROJECT}] Preview lookup failed:`, error);
+          return createErrorResponse(error, {
+            project_id,
+            issue_node_id,
+            hint: 'Could not look up the project and issue for the preview. Check both ids.',
+          });
         }
 
-        previewData[''] = ''; // Spacing
-        previewData['ℹ️ Note'] =
-          'This issue will be added to the project board. You can then update its fields (Priority, Status, etc.).';
+        const project = resolved.project && isProjectV2(resolved.project) ? resolved.project : null;
+        const content = resolved.content && isIssueOrPullRequest(resolved.content) ? resolved.content : null;
+        if (!project || !content) {
+          return createCustomErrorResponse('Could not resolve the project or issue for this preview', {
+            project_id,
+            issue_node_id,
+            problem: !project
+              ? 'project_id is not a GitHub Project (v2) you can access'
+              : 'issue_node_id is not an issue or pull request you can access',
+          });
+        }
+
+        // The confirm card renders these labels, so they must come from this lookup, never from the model.
+        const display_project_name = project.title;
+        const display_issue_title = formatContentLabel(content);
+        const display_repository = content.repository.nameWithOwner;
+
+        const previewData: Record<string, string> = {
+          'Target Project': `${display_project_name} (${project_id})`,
+          Issue: `${display_issue_title} (${issue_node_id})`,
+          Repository: display_repository,
+          '': '',
+          Note: 'This issue will be added to the project board. You can then update its fields (Priority, Status, etc.).',
+        };
 
         return createPreviewResponse('📋 Preview: Add Issue to GitHub Project', previewData, 'update', {
           tool: TOOL_ADD_ISSUE_TO_PROJECT,
@@ -299,7 +307,7 @@ export function registerProjectTools(server: McpServer) {
   // UPDATE PROJECT ITEM FIELDS - Update one or more fields on a project item
   server.tool(
     TOOL_UPDATE_PROJECT_ITEM_FIELDS,
-    'Update MULTIPLE fields at once on a GitHub Project item (e.g., Priority + Size + Iteration + Estimate + Start Date + Target Date in one operation). Use this when the user asks to update multiple fields together. REQUIRED: You MUST provide display_* parameters for ALL fields being updated.',
+    'Update MULTIPLE fields at once on a GitHub Project item (e.g., Priority + Size + Iteration + Estimate + Start Date + Target Date in one operation). Use this when the user asks to update multiple fields together. The preview resolves field, option and iteration names from the ids.',
     {
       project_id: z.string().describe('Project ID'),
       item_id: z.string().describe('Project item ID (from get_project_item)'),
@@ -310,30 +318,14 @@ export function registerProjectTools(server: McpServer) {
             value: z
               .union([z.string(), z.number()])
               .describe(
-                'Field value: option ID for single-select, string for text, number for number, ISO date for date'
+                'Field value: option ID for single-select, iteration ID for iteration, string for text, number for number, ISO date for date'
               ),
-            field_name: z.string().describe('Human-readable field name (e.g., "Priority", "Size", "Status")'),
-            current_value: z.string().optional().describe('Current field value for preview (e.g., "P1", "M", "Todo")'),
-            new_value: z.string().describe('New field value for preview (e.g., "P2", "L", "In Progress")'),
           })
         )
         .describe('Array of field updates to apply'),
-      // Display parameters for human-readable preview
-      display_project_name: z
-        .string()
-        .optional()
-        .describe(
-          'Human-readable project name for preview (e.g., "Project A"). If omitted, will extract from updates.'
-        ),
-      display_issue_title: z
-        .string()
-        .optional()
-        .describe(
-          'Human-readable issue title for preview (e.g., "#1 - Change button color"). If omitted, will use generic label.'
-        ),
       ...confirmationParams,
     },
-    async ({ project_id, item_id, updates, display_project_name, display_issue_title, _executeFromButton }) => {
+    async ({ project_id, item_id, updates, _executeFromButton }) => {
       // VALIDATE INPUTS - Common AI mistakes
       // Mistake #1: Passing issue node_id (I_...) instead of project item ID (PVTI_...)
       if (!item_id.startsWith('PVTI_')) {
@@ -364,7 +356,7 @@ export function registerProjectTools(server: McpServer) {
               '4. For single-select fields, also get the option ID from field.options array',
               '5. Use these IDs in the updates array, NOT the human-readable names',
             ],
-            invalid_update: { field_id: update.field_id, field_name: update.field_name, value: update.value },
+            invalid_update: { field_id: update.field_id, value: update.value },
             expected_field_id_format: 'PVTSSF_lADO... or PVTF_lADO... or PVTIF_lADO...',
           });
         }
@@ -374,29 +366,88 @@ export function registerProjectTools(server: McpServer) {
       const shouldExecute = _executeFromButton === true;
 
       if (!shouldExecute) {
-        // Build human-readable preview showing ALL fields
-        const projectLabel = display_project_name || `GitHub Project`;
-        const issueLabel = display_issue_title || `Issue`;
+        let itemResult: ProjectItemPreviewQueryResult;
+        let fieldsResult: ProjectFieldsPreviewResult;
+        try {
+          [itemResult, fieldsResult] = await Promise.all([
+            octokit.graphql<ProjectItemPreviewQueryResult>(GET_PROJECT_ITEM_PREVIEW_QUERY, { itemId: item_id }),
+            octokit.graphql<ProjectFieldsPreviewResult>(LIST_PROJECT_FIELDS_QUERY, {
+              projectId: project_id,
+              first: PROJECT_FIELDS_PAGE_SIZE,
+            }),
+          ]);
+        } catch (error) {
+          console.error(`[${TOOL_UPDATE_PROJECT_ITEM_FIELDS}] Preview lookup failed:`, error);
+          return createErrorResponse(error, {
+            project_id,
+            item_id,
+            hint: 'Could not look up the project item and fields for the preview. Check the ids.',
+          });
+        }
+
+        const item = itemResult.node && isProjectV2Item(itemResult.node) ? itemResult.node : null;
+        const itemProject = item?.project;
+        const itemContent = item?.content && isProjectItemContent(item.content) ? item.content : null;
+        if (!itemProject || itemProject.id !== project_id || !itemContent) {
+          return createCustomErrorResponse('Could not resolve the project item for this preview', {
+            project_id,
+            item_id,
+            problem: !itemProject
+              ? 'item_id is not a project item you can access'
+              : itemProject.id !== project_id
+                ? 'item_id does not belong to project_id'
+                : 'The item has no issue, pull request or draft issue you can access',
+          });
+        }
+
+        const fields = fieldsResult.node?.fields?.nodes ?? [];
+        const resolvedUpdates: ResolvedFieldUpdate[] = [];
+        const seenFieldIds = new Set<string>();
+        for (const update of updates) {
+          const resolution = seenFieldIds.has(update.field_id)
+            ? { ok: false as const, error: `Field "${update.field_id}" appears more than once in updates` }
+            : resolveFieldUpdate(update, fields);
+          seenFieldIds.add(update.field_id);
+          if (!resolution.ok) {
+            return createCustomErrorResponse(resolution.error, {
+              project_id,
+              item_id,
+              invalid_update: { field_id: update.field_id, value: update.value },
+              hint: 'Call list_project_fields(project_id) and use a field id, option id or iteration id from it.',
+            });
+          }
+          resolvedUpdates.push(resolution.update);
+        }
+
+        // The confirm card renders these labels, so they must come from these lookups, never from the model.
+        const display_project_name = itemProject.title;
+        const display_issue_title = formatContentLabel(itemContent);
+        const display_repository =
+          itemContent.__typename === 'DraftIssue' ? undefined : itemContent.repository.nameWithOwner;
 
         const previewData: Record<string, string> = {
-          '🎯 Target': `${projectLabel} - ${issueLabel}`,
-          '': '', // Empty line for spacing
-          '📝 Updates': `${updates.length} field${updates.length > 1 ? 's' : ''} will be updated:`,
-          ' ': '', // Another empty line
+          Target: `${display_project_name} - ${display_issue_title}`,
+          Project: project_id,
+          Item: item_id,
+          ...(display_repository ? { Repository: display_repository } : {}),
+          '': '',
+          Updates: `${resolvedUpdates.length} field${resolvedUpdates.length === 1 ? '' : 's'} will be updated:`,
+          ' ': '',
         };
-
-        // Add each field update to preview
-        updates.forEach(update => {
-          const fieldLabel = `  ${update.field_name}`;
-          const changeLabel = update.current_value
-            ? `${update.current_value} → ${update.new_value}`
-            : `→ ${update.new_value}`;
-          previewData[fieldLabel] = changeLabel;
-        });
+        for (const update of resolvedUpdates) {
+          previewData[`  ${update.display_field_name} (${update.field_id})`] = update.display_value;
+        }
 
         return createPreviewResponse('📋 Preview: Update Multiple Project Fields', previewData, 'update', {
           tool: TOOL_UPDATE_PROJECT_ITEM_FIELDS,
-          params: { project_id, item_id, updates },
+          params: {
+            project_id,
+            item_id,
+            updates: resolvedUpdates,
+            display_project_name,
+            display_issue_title,
+            display_repository,
+          },
         });
       }
 
@@ -404,53 +455,25 @@ export function registerProjectTools(server: McpServer) {
       try {
         console.error(`[${TOOL_UPDATE_PROJECT_ITEM_FIELDS}] Updating ${updates.length} fields on item ${item_id}`);
 
-        const results: Array<{ field_name: string; success: boolean; error?: string }> = [];
+        const results: Array<{ field_id: string; success: boolean; error?: string }> = [];
 
         // Update each field sequentially
         for (const update of updates) {
           try {
-            console.error(
-              `[${TOOL_UPDATE_PROJECT_ITEM_FIELDS}] Updating field ${update.field_id} (${update.field_name})`
-            );
+            console.error(`[${TOOL_UPDATE_PROJECT_ITEM_FIELDS}] Updating field ${update.field_id}`);
 
-            // Determine field value type and use appropriate mutation
-            let mutation: string;
-            let variables: Record<string, string | number>;
+            const kind = classifyFieldUpdate(update);
+            const value = kind === 'date' ? toDateOnly(String(update.value)) : update.value;
+            const variables = { projectId: project_id, itemId: item_id, fieldId: update.field_id, value };
 
-            if (typeof update.value === 'number') {
-              // Number field (e.g., Estimate)
-              mutation = UPDATE_NUMBER_FIELD_MUTATION;
-              variables = { projectId: project_id, itemId: item_id, fieldId: update.field_id, value: update.value };
-            } else if (update.value.match(/^\d{4}-\d{2}-\d{2}(T[\d:]+Z?)?$/)) {
-              // Date field (ISO format: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ)
-              const dateOnly = update.value.match(/^(\d{4}-\d{2}-\d{2})/)?.[1];
-              if (!dateOnly) {
-                throw new Error(`Invalid date format: ${update.value}`);
-              }
-              mutation = UPDATE_DATE_FIELD_MUTATION;
-              variables = { projectId: project_id, itemId: item_id, fieldId: update.field_id, value: dateOnly };
-            } else if (update.field_id.startsWith('PVTIF_')) {
-              // Iteration field
-              mutation = UPDATE_ITERATION_FIELD_MUTATION;
-              variables = { projectId: project_id, itemId: item_id, fieldId: update.field_id, value: update.value };
-            } else if (update.field_id.startsWith('PVTF_')) {
-              // Text field
-              mutation = UPDATE_TEXT_FIELD_MUTATION;
-              variables = { projectId: project_id, itemId: item_id, fieldId: update.field_id, value: update.value };
-            } else {
-              // Single-select field (Priority, Size, Status, etc.)
-              mutation = UPDATE_SINGLE_SELECT_FIELD_MUTATION;
-              variables = { projectId: project_id, itemId: item_id, fieldId: update.field_id, value: update.value };
-            }
+            await octokit.graphql(FIELD_UPDATE_MUTATIONS[kind], variables);
 
-            await octokit.graphql(mutation, variables);
-
-            console.error(`[${TOOL_UPDATE_PROJECT_ITEM_FIELDS}] SUCCESS: Updated ${update.field_name}`);
-            results.push({ field_name: update.field_name, success: true });
+            console.error(`[${TOOL_UPDATE_PROJECT_ITEM_FIELDS}] SUCCESS: Updated ${update.field_id}`);
+            results.push({ field_id: update.field_id, success: true });
           } catch (fieldError) {
             const errorMsg = getErrorMessage(fieldError);
-            console.error(`[${TOOL_UPDATE_PROJECT_ITEM_FIELDS}] ERROR updating ${update.field_name}:`, errorMsg);
-            results.push({ field_name: update.field_name, success: false, error: errorMsg });
+            console.error(`[${TOOL_UPDATE_PROJECT_ITEM_FIELDS}] ERROR updating ${update.field_id}:`, errorMsg);
+            results.push({ field_id: update.field_id, success: false, error: errorMsg });
           }
         }
 
@@ -485,4 +508,180 @@ export function registerProjectTools(server: McpServer) {
       }
     }
   );
+}
+
+// Projects allow at most 50 custom fields plus the built-ins, so one page of 100 covers them all.
+const PROJECT_FIELDS_PAGE_SIZE = 100;
+
+type ProjectFieldNode = {
+  id?: string;
+  name?: string;
+  dataType?: string;
+  options?: Array<{ id: string; name: string }>;
+  configuration?: {
+    iterations: Array<{ id: string; title: string }>;
+    completedIterations?: Array<{ id: string; title: string }>;
+  };
+};
+
+type ProjectFieldsPreviewResult = {
+  node: { fields?: { nodes: ProjectFieldNode[] } } | null;
+};
+
+type RepositoryRef = { nameWithOwner: string };
+
+type IssueOrPullRequest = {
+  __typename: 'Issue' | 'PullRequest';
+  number: number;
+  title: string;
+  repository: RepositoryRef;
+};
+
+type DraftIssue = { __typename: 'DraftIssue'; title: string };
+
+type ProjectItemContent = IssueOrPullRequest | DraftIssue;
+
+type UnresolvedNode = { __typename: string };
+
+type ProjectV2Node = { __typename: 'ProjectV2'; id: string; title: string };
+
+type ProjectV2ItemNode = {
+  __typename: 'ProjectV2Item';
+  project: { id: string; title: string } | null;
+  content: (ProjectItemContent | UnresolvedNode) | null;
+};
+
+type AddToProjectPreviewQueryResult = {
+  project: (ProjectV2Node | UnresolvedNode) | null;
+  content: (IssueOrPullRequest | UnresolvedNode) | null;
+};
+
+type ProjectItemPreviewQueryResult = {
+  node: (ProjectV2ItemNode | UnresolvedNode) | null;
+};
+
+function isProjectV2(node: ProjectV2Node | UnresolvedNode): node is ProjectV2Node {
+  return node.__typename === 'ProjectV2';
+}
+
+function isProjectV2Item(node: ProjectV2ItemNode | UnresolvedNode): node is ProjectV2ItemNode {
+  return node.__typename === 'ProjectV2Item';
+}
+
+function isIssueOrPullRequest(node: IssueOrPullRequest | UnresolvedNode): node is IssueOrPullRequest {
+  return node.__typename === 'Issue' || node.__typename === 'PullRequest';
+}
+
+function isProjectItemContent(node: ProjectItemContent | UnresolvedNode): node is ProjectItemContent {
+  return node.__typename === 'Issue' || node.__typename === 'PullRequest' || node.__typename === 'DraftIssue';
+}
+
+function formatContentLabel(content: ProjectItemContent): string {
+  if (content.__typename === 'DraftIssue') {
+    return `Draft: ${content.title}`;
+  }
+  return `#${content.number} - ${content.title}`;
+}
+
+type FieldUpdateKind = 'number' | 'date' | 'iteration' | 'text' | 'single_select';
+
+const FIELD_UPDATE_MUTATIONS: Record<FieldUpdateKind, string> = {
+  number: UPDATE_NUMBER_FIELD_MUTATION,
+  date: UPDATE_DATE_FIELD_MUTATION,
+  iteration: UPDATE_ITERATION_FIELD_MUTATION,
+  text: UPDATE_TEXT_FIELD_MUTATION,
+  single_select: UPDATE_SINGLE_SELECT_FIELD_MUTATION,
+};
+
+/** The field dataType each mutation can write, so an update aimed at the wrong kind of field is refused at preview. */
+const FIELD_DATA_TYPE_BY_KIND: Record<FieldUpdateKind, string> = {
+  number: 'NUMBER',
+  date: 'DATE',
+  iteration: 'ITERATION',
+  text: 'TEXT',
+  single_select: 'SINGLE_SELECT',
+};
+
+const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}(T[\d:]+Z?)?$/;
+
+/**
+ * Picks the mutation an update runs. The preview and the execute branch both dispatch through this,
+ * so the preview's label always describes the mutation that will actually run.
+ */
+function classifyFieldUpdate(update: { field_id: string; value: string | number }): FieldUpdateKind {
+  if (typeof update.value === 'number') return 'number';
+  if (ISO_DATE_PATTERN.test(update.value)) return 'date';
+  if (update.field_id.startsWith('PVTIF_')) return 'iteration';
+  if (update.field_id.startsWith('PVTF_')) return 'text';
+  return 'single_select';
+}
+
+function toDateOnly(value: string): string {
+  const dateOnly = value.match(/^(\d{4}-\d{2}-\d{2})/)?.[1];
+  if (!dateOnly) {
+    throw new Error(`Invalid date format: ${value}`);
+  }
+  return dateOnly;
+}
+
+type ResolvedFieldUpdate = {
+  field_id: string;
+  value: string | number;
+  display_field_name: string;
+  display_value: string;
+};
+
+type FieldUpdateResolution = { ok: true; update: ResolvedFieldUpdate } | { ok: false; error: string };
+
+/**
+ * Resolves the labels a preview shows for one update from the project's own field definitions.
+ * Refuses an update whose field, option or iteration id is not part of this project.
+ */
+function resolveFieldUpdate(
+  update: { field_id: string; value: string | number },
+  fields: ProjectFieldNode[]
+): FieldUpdateResolution {
+  const field = fields.find(candidate => candidate.id === update.field_id);
+  const fieldName = field?.name;
+  if (!field || !fieldName) {
+    return { ok: false, error: `Field "${update.field_id}" is not a field of this project` };
+  }
+
+  const resolved = (display_value: string): FieldUpdateResolution => ({
+    ok: true,
+    update: { field_id: update.field_id, value: update.value, display_field_name: fieldName, display_value },
+  });
+
+  const kind = classifyFieldUpdate(update);
+  if (field.dataType !== FIELD_DATA_TYPE_BY_KIND[kind]) {
+    return {
+      ok: false,
+      error: `"${update.value}" would be written as ${kind.replace('_', '-')} but "${fieldName}" is a ${field.dataType ?? 'unknown'} field`,
+    };
+  }
+  switch (kind) {
+    case 'single_select': {
+      const option = field.options?.find(candidate => candidate.id === update.value);
+      if (!option) {
+        return { ok: false, error: `"${update.value}" is not an option of the "${fieldName}" field` };
+      }
+      return resolved(option.name);
+    }
+    case 'iteration': {
+      const iterations = [
+        ...(field.configuration?.iterations ?? []),
+        ...(field.configuration?.completedIterations ?? []),
+      ];
+      const iteration = iterations.find(candidate => candidate.id === update.value);
+      if (!iteration) {
+        return { ok: false, error: `"${update.value}" is not an iteration of the "${fieldName}" field` };
+      }
+      return resolved(iteration.title);
+    }
+    case 'date':
+      return resolved(toDateOnly(String(update.value)));
+    case 'number':
+    case 'text':
+      return resolved(String(update.value));
+  }
 }

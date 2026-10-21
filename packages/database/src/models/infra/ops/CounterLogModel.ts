@@ -185,7 +185,8 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
           },
         },
       ],
-      // This week's data (always 7 days for both daily and weekly reports)
+      // Same window as last24h: the rolling 24 hours for today, the UTC day for past
+      // dates. startDate only flags a weekly report; it does not widen this window.
       thisWeek: [
         {
           $match: {
@@ -271,9 +272,7 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
         },
         {
           $match: internalStaffRegex
-            ? {
-                $or: [{ userEmail: { $regex: internalStaffRegex } }, { 'user.email': { $regex: internalStaffRegex } }],
-              }
+            ? { 'user.email': { $regex: internalStaffRegex } }
             : // None configured: count no internal users.
               { $expr: false },
         },
@@ -289,6 +288,35 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
           },
         },
       ],
+      // Distinct non-staff users over the 7 days ending at the report window's end. Daily reports
+      // only: the weekly formatter never reads it. No $limit, unlike the topUsers leaderboard.
+      ...(isWeeklyReport
+        ? {}
+        : {
+            weeklyActiveUsers: [
+              {
+                $match: {
+                  datetime: { $gte: weekEnd.subtract(7, 'days').toDate(), $lte: weekEndDate },
+                },
+              },
+              { $group: { _id: '$userId' } },
+              {
+                $addFields: {
+                  userObjectId: { $convert: { input: '$_id', to: 'objectId', onError: null } },
+                },
+              },
+              {
+                $lookup: {
+                  from: 'users',
+                  localField: 'userObjectId',
+                  foreignField: '_id',
+                  as: 'user',
+                },
+              },
+              ...(internalStaffRegex ? [{ $match: { $nor: [{ 'user.email': { $regex: internalStaffRegex } }] } }] : []),
+              { $count: 'count' },
+            ],
+          }),
       // Model usage tracking - different for daily and weekly reports
       topModels: isWeeklyReport
         ? [
@@ -485,11 +513,7 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
                 interactions: { $sum: 1 },
                 email: {
                   $first: {
-                    $cond: [
-                      { $gt: [{ $size: '$userDetails' }, 0] },
-                      { $arrayElemAt: ['$userDetails.email', 0] },
-                      '$userEmail',
-                    ],
+                    $cond: [{ $gt: [{ $size: '$userDetails' }, 0] }, { $arrayElemAt: ['$userDetails.email', 0] }, null],
                   },
                 },
               },
@@ -619,11 +643,7 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
                 interactions: { $sum: 1 },
                 email: {
                   $first: {
-                    $cond: [
-                      { $gt: [{ $size: '$userDetails' }, 0] },
-                      { $arrayElemAt: ['$userDetails.email', 0] },
-                      '$userEmail',
-                    ],
+                    $cond: [{ $gt: [{ $size: '$userDetails' }, 0] }, { $arrayElemAt: ['$userDetails.email', 0] }, null],
                   },
                 },
               },
@@ -952,6 +972,7 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
           lastMonth: facetData.lastMonth || [],
           allUsers: facetData.allUsers || [],
           internalUsers: facetData.internalUsers || [],
+          weeklyActiveUsers: facetData.weeklyActiveUsers || [],
           topUsers: facetData.topUsers || [],
           topModels: facetData.topModels || [],
           topOrganizations: facetData.topOrganizations || [],

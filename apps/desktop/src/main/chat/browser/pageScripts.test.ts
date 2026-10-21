@@ -1,6 +1,14 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from 'vitest';
-import { CLICK_REF, FILL_REF, pageCall, SNAPSHOT_PAGE, type ElementOutcome, type SnapshotResult } from './pageScripts';
+import {
+  CLICK_REF,
+  FILL_REF,
+  pageCall,
+  SCROLL_PAGE,
+  SNAPSHOT_PAGE,
+  type ElementOutcome,
+  type SnapshotResult,
+} from './pageScripts';
 
 // Indirect eval runs a script at global scope, as executeJavaScript does in the page. The page
 // setup goes through it too: the main process's tsconfig has no DOM types to write it against.
@@ -86,5 +94,106 @@ describe('page scripts', () => {
       ok: false,
       error: expect.stringContaining('button'),
     });
+  });
+});
+
+describe('scrolling', () => {
+  beforeEach(() => {
+    inPage(`
+      window.__seen = [];
+      Element.prototype.scrollIntoView = function (options) {
+        window.__seen.push(this.tagName.toLowerCase() + ':' + this.textContent.trim() + ':' + options.block);
+      };
+      document.body.innerHTML =
+        '<main id="panel" aria-label="Feed" style="overflow-y: auto">' +
+        '<h2>Plans</h2><p>The <b>Total</b> due today</p><button>Load more</button>' +
+        '<p hidden>Secret pricing</p><script>var pricing = 1;</script></main>';
+      // jsdom does no layout: give the panel the metrics of a 600px view onto 3000px of content.
+      const panel = document.getElementById('panel');
+      Object.defineProperty(panel, 'scrollHeight', { value: 3000 });
+      Object.defineProperty(panel, 'clientHeight', { value: 600 });
+      Object.defineProperty(panel, 'clientWidth', { value: 800 });
+      Object.defineProperty(panel, 'scrollTop', { value: 0, writable: true });
+      panel.scrollTo = function (options) { this.scrollTop = options.top; };
+      document.elementFromPoint = () => panel.querySelector('p');
+    `);
+  });
+
+  it('brings a ref to the middle of the view', () => {
+    run(SNAPSHOT_PAGE, 10_000);
+    expect(run<ElementOutcome>(SCROLL_PAGE, { ref: '1' })).toEqual({ ok: true, description: 'Load more' });
+    expect(inPage<string[]>('window.__seen')).toEqual(['button:Load more:center']);
+  });
+
+  it('finds the first visible element holding some text, even split across inline tags', () => {
+    expect(run<ElementOutcome>(SCROLL_PAGE, { text: 'plans' })).toEqual({ ok: true, description: 'Plans' });
+    expect(run<ElementOutcome>(SCROLL_PAGE, { text: 'total due' })).toEqual({
+      ok: true,
+      description: 'The Total due today',
+    });
+  });
+
+  it('reports a ref or text that matches nothing, never touching a null', () => {
+    expect(run<ElementOutcome>(SCROLL_PAGE, { ref: '99' })).toEqual({
+      ok: false,
+      error: 'No element matched ref 99; take a browser_snapshot for current refs.',
+    });
+    // Hidden and script text do not count as on the page.
+    expect(run<ElementOutcome>(SCROLL_PAGE, { text: 'pricing' })).toEqual({
+      ok: false,
+      error: 'No visible element matched text "pricing"; take a browser_snapshot for current refs.',
+    });
+    expect(inPage<string[]>('window.__seen')).toEqual([]);
+  });
+
+  it('scrolls the panel under the middle of the view when the document does not scroll', () => {
+    expect(run<ElementOutcome>(SCROLL_PAGE, { direction: 'down' })).toEqual({
+      ok: true,
+      description: 'Scrolled down 540px in the scrollable main "Feed" (now 540px of 2400px).',
+    });
+    expect(run<ElementOutcome>(SCROLL_PAGE, { direction: 'up', pixels: 100 })).toMatchObject({
+      description: expect.stringMatching(/^Scrolled up 100px .*\(now 440px of 2400px\)/),
+    });
+    expect(run<ElementOutcome>(SCROLL_PAGE, { direction: 'bottom' })).toMatchObject({
+      description: 'Scrolled to the bottom of the scrollable main "Feed" (now 2400px of 2400px).',
+    });
+    expect(run<ElementOutcome>(SCROLL_PAGE, { direction: 'down', pages: 2 })).toEqual({
+      ok: true,
+      description: 'Already at the bottom of the scrollable main "Feed"; nothing moved.',
+    });
+  });
+
+  it('falls back to the largest scrolling panel when nothing scrolls under the middle', () => {
+    inPage(`document.elementFromPoint = () => null;`);
+    expect(run<ElementOutcome>(SCROLL_PAGE, { direction: 'down' })).toMatchObject({
+      description: expect.stringContaining('the scrollable main "Feed"'),
+    });
+  });
+
+  it('says so when nothing on the page scrolls', () => {
+    inPage(`document.body.innerHTML = '<p>Short</p>'; document.elementFromPoint = () => null;`);
+    expect(run<ElementOutcome>(SCROLL_PAGE, { direction: 'down' })).toMatchObject({
+      ok: false,
+      error: expect.stringContaining('Nothing on this page scrolls'),
+    });
+  });
+
+  it('outlines only what is in view when asked to', () => {
+    inPage(`
+      window.innerHeight = 600;
+      window.innerWidth = 800;
+      const at = (selector, top) => {
+        document.querySelector(selector).getBoundingClientRect = () =>
+          ({ top, bottom: top + 20, left: 0, right: 100, width: 100, height: 20 });
+      };
+      at('h2', -400);
+      at('p', 100);
+      at('b', 100);
+      at('button', 900);
+    `);
+    const snap = run<SnapshotResult>(SNAPSHOT_PAGE, 10_000, true);
+    expect(snap.text).toContain('The');
+    expect(snap.text).not.toContain('Plans');
+    expect(snap.text).not.toContain('Load more');
   });
 });

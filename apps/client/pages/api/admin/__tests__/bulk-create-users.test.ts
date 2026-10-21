@@ -4,6 +4,9 @@ const h = vi.hoisted(() => ({
   handler: null as null | ((req: unknown, res: unknown) => Promise<unknown>),
   update: vi.fn(),
   createUser: vi.fn(),
+  publish: vi.fn(),
+  emitSignupFunnelEvents: vi.fn(),
+  recordSyntheticIdentity: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -18,8 +21,13 @@ vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown)
 vi.mock('@bike4mind/database', () => ({ userRepository: { update: h.update } }));
 vi.mock('@bike4mind/services', () => ({ userService: { createUser: h.createUser } }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
-vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn() } } }));
-vi.mock('@server/utils/mailer/emailHelpers', () => ({
+vi.mock('@server/analytics/funnel', () => ({
+  emitSignupFunnelEvents: (...args: unknown[]) => h.emitSignupFunnelEvents(...args),
+  recordSyntheticIdentity: (...args: unknown[]) => h.recordSyntheticIdentity(...args),
+}));
+vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.publish } } }));
+vi.mock('@bike4mind/server-utils/utils/mailer/emailHelpers', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/mailer/emailHelpers')>()),
   getLogoUrl: () => 'logo',
   buildEmailLogoImg: () => '',
 }));
@@ -36,23 +44,88 @@ describe('POST /api/admin/bulk-create-users', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.createUser.mockResolvedValue({ id: 'new-1', email: 'a@b.test', name: 'a@b.test', storageLimit: 1000 });
+    h.recordSyntheticIdentity.mockResolvedValue(false);
   });
 
   it('writes exactly the storage limit and tags when both are given', async () => {
     const json = vi.fn();
+    const res = { status: vi.fn().mockReturnThis(), json };
 
-    await h.handler!(makeReq([{ email: 'a@b.test', startingStorage: 5000, tags: ['x', 'y'] }]), { json });
+    await h.handler!(makeReq([{ email: 'a@b.test', startingStorage: 5000, tags: ['x', 'y'] }]), res);
 
     expect(h.update).toHaveBeenCalledTimes(1);
     expect(h.update.mock.calls[0][0]).toStrictEqual({ id: 'new-1', storageLimit: 5000, tags: ['x', 'y'] });
+    expect(h.emitSignupFunnelEvents).toHaveBeenCalledWith({
+      user: expect.objectContaining({ id: 'new-1', isSynthetic: false }),
+      method: 'admin',
+      emailVerified: false,
+      creditsGranted: 0,
+    });
+  });
+
+  it('passes a synthetic classification into the signup emitter', async () => {
+    const user = { id: 'new-synthetic', email: 'seed@test.example', name: 'Seed', storageLimit: 1000 };
+    h.createUser.mockResolvedValue(user);
+    h.recordSyntheticIdentity.mockResolvedValue(true);
+
+    await h.handler!(makeReq([{ email: 'seed@test.example' }]), {
+      status: vi.fn().mockReturnThis(),
+      json: vi.fn(),
+    });
+
+    expect(h.recordSyntheticIdentity).toHaveBeenCalledWith(user);
+    expect(h.emitSignupFunnelEvents).toHaveBeenCalledWith(
+      expect.objectContaining({ user: expect.objectContaining({ id: 'new-synthetic', isSynthetic: true }) })
+    );
   });
 
   it('writes the created defaults, with tags undefined, when neither is given', async () => {
     const json = vi.fn();
+    const res = { status: vi.fn().mockReturnThis(), json };
 
-    await h.handler!(makeReq([{ email: 'a@b.test' }]), { json });
+    await h.handler!(makeReq([{ email: 'a@b.test' }]), res);
 
     expect(h.update).toHaveBeenCalledTimes(1);
     expect(h.update.mock.calls[0][0]).toStrictEqual({ id: 'new-1', storageLimit: 1000, tags: undefined });
+  });
+
+  it('reports an invalid row as a per-row failure without failing the batch', async () => {
+    const json = vi.fn();
+    const res = { status: vi.fn().mockReturnThis(), json };
+
+    await h.handler!(makeReq([{ email: 'a@b.test' }, { first: 'no-email' }]), res);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    const { results } = json.mock.calls[0][0];
+    expect(results[0]).toMatchObject({ success: true, email: 'a@b.test' });
+    expect(results[1]).toMatchObject({ success: false, error: expect.any(String) });
+  });
+
+  it('escapes the user name in the welcome email body', async () => {
+    h.createUser.mockResolvedValue({ id: 'new-1', email: 'a@b.test', name: '<b>x</b>', storageLimit: 1000 });
+
+    await h.handler!(makeReq([{ email: 'a@b.test', first: '<b>x</b>' }]), {
+      status: vi.fn().mockReturnThis(),
+      json: vi.fn(),
+    });
+
+    const { body } = h.publish.mock.calls[0][0] as { body: string };
+    expect(body).toContain('Hello &lt;b&gt;x&lt;/b&gt;,');
+    expect(body).not.toContain('<b>x</b>');
+  });
+
+  it('derives a username that satisfies the username rules from the address', async () => {
+    await h.handler!(makeReq([{ email: 'first.last+tag@b.test' }]), {
+      status: vi.fn().mockReturnThis(),
+      json: vi.fn(),
+    });
+
+    expect(h.createUser.mock.calls[0][0].username).toBe('first.lasttag');
+  });
+
+  it('falls back to a generated username when the local part has no usable characters', async () => {
+    await h.handler!(makeReq([{ email: '+++@b.test' }]), { status: vi.fn().mockReturnThis(), json: vi.fn() });
+
+    expect(h.createUser.mock.calls[0][0].username).toMatch(/^user-[0-9a-f]{8}$/);
   });
 });

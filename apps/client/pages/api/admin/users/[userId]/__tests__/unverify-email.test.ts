@@ -23,7 +23,9 @@ vi.mock('@bike4mind/database', () => ({
   withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
-vi.mock('@server/utils/auditLog', () => ({ logAuditEvent: vi.fn(), EmailAuditEvents: {} }));
+vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn().mockResolvedValue(null) }));
+
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 await import('../unverify-email');
 
@@ -52,6 +54,13 @@ describe('POST /api/admin/users/[userId]/unverify-email', () => {
     await h.handler!(makeReq(), { json });
 
     expect(h.update).toHaveBeenCalledTimes(1);
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'user.email.unverified',
+        target: expect.objectContaining({ kind: 'user', id: 'user-1' }),
+      })
+    );
     expect(h.update).toHaveBeenCalledWith({ id: 'user-1', emailVerified: false, emailVerifiedAt: null });
     expect(json).toHaveBeenCalledWith({ message: 'Email unverified successfully' });
   });

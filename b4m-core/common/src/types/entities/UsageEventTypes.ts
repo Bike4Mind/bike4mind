@@ -27,6 +27,8 @@ export const USAGE_EVENT_FEATURES = [
   'operations',
   // Query-embedding spend (e.g. every search_knowledge_base semantic search).
   'embedding',
+  // Synchronous POST /api/v1/decisions calls.
+  'decision',
 ] as const;
 
 export type UsageEventFeature = (typeof USAGE_EVENT_FEATURES)[number];
@@ -284,7 +286,7 @@ export interface IUsageDashboardResponse {
   byMember: NamedOwnerSpendMember[];
   byModel: IOwnerSpendModel[];
   byFeature: IOwnerSpendFeature[];
-  /** API-token spend grouped by key (from the ledger; only completion_api_usage carries a key). */
+  /** API-token spend grouped by key (from the ledger; only completion_api_usage and decision_usage carry a key). */
   byApiKey: NamedApiKeyUsage[];
   /**
    * Spend grouped by originating surface (from the ledger, the only source

@@ -7,6 +7,7 @@ export default defineConfig({
     alias: {
       '@shared': resolve(__dirname, 'src/shared'),
       '@renderer': resolve(__dirname, 'src/renderer/src'),
+      '@bike4mind/cli/skills': resolve(__dirname, '../../packages/cli/src/skills/index.ts'),
     },
   },
   test: {

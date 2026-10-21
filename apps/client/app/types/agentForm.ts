@@ -45,7 +45,7 @@ export interface FormState {
  *
  * Setting any of these fields routes the agent through the ReAct executor with
  * the inline permission card; leaving them unset keeps the agent on the legacy
- * chat-completion path (see `hasOrchestrationFields` in `utils/agentOrchestration.ts`).
+ * chat-completion path (see `hasOrchestrationFields` in `lib/agentOrchestration.ts`).
  *
  * `defaultVariables` is modeled as an array of pairs on the form so React can
  * key by stable id while the user types - serialized to a `Record<string, string>`

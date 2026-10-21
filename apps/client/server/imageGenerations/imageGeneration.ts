@@ -5,7 +5,6 @@ import {
   creditTransactionRepository,
   defineAbilitiesFor,
   fabFileRepository,
-  imageModerationIncidentRepository,
   organizationRepository,
   questRepository,
   Session,
@@ -18,13 +17,15 @@ import { SQSService } from '@bike4mind/utils';
 import { RekognitionImageModerationService } from '@bike4mind/utils/imageModeration';
 import { Logger } from '@bike4mind/observability';
 import { logEvent } from '@server/utils/analyticsLog';
-import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
-import imageLogger from '@client/app/utils/imageLogger';
-import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
+import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
+import imageLogger from '@bike4mind/server-utils/utils/imageLogger';
+import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { SessionEvents } from '@server/utils/eventBus';
-import { createAttachmentLakeAccess } from '@server/queueHandlers/agentExecutor.attachmentLakeAccess';
+import { createAttachmentLakeAccess } from '@server/dataLakes/attachmentLakeAccess';
 import type { IUserDocument } from '@bike4mind/common';
 import { Resource } from 'sst';
+import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
 
 let _imageGeneration: ImageGenerationService | undefined;
 export const getImageGeneration = (): ImageGenerationService => {
@@ -45,7 +46,7 @@ export const getImageGeneration = (): ImageGenerationService => {
         creditTransactions: creditTransactionRepository,
         usageEvents: usageEventRepository,
         organizations: organizationRepository,
-        imageModerationIncidents: imageModerationIncidentRepository,
+        imageModerationIncidents,
       },
       imageProcessorLambdaName: Resource.ImageProcessor.name,
       imageModerationService: new RekognitionImageModerationService(Logger.globalInstance),
@@ -75,6 +76,7 @@ export const getImageGeneration = (): ImageGenerationService => {
       logEvent: logEvent,
       storage: getGeneratedImageStorage(),
       fabFileStorage: getFilesStorage(),
+      saveGeneratedAsset: saveGeneratedAssetToFiles,
       abilityGetter: defineAbilitiesFor,
       invokeSessionAutoNaming: async (sessionId: string, userId: string) => {
         await SessionEvents.AutoName.publish({

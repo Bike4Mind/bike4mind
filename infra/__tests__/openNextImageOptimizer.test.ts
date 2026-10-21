@@ -8,7 +8,7 @@ import { join } from 'path';
 import openNextConfig from '../../apps/client/open-next.config';
 
 const readRepoFile = (rel: string) => readFileSync(join(__dirname, '..', '..', rel), 'utf8');
-const rootPkg = JSON.parse(readRepoFile('package.json'));
+const sharpFloor = readRepoFile('pnpm-workspace.yaml').match(/^ {2}"sharp@<([^"]+)"/m)?.[1];
 
 // The `sharp` entry of the apps/client importer block in pnpm-lock.yaml, i.e. what the app actually resolves.
 const resolvedClientSharp = () => {
@@ -49,8 +49,7 @@ describe('OpenNext image optimizer sharp install', () => {
   });
 
   it('stays at or above the root pnpm override floor for sharp', () => {
-    const floorKey = Object.keys(rootPkg.pnpm?.overrides ?? {}).find(k => k.startsWith('sharp@<'));
-    expect(floorKey).toBeDefined();
-    expect(compare(sharpVersion, (floorKey ?? '').slice('sharp@<'.length))).toBeGreaterThanOrEqual(0);
+    expect(sharpFloor).toBeDefined();
+    expect(compare(sharpVersion, sharpFloor ?? '')).toBeGreaterThanOrEqual(0);
   });
 });

@@ -108,17 +108,19 @@ export async function logEvent(event: AnalyticsEventPayloads, options?: LogEvent
  * either duplicates it or fails against the state the first call left behind.
  *
  * Falls back to console.error so a failure is still recorded when no request
- * logger is threaded through.
+ * logger is threaded through. `context` (e.g. the affected record's id) is
+ * appended to the failure line; the event payload itself is never logged.
  */
 export async function logEventSafe(
   event: AnalyticsEventPayloads,
   options?: LogEventOptions,
-  logger?: Pick<ILogger, 'error'>
+  logger?: Pick<ILogger, 'error'>,
+  context?: string
 ): Promise<void> {
   try {
     await logEvent(event, options);
   } catch (error) {
-    const message = `Failed to log analytics event ${event.type}; continuing`;
+    const message = `Failed to log analytics event ${event.type}${context ? ` for ${context}` : ''}; continuing`;
     if (logger) logger.error(message, error);
     else console.error(message, error);
   }

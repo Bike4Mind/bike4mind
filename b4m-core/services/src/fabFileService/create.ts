@@ -11,10 +11,11 @@ import {
   SupportedFabFileMimeTypes,
   isStorableFabFileMimeType,
   settingsMap,
+  StorageLimitError,
 } from '@bike4mind/common';
 import {
   BadRequestError,
-  checkStorageLimitForFile,
+  checkStorageLimitForOwner,
   getFileExtension,
   getSettingsMap,
   getSettingsValue,
@@ -26,6 +27,7 @@ import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
 import { assertCanWriteDataLakeTags, assertCanWriteStaticRegistryTags } from '../dataLakeService/authorizeLakeWrite';
 import { reconcileDataLakeFallbackTags } from '../dataLakeService/fallbackLakeTags';
+import { pickOwnerOrganizationId } from './resolveOwnerOrganization';
 
 // The fab-file bucket reaps everything under these prefixes after 1 day (infra/buckets.ts,
 // expire-notebook-exports and expire-generated-audio-offload), so no durable FabFile may be stored there. Pinned to the rule by
@@ -39,7 +41,6 @@ export const createFabFileSchema = z.object({
   fileSize: z.number(),
   type: z.enum(KnowledgeType),
   content: z.union([z.string(), z.instanceof(Buffer)]).optional(),
-  organizationId: z.string().optional(),
   /**
    * Content type of the file
    * @example 'text/markdown'
@@ -76,7 +77,8 @@ export interface CreateFabFileAdapters {
     users: {
       findById: (id: string) => Promise<IUserDocument | null>;
     };
-    organizations?: {
+    // Required: a file created into an org lake is billed to, and quota-checked against, that org.
+    organizations: {
       findById: (id: string) => Promise<IOrganizationDocument | null>;
     };
     // 'find' is for the fallback tagger's prefix-overlap check (decideStampPrefix), not the write
@@ -94,7 +96,13 @@ export interface CreateFabFileAdapters {
     scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
   };
   storage: {
-    generateSignedUrl: (path: string, expireInSeconds: number, type?: 'get' | 'put') => Promise<string>;
+    /** `ContentLength` binds a PUT to that byte length (see S3Storage.getSignedUrl). */
+    generateSignedUrl: (
+      path: string,
+      expireInSeconds: number,
+      type?: 'get' | 'put',
+      options?: { ContentLength?: number }
+    ) => Promise<string>;
     upload: (
       path: string,
       content: string | Buffer,
@@ -181,7 +189,8 @@ export const prepareFabFile = async (
   const actor = { userId, isAdmin: !!user.isAdmin, administeredOrgIds: administeredOrgIds ?? [] };
   const tagNames = (params.tags ?? []).map(t => t.name);
   // The file is created under `userId`, so it is its own owner-to-be for the admission contract.
-  await assertCanWriteDataLakeTags(actor, tagNames, { db, members: [{ userId }] });
+  const targetLakes = await assertCanWriteDataLakeTags(actor, tagNames, { db, members: [{ userId }] });
+  const ownerOrganizationId = pickOwnerOrganizationId(targetLakes);
   assertCanWriteStaticRegistryTags(actor, tagNames);
 
   // A file joining a lake here must also land under that lake's content prefix, or it
@@ -209,14 +218,24 @@ export const prepareFabFile = async (
 
   const maxFileSize = getSettingsValue('MaxFileSize', await getSettingsMap(db), MAX_FILE_SIZE_DEFAULT_MB) * 1024 * 1024;
 
-  if (params.fileSize >= maxFileSize) throw new BadRequestError('File size exceeds maximum file size');
+  if (params.fileSize >= maxFileSize) {
+    throw new StorageLimitError('File size exceeds maximum file size', {
+      errorCode: 'file_too_large',
+      used_bytes: 0,
+      limit_bytes: maxFileSize,
+      requested_bytes: params.fileSize,
+      owner: 'user',
+    });
+  }
 
-  // Check storage limit - use organization limit if organizationId is provided
-  await checkStorageLimitForFile(user, params.fileSize, params.organizationId, db.organizations?.findById);
+  await checkStorageLimitForOwner({ user, organizationId: ownerOrganizationId }, params.fileSize, id =>
+    db.organizations.findById(id)
+  );
 
   const buildData: Omit<IFabFileDocument, 'id'> = {
     userId,
     ...params,
+    ...(ownerOrganizationId && { organizationId: ownerOrganizationId }),
     ...(tags !== undefined && { tags }),
     ...(provenance && {
       sourceType: provenance.sourceType,
@@ -249,7 +268,9 @@ export const prepareFabFile = async (
       buildData.fileUrlExpireAt = new Date(Date.now() + DEFAULT_EXPIRE_IN_SECONDS * 1000);
     }
   } else {
-    buildData.presignedUrl = await storage.generateSignedUrl(filePath, 600, 'put');
+    // Bound to the declared size, the one the size and storage checks above ran on.
+    buildData.presignedUrl = await storage.generateSignedUrl(filePath, 600, 'put', { ContentLength: params.fileSize });
+    buildData.clientUpload = true;
   }
 
   return buildData;

@@ -7,7 +7,7 @@ import {
   type UserAuthAuditEvent,
 } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
 import { ApiKeyScope, CURRENT_POLICY_VERSION, type UserComplianceResponse } from '@bike4mind/common';
 import { z } from 'zod';

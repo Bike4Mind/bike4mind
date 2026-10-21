@@ -1,4 +1,5 @@
-import { ChatModels } from '@bike4mind/common';
+import { ChatModels, DEEP_RESEARCH_MAX_DEPTH, DEEP_RESEARCH_MAX_DURATION_MIN } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 import { ToolContext, ToolDefinition } from '../../base/types';
 import { recordToolOperationalUsage } from '../../base/recordToolOperationalUsage';
 import { OpenAIBackend, toProviderEndUserId, type CompletionInfo } from '@bike4mind/llm-adapters';
@@ -105,8 +106,9 @@ export async function performDeepResearch(
     totalSteps: number;
   };
 }> {
-  const maxDepth = config.maxDepth || 7;
-  const duration = config.duration || 4.5; // Duration in minutes
+  // Clamped here as well as at the request schemas: the config also arrives from stored research tasks.
+  const maxDepth = Math.min(Math.max(Math.floor(config.maxDepth || 7), 1), DEEP_RESEARCH_MAX_DEPTH);
+  const duration = Math.min(config.duration || 4.5, DEEP_RESEARCH_MAX_DURATION_MIN);
   const startTime = Date.now();
   const timeLimit = duration * 60 * 1000; // Convert minutes to milliseconds
   let topic = params.topic;
@@ -428,6 +430,13 @@ export async function performDeepResearch(
             depth: state.depth,
           });
           log(`🔬 Deep Research: ${searcher.name} search failed:`, error);
+          // The provider attempts log transient failures at warn, and a search that throws has no
+          // caller here to alert on it, so this catch is deep research's only error-level record.
+          Logger.globalInstance.error('Deep Research: search failed', {
+            searcher: searcher.name,
+            query: currentQuery,
+            error: error instanceof Error ? error.message : String(error),
+          });
         }
       }
 

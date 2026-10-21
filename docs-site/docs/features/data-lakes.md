@@ -108,8 +108,11 @@ Data Lake, personal or organization. To move a Drive-fed Data Lake into or out o
 disconnect its folder first and reconnect it afterwards.
 
 **Who can connect a GitHub repository to a Data Lake, and what if the lake is curated?**
-Only an organization Data Lake can take a GitHub repository, and only an organization owner or
-manager (or a platform admin) can connect one. The Data Lake must be connector-fed and not archived.
+On an organization Data Lake, an organization owner or manager (or a platform admin). On a personal
+Data Lake, only the person who created it, who is also the only one who can re-sync or disconnect it.
+The Data Lake must be connector-fed and not archived. A repository can feed only one Data Lake,
+personal or organization. To move a GitHub-fed Data Lake into or out of an organization, disconnect
+its repository first and reconnect it afterwards.
 On a curated Data Lake, **Connect GitHub** offers to switch it to connector-fed for you. The switch
 applies to the whole Data Lake, not just GitHub: any connector or scheduled import can then add
 files to it. It is made only when the connection can actually start, so if it cannot (for example,
@@ -127,6 +130,19 @@ you uploaded by hand are kept.
 The files are removed in the background, so a large folder can take a few minutes. Until that
 finishes the connection shows **Disconnecting** and cannot be synced. If it stops making progress,
 a **Retry disconnect** button appears.
+
+**Why does my Drive connection say "Credential error"?**
+Google Drive access for the connection was revoked or has expired, so syncing has stopped. Click
+**Reconnect Google Drive**, approve Google's consent screen, and the folder re-syncs when you return.
+
+**Why is a file from my Drive folder or GitHub repository missing from the Data Lake?**
+Sync skips files it cannot ingest, for example a file over the size limit, a file type that cannot
+be imported (such as a Google Form), or a GitHub file that is not text. When files were skipped,
+the Data Lake manager shows a chip such as **3 files not ingested** to anyone who can manage the
+lake. Click it to see each file by name with the reason it was skipped. A file leaves the list once
+it ingests or is removed from the folder or repository. Files skipped because they could not be
+downloaded, or because the lake owner's storage was full, are retried on a later sync (for Drive,
+at the latest on its daily full re-sync).
 
 ## Related
 

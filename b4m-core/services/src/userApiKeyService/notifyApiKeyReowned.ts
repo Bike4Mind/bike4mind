@@ -1,5 +1,5 @@
 import type { IUserRepository } from '@bike4mind/common';
-import { escapeHtml, wrapLakeEmail } from '../dataLakeService/renderSpendNotificationEmail';
+import { escapeHtml, wrapEmail } from '../notificationEmail';
 
 export interface ApiKeyReownedNotifyDeps {
   db: { users: Pick<IUserRepository, 'findActiveEmailsByIds'> };
@@ -14,7 +14,7 @@ export function renderApiKeyReownedEmail(keyName: string): { subject: string; ht
   const subjectName = keyName.replace(/[\r\n]+/g, ' ');
   return {
     subject: `Your API key "${subjectName}" was rotated to a new owner`,
-    html: wrapLakeEmail(
+    html: wrapEmail(
       `<p>Your API key <strong>${escaped}</strong> was rotated by an org admin and is now owned by that admin. ` +
         `The credential you previously held is no longer valid. ` +
         `If you need a new key, you can create one from your account settings.</p>`,

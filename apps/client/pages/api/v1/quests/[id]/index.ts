@@ -1,5 +1,5 @@
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { NotFoundError } from '@server/utils/errors';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { questRepository, sessionRepository } from '@bike4mind/database';
 import { getQuestContract } from '@bike4mind/common';
 import { toQuestPollBody } from '@server/utils/questPollBody';
@@ -7,7 +7,7 @@ import {
   applyRecoveryInMemory,
   resolveQuestTimeoutRecovery,
   STUCK_QUEST_RECOVERED_LOG,
-} from '@server/chatCompletion/questTimeoutRecovery';
+} from '@bike4mind/server-utils/chatCompletion/questTimeoutRecovery';
 import { dispatchQuestCallback } from '@server/generationCallback/dispatchQuestCallback';
 import { isSessionOwnedByUser } from '@server/utils/sessionOwnership';
 
@@ -74,7 +74,7 @@ const handler = nextRouteForContract(getQuestContract, {
     }
   }
 
-  return res.json(toQuestPollBody(quest, { isOwner, logger: req.logger }));
+  return res.json(await toQuestPollBody(quest, { isOwner, logger: req.logger }));
 });
 
 export default handler;

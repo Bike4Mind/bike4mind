@@ -1,5 +1,10 @@
 import type { IMFAConfig, IOrganizationDocument, IUserDocument } from '@bike4mind/common';
 
+// What toSafeOrganization leaves on an org: no stripeCustomerId for anyone; billingContact is
+// present only for the org owner or a site admin.
+export type SafeOrganization = Omit<IOrganizationDocument, 'stripeCustomerId' | 'billingContact'> &
+  Partial<Pick<IOrganizationDocument, 'billingContact'>>;
+
 // Both the GET /api/users projection and the client row type (AdminUserListItem) derive from
 // this list, so reading a field the endpoint does not emit is a compile error. Shared here
 // rather than in the route so pages/api/users/index.ts and the client agree by construction.
@@ -7,9 +12,9 @@ import type { IMFAConfig, IOrganizationDocument, IUserDocument } from '@bike4min
 // The projection is an inclusion allowlist, so a newly-added secret field on the User
 // schema can never silently appear here. Aggregation ignores Mongoose select:false, so
 // this projection is the only guard. MFA is narrowed to enrollment status -- totpSecret /
-// backupCodes must never reach the client, even an admin's browser. (The joined
-// `organization` object is admin-scoped org data; its own field-level exposure is tracked
-// separately, not here.)
+// backupCodes must never reach the client, even an admin's browser. The $lookup-joined
+// `organization` is deliberately not projected: the org comes back once, serialized, via the
+// populated organizationId. The org-name $match still works because it runs before $project.
 export const ADMIN_USER_LIST_FIELDS = [
   'name',
   'username',
@@ -48,7 +53,6 @@ export const ADMIN_USER_PROJECTION: Record<string, 1> = {
   'mfa.totpEnabled': 1,
   'mfa.setupAt': 1,
   'mfa.lastUsedAt': 1,
-  organization: 1,
 };
 
 // Deliberately a structural subset of IUserDocument (no `_id`) so the wider single-user
@@ -57,14 +61,19 @@ export const ADMIN_USER_PROJECTION: Record<string, 1> = {
 export type AdminUserListItem = Omit<Pick<IUserDocument, (typeof ADMIN_USER_LIST_FIELDS)[number]>, 'organizationId'> & {
   // Rows are returned through User.hydrate(), so JSON carries the `id` virtual.
   id: string;
-  // The endpoint populates organizationId, so it arrives as the org document (null when unset).
-  organizationId: IOrganizationDocument | null;
+  // The endpoint populates organizationId and serializes it, so it arrives as the safe org shape
+  // (null when unset).
+  organizationId: SafeOrganization | null;
   mfa?: Pick<IMFAConfig, 'totpEnabled' | 'setupAt' | 'lastUsedAt'> | null;
-  // Joined by the $lookup stage, absent when the user has no organization.
-  organization?: IOrganizationDocument;
 };
 
+// publicView for an admin caller. Non-admin pickers get PICKER_USER_PROJECTION instead.
 export const PUBLIC_USER_LIST_PROJECTION: Record<string, 1> = { _id: 1, username: 1, name: 1, email: 1 };
+
+// publicView for a non-admin caller (the project/org add-member pickers). No email: another user's
+// address is never returned to a non-admin, and `username` is further stripped from any row outside
+// the caller's shared workspaces (see GET /api/users), leaving just id and name.
+export const PICKER_USER_PROJECTION: Record<string, 1> = { _id: 1, username: 1, name: 1 };
 
 // $sort runs before $project in the GET /api/users pipeline, so an unvalidated sortField lets a
 // caller rank on attributes their own projection strips -- `sortField=isAdmin` turns the public
@@ -72,6 +81,7 @@ export const PUBLIC_USER_LIST_PROJECTION: Record<string, 1> = { _id: 1, username
 // themselves so a field can never be sortable without also being returned.
 export const ADMIN_USER_SORT_FIELDS: ReadonlySet<string> = new Set(Object.keys(ADMIN_USER_PROJECTION));
 export const PUBLIC_USER_SORT_FIELDS: ReadonlySet<string> = new Set(Object.keys(PUBLIC_USER_LIST_PROJECTION));
+export const PICKER_USER_SORT_FIELDS: ReadonlySet<string> = new Set(Object.keys(PICKER_USER_PROJECTION));
 
 // createdAt is projected for admins but not for public callers, so the two paths need
 // different fallbacks for an out-of-allowlist sortField.

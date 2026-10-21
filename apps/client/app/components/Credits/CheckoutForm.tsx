@@ -1,17 +1,46 @@
-import { FC, useCallback, useEffect, useState } from 'react';
+import { FC, useCallback, useEffect, useRef, useState } from 'react';
 import { PaymentElement, useElements, useStripe } from '@stripe/react-stripe-js';
 import { Button } from '@mui/joy';
+import type { CreditPurchaseConfirmOutcome } from '@bike4mind/common';
+import { reportCreditPurchaseConversion } from '@client/app/components/stripe/StripePaymentReturnHandler';
+
+export interface ConfirmResult {
+  outcome: CreditPurchaseConfirmOutcome;
+  errorType?: string;
+  errorCode?: string;
+  declineCode?: string;
+}
 
 interface ICheckoutFormProps {
   clientSecret: string;
   onPayment: () => void;
+  onConfirmResult?: (result: ConfirmResult) => void;
 }
 
-const CheckoutForm: FC<ICheckoutFormProps> = ({ clientSecret, onPayment }) => {
+// Some methods (bank transfer instructions, microdeposit verification) finish outside this form,
+// so a requires_action confirm without an error is pending, not failed.
+const PENDING_ACTION_MESSAGE = 'Your payment needs one more step. Follow the instructions from your payment provider.';
+
+function toOutcome(status: string | undefined): CreditPurchaseConfirmOutcome {
+  return status === 'succeeded' || status === 'processing' || status === 'requires_action' ? status : 'unknown';
+}
+
+const CheckoutForm: FC<ICheckoutFormProps> = ({ clientSecret, onPayment, onConfirmResult }) => {
   const stripe = useStripe();
   const elements = useElements();
   const [message, setMessage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  // Once the intent has succeeded or is processing, a second confirm only returns an
+  // unexpected-state error, which would replace the success message and trace as a failure.
+  const [isSettled, setIsSettled] = useState(false);
+  // Callers pass an inline onPayment, so the status effect below re-runs on every parent render;
+  // without this an in-page success would re-announce itself each time.
+  const paidRef = useRef(false);
+  const notifyPaid = useCallback(() => {
+    if (paidRef.current) return;
+    paidRef.current = true;
+    onPayment();
+  }, [onPayment]);
 
   // Retrieve purchase status from Stripe
   useEffect(() => {
@@ -21,10 +50,15 @@ const CheckoutForm: FC<ICheckoutFormProps> = ({ clientSecret, onPayment }) => {
       switch (paymentIntent?.status) {
         case 'succeeded':
           setMessage('Payment succeeded!');
-          onPayment();
+          setIsSettled(true);
+          notifyPaid();
           break;
         case 'processing':
           setMessage('Your payment is processing.');
+          setIsSettled(true);
+          break;
+        case 'requires_action':
+          setMessage(PENDING_ACTION_MESSAGE);
           break;
         case 'requires_payment_method':
           setMessage('');
@@ -34,7 +68,7 @@ const CheckoutForm: FC<ICheckoutFormProps> = ({ clientSecret, onPayment }) => {
           break;
       }
     });
-  }, [clientSecret, onPayment, stripe]);
+  }, [clientSecret, notifyPaid, stripe]);
 
   const handleSubmit: (event: React.MouseEvent<HTMLButtonElement>) => void = useCallback(
     async e => {
@@ -45,24 +79,50 @@ const CheckoutForm: FC<ICheckoutFormProps> = ({ clientSecret, onPayment }) => {
 
       setIsLoading(true);
 
-      const { error } = await stripe.confirmPayment({
+      // 'if_required' keeps card payments in-page so the result is observable here; methods that
+      // need a redirect (e.g. iDEAL) still go to return_url and are traced by the webhook instead.
+      const { error, paymentIntent } = await stripe.confirmPayment({
         elements,
         confirmParams: {
           return_url: window.location.toString(),
         },
+        redirect: 'if_required',
       });
 
-      // Only reached if confirmPayment errors immediately; otherwise Stripe redirects the
-      // customer to return_url (some methods like iDEAL redirect via an intermediate site first).
-      if (error.type === 'card_error' || error.type === 'validation_error') {
-        setMessage(error.message ?? null);
+      if (error) {
+        onConfirmResult?.({
+          outcome: 'error',
+          errorType: error.type,
+          errorCode: error.code,
+          declineCode: error.decline_code,
+        });
+        if (error.type === 'card_error' || error.type === 'validation_error') {
+          setMessage(error.message ?? null);
+        } else {
+          setMessage('An unexpected error occurred.');
+        }
       } else {
-        setMessage('An unexpected error occurred.');
+        onConfirmResult?.({ outcome: toOutcome(paymentIntent?.status) });
+        if (paymentIntent?.status === 'succeeded') {
+          setMessage('Payment succeeded!');
+          setIsSettled(true);
+          notifyPaid();
+          // A card success no longer redirects, so StripePaymentReturnHandler never sees it.
+          reportCreditPurchaseConversion(paymentIntent.id);
+        } else if (paymentIntent?.status === 'processing') {
+          setMessage('Your payment is processing.');
+          setIsSettled(true);
+        } else if (paymentIntent?.status === 'requires_action') {
+          setMessage(PENDING_ACTION_MESSAGE);
+          setIsSettled(true);
+        } else {
+          setMessage('Something went wrong.');
+        }
       }
 
       setIsLoading(false);
     },
-    [elements, stripe]
+    [elements, notifyPaid, onConfirmResult, stripe]
   );
 
   return (
@@ -70,7 +130,8 @@ const CheckoutForm: FC<ICheckoutFormProps> = ({ clientSecret, onPayment }) => {
       <PaymentElement id="payment-element" className="checkout-payment-element" options={{ layout: 'tabs' }} />
       <Button
         className="checkout-submit-button"
-        disabled={isLoading || !stripe || !elements}
+        data-testid="checkout-submit-btn"
+        disabled={isLoading || isSettled || !stripe || !elements}
         id="submit"
         onClick={handleSubmit}
         sx={{ mt: 2, mb: 2 }}

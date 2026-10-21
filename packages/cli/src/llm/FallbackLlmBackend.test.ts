@@ -155,50 +155,38 @@ describe('FallbackLlmBackend', () => {
     expect(inner.complete).toHaveBeenCalledOnce();
   });
 
-  it('discards a failed attempt’s partial output and falls back cleanly (no double-content)', async () => {
-    // OllamaBackend fires the callback per-chunk, so an attempt can stream
-    // partial output before throwing. The decorator buffers inner deliveries
-    // and only flushes on success, so that partial output must be discarded and
-    // never replayed on top of the fallback model's result.
-    const error = new Error('stream broke');
-    const modelsAttempted: string[] = [];
-    let calls = 0;
+  it('falls back when an attempt fails before delivering any output', async () => {
     const inner = createMockBackend();
-    (inner.complete as ReturnType<typeof vi.fn>).mockImplementation(async (model, _msgs, _opts, cb) => {
-      modelsAttempted.push(model);
-      calls++;
-      if (calls === 1) {
-        await cb(['partial from model-a'], {}); // streamed, then fails
-        throw error;
-      }
-      await cb(['final from model-b'], {});
-    });
+    (inner.complete as ReturnType<typeof vi.fn>)
+      .mockRejectedValueOnce(new Error('rate limited'))
+      .mockImplementationOnce(async (_model, _msgs, _opts, cb) => {
+        await cb(['final from model-b'], {});
+      });
 
     const fallback = new FallbackLlmBackend(inner, ['model-b'], onFallback);
     await fallback.complete('model-a', makeMessages(), makeOptions(), callback);
 
-    expect(modelsAttempted).toEqual(['model-a', 'model-b']);
     expect(onFallback).toHaveBeenCalledOnce();
-    // Only the successful model's output reaches the caller, exactly once -
-    // the failed attempt's partial chunk is never delivered.
     expect(callback).toHaveBeenCalledOnce();
     expect(callback).toHaveBeenCalledWith(['final from model-b'], {});
   });
 
-  it('never delivers buffered output when every model fails after streaming', async () => {
-    const error = new Error('all broke');
+  it('streams output live and does not fall back once output was delivered (no double-content)', async () => {
+    // The caller appends every delivery, so falling back after one would put the
+    // next model's answer on top of the partial one. The failure surfaces instead.
+    const error = new Error('stream broke');
     const inner = createMockBackend();
     (inner.complete as ReturnType<typeof vi.fn>).mockImplementation(async (_model, _msgs, _opts, cb) => {
-      await cb(['partial'], {}); // streams before failing on every attempt
+      await cb(['partial from model-a']);
+      expect(callback).toHaveBeenCalledWith(['partial from model-a'], undefined);
       throw error;
     });
 
     const fallback = new FallbackLlmBackend(inner, ['model-b'], onFallback);
     await expect(fallback.complete('model-a', makeMessages(), makeOptions(), callback)).rejects.toThrow(error);
 
-    expect(inner.complete).toHaveBeenCalledTimes(2);
-    // Buffered partial output is discarded on failure - caller sees nothing.
-    expect(callback).not.toHaveBeenCalled();
+    expect(inner.complete).toHaveBeenCalledOnce();
+    expect(onFallback).not.toHaveBeenCalled();
   });
 
   it('delegates pushToolMessages and getModelInfo to inner backend', async () => {

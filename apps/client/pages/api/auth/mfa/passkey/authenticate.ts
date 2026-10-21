@@ -2,7 +2,8 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { mfaService } from '@bike4mind/services';
 import { userRepository } from '@bike4mind/database';
-import { redactUserSecretsForSelf } from '@bike4mind/common';
+import { redactUserSecretsForSelf, selfUserResponseSchema } from '@bike4mind/common';
+import { respond } from '@server/utils/respond';
 import { completeMfaLogin } from '@server/auth/completeMfaLogin';
 import { sendFailedMfaAttempt, sendIfLockedOut } from '@server/auth/mfaLockout';
 import {
@@ -17,6 +18,13 @@ import * as z from 'zod';
 const bodySchema = z.object({
   response: authenticationResponseSchema,
   rememberDevice: z.boolean().optional(),
+});
+
+const passkeyAuthenticateResponseSchema = z.object({
+  verified: z.literal(true),
+  deviceRemembered: z.boolean(),
+  accessToken: z.string(),
+  user: selfUserResponseSchema,
 });
 
 /**
@@ -54,7 +62,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
     }
 
     const { accessToken, deviceRemembered } = await completeMfaLogin(req, res, result.user, { rememberDevice });
-    return res.json({
+    return respond(res, passkeyAuthenticateResponseSchema, {
       verified: true,
       deviceRemembered,
       accessToken,

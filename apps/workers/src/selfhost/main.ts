@@ -3,20 +3,20 @@ import { adminSettingsRepository, connectDB } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { dispatch as researchEngineDispatch } from '@workers/queueHandlers/researchEngineQueue';
 import { dispatch as fabFileChunkDispatch } from '@workers/queueHandlers/fabFileChunk';
 import { dispatch as fabFileVectorizeDispatch } from '@workers/queueHandlers/fabFileVectorize';
 import { dispatch as dataLakeTaxonomyAnalysisDispatch } from '@workers/queueHandlers/dataLakeTaxonomyAnalysis';
 import { dispatch as dataLakeResearchRunDispatch } from '@workers/queueHandlers/dataLakeResearchRun';
-import { dispatch as driveDisconnectPurgeDispatch } from '@server/queueHandlers/driveDisconnectPurge';
+import { dispatch as driveDisconnectPurgeDispatch } from '@workers/queueHandlers/driveDisconnectPurge';
 import { dispatch as driveLakeIngestDispatch } from '@workers/queueHandlers/driveLakeIngest';
 import { dispatch as githubLakeIngestDispatch } from '@workers/queueHandlers/githubLakeIngest';
 import { dispatch as githubLakeRevokeDispatch } from '@workers/queueHandlers/githubLakeRevoke';
 import { dispatch as imageGenerationDispatch } from '@workers/queueHandlers/imageGeneration';
 import { dispatch as imageEditDispatch } from '@workers/queueHandlers/imageEdit';
 import { dispatch as generationCallbackDispatch } from '@workers/queueHandlers/generationCallback';
-import { dispatch as generationJobDispatch } from '@server/queueHandlers/generationJob';
+import { dispatch as generationJobDispatch } from '@workers/queueHandlers/generationJob';
 import { modelDiscoveryIntervalMs, runScheduledDiscovery } from '@server/modelDiscovery/scheduledRun';
 import { isDiscoveryDriver, startDiscoveryOnStartup } from '@server/modelDiscovery/startupLeg';
 import { runStuckBatchSweep } from '@workers/cron/dataLakeBatchReconcile';
@@ -30,15 +30,21 @@ import { registerDataLakeCleanupQueue } from './dataLakeCleanupQueue';
 import { registerTelemetryCleanup } from './telemetryCleanup';
 import { registerApiKeyBaselineCalculation } from './apiKeyBaselineCalculation';
 import { registerLakeInconsistencySweep } from './lakeInconsistencySweep';
+import { registerCreditLotSweep } from './creditLotSweep';
+import { registerVoiceHoldSweep } from './voiceHoldSweep';
+import { registerCreditHoldSweep } from './creditHoldSweep';
 import { registerAbandonedExecutionSweep } from './abandonedExecutionSweep';
 import { registerQuestTimeoutSweep } from './questTimeoutSweep';
 import { registerGenerationJobSweep } from './generationJobSweep';
+import { registerSkillMarketReviewSla } from './skillMarketReviewSla';
+import { registerRealtimeConnectionSweep } from './realtimeConnectionSweep';
 import { registerLakeHealthSweep } from './lakeHealthSweep';
 import { registerGitHubLakeReconcile } from './githubLakeReconcile';
+import { registerLakeConnectorOrphanReap } from './lakeConnectorOrphanReap';
 import { dispatchSelfHostEvent } from './eventDispatch';
-import { runChunkRescueSweep, runStrandedVectorizeRescue } from '@server/s3/chunkRescueSweep';
-import { runModerationRescueSweep } from '@server/s3/moderationRescueSweep';
-import { CHUNK_SCAN_BATCH } from '@server/s3/chunkScan';
+import { runChunkRescueSweep, runStrandedVectorizeRescue } from '@workers/s3/chunkRescueSweep';
+import { runModerationRescueSweep } from '@workers/s3/moderationRescueSweep';
+import { CHUNK_SCAN_BATCH } from '@workers/s3/chunkScan';
 import {
   FAB_FILE_CHUNK_MAX_RECEIVE_COUNT,
   FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT,
@@ -46,7 +52,7 @@ import {
   GENERATION_CALLBACK_VISIBILITY_TIMEOUT_SEC,
   GENERATION_JOB_MAX_RECEIVE_COUNT,
   GENERATION_JOB_VISIBILITY_TIMEOUT_SEC,
-} from '@server/queueHandlers/sqsDelivery';
+} from '@bike4mind/server-utils/utils/sqsDelivery';
 
 /**
  * Self-host background worker entrypoint.
@@ -101,11 +107,17 @@ async function main() {
   registerAbandonedExecutionSweep(worker);
   registerQuestTimeoutSweep(worker);
   registerGenerationJobSweep(worker);
+  registerSkillMarketReviewSla(worker);
+  registerRealtimeConnectionSweep(worker);
   registerLakeHealthSweep(worker);
   registerGitHubLakeReconcile(worker);
+  registerLakeConnectorOrphanReap(worker);
   registerTelemetryCleanup(worker);
   registerApiKeyBaselineCalculation(worker);
   registerLakeInconsistencySweep(worker);
+  registerCreditLotSweep(worker);
+  registerVoiceHoldSweep(worker);
+  registerCreditHoldSweep(worker);
 
   worker.registerQueueHandler('researchEngineQueue', Resource.researchEngineQueue.url, researchEngineDispatch, {
     visibilityTimeoutSec: RESEARCH_VISIBILITY_TIMEOUT_SEC,

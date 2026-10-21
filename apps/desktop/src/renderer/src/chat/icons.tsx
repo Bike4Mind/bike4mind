@@ -301,6 +301,15 @@ export function GlobeIcon() {
   );
 }
 
+export function TerminalIcon() {
+  return (
+    <Glyph>
+      <rect x="2" y="3" width="12" height="10" rx="1.5" />
+      <path d="M4.75 6.25 6.75 8l-2 1.75M8.25 10h3" />
+    </Glyph>
+  );
+}
+
 /** The browser pane's url bar: back, forward, and a reload that is the same arc both ways. */
 export function ArrowLeftIcon() {
   return (

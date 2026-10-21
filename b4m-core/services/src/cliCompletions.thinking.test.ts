@@ -119,4 +119,32 @@ describe('executeCompletion - thinking', () => {
     await executeCompletion({ ...baseParams, model: 'adaptive-model', db, options: { thinking: { enabled: false } } });
     expect(capturedOptions).not.toHaveProperty('thinking');
   });
+
+  describe('Ollama', () => {
+    const OLLAMA_THINKING_MODEL = { id: 'qwen3:8b', backend: 'ollama', max_tokens: 8192, can_think: true };
+
+    it.each([
+      ['turned thinking off', { thinking: { enabled: false } }],
+      ['sent no thinking option', {}],
+    ])('turns thinking off explicitly when the caller %s, since Ollama otherwise thinks', async (_label, options) => {
+      availableModels = [OLLAMA_THINKING_MODEL];
+      const { db } = buildDb();
+      await executeCompletion({ ...baseParams, model: 'qwen3:8b', db, options });
+      expect(capturedOptions?.thinking).toEqual({ enabled: false, budget_tokens: 0 });
+    });
+
+    it('still turns thinking on when asked', async () => {
+      availableModels = [OLLAMA_THINKING_MODEL];
+      const { db } = buildDb();
+      await executeCompletion({ ...baseParams, model: 'qwen3:8b', db, options: { thinking: { enabled: true } } });
+      expect(capturedOptions?.thinking).toEqual({ enabled: true, budget_tokens: 16000 });
+    });
+
+    it('sends no thinking option to a model that cannot think', async () => {
+      availableModels = [{ ...OLLAMA_THINKING_MODEL, can_think: false }];
+      const { db } = buildDb();
+      await executeCompletion({ ...baseParams, model: 'qwen3:8b', db, options: { thinking: { enabled: true } } });
+      expect(capturedOptions).not.toHaveProperty('thinking');
+    });
+  });
 });

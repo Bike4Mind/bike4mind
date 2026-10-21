@@ -825,6 +825,7 @@ async function planPass(input: PassInput): Promise<PassPlan> {
     coveredBackends,
     priorDiscoveryGroups,
     priorContributors,
+    providerUndated: signals.providerUndated,
     operatorOwnedModelIds,
     presentationOwnedElsewhere,
     credentials,
@@ -834,6 +835,11 @@ async function planPass(input: PassInput): Promise<PassPlan> {
     runStartedAt: effectiveAt,
     runId,
   });
+
+  for (const source of succeeded) {
+    const r = results.get(source.name)?.result;
+    if (r?.ok) catalog.dropped.push(...(r.dropped ?? []));
+  }
 
   const priceRowsAtRunStart = input.priceRowsAtRunStart ?? priceRowsInForce;
   const prices = planPriceWrites({

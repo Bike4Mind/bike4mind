@@ -57,6 +57,12 @@ const FULL_MODEL_ID_PREFIXES = [
  * To add a new model alias:
  * 1. Add the alias as a key (lowercase)
  * 2. Set the value to the full model ID from ChatModels enum
+ *
+ * The CLI request path never runs resolveDeprecatedModelId, so a target must be
+ * an active model with no deprecationDate. A target with a scheduled
+ * deprecationDate belongs in SUNSETTING_MODEL_ALIASES; an alias for a retired
+ * model points at its successor or moves to RETIRED_MODEL_ALIASES.
+ * AgentStore.test.ts enforces this.
  */
 export const MODEL_ALIASES: Record<string, string> = {
   // Anthropic/Claude Models
@@ -79,7 +85,7 @@ export const MODEL_ALIASES: Record<string, string> = {
   'claude-4.5-sonnet': ChatModels.CLAUDE_4_5_SONNET,
   'claude-4.5-haiku': ChatModels.CLAUDE_4_5_HAIKU,
   'claude-4-opus': ChatModels.CLAUDE_4_OPUS,
-  'claude-4-sonnet': ChatModels.CLAUDE_4_SONNET,
+  'claude-4-sonnet': ChatModels.CLAUDE_4_6_SONNET,
   'claude-4.1-opus': ChatModels.CLAUDE_4_1_OPUS,
   'claude-3.7-sonnet': ChatModels.CLAUDE_4_6_SONNET,
   'claude-3.5-sonnet': ChatModels.CLAUDE_4_5_SONNET,
@@ -88,14 +94,10 @@ export const MODEL_ALIASES: Record<string, string> = {
 
   // OpenAI Models
   // GPT-4 family
-  'gpt-4': ChatModels.GPT4,
   'gpt-4o': ChatModels.GPT4o,
   'gpt-4o-mini': ChatModels.GPT4o_MINI,
-  'gpt-4-turbo': ChatModels.GPT4_TURBO,
   'gpt-4.1': ChatModels.GPT4_1,
   'gpt-4.1-mini': ChatModels.GPT4_1_MINI,
-  'gpt-4.1-nano': ChatModels.GPT4_1_NANO,
-  'gpt-4.5': ChatModels.GPT4_5_PREVIEW,
 
   // GPT-5 family
   'gpt-5': ChatModels.GPT5,
@@ -111,46 +113,30 @@ export const MODEL_ALIASES: Record<string, string> = {
   'gpt-5.6-luna': ChatModels.GPT5_6_LUNA,
   'gpt-5.6-terra': ChatModels.GPT5_6_TERRA,
 
-  // OpenAI reasoning models (o-series)
-  o1: ChatModels.O1,
-  'o1-preview': ChatModels.O1_PREVIEW,
-  'o1-mini': ChatModels.O1_MINI,
-  o3: ChatModels.O3,
-  'o3-mini': ChatModels.O3_MINI,
-  'o4-mini': ChatModels.O4_MINI,
-
   // Google Gemini Models
-  gemini: ChatModels.GEMINI_2_5_PRO,
-  'gemini-pro': ChatModels.GEMINI_2_5_PRO,
+  gemini: ChatModels.GEMINI_3_5_FLASH,
+  'gemini-pro': ChatModels.GEMINI_3_1_PRO_PREVIEW,
   'gemini-flash': ChatModels.GEMINI_3_5_FLASH,
-  'gemini-flash-lite': ChatModels.GEMINI_2_5_FLASH_LITE,
+  'gemini-flash-lite': ChatModels.GEMINI_3_1_FLASH_LITE,
 
   // Gemini 3 (preview)
-  'gemini-3': ChatModels.GEMINI_3_PRO_PREVIEW,
-  'gemini-3-pro': ChatModels.GEMINI_3_PRO_PREVIEW,
+  'gemini-3': ChatModels.GEMINI_3_1_PRO_PREVIEW,
+  'gemini-3-pro': ChatModels.GEMINI_3_1_PRO_PREVIEW,
   'gemini-3-flash': ChatModels.GEMINI_3_FLASH_PREVIEW,
 
   // Gemini 2.5
-  'gemini-2.5': ChatModels.GEMINI_2_5_PRO,
-  'gemini-2.5-pro': ChatModels.GEMINI_2_5_PRO,
-  'gemini-2.5-flash': ChatModels.GEMINI_2_5_FLASH,
-
-  // Gemini 2.0
-  'gemini-2.0-flash': ChatModels.GEMINI_2_0_FLASH_EXP,
-
-  // Gemini 1.5 (legacy)
-  'gemini-1.5-pro': ChatModels.GEMINI_1_5_PRO,
-  'gemini-1.5-flash': ChatModels.GEMINI_1_5_FLASH,
-  'gemini-1.5-flash-8b': ChatModels.GEMINI_1_5_FLASH_8B,
+  'gemini-2.5': ChatModels.GEMINI_3_5_FLASH,
+  'gemini-2.5-pro': ChatModels.GEMINI_3_5_FLASH,
+  'gemini-2.5-flash': ChatModels.GEMINI_3_1_FLASH_LITE,
 
   // xAI Grok Models
-  grok: ChatModels.GROK_3,
-  'grok-3': ChatModels.GROK_3,
-  'grok-3-fast': ChatModels.GROK_3_FAST,
+  grok: ChatModels.GROK_4_5,
+  'grok-3': ChatModels.GROK_4_5,
+  'grok-3-fast': ChatModels.GROK_4_5,
   'grok-3-mini': ChatModels.GROK_3_MINI,
-  'grok-3-mini-fast': ChatModels.GROK_3_MINI_FAST,
-  'grok-2': ChatModels.GROK_2,
-  'grok-2-vision': ChatModels.GROK_2_VISION,
+  'grok-3-mini-fast': ChatModels.GROK_3_MINI,
+  'grok-2': ChatModels.GROK_4_5,
+  'grok-2-vision': ChatModels.GROK_4_5,
 
   // DeepSeek Models
   // Bare `deepseek` points at the hosted first-party model; `deepseek-r1` keeps
@@ -166,10 +152,52 @@ export const MODEL_ALIASES: Record<string, string> = {
 };
 
 /**
+ * Aliases whose target is still served but carries a catalog deprecationDate.
+ * An entry's `model` id resolves and retires on the same date as its key. Each
+ * resolves until `retiresOn`, then reports as retired and names `successor`
+ * instead of pinning a dead id. AgentStore.test.ts keeps every `retiresOn` equal
+ * to the catalog deprecationDate and every `successor` a live MODEL_ALIASES key.
+ */
+export const SUNSETTING_MODEL_ALIASES: Record<string, { model: string; retiresOn: string; successor: string }> = {
+  'gpt-4': { model: ChatModels.GPT4, retiresOn: '2026-10-23', successor: 'gpt-5.5' },
+  'gpt-4-turbo': { model: ChatModels.GPT4_TURBO, retiresOn: '2026-10-23', successor: 'gpt-5.5' },
+  'gpt-4.1-nano': { model: ChatModels.GPT4_1_NANO, retiresOn: '2026-10-23', successor: 'gpt-5-nano' },
+  'o4-mini': { model: ChatModels.O4_MINI, retiresOn: '2026-10-23', successor: 'gpt-5-mini' },
+  o3: { model: ChatModels.O3, retiresOn: '2026-12-11', successor: 'gpt-5.5' },
+};
+
+/**
+ * Aliases for retired models, mapped to the alias to suggest instead. Checked
+ * before the full-id passthrough so `gpt-4.5` or `gemini-1.5-pro` warn rather
+ * than pin an id the provider no longer serves.
+ */
+export const RETIRED_MODEL_ALIASES: Record<string, string> = {
+  'gpt-4.5': 'gpt-5.5',
+  o1: 'gpt-5.5',
+  'o1-preview': 'gpt-5.5',
+  'o1-mini': 'gpt-5-mini',
+  'o3-mini': 'gpt-5-mini',
+  'gemini-2.0-flash': 'gemini-flash',
+  'gemini-1.5-pro': 'gemini-pro',
+  'gemini-1.5-flash': 'gemini-flash',
+  'gemini-1.5-flash-8b': 'gemini-flash-lite',
+};
+
+// Agent frontmatter is user-controlled, so `constructor` or `toString` must not
+// resolve through the prototype.
+function ownEntry<T>(table: Record<string, T>, key: string): T | undefined {
+  return Object.prototype.hasOwnProperty.call(table, key) ? table[key] : undefined;
+}
+
+/**
  * Get list of all available model aliases for error messages
  */
-export function getAvailableModelAliases(): string[] {
-  return Object.keys(MODEL_ALIASES).sort();
+export function getAvailableModelAliases(now: Date = new Date()): string[] {
+  const today = now.toISOString().slice(0, 10);
+  const sunsetting = Object.entries(SUNSETTING_MODEL_ALIASES)
+    .filter(([, entry]) => today < entry.retiresOn)
+    .map(([alias]) => alias);
+  return [...Object.keys(MODEL_ALIASES), ...sunsetting].sort();
 }
 
 /**
@@ -190,13 +218,39 @@ export interface ModelResolutionResult {
  * @param modelInput - The model alias or full model ID
  * @param agentName - Name of the agent (for warning messages)
  * @param filePath - Path to the agent file (for warning messages)
+ * @param now - Clock for sunsetting aliases (injectable for tests)
  * @returns Resolution result with model ID and optional warning
  */
-export function resolveModelAlias(modelInput: string, agentName: string, filePath: string): ModelResolutionResult {
+export function resolveModelAlias(
+  modelInput: string,
+  agentName: string,
+  filePath: string,
+  now: Date = new Date()
+): ModelResolutionResult {
   const normalizedInput = modelInput.toLowerCase();
 
-  if (MODEL_ALIASES[normalizedInput]) {
-    return { model: MODEL_ALIASES[normalizedInput], resolved: true };
+  const alias = ownEntry(MODEL_ALIASES, normalizedInput);
+  if (alias) {
+    return { model: alias, resolved: true };
+  }
+
+  // Match the alias key or the catalog id it points at.
+  const sunsetting =
+    ownEntry(SUNSETTING_MODEL_ALIASES, normalizedInput) ??
+    Object.values(SUNSETTING_MODEL_ALIASES).find(entry => entry.model === normalizedInput);
+  if (sunsetting && now.toISOString().slice(0, 10) < sunsetting.retiresOn) {
+    return { model: sunsetting.model, resolved: true };
+  }
+
+  const successor = sunsetting?.successor ?? ownEntry(RETIRED_MODEL_ALIASES, normalizedInput);
+  if (successor) {
+    return {
+      model: DEFAULT_AGENT_MODEL,
+      resolved: false,
+      warning:
+        `Model "${modelInput}" in agent "${agentName}" (${filePath}) is retired. ` +
+        `Will inherit the parent or main session model at runtime. Set model: ${successor} to pick its replacement.`,
+    };
   }
 
   // Check if it looks like a full model ID
@@ -214,7 +268,7 @@ export function resolveModelAlias(modelInput: string, agentName: string, filePat
     .filter(alias => alias.includes(normalizedInput) || normalizedInput.includes(alias))
     .slice(0, 5);
 
-  let warning = `Unknown model "${modelInput}" in agent "${agentName}" (${filePath}). Will inherit the main session model at runtime.\n`;
+  let warning = `Unknown model "${modelInput}" in agent "${agentName}" (${filePath}). Will inherit the parent or main session model at runtime.\n`;
 
   if (suggestions.length > 0) {
     warning += `Did you mean: ${suggestions.join(', ')}?\n`;

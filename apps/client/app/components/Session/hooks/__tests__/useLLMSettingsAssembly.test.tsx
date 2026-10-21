@@ -16,6 +16,11 @@ vi.mock('@client/app/contexts/LLMContext', () => ({
   useLLM: (selector: (s: typeof llmState) => unknown) => selector(llmState),
 }));
 
+const userState = { currentUser: { preferences: { hiddenSurfaces: [] as string[] } } };
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: (selector: (s: typeof userState) => unknown) => selector(userState),
+}));
+
 const { toastInfo, toastError } = vi.hoisted(() => ({ toastInfo: vi.fn(), toastError: vi.fn() }));
 vi.mock('sonner', () => ({
   toast: { info: (m: string) => toastInfo(m), error: (m: string) => toastError(m) },
@@ -41,6 +46,7 @@ beforeEach(() => {
   llmState.n = undefined;
   llmState.toolMode = 'smart';
   llmState.tools = [];
+  userState.currentUser.preferences.hiddenSurfaces = [];
 });
 
 describe('useLLMSettingsAssembly › assembleSettings', () => {
@@ -99,6 +105,48 @@ describe('useLLMSettingsAssembly › resolveTools', () => {
     // Only `web_fetch` is newly auto-selected (web_search was already in `tools`).
     expect(toastInfo).toHaveBeenCalledTimes(1);
     expect(toastInfo).toHaveBeenCalledWith('Smart tools: fetch a URL');
+  });
+
+  describe('Smart mode with session-denied tools', () => {
+    const recommend = () => {
+      llmState.toolMode = 'smart';
+      llmState.tools = ['web_search'] as B4MLLMTools[];
+      recommendToolsMock.mockReturnValue([
+        { tool: 'dice_roll', reason: 'roll some dice' },
+        { tool: 'web_fetch', reason: 'fetch a URL' },
+      ]);
+      mergeToolsMock.mockReturnValue(['web_search', 'dice_roll', 'web_fetch'] as B4MLLMTools[]);
+    };
+
+    it('does not name a denied tool in the toast', () => {
+      recommend();
+      render().current.resolveTools({ prompt: 'x', supportsTools: true, deniedTools: ['dice_roll'] });
+      expect(toastInfo).toHaveBeenCalledTimes(1);
+      expect(toastInfo).toHaveBeenCalledWith('Smart tools: fetch a URL');
+    });
+
+    it('does not toast at all when the only new recommendation is denied', () => {
+      llmState.toolMode = 'smart';
+      llmState.tools = ['web_search'] as B4MLLMTools[];
+      recommendToolsMock.mockReturnValue([{ tool: 'dice_roll', reason: 'roll some dice' }]);
+      mergeToolsMock.mockReturnValue(['web_search', 'dice_roll'] as B4MLLMTools[]);
+      render().current.resolveTools({ prompt: 'x', supportsTools: true, deniedTools: ['dice_roll'] });
+      expect(toastInfo).not.toHaveBeenCalled();
+    });
+
+    // The server denylist is the gate; the client payload is deliberately left alone.
+    it('still sends the denied tool in effectiveTools', () => {
+      recommend();
+      const result = render().current.resolveTools({ prompt: 'x', supportsTools: true, deniedTools: ['dice_roll'] });
+      expect(result.effectiveTools).toEqual(['web_search', 'dice_roll', 'web_fetch']);
+    });
+
+    // Control: without a denylist the same recommendations are all named.
+    it('names every recommendation when no denylist is given', () => {
+      recommend();
+      render().current.resolveTools({ prompt: 'x', supportsTools: true });
+      expect(toastInfo).toHaveBeenCalledWith('Smart tools: roll some dice, fetch a URL');
+    });
   });
 
   it('Smart mode does not toast when nothing new was auto-selected', () => {
@@ -182,5 +230,79 @@ describe('useLLMSettingsAssembly › resolveTools', () => {
     const msg = toastError.mock.calls[0][0] as string;
     expect(msg).not.toMatch(/\(\s*\)/); // no "()" or "( )"
     expect(msg).toContain('requires tools that the current model');
+  });
+});
+
+describe('useLLMSettingsAssembly - resolveTools with a hidden workspace', () => {
+  const OPTI_TOOL = 'optihashi_schedule' as B4MLLMTools;
+
+  beforeEach(() => {
+    userState.currentUser.preferences.hiddenSurfaces = ['opti'];
+    llmState.toolMode = 'smart';
+  });
+
+  it('never auto-recommends or toasts a hidden-surface tool outside that surface', () => {
+    recommendToolsMock.mockReturnValue([{ tool: OPTI_TOOL, reason: 'Optimization Solver' }]);
+    mergeToolsMock.mockImplementation((recs: { tool: B4MLLMTools }[], tools: B4MLLMTools[]) => [
+      ...tools,
+      ...recs.map(r => r.tool),
+    ]);
+
+    const result = render().current.resolveTools({ prompt: 'optimize my shifts', supportsTools: true });
+
+    expect(result.effectiveTools).not.toContain(OPTI_TOOL);
+    expect(mergeToolsMock).toHaveBeenCalledWith([], []);
+    expect(toastInfo).not.toHaveBeenCalled();
+  });
+
+  it('drops a pinned hidden-surface tool from the send outside that surface', () => {
+    llmState.tools = ['web_search', OPTI_TOOL] as B4MLLMTools[];
+    recommendToolsMock.mockReturnValue([]);
+    mergeToolsMock.mockReturnValue(['web_search', OPTI_TOOL] as B4MLLMTools[]);
+
+    const result = render().current.resolveTools({ prompt: 'x', supportsTools: true, activeSurface: null });
+
+    expect(result.effectiveTools).toEqual(['web_search']);
+  });
+
+  it('keeps a hidden-surface tool a briefcase override names explicitly', () => {
+    const result = render().current.resolveTools({
+      prompt: 'x',
+      supportsTools: true,
+      toolsOverride: [OPTI_TOOL],
+      activeSurface: null,
+    });
+
+    expect(result).toEqual({ effectiveTools: [OPTI_TOOL], refused: false });
+    expect(recommendToolsMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps a pinned hidden-surface tool when auto-offers are off', () => {
+    llmState.tools = [OPTI_TOOL] as B4MLLMTools[];
+
+    const result = render().current.resolveTools({ prompt: 'x', supportsTools: true, skipAutoOffers: true });
+
+    expect(result.effectiveTools).toEqual([OPTI_TOOL]);
+  });
+
+  it('keeps the tool for a session inside that surface', () => {
+    llmState.tools = [OPTI_TOOL] as B4MLLMTools[];
+    recommendToolsMock.mockReturnValue([]);
+    mergeToolsMock.mockReturnValue([OPTI_TOOL] as B4MLLMTools[]);
+
+    const result = render().current.resolveTools({ prompt: 'x', supportsTools: true, activeSurface: 'opti' });
+
+    expect(result.effectiveTools).toEqual([OPTI_TOOL]);
+  });
+
+  it('keeps the tool again once the surface is unhidden', () => {
+    userState.currentUser.preferences.hiddenSurfaces = [];
+    llmState.tools = [OPTI_TOOL] as B4MLLMTools[];
+    recommendToolsMock.mockReturnValue([]);
+    mergeToolsMock.mockReturnValue([OPTI_TOOL] as B4MLLMTools[]);
+
+    const result = render().current.resolveTools({ prompt: 'x', supportsTools: true });
+
+    expect(result.effectiveTools).toEqual([OPTI_TOOL]);
   });
 });

@@ -7,6 +7,7 @@ import { KnowledgeType } from '@bike4mind/common';
 // fabFileVectorize's success path writes chunk vectors via withTransaction.
 import {
   createMongoReplSet,
+  settleAutoIndexBuilds,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 import {
@@ -49,7 +50,7 @@ const h = vi.hoisted(() => ({
   getEmbedding: vi.fn(),
 }));
 
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...(a as [])) }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...(a as [])) }));
 vi.mock('@server/managers/fabFileManager', () => ({ getVector: h.getVector }));
 vi.mock('@bike4mind/services', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/services')>();
@@ -89,8 +90,10 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
   FabFileChunkSearchIndex: { deleteByFabFileId: vi.fn() },
 }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn(async () => undefined) }));
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: vi.fn(() => ({ getContentAsBuffer: vi.fn() })) }));
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
+  getFilesStorage: vi.fn(() => ({ getContentAsBuffer: vi.fn() })),
+}));
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   recordBatchCompletion: vi.fn(async () => undefined),
   recordTaxonomyDailyCapExceeded: vi.fn(async () => undefined),
 }));
@@ -105,7 +108,7 @@ vi.mock('sst', () => ({ Resource: new Proxy({}, { get: () => new Proxy({}, { get
 
 import { dispatch as chunkDispatch } from './fabFileChunk';
 import { dispatch as vectorizeDispatch } from './fabFileVectorize';
-import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDelivery';
+import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from '@bike4mind/server-utils/utils/sqsDelivery';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -117,7 +120,8 @@ let replSet: MongoMemoryReplSet;
 
 beforeAll(async () => {
   replSet = await createMongoReplSet();
-  await mongoose.connect(replSet.getUri());
+  await mongoose.connect(replSet.getUri(), { autoIndex: false });
+  await settleAutoIndexBuilds(mongoose);
 });
 afterAll(async () => {
   await mongoose.disconnect();

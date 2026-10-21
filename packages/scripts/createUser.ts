@@ -1,6 +1,8 @@
 #!/usr/bin/env npx ts-node -r tsconfig-paths/register
 
+import { sanitizeUsername } from '@bike4mind/common';
 import { userService } from '@bike4mind/services';
+import { randomUUID } from 'crypto';
 import { connectDB, userRepository } from '@bike4mind/database';
 import { input, password } from '@inquirer/prompts';
 import { Resource } from 'sst';
@@ -33,7 +35,8 @@ class UserCreator {
 
   private async promptForUserDetails() {
     this.options.email = await input({ message: 'Enter user email:' });
-    this.options.username = await input({ message: 'Enter username:' });
+    const typedUsername = await input({ message: 'Enter username:' });
+    this.options.username = sanitizeUsername(typedUsername) || `user-${randomUUID().slice(0, 8)}`;
     this.options.password = await password({ message: 'Enter user password:' });
     this.options.isAdmin =
       (await input({

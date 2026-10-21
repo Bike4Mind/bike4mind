@@ -1,5 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi, Mock } from 'vitest';
-import { FabFileSourceType, KnowledgeType, SupportedFabFileMimeTypes } from '@bike4mind/common';
+import {
+  FabFileSourceType,
+  type IOrganizationDocument,
+  isStorageLimitError,
+  KnowledgeType,
+  SupportedFabFileMimeTypes,
+  settingsMap,
+} from '@bike4mind/common';
 import { BadRequestError, invalidateSettingsCache } from '@bike4mind/utils';
 import { createFabFile, createFabFileSchema, type CreateFabFileAdapters } from './create';
 
@@ -249,6 +256,8 @@ describe('createFabFile (upload moderation gate root cause)', () => {
     expect(storageGenerateSignedUrl).toHaveBeenCalledWith(expect.any(String), expect.any(Number), 'get');
     expect(result.fileUrl).toBe('https://s3.example.com/signed-url');
     expect(result.fileUrlExpireAt).toBeInstanceOf(Date);
+    // Bytes this service wrote itself are not judged by the landed-size gate.
+    expect(fabFilesCreate.mock.calls[0][0]).not.toHaveProperty('clientUpload');
   });
 
   it('mints only a PUT presignedUrl (never a GET fileUrl) when no content is provided (client-upload path, unaffected)', async () => {
@@ -263,9 +272,12 @@ describe('createFabFile (upload moderation gate root cause)', () => {
       mockAdapters
     );
 
-    expect(storageGenerateSignedUrl).toHaveBeenCalledWith(expect.any(String), 600, 'put');
+    // Bound to the declared fileSize, so storage refuses a PUT of any other length.
+    expect(storageGenerateSignedUrl).toHaveBeenCalledWith(expect.any(String), 600, 'put', { ContentLength: 2048 });
     expect(result.fileUrl).toBeUndefined();
     expect((result as { presignedUrl?: string }).presignedUrl).toBe('https://s3.example.com/signed-url');
+    // Marks the row for the landed-size gate, which judges only client uploads.
+    expect(fabFilesCreate.mock.calls[0][0]).toMatchObject({ clientUpload: true });
   });
 
   // Audio (generated TTS / sound effects) is storable-but-not-ingestable: it was
@@ -352,6 +364,22 @@ describe('createFabFile MaxFileSize enforcement - cleared setting no longer bloc
         mockAdapters
       )
     ).resolves.toBeDefined();
+  });
+
+  it('refuses a file over the cap with a file_too_large code and the byte counts', async () => {
+    const limit = settingsMap.MaxFileSize.defaultValue! * 1024 * 1024;
+
+    await expect(
+      createFabFile(
+        mockUserId,
+        { fileName: 'huge.txt', mimeType: 'text/plain', fileSize: limit + 1, type: KnowledgeType.FILE },
+        mockAdapters
+      )
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      info: { errorCode: 'file_too_large', limit_bytes: limit, requested_bytes: limit + 1, owner: 'user' },
+    });
+    expect(fabFilesCreate).not.toHaveBeenCalled();
   });
 });
 
@@ -623,5 +651,133 @@ describe('createFabFile - lake fallback-tag stamp at create time (#2397)', () =>
 
     expect(result.tags).toBeUndefined();
     expect(adapters.db.dataLakes.findByDatalakeTag).not.toHaveBeenCalled();
+  });
+});
+
+describe('createFabFile - owning organization', () => {
+  const orgLake = {
+    id: 'lake-1',
+    datalakeTag: 'datalake:team',
+    createdByUserId: 'u1',
+    organizationId: 'org-1',
+    createdAt: new Date('2026-01-01'),
+  };
+
+  function ownerAdapters(): CreateFabFileAdapters {
+    return {
+      db: {
+        // any: only the fields prepareFabFile reads are stubbed.
+        users: { findById: vi.fn().mockResolvedValue({ id: 'u1' } as any) },
+        organizations: { findById: vi.fn().mockResolvedValue({ id: 'org-1', currentStorageSize: 0 } as any) },
+        fabFiles: { create: vi.fn().mockImplementation(async data => ({ id: 'fab-1', ...data })) },
+        adminSettings: { findAll: vi.fn().mockResolvedValue([]), findBySettingNames: vi.fn().mockResolvedValue([]) },
+        dataLakes: {
+          findByDatalakeTag: vi.fn(async (tag: string) => (tag === orgLake.datalakeTag ? (orgLake as any) : null)),
+          find: vi.fn().mockResolvedValue([]),
+        },
+      },
+      storage: { generateSignedUrl: vi.fn().mockResolvedValue('https://signed'), upload: vi.fn() },
+    };
+  }
+
+  const file = { ...base, fileName: 'notes.txt', mimeType: 'text/plain' };
+
+  it('persists the org of the org-owned lake the file joins', async () => {
+    const created = await createFabFile(
+      'u1',
+      { ...file, tags: [{ name: orgLake.datalakeTag, strength: 1 }] },
+      ownerAdapters()
+    );
+    expect(created.organizationId).toBe('org-1');
+  });
+
+  // The request's organizationId is the user's selected org, which is a display preference: a file
+  // uploaded with an org selected stays personal unless it joins one of that org's lakes.
+  it('never persists the caller-supplied organizationId', async () => {
+    const created = await createFabFile('u1', { ...file, organizationId: 'org-from-request' }, ownerAdapters());
+    expect(created).not.toHaveProperty('organizationId');
+  });
+
+  it('gates an upload into an org lake on the org quota, not the uploader', async () => {
+    const adapters = ownerAdapters();
+    // Only the quota fields checkOrganizationStorageLimit reads are stubbed.
+    vi.mocked(adapters.db.organizations.findById).mockResolvedValue({
+      id: 'org-1',
+      storageLimit: 1,
+      currentStorageSize: 1_000_000,
+    } as unknown as IOrganizationDocument);
+
+    await expect(
+      createFabFile('u1', { ...file, fileSize: 100_000, tags: [{ name: orgLake.datalakeTag, strength: 1 }] }, adapters)
+    ).rejects.toMatchObject({ info: { errorCode: 'org_storage_limit_exceeded', owner: 'org' } });
+    expect(adapters.db.organizations.findById).toHaveBeenCalledWith('org-1');
+    expect(adapters.db.fabFiles.create).not.toHaveBeenCalled();
+  });
+
+  it('persists the derived owner, not the caller-supplied org, when both are present', async () => {
+    const created = await createFabFile(
+      'u1',
+      { ...file, organizationId: 'org-from-request', tags: [{ name: orgLake.datalakeTag, strength: 1 }] },
+      ownerAdapters()
+    );
+    expect(created.organizationId).toBe('org-1');
+  });
+});
+
+describe('createFabFile - organization storage limit lookup', () => {
+  beforeEach(() => invalidateSettingsCache());
+  afterEach(() => invalidateSettingsCache());
+
+  // Shaped like the real repositories: findById is a prototype method that reads `this`, so it
+  // only works when called on the adapter, not as a detached function.
+  class OrganizationsAdapter {
+    private readonly model = new Map([['org-1', { id: 'org-1', storageLimit: 1000, currentStorageSize: 0 }]]);
+    async findById(id: string) {
+      return (this.model.get(id) ?? null) as never;
+    }
+  }
+
+  // The org is the one the file is stamped with: the org of the org lake it joins.
+  const lakeFile = (organizationId: string) => ({
+    fileName: 'report.md',
+    mimeType: 'text/markdown',
+    fileSize: 10,
+    type: KnowledgeType.TEXT,
+    tags: [{ name: `datalake:${organizationId}`, strength: 1 }],
+  });
+  const deps = () =>
+    ({
+      db: {
+        fabFiles: { create: vi.fn().mockImplementation(async data => ({ id: 'fab-1', ...data })) },
+        adminSettings: { findAll: vi.fn().mockResolvedValue([]), findBySettingNames: vi.fn().mockResolvedValue([]) },
+        users: {
+          findById: vi.fn().mockResolvedValue({ id: 'u1', storageLimit: 1000, currentStorageSize: 0 }),
+        },
+        organizations: new OrganizationsAdapter(),
+        dataLakes: {
+          findByDatalakeTag: vi.fn(async (tag: string) => ({
+            id: `lake-${tag}`,
+            datalakeTag: tag,
+            createdByUserId: 'u1',
+            organizationId: tag.slice('datalake:'.length),
+            createdAt: new Date('2026-01-01'),
+          })),
+          find: vi.fn().mockResolvedValue([]),
+        },
+      },
+      storage: { generateSignedUrl: vi.fn().mockResolvedValue('https://s3.example.com/x'), upload: vi.fn() },
+    }) as unknown as CreateFabFileAdapters;
+
+  it('looks the organization up through the adapter it was given', async () => {
+    await expect(createFabFile('u1', lakeFile('org-1'), deps())).resolves.toMatchObject({
+      id: 'fab-1',
+      organizationId: 'org-1',
+    });
+  });
+
+  it('refuses a file whose owning organization the adapter does not find', async () => {
+    await expect(createFabFile('u1', lakeFile('org-missing'), deps())).rejects.toSatisfy(
+      error => isStorageLimitError(error) && error.info.errorCode === 'org_storage_limit_exceeded'
+    );
   });
 });

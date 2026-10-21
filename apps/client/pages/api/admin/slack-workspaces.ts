@@ -1,7 +1,7 @@
 import { slackDevWorkspaceRepository } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, BadRequestError, NotFoundError } from '@server/utils/errors';
+import { ForbiddenError, BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
 

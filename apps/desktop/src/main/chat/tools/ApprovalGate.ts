@@ -140,7 +140,9 @@ export class ApprovalGate {
     const own = [...standing.patterns]
       .filter(entry => entry.startsWith(`${always.namespace}\x00`))
       .map(entry => entry.slice(always.namespace.length + 1));
-    return always.commands.every(({ text }) => own.some(pattern => patternMatches(pattern, text)));
+    return always.commands.every(
+      ({ text, coverable }) => coverable && own.some(pattern => patternMatches(pattern, text))
+    );
   }
 
   /** The directories among these that the user has not said "always" to. */

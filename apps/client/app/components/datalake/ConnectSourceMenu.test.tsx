@@ -12,7 +12,7 @@ vi.mock('@client/app/components/DataLakeWizard/steps/DriveConnectAction', () => 
 vi.mock('@client/app/components/DataLakeWizard/steps/GitHubConnectAction', () => ({ default: () => null }));
 
 import ConnectSourceMenu from './ConnectSourceMenu';
-import { LAKE_MANAGER_ONLY_REASON } from './lakeSources';
+import { GITHUB_PERSONAL_OWNER_ONLY_REASON, LAKE_MANAGER_ONLY_REASON } from './lakeSources';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const wrap = (ui: ReactNode) => render(<CssVarsProvider theme={appTheme}>{ui}</CssVarsProvider>);
@@ -76,14 +76,29 @@ describe('ConnectSourceMenu', () => {
     expect(onConnect).toHaveBeenCalledWith('github');
   });
 
-  it('keeps GitHub listed but disabled on a personal lake, with the reason inline', () => {
+  it('enables GitHub on a personal lake the caller created', () => {
     const onConnect = vi.fn();
     wrap(<ConnectSourceMenu lake={{ organizationId: null, canManage: true, isCreator: true }} onConnect={onConnect} />);
     openMenu();
 
     const item = screen.getByTestId('datalake-connect-source-github-item');
+    expect(item).not.toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(item);
+    expect(onConnect).toHaveBeenCalledWith('github');
+  });
+
+  it("keeps GitHub listed but disabled on someone else's personal lake, with the reason inline", () => {
+    const onConnect = vi.fn();
+    wrap(
+      <ConnectSourceMenu lake={{ organizationId: null, canManage: false, isCreator: false }} onConnect={onConnect} />
+    );
+    openMenu();
+
+    const item = screen.getByTestId('datalake-connect-source-github-item');
     expect(item).toHaveAttribute('aria-disabled', 'true');
-    expect(screen.getByTestId('datalake-connect-source-github-hint')).toHaveTextContent(/organization/);
+    expect(screen.getByTestId('datalake-connect-source-github-hint')).toHaveTextContent(
+      GITHUB_PERSONAL_OWNER_ONLY_REASON
+    );
     fireEvent.click(item);
     expect(onConnect).not.toHaveBeenCalled();
   });

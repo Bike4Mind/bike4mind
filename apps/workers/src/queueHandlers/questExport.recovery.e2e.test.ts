@@ -29,13 +29,14 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
     getSignedUrl = async (key: string) => `http://download.test/${key}`;
   },
 }));
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ download: async (key: string) => h.objects.get(key) }),
   getGeneratedImageStorage: () => ({ download: async (key: string) => h.objects.get(key) }),
 }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: h.progress }));
 vi.mock('@bike4mind/services', () => ({ apiKeyService: { getEffectiveLLMApiKeys: async () => ({}) } }));
-vi.mock('@bike4mind/llm-adapters', () => ({
+vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/llm-adapters')>()),
   getAvailableModels: h.models,
   getLlmByModel: () => ({ complete: h.complete }),
 }));

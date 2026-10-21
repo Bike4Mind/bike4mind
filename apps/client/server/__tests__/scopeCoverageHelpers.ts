@@ -146,7 +146,7 @@ export function extractRequiredScopesGate(
   callPattern: string = 'baseApi\\('
 ): string | undefined {
   const gate = new RegExp(
-    `${callPattern}\\{[^}]*requiredScopes:\\s*(${prefix}_(?:READ|WRITE|READ_OR_WRITE)_SCOPES)\\b[^}]*\\}\\)`
+    `${callPattern}\\{[^}]*requiredScopes:\\s*(${prefix}_(?:READ|WRITE|READ_OR_WRITE)(?:_OR_GENERATE)?_SCOPES)\\b[^}]*\\}\\)`
   );
   return stripComments(source).match(gate)?.[1];
 }

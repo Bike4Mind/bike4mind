@@ -10,13 +10,13 @@ const CreditTransactionsQuerySchema = z.object({
    */
   // Bounded like this model's three other callers: unbounded, a finite-but-huge value
   // overflows the repository's `setDate` into an Invalid Date that casts on `createdAt`.
-  days: z.number().int().min(1).max(365).optional().prefault(30),
+  days: z.number().int().min(1).max(365).prefault(30),
   /**
    * @description Type of transactions to get
    * @default 'all'
    * @enum ['all', 'purchase', 'usage']
    */
-  type: z.enum(['all', 'added', 'deducted']).optional().prefault('all'),
+  type: z.enum(['all', 'added', 'deducted']).prefault('all'),
 });
 
 const handler = baseApi().get(async (req, res) => {

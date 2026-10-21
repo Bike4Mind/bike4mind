@@ -15,6 +15,7 @@ import {
   prStateSchema,
   confirmationParams,
   pullNumberSchema,
+  githubUsernameSchema,
 } from '../helpers/schemas.js';
 import { getErrorMessage, hasStatus, isRateLimitError } from '../helpers/errors.js';
 import { createPreviewResponse } from '../../shared/confirmation-helpers.js';
@@ -38,11 +39,7 @@ export function registerPullTools(server: McpServer) {
       owner: ownerSchema,
       repo: repoSchema,
       state: prStateSchema,
-      author: z
-        .string()
-        .max(39, 'GitHub username too long')
-        .optional()
-        .describe('Filter PRs by author username (e.g., "octocat")'),
+      author: githubUsernameSchema.optional().describe('Filter PRs by author username (e.g., "octocat")'),
       labels: z
         .array(
           z
@@ -957,12 +954,7 @@ export function registerPullTools(server: McpServer) {
         .regex(/^\d{4}-\d{2}-\d{2}$/, 'Must be YYYY-MM-DD format')
         .optional()
         .describe('ISO date string (YYYY-MM-DD) — only return PRs closed after this date'),
-      author: z
-        .string()
-        .regex(/^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$/, 'Invalid GitHub username format')
-        .max(39, 'GitHub username too long')
-        .optional()
-        .describe('Filter by PR author username'),
+      author: githubUsernameSchema.optional().describe('Filter by PR author username'),
       labels: z
         .array(
           z

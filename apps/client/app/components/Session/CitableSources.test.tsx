@@ -1,10 +1,11 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import type { CitableSource } from '@bike4mind/common';
 import { getThemeConfig } from '../../utils/themes';
-import CitableSources from './CitableSources';
+import CitableSources, { citedFirst, conflictPlacementOf } from './CitableSources';
+import { replyProse } from './markdown/inlineCitations';
 import { CitationInteractionProvider } from './CitationInteractionContext';
 import useSessionLayout from '@client/app/hooks/useSessionLayout';
 
@@ -229,19 +230,45 @@ describe('CitableSources conflict badge', () => {
     ]);
 
     expect(screen.getAllByTestId('citable-conflict-badge')).toHaveLength(2);
-    expect(screen.getByTitle(/May disagree with Annual Report\.pdf/)).toBeInTheDocument();
-    expect(screen.getByTitle(/May disagree with Q3 Revenue\.pdf/)).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: /May disagree with Annual Report\.pdf/ })).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: /May disagree with Q3 Revenue\.pdf/ })).toBeInTheDocument();
   });
 
-  it('hedges the claim rather than asserting a contradiction', () => {
+  it('hedges the claim once under the list rather than asserting a contradiction', () => {
     // The detector's own contract: a finding is "worth a human's eye", never proven. Wording that
     // overclaims here would be the one place that contract is broken, since this is the only
     // surface a non-technical reader sees it on.
-    // One badged chip, so the hedge resolves to a single element: the wording is identical on every
-    // badge, and a two-chip fixture would match both.
+    renderChips([
+      lakeChip('file-a', 'Q3 Revenue.pdf', ['file-b']),
+      lakeChip('file-b', 'Annual Report.pdf', ['file-a']),
+    ]);
+
+    expect(screen.getAllByTestId('citable-sources-conflict-note')).toHaveLength(1);
+    expect(screen.getByTestId('citable-sources-conflict-note')).toHaveTextContent(/not a proven contradiction/);
+  });
+
+  it('keeps the caveat out of the tooltip, so the box stays one line', () => {
+    // The caveat tripled the tooltip's height, which is what made it cover the chip it names.
     renderChips([lakeChip('file-a', 'Q3 Revenue.pdf', ['file-b']), lakeChip('file-b', 'Annual Report.pdf')]);
 
-    expect(screen.getByTitle(/not a proven contradiction/)).toBeInTheDocument();
+    expect(screen.getByTestId('citable-conflict-badge')).toHaveAttribute(
+      'aria-label',
+      'May disagree with Annual Report.pdf.'
+    );
+  });
+
+  it('shows no caveat when no rendered chip is badged', () => {
+    renderChips([
+      lakeChip('file-x', 'Support Hours.md'),
+      lakeChip('file-y', 'Billing FAQ.md'),
+      lakeChip('file-z', 'Release Notes.md'),
+      lakeChip('file-a', 'Q3 Revenue.pdf', ['file-b']),
+      lakeChip('file-b', 'Annual Report.pdf', ['file-a']),
+    ]);
+
+    expect(screen.queryByTestId('citable-sources-conflict-note')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('citable-sources-show-more-btn'));
+    expect(screen.getByTestId('citable-sources-conflict-note')).toBeInTheDocument();
   });
 
   it('leaves an unmarked source unbadged', () => {
@@ -258,6 +285,7 @@ describe('CitableSources conflict badge', () => {
     renderChips([lakeChip('file-a', 'Q3 Revenue.pdf'), lakeChip('file-b', 'Annual Report.pdf')]);
 
     expect(screen.queryByTestId('citable-conflict-badge')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('citable-sources-conflict-note')).not.toBeInTheDocument();
   });
 
   it('keeps the badge when the partner is not among the rendered chips', () => {
@@ -266,7 +294,7 @@ describe('CitableSources conflict badge', () => {
     renderChips([lakeChip('file-a', 'Q3 Revenue.pdf', ['file-missing'])]);
 
     expect(screen.getByTestId('citable-conflict-badge')).toBeInTheDocument();
-    expect(screen.getByTitle(/May disagree with 1 further source\./)).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: /May disagree with 1 further source\./ })).toBeInTheDocument();
   });
 
   it('renders no badge for a malformed conflictsWith rather than throwing in the reply', () => {
@@ -277,18 +305,25 @@ describe('CitableSources conflict badge', () => {
     expect(screen.queryByTestId('citable-conflict-badge')).not.toBeInTheDocument();
     expect(screen.getByText('Q3 Revenue.pdf')).toBeInTheDocument();
   });
+
+  it('names the badge without an SVG <title>, which would raise a second, native tooltip', () => {
+    // The native tooltip appears below the cursor, so on the upper chip of a pair it covers the
+    // partner underneath whichever side the Joy tooltip opens on.
+    renderChips([lakeChip('file-a', 'Q3 Revenue.pdf', ['file-b']), lakeChip('file-b', 'Annual Report.pdf')]);
+
+    const badge = screen.getByRole('img', { name: /May disagree with Annual Report\.pdf/ });
+    expect(badge).toBe(screen.getByTestId('citable-conflict-badge'));
+    expect(badge.querySelector('title')).toBeNull();
+  });
 });
 
 /**
- * Chips render full-width and stack, so a tooltip left on Joy's default `bottom` opens over the
- * chip below. `placement="top"` clears that for the upper chip of a pair. It does NOT clear the
- * problem in general: the detector stamps conflicts symmetrically (retrievalConflictNote.ts builds
- * `conflictsWith` from every other member of a group), so both chips of a pair are badged and the
- * lower one's tooltip now opens over the partner above it. The occlusion moves rather than going
- * away, and no placement clears both on a stacked list of full-width chips. The mutual fixture
- * below pins the shape the detector actually emits so that stays visible (#3290).
+ * Chips render full-width and stack, so a tooltip on Joy's default `bottom` opens over the chip
+ * below. The detector stamps conflicts symmetrically (retrievalConflictNote.ts), so both chips of a
+ * pair are badged and each tooltip names the other: a single fixed side covers one partner. The
+ * conflict tooltip therefore picks its side per chip, away from the partner it names.
  */
-describe('CitableSources badge tooltips open above the chip', () => {
+describe('CitableSources badge tooltip placement', () => {
   const lakeChip = (id: string, title: string, conflictsWith?: string[]): CitableSource => ({
     id,
     type: 'document',
@@ -298,43 +333,211 @@ describe('CitableSources badge tooltips open above the chip', () => {
     metadata: { sourceSystem: 'knowledge_base', ...(conflictsWith === undefined ? {} : { conflictsWith }) },
   });
 
+  const renderChips = (citables: CitableSource[], reply?: string) =>
+    render(
+      <TestWrapper>
+        <CitableSources citables={citables} reply={reply} />
+      </TestWrapper>
+    );
+
   // Joy opens on mouseover behind a 100ms enterDelay, so the popper has to be awaited.
   const openTooltip = (badge: HTMLElement) => {
     fireEvent.mouseOver(badge);
     return screen.findByRole('tooltip');
   };
 
+  const closeTooltip = async (badge: HTMLElement) => {
+    fireEvent.mouseLeave(badge);
+    await waitFor(() => expect(screen.queryByRole('tooltip')).not.toBeInTheDocument());
+  };
+
   // jsdom does no layout, so the box overlapping a neighbour cannot be measured directly.
   // data-popper-placement is a popper.js internal, and the only observable proxy for placement
   // here - a deliberate tradeoff, not an oversight, if an @mui/base upgrade ever moves it.
-  const expectOpensAbove = async (badge: HTMLElement) =>
-    expect(await openTooltip(badge)).toHaveAttribute('data-popper-placement', 'top');
+  const placementOf = async (badge: HTMLElement) => {
+    const placement = (await openTooltip(badge)).getAttribute('data-popper-placement');
+    await closeTooltip(badge);
+    return placement;
+  };
 
-  it('opens both halves of a mutually conflicting pair above their chip', async () => {
-    render(
-      <TestWrapper>
-        <CitableSources
-          citables={[
-            lakeChip('file-a', 'Q3 Revenue.pdf', ['file-b']),
-            lakeChip('file-b', 'Annual Report.pdf', ['file-a']),
-          ]}
-        />
-      </TestWrapper>
-    );
+  const badgeOf = (title: string) => {
+    const badge = screen
+      .getAllByTestId('citable-conflict-badge')
+      .find(b => b.closest('[data-testid="citable-source-chip"]')?.textContent?.includes(title));
+    if (!badge) throw new Error(`no conflict badge for ${title}`);
+    return badge;
+  };
 
-    // Both, not just the upper one: asserting only the top chip would read as coverage for a
-    // case this change does not fix (see the block comment).
-    const badges = screen.getAllByTestId('citable-conflict-badge');
-    expect(badges).toHaveLength(2);
-    for (const badge of badges) {
-      await expectOpensAbove(badge);
-    }
+  it('opens each half of an adjacent pair away from the other', async () => {
+    renderChips([
+      lakeChip('file-a', 'Q3 Revenue.pdf', ['file-b']),
+      lakeChip('file-b', 'Annual Report.pdf', ['file-a']),
+    ]);
+
+    expect(await placementOf(badgeOf('Q3 Revenue.pdf'))).toBe('top');
+    expect(await placementOf(badgeOf('Annual Report.pdf'))).toBe('bottom');
   });
 
-  it('opens the truncation tooltip above too', async () => {
+  it('places by the cited-first order on screen, not by retrieval order', async () => {
+    // Retrieval order puts Q3 Revenue above Annual Report; citing only Annual Report swaps them.
+    renderChips(
+      [lakeChip('file-a', 'Q3 Revenue.pdf', ['file-b']), lakeChip('file-b', 'Annual Report.pdf', ['file-a'])],
+      'Per the Annual Report, revenue grew.'
+    );
+
+    expect(await placementOf(badgeOf('Annual Report.pdf'))).toBe('top');
+    expect(await placementOf(badgeOf('Q3 Revenue.pdf'))).toBe('bottom');
+  });
+
+  it('keeps top for partners with an unrelated chip between them', async () => {
+    renderChips([
+      lakeChip('file-a', 'Q3 Revenue.pdf', ['file-c']),
+      lakeChip('file-b', 'Support Hours.md'),
+      lakeChip('file-c', 'Annual Report.pdf', ['file-a']),
+    ]);
+
+    expect(await placementOf(badgeOf('Q3 Revenue.pdf'))).toBe('top');
+    expect(await placementOf(badgeOf('Annual Report.pdf'))).toBe('top');
+  });
+
+  it('keeps top for a chip with partners both above and below, since no side clears both', async () => {
+    renderChips([
+      lakeChip('file-a', 'Q3 Revenue.pdf', ['file-b', 'file-c']),
+      lakeChip('file-b', 'Annual Report.pdf', ['file-a', 'file-c']),
+      lakeChip('file-c', 'Board Deck.pdf', ['file-a', 'file-b']),
+    ]);
+
+    expect(await placementOf(badgeOf('Annual Report.pdf'))).toBe('top');
+    expect(await placementOf(badgeOf('Board Deck.pdf'))).toBe('bottom');
+  });
+
+  it('outlines the partner chip, and only the partner, while the tooltip is open', async () => {
+    renderChips([
+      lakeChip('file-a', 'Q3 Revenue.pdf', ['file-b']),
+      lakeChip('file-b', 'Annual Report.pdf', ['file-a']),
+      lakeChip('file-c', 'Support Hours.md'),
+    ]);
+    const highlighted = () =>
+      screen
+        .getAllByTestId('citable-source-chip')
+        .filter(chip => chip.getAttribute('data-conflict-highlighted') === 'true')
+        .map(chip => chip.textContent);
+
+    expect(highlighted()).toEqual([]);
+
+    const badge = badgeOf('Annual Report.pdf');
+    await openTooltip(badge);
+    expect(highlighted()).toHaveLength(1);
+    expect(highlighted()[0]).toContain('Q3 Revenue.pdf');
+
+    await closeTooltip(badge);
+    expect(highlighted()).toEqual([]);
+  });
+
+  it('opens the last visible chip bottom when its other partner is collapsed behind Show More', async () => {
+    renderChips([
+      lakeChip('file-x', 'Support Hours.md'),
+      lakeChip('file-a', 'Q3 Revenue.pdf', ['file-b', 'file-c']),
+      lakeChip('file-b', 'Annual Report.pdf', ['file-a', 'file-c']),
+      lakeChip('file-c', 'Board Deck.pdf', ['file-a', 'file-b']),
+    ]);
+
+    // Board Deck is below Annual Report but not rendered, so only the partner above is in the way.
+    expect(screen.queryByText('Board Deck.pdf')).not.toBeInTheDocument();
+    expect(await placementOf(badgeOf('Annual Report.pdf'))).toBe('bottom');
+  });
+
+  it('clears the outline when the open badge is collapsed away without closing', async () => {
+    renderChips([
+      lakeChip('file-a', 'Q3 Revenue.pdf', ['file-d']),
+      lakeChip('file-b', 'Support Hours.md'),
+      lakeChip('file-c', 'Billing FAQ.md'),
+      lakeChip('file-d', 'Annual Report.pdf', ['file-a']),
+    ]);
+    const isHighlighted = (title: string) =>
+      screen
+        .getAllByTestId('citable-source-chip')
+        .find(chip => chip.textContent?.includes(title))
+        ?.getAttribute('data-conflict-highlighted') === 'true';
+
+    fireEvent.click(screen.getByTestId('citable-sources-show-more-btn'));
+    await openTooltip(badgeOf('Annual Report.pdf'));
+    expect(isHighlighted('Q3 Revenue.pdf')).toBe(true);
+
+    // A click fires no mouseleave, as with a tap on touch, so the tooltip never reports a close.
+    fireEvent.click(screen.getByTestId('citable-sources-show-more-btn'));
+    expect(screen.queryByText('Annual Report.pdf')).not.toBeInTheDocument();
+    expect(isHighlighted('Q3 Revenue.pdf')).toBe(false);
+  });
+
+  it('keeps the newer badge outline when the previous badge reports its close late', async () => {
+    renderChips([
+      lakeChip('file-a', 'Q3 Revenue.pdf', ['file-c']),
+      lakeChip('file-b', 'Annual Report.pdf', ['file-d']),
+      lakeChip('file-c', 'Board Deck.pdf', ['file-a']),
+      lakeChip('file-d', 'Support Hours.md', ['file-b']),
+    ]);
+    fireEvent.click(screen.getByTestId('citable-sources-show-more-btn'));
+    const isHighlighted = (title: string) =>
+      screen
+        .getAllByTestId('citable-source-chip')
+        .find(chip => chip.textContent?.includes(title))
+        ?.getAttribute('data-conflict-highlighted') === 'true';
+
+    const first = badgeOf('Q3 Revenue.pdf');
+    await openTooltip(first);
+    fireEvent.mouseOver(badgeOf('Annual Report.pdf'));
+    await waitFor(() => expect(isHighlighted('Support Hours.md')).toBe(true));
+
+    // Joy closes the badge just left on its own timer, which can land after the next badge opened.
+    fireEvent.mouseLeave(first);
+    await waitFor(() => expect(screen.getAllByRole('tooltip')).toHaveLength(1));
+    expect(isHighlighted('Board Deck.pdf')).toBe(false);
+    expect(isHighlighted('Support Hours.md')).toBe(true);
+  });
+
+  it('opens the truncation tooltip above', async () => {
     renderWith({ sourceSystem: 'web_fetch', contentLength: 50000, truncated: true, cap: 50000 });
 
-    await expectOpensAbove(screen.getByTestId('citable-truncated-badge'));
+    expect(await openTooltip(screen.getByTestId('citable-truncated-badge'))).toHaveAttribute(
+      'data-popper-placement',
+      'top'
+    );
+  });
+});
+
+describe('conflictPlacementOf', () => {
+  const chip = (id: string, conflictsWith?: unknown): CitableSource => ({
+    id,
+    type: 'document',
+    title: `${id}.md`,
+    status: 'complete',
+    metadata: { sourceSystem: 'knowledge_base', ...(conflictsWith === undefined ? {} : { conflictsWith }) },
+  });
+
+  it('opens bottom only when the chip above is a partner and the one below is not', () => {
+    expect(conflictPlacementOf(chip('b', ['a']), chip('a'), chip('c'))).toBe('bottom');
+    expect(conflictPlacementOf(chip('b', ['a']), chip('a'), undefined)).toBe('bottom');
+    expect(conflictPlacementOf(chip('b', ['c']), chip('a'), chip('c'))).toBe('top');
+    expect(conflictPlacementOf(chip('b', ['a', 'c']), chip('a'), chip('c'))).toBe('top');
+  });
+
+  it('keeps top for the first chip and for a partner that is not rendered', () => {
+    expect(conflictPlacementOf(chip('a', ['b']), undefined, chip('b'))).toBe('top');
+    // Collapsed behind Show More: the partner is simply not the neighbour passed in.
+    expect(conflictPlacementOf(chip('c', ['d']), chip('b'), undefined)).toBe('top');
+  });
+
+  it.each([
+    ['a string', 'a'],
+    ['absent', undefined],
+    ['non-string ids', [1, null]],
+  ])('keeps top for a malformed conflictsWith (%s)', (_name, conflictsWith) => {
+    expect(conflictPlacementOf(chip('b', conflictsWith), chip('a'), undefined)).toBe('top');
+  });
+
+  it('ignores a neighbour without an id', () => {
+    expect(conflictPlacementOf(chip('b', ['']), { ...chip('x'), id: '' }, undefined)).toBe('top');
   });
 });
 
@@ -422,5 +625,78 @@ describe('CitableSources origin label', () => {
     );
     expect(screen.queryByTestId('citable-source-origin-label')).not.toBeInTheDocument();
     expect(screen.getByText('example.com')).toBeInTheDocument();
+  });
+});
+
+describe('CitableSources cited-first order', () => {
+  const lakeFile = (id: string, title: string, citationIndex?: number): CitableSource => ({
+    id,
+    type: 'document',
+    title,
+    status: 'complete',
+    metadata: { sourceSystem: 'knowledge_base', ...(citationIndex ? { citationIndex } : {}) },
+  });
+  const titlesOf = (sources: CitableSource[]) => sources.map(source => source.title);
+
+  const named = [
+    lakeFile('f1', 'sample.yaml'),
+    lakeFile('f2', 'deploy-guide.md'),
+    lakeFile('f3', 'notes.txt'),
+    lakeFile('f4', 'release_notes.md'),
+  ];
+
+  it('leads with the sources a named-style reply names, keeping retrieval order within each group', () => {
+    const reply = 'Per release_notes.md and the Deploy Guide, the rollout runs nightly.';
+    expect(titlesOf(citedFirst(named, named, reply))).toEqual([
+      'deploy-guide.md',
+      'release_notes.md',
+      'sample.yaml',
+      'notes.txt',
+    ]);
+  });
+
+  it('leads with the sources an indexed reply marks, by [N] -> citables[N-1]', () => {
+    const indexed = named.map((source, i) => ({ ...source, metadata: { ...source.metadata, citationIndex: i + 1 } }));
+    expect(titlesOf(citedFirst(indexed, indexed, 'It runs nightly [3, 4], see also [9].'))).toEqual([
+      'notes.txt',
+      'release_notes.md',
+      'sample.yaml',
+      'deploy-guide.md',
+    ]);
+  });
+
+  it('counts a web source cited by its URL', () => {
+    const web = [baseCitable, { ...baseCitable, id: 'https://other.dev/x', url: 'https://other.dev/x', title: 'X' }];
+    expect(titlesOf(citedFirst(web, web, 'See [the post](https://other.dev/x).'))).toEqual(['X', 'A Long Essay']);
+  });
+
+  it('keeps retrieval order when the reply cites nothing it can detect, or is not finished', () => {
+    expect(citedFirst(named, named, 'The rollout runs nightly.')).toEqual(named);
+    expect(citedFirst(named, named, undefined)).toEqual(named);
+  });
+
+  it('does not count a name or [N] that only appears in code', () => {
+    const indexed = named.map((source, i) => ({ ...source, metadata: { ...source.metadata, citationIndex: i + 1 } }));
+    const codeOnly = 'Use `release_notes.md` here.\n\n```\nnotes[3] = load("deploy-guide.md")\n```';
+    expect(citedFirst(named, named, replyProse(codeOnly))).toEqual(named);
+    expect(citedFirst(indexed, indexed, replyProse(codeOnly))).toEqual(indexed);
+  });
+
+  it('keeps retrieval order when the only mention is inside a code block', () => {
+    render(
+      <TestWrapper>
+        <CitableSources citables={named} reply={'The rollout runs nightly.\n\n```\nsource: release_notes.md\n```'} />
+      </TestWrapper>
+    );
+    expect(screen.getAllByTestId('citable-source-chip')[0]).toHaveTextContent('sample.yaml');
+  });
+
+  it('renders the cited source above an uncited one retrieved before it', () => {
+    render(
+      <TestWrapper>
+        <CitableSources citables={named} reply="The answer comes from release_notes.md." />
+      </TestWrapper>
+    );
+    expect(screen.getAllByTestId('citable-source-chip')[0]).toHaveTextContent('release_notes.md');
   });
 });

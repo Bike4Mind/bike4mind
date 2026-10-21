@@ -1,5 +1,11 @@
 import { Logger } from '@bike4mind/observability';
-import { IAuthSessionDocument, IAuthSessionRepository, IUserDocument, IUserRepository } from '@bike4mind/common';
+import {
+  IAuthSessionDocument,
+  IAuthSessionRepository,
+  IRealtimeConnectionRepository,
+  IUserDocument,
+  IUserRepository,
+} from '@bike4mind/common';
 import { TooManyRequestsError, UnauthorizedError } from '@bike4mind/utils';
 import {
   ABSOLUTE_SESSION_MAX_MS,
@@ -8,6 +14,7 @@ import {
   MAX_SESSION_RECOVERIES,
   REFRESH_REPLAY_WINDOW_MS,
 } from './constants';
+import { endRealtimeConnections } from './endRealtimeConnections';
 import { buildRefreshToken, generateRefreshSecret, hashRefreshSecret, parseRefreshToken } from './refreshTokenFormat';
 
 /**
@@ -28,6 +35,7 @@ export interface RotateSessionAdapters {
       'findBySid' | 'rotateHash' | 'recoverRotateHash' | 'registerReplayUse' | 'revokeBySid'
     >;
     users: Pick<IUserRepository, 'findById'>;
+    realtimeConnections: Pick<IRealtimeConnectionRepository, 'endConnections'>;
   };
   signAccessToken: (id: string, tokenVersion: number, additionalPayload?: Record<string, unknown>) => string;
   /** Replay tolerance for the just-superseded secret; defaults to REFRESH_REPLAY_WINDOW_MS. */
@@ -89,6 +97,36 @@ const isReplayable = (session: IAuthSessionDocument, hash: string, now: Date): b
   session.graceExpiresAt > now;
 
 /**
+ * Which check condemned the token. Only the current and previous hashes are stored, so
+ * `unrecognized_secret` cannot tell "2+ generations stale" from "forged"; the `chain_advanced_*`
+ * reasons mean the secret WAS current or previous at first read and a true rotation overtook it.
+ */
+export type ReuseRevokeReason =
+  | 'unrecognized_secret'
+  | 'chain_advanced_during_rotation'
+  | 'chain_advanced_during_recovery';
+
+/**
+ * Triage fields for a `session_reuse_revoked` event, from the row as this call first read it. Most
+ * revocations so far were benign (a second client holding a stale cookie), and telling those apart
+ * from theft needs the issuing IP to compare with the request IP, plus how long the token sat idle.
+ * Never includes token or hash material.
+ */
+const describeReuse = (session: IAuthSessionDocument, reason: ReuseRevokeReason, now: Date) => ({
+  reason,
+  msSinceLastUse: now.getTime() - new Date(session.lastUsedAt).getTime(),
+  /** Negative while the replay window is still open; null when no previous secret is held. */
+  msSinceReplayWindowClosed: session.graceExpiresAt
+    ? now.getTime() - new Date(session.graceExpiresAt).getTime()
+    : null,
+  sessionAgeMs: now.getTime() - new Date(session.createdAt).getTime(),
+  recoveries: session.recoveries ?? 0,
+  createdVia: session.createdVia,
+  issuedIp: session.device?.ip ?? null,
+  issuedUserAgent: session.device?.userAgent ?? null,
+});
+
+/**
  * Sliding session window: a true rotation pushes expiry to now + the idle TTL, clamped to the
  * absolute cap (createdAt + ABSOLUTE_SESSION_MAX_MS) and never below what the row already
  * promised (monotone - a slide must not shorten a session).
@@ -143,8 +181,9 @@ const slideExpiresAt = (session: IAuthSessionDocument, now: Date): Date => {
  *         this an idle victim's session could be pushed to the absolute cap by the attacker's own
  *         traffic.
  *     Recoveries and revocations are RECORDED through `audit`. That is a forensic trail, not a
- *     detection control: nothing currently alerts on it, so do not treat "it would show up in the
- *     audit log" as a reason to widen anything here.
+ *     detection control: the only alarms are on volume (a burst of revocations, a high recovery
+ *     rate - infra/alarms.ts), so do not treat "it would show up in the audit log" as a reason to
+ *     widen anything here.
  *  4. Anything else -> an already-rotated or forged token was replayed. Treated as theft: the
  *     session is revoked and the caller rejected.
  *
@@ -180,21 +219,26 @@ export const rotateSession = async (
   // flushed; everyone else drops the promise.
   const emit = (type: RotateSessionAuditEvent['type'], extraMetadata?: Record<string, unknown>): Promise<void> => {
     try {
-      return Promise.resolve(audit?.({ type, sid, userId: session.userId, ...(extraMetadata && { metadata: extraMetadata }) })).catch(() => {});
+      return Promise.resolve(
+        audit?.({ type, sid, userId: session.userId, ...(extraMetadata && { metadata: extraMetadata }) })
+      ).catch(() => {});
     } catch {
       return Promise.resolve();
     }
   };
 
-  const revokeAsTheft = async (): Promise<never> => {
-    // A token matching neither the current nor the previous hash was presented: forged, or at
-    // least two generations stale. Revoke the whole session: if it is theft the attacker is
-    // locked out; the (rare) benign holder of such a token re-authenticates.
+  const revokeAsTheft = async (reason: ReuseRevokeReason): Promise<never> => {
+    // The presented secret is, by now, neither the current nor the previous hash: forged, or at
+    // least two generations stale (see ReuseRevokeReason). Revoke the whole session: if it is
+    // theft the attacker is locked out; the benign holder of such a token re-authenticates.
     await db.authSessions.revokeBySid(sid);
+    await endRealtimeConnections({ sid }, { db, logger });
+    const forensics = describeReuse(session, reason, new Date());
     // Awaited: this path throws on the next line, and `session_reuse_revoked` is the one event a
     // post-mortem cannot do without. Cannot fail the request - see emit.
-    await emit('session_reuse_revoked');
-    logger?.log('Refresh-token reuse detected; revoked session', sid);
+    await emit('session_reuse_revoked', forensics);
+    // Request IP/UA are only known to the caller; its audit sink logs the full triage line.
+    logger?.warn('Refresh-token reuse detected; revoked session', { sid, userId: session.userId, reason });
     throw invalid();
   };
 
@@ -285,14 +329,17 @@ export const rotateSession = async (
       logger?.log('Recovery allowance exhausted or lost for session', sid);
       throw new TooManyRequestsError('Too many refresh attempts');
     }
-    // (c) The previous hash moved on: the secret really is two or more generations stale.
-    return revokeAsTheft();
+    // (c) The previous hash moved on: the secret really is two or more generations stale. Not
+    // reachable by two concurrent recoveries of the same secret - the winner re-opens the window
+    // for that hash, so a loser lands in (a) - only by a TRUE rotation landing between this call's
+    // CAS and its re-read.
+    return revokeAsTheft('chain_advanced_during_recovery');
   };
 
   if (presentedHash !== session.refreshTokenHash) {
     // Not the previous hash either (or there is none): forged or 2+ generations stale -> theft.
     if (!session.previousRefreshTokenHash || presentedHash !== session.previousRefreshTokenHash) {
-      return revokeAsTheft();
+      return revokeAsTheft('unrecognized_secret');
     }
     // Case 2a: one generation behind, inside the window. A sibling rotated; do not fork the chain.
     if (isReplayable(session, presentedHash, now)) return finish(null);
@@ -323,5 +370,5 @@ export const rotateSession = async (
   // instant revoke (the jar's next refresh collides either way) and strictly better for
   // long-timeout non-browser callers.
   if (presentedHash === current.previousRefreshTokenHash) return recover();
-  return revokeAsTheft();
+  return revokeAsTheft('chain_advanced_during_rotation');
 };

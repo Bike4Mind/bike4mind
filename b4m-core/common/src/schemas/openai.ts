@@ -1,5 +1,6 @@
 import { IMAGE_SIZE_CONSTRAINTS, ImageModels } from '../models';
 import { z } from 'zod';
+import { MAX_THINKING_BUDGET_TOKENS } from '../constants/llmLimits';
 import { BFL_IMAGE_MODELS } from './bfl';
 import { XAI_IMAGE_MODELS } from './xai';
 import { GEMINI_IMAGE_MODELS } from './gemini';
@@ -26,7 +27,7 @@ export const ChatCompletionCreateInputSchema = z.object({
   thinking: z
     .object({
       enabled: z.boolean(),
-      budget_tokens: z.number().optional(),
+      budget_tokens: z.number().int().positive().max(MAX_THINKING_BUDGET_TOKENS).optional(),
     })
     .optional(),
   messages: z

@@ -3,7 +3,7 @@
  *
  * Promotes a regular chat agent to a ReAct-orchestrated agent. Setting *any* of
  * these fields opts the agent into the orchestration dispatch path (see
- * `hasOrchestrationFields` in `utils/agentOrchestration.ts`) - the executor
+ * `hasOrchestrationFields` in `lib/agentOrchestration.ts`) - the executor
  * then runs the iteration loop and surfaces the inline permission card for
  * tools flagged `needs_approval` server-side.
  *

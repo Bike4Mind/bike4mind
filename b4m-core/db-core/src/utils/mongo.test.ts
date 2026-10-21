@@ -8,6 +8,7 @@ import {
   usableObjectIds,
   mongoExportedRecordConverter,
   isTransientTransactionError,
+  isConnectionLostError,
   withTransaction,
   softDeletePlugin,
 } from './mongo';
@@ -161,6 +162,30 @@ describe('MongoDB Utility Functions', () => {
     it('should return false for errors without code or labels', () => {
       const error = { message: 'Generic error' };
       expect(isTransientTransactionError(error)).toBe(false);
+    });
+  });
+
+  describe('isConnectionLostError', () => {
+    it("matches mongoose's command-buffering timeout", () => {
+      const error = Object.assign(new Error('Connection operation buffering timed out after 10000ms'), {
+        name: 'MongooseError',
+      });
+      expect(isConnectionLostError(error)).toBe(true);
+    });
+
+    it('matches driver server-selection and network errors by name', () => {
+      for (const name of ['MongoServerSelectionError', 'MongoNetworkError', 'MongoNetworkTimeoutError']) {
+        expect(isConnectionLostError(Object.assign(new Error('x'), { name }))).toBe(true);
+      }
+    });
+
+    it('does not match other errors', () => {
+      expect(isConnectionLostError(Object.assign(new Error('Validation failed'), { name: 'MongooseError' }))).toBe(
+        false
+      );
+      expect(isConnectionLostError({ code: 11000, message: 'Duplicate key error' })).toBe(false);
+      expect(isConnectionLostError(new ChunkClaimLostError('ff1'))).toBe(false);
+      expect(isConnectionLostError(null)).toBe(false);
     });
   });
 
@@ -345,6 +370,90 @@ describe('MongoDB Utility Functions', () => {
 
       // Initial attempt + 1 retry = 2 calls
       expect(mockTransaction).toHaveBeenCalledTimes(2);
+    });
+
+    describe('connection loss', () => {
+      const bufferingTimeout = Object.assign(new Error('Connection operation buffering timed out after 10000ms'), {
+        name: 'MongooseError',
+      });
+      let ping: ReturnType<typeof vi.fn>;
+
+      // Captures the delays scheduled by the backoff, and runs them immediately. Recovery from a lost
+      // connection is driven by the ping, not by a wait, so this stays empty on that path.
+      const spyOnRetryDelays = (): number[] => {
+        const delays: number[] = [];
+        vi.spyOn(global, 'setTimeout').mockImplementation((fn: () => void, delay?: number) => {
+          if (delay && delay > 0) delays.push(delay);
+          fn();
+          return 0 as unknown as NodeJS.Timeout;
+        });
+        return delays;
+      };
+
+      beforeEach(() => {
+        ping = vi.fn(async () => ({ ok: 1 }));
+        vi.spyOn(mongoose.connection, 'getClient').mockReturnValue({
+          db: () => ({ command: ping }),
+        } as unknown as ReturnType<typeof mongoose.connection.getClient>);
+      });
+
+      it('re-checks the servers and retries without a backoff delay when asked to', async () => {
+        const delays = spyOnRetryDelays();
+        mockTransaction.mockRejectedValueOnce(bufferingTimeout).mockResolvedValueOnce('committed');
+
+        await expect(withTransaction(async () => 'committed', { retryOnConnectionLoss: true })).resolves.toBe(
+          'committed'
+        );
+        expect(ping).toHaveBeenCalledWith({ ping: 1 });
+        expect(mockTransaction).toHaveBeenCalledTimes(2);
+        expect(delays).toEqual([]);
+      });
+
+      it('shares the retry budget between a transient error and a lost connection', async () => {
+        const transientError = { code: 112, errorLabels: ['TransientTransactionError'] };
+        const delays = spyOnRetryDelays();
+
+        mockTransaction
+          .mockRejectedValueOnce(transientError)
+          .mockRejectedValueOnce(bufferingTimeout)
+          .mockResolvedValueOnce('committed');
+
+        await expect(withTransaction(async () => 'committed', { retryOnConnectionLoss: true })).resolves.toBe(
+          'committed'
+        );
+
+        // Three attempts is the default budget; only the transient error waits out a backoff.
+        expect(mockTransaction).toHaveBeenCalledTimes(3);
+        expect(delays).toHaveLength(1);
+        expect(ping).toHaveBeenCalledTimes(1);
+      });
+
+      it('still retries when the ping itself fails', async () => {
+        ping.mockRejectedValueOnce(new Error('server selection timed out'));
+        mockTransaction.mockRejectedValueOnce(bufferingTimeout).mockResolvedValueOnce('committed');
+
+        await expect(withTransaction(async () => 'committed', { retryOnConnectionLoss: true })).resolves.toBe(
+          'committed'
+        );
+        expect(mockTransaction).toHaveBeenCalledTimes(2);
+      });
+
+      it('gives up after maxRetries', async () => {
+        mockTransaction.mockRejectedValue(bufferingTimeout);
+
+        await expect(withTransaction(async () => 'never', { retryOnConnectionLoss: true, maxRetries: 1 })).rejects.toBe(
+          bufferingTimeout
+        );
+        expect(mockTransaction).toHaveBeenCalledTimes(2);
+      });
+
+      it('is not retried unless asked for', async () => {
+        mockTransaction.mockRejectedValue(bufferingTimeout);
+
+        await expect(withTransaction(async () => 'never')).rejects.toBe(bufferingTimeout);
+        expect(mockTransaction).toHaveBeenCalledTimes(1);
+        expect(ping).not.toHaveBeenCalled();
+      });
     });
 
     it('should apply jitter to retry delays (delays are not identical)', async () => {

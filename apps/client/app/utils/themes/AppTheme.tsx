@@ -3,6 +3,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import type { Theme, Components } from '@mui/joy/styles';
 import { getThemeConfig } from './themePrimitives';
 import { inputCustomizations } from './customizations/input';
+import { modalCustomizations } from './customizations/modal';
 import { navigationCustomizations } from './customizations/navigation';
 import { tooltipCustomizations } from './customizations/tooltip';
 import { securityPaletteLight, securityPaletteDark } from '@client/app/theme/securityTheme'; // Includes type declarations
@@ -46,6 +47,7 @@ export default function AppTheme({ children, themeComponents, disableCustomTheme
       },
       components: {
         ...inputCustomizations,
+        ...modalCustomizations,
         ...navigationCustomizations,
         ...tooltipCustomizations,
         ...themeComponents,

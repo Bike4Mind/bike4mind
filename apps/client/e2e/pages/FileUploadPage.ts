@@ -29,7 +29,10 @@ export class FileUploadPage extends BasePage {
     await fileChooser.setFiles(resolvedPath);
     // Wait for upload API or file thumbnail appearing in composer - whichever comes first
     const filename = path.basename(resolvedPath);
-    const fileThumbnail = this.page.locator('[data-testid^="message-file-thumbnail-"]').filter({ hasText: filename });
+    // Image tiles render no filename text, so match on the remove button's accessible name.
+    const fileThumbnail = this.page
+      .locator('[data-testid^="message-file-thumbnail-"]')
+      .filter({ has: this.page.getByRole('button', { name: `Remove ${filename}` }) });
     await this.waitForResponseOrUI(
       response => response.url().includes('createFabFile') && response.ok(),
       () =>

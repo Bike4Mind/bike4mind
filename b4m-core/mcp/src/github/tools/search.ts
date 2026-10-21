@@ -11,8 +11,9 @@ import { createSuccessResponse, createErrorResponse, createCustomErrorResponse }
 import { paginationParams } from '../helpers/schemas.js';
 import { isRateLimitError } from '../helpers/errors.js';
 import { TOOL_SEARCH_CODE } from '../constants.js';
+import { filterToScope, type RepoScope } from '../repoScope.js';
 
-export function registerSearchTools(server: McpServer) {
+export function registerSearchTools(server: McpServer, scope: RepoScope) {
   // SEARCH CODE - Find implementations and patterns
   server.tool(
     TOOL_SEARCH_CODE,
@@ -30,10 +31,16 @@ export function registerSearchTools(server: McpServer) {
           page: page || 1,
         });
 
+        const items = filterToScope(scope, result.data.items, item => item.repository.full_name);
+
         return createSuccessResponse({
-          total_count: result.data.total_count,
+          // GitHub's total counts matches in every repository, so it is only reported unrestricted.
+          ...(scope.mode === 'all' && { total_count: result.data.total_count }),
           incomplete_results: result.data.incomplete_results,
-          items: result.data.items.map(item => ({
+          ...(items.length < result.data.items.length && {
+            excluded_outside_selected_repositories: result.data.items.length - items.length,
+          }),
+          items: items.map(item => ({
             name: item.name,
             path: item.path,
             repository: {

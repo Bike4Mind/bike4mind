@@ -4,8 +4,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { ToolCatalog } from '../tools/gateway/toolCatalog.js';
 import {
-  isReadOnlyTool,
   categorizeTools,
   executeToolsInParallel,
   getResultsInOrder,
@@ -19,45 +19,48 @@ describe('toolParallelizer', () => {
     vi.clearAllMocks();
   });
 
-  describe('isReadOnlyTool', () => {
+  describe('read-only classification (via the tool catalog)', () => {
+    const catalog = new ToolCatalog();
+
     it('should return true for auto_approve tools', () => {
-      expect(isReadOnlyTool('math_evaluate')).toBe(true);
-      expect(isReadOnlyTool('current_datetime')).toBe(true);
-      expect(isReadOnlyTool('dice_roll')).toBe(true);
+      expect(catalog.isReadOnly('math_evaluate')).toBe(true);
+      expect(catalog.isReadOnly('current_datetime')).toBe(true);
+      expect(catalog.isReadOnly('dice_roll')).toBe(true);
     });
 
     it('should return true for prompt_default tools (read-only)', () => {
-      expect(isReadOnlyTool('file_read')).toBe(true);
-      expect(isReadOnlyTool('grep_search')).toBe(true);
-      expect(isReadOnlyTool('glob_files')).toBe(true);
-      expect(isReadOnlyTool('git_status')).toBe(true);
-      expect(isReadOnlyTool('git_diff')).toBe(true);
+      expect(catalog.isReadOnly('file_read')).toBe(true);
+      expect(catalog.isReadOnly('grep_search')).toBe(true);
+      expect(catalog.isReadOnly('glob_files')).toBe(true);
+      expect(catalog.isReadOnly('git_status')).toBe(true);
+      expect(catalog.isReadOnly('git_diff')).toBe(true);
     });
 
     it('should return false for prompt_always tools (write operations)', () => {
-      expect(isReadOnlyTool('edit_file')).toBe(false);
-      expect(isReadOnlyTool('edit_local_file')).toBe(false);
-      expect(isReadOnlyTool('create_file')).toBe(false);
-      expect(isReadOnlyTool('delete_file')).toBe(false);
-      expect(isReadOnlyTool('bash_execute')).toBe(false);
-      expect(isReadOnlyTool('shell_execute')).toBe(false);
+      expect(catalog.isReadOnly('edit_file')).toBe(false);
+      expect(catalog.isReadOnly('edit_local_file')).toBe(false);
+      expect(catalog.isReadOnly('create_file')).toBe(false);
+      expect(catalog.isReadOnly('delete_file')).toBe(false);
+      expect(catalog.isReadOnly('bash_execute')).toBe(false);
+      expect(catalog.isReadOnly('shell_execute')).toBe(false);
     });
 
     it('should return true for unknown tools (default to prompt_default)', () => {
       // Unknown tools default to prompt_default which is read-only
-      expect(isReadOnlyTool('unknown_tool')).toBe(true);
+      expect(catalog.isReadOnly('unknown_tool')).toBe(true);
     });
 
-    it('should respect custom category overrides', () => {
-      const customCategories = {
-        file_read: 'prompt_always' as const,
-        custom_safe_tool: 'auto_approve' as const,
-      };
+    it('should respect registered descriptors', () => {
+      const registered = new ToolCatalog();
+      registered.register('custom_writer', {
+        source: { kind: 'builtin-module', module: 'test' },
+        effect: 'write',
+        approval: 'prompt_always',
+      });
+      registered.register('custom_safe_tool', { source: { kind: 'cli' }, effect: 'none', approval: 'auto_approve' });
 
-      // file_read is normally read-only but overridden to write
-      expect(isReadOnlyTool('file_read', customCategories)).toBe(false);
-      // custom tool marked as safe
-      expect(isReadOnlyTool('custom_safe_tool', customCategories)).toBe(true);
+      expect(registered.isReadOnly('custom_writer')).toBe(false);
+      expect(registered.isReadOnly('custom_safe_tool')).toBe(true);
     });
   });
 
@@ -69,7 +72,7 @@ describe('toolParallelizer', () => {
         { name: 'grep_search', arguments: '{"pattern": "test"}' },
       ];
 
-      const plan = categorizeTools(tools);
+      const plan = categorizeTools(tools, new ToolCatalog());
 
       expect(plan.parallelBatch).toHaveLength(3);
       expect(plan.sequentialBatch).toHaveLength(0);
@@ -83,7 +86,7 @@ describe('toolParallelizer', () => {
         { name: 'bash_execute', arguments: '{"command": "ls"}' },
       ];
 
-      const plan = categorizeTools(tools);
+      const plan = categorizeTools(tools, new ToolCatalog());
 
       expect(plan.parallelBatch).toHaveLength(0);
       expect(plan.sequentialBatch).toHaveLength(3);
@@ -98,7 +101,7 @@ describe('toolParallelizer', () => {
         { name: 'create_file', arguments: '{"path": "/c.txt"}' },
       ];
 
-      const plan = categorizeTools(tools);
+      const plan = categorizeTools(tools, new ToolCatalog());
 
       expect(plan.parallelBatch).toHaveLength(2);
       expect(plan.sequentialBatch).toHaveLength(2);
@@ -106,23 +109,26 @@ describe('toolParallelizer', () => {
       expect(plan.sequentialBatch.map(t => t.name)).toEqual(['edit_file', 'create_file']);
     });
 
-    it('should use custom category overrides when provided', () => {
-      const customCategories = {
-        file_read: 'prompt_always' as const, // Override: treat as write
-        custom_safe: 'auto_approve' as const, // Custom tool: treat as read-only
-      };
+    it('should use registered descriptors when provided', () => {
+      const catalog = new ToolCatalog();
+      catalog.register('custom_writer', {
+        source: { kind: 'builtin-module', module: 'test' },
+        effect: 'write',
+        approval: 'prompt_always',
+      });
+      catalog.register('custom_safe', { source: { kind: 'cli' }, effect: 'none', approval: 'auto_approve' });
 
       const tools: ToolUseInfo[] = [
-        { name: 'file_read', arguments: '{}' },
+        { name: 'custom_writer', arguments: '{}' },
         { name: 'custom_safe', arguments: '{}' },
         { name: 'grep_search', arguments: '{}' },
       ];
 
-      const plan = categorizeTools(tools, customCategories);
+      const plan = categorizeTools(tools, catalog);
 
-      // file_read overridden to prompt_always -> sequential
-      expect(plan.sequentialBatch.map(t => t.name)).toEqual(['file_read']);
-      // custom_safe is auto_approve, grep_search is prompt_default -> parallel
+      // custom_writer writes -> sequential
+      expect(plan.sequentialBatch.map(t => t.name)).toEqual(['custom_writer']);
+      // custom_safe is pure compute, grep_search reads -> parallel
       expect(plan.parallelBatch.map(t => t.name)).toEqual(['custom_safe', 'grep_search']);
     });
 
@@ -133,7 +139,7 @@ describe('toolParallelizer', () => {
         { name: 'grep_search', arguments: '{"pattern": "test"}' },
       ];
 
-      const plan = categorizeTools(tools);
+      const plan = categorizeTools(tools, new ToolCatalog());
 
       expect(plan.originalOrder).toHaveLength(3);
       expect(plan.originalOrder[0]).toContain('file_read');
@@ -361,11 +367,11 @@ describe('toolParallelizer', () => {
     it('should return false for single tool', () => {
       const tools: ToolUseInfo[] = [{ name: 'file_read', arguments: '{}' }];
 
-      expect(shouldUseParallelExecution(tools)).toBe(false);
+      expect(shouldUseParallelExecution(tools, new ToolCatalog())).toBe(false);
     });
 
     it('should return false for empty tools', () => {
-      expect(shouldUseParallelExecution([])).toBe(false);
+      expect(shouldUseParallelExecution([], new ToolCatalog())).toBe(false);
     });
 
     it('should return true for 2+ read-only tools', () => {
@@ -374,7 +380,7 @@ describe('toolParallelizer', () => {
         { name: 'file_read', arguments: '{"path": "/b.txt"}' },
       ];
 
-      expect(shouldUseParallelExecution(tools)).toBe(true);
+      expect(shouldUseParallelExecution(tools, new ToolCatalog())).toBe(true);
     });
 
     it('should return true for 3+ read-only tools', () => {
@@ -384,7 +390,7 @@ describe('toolParallelizer', () => {
         { name: 'glob_files', arguments: '{}' },
       ];
 
-      expect(shouldUseParallelExecution(tools)).toBe(true);
+      expect(shouldUseParallelExecution(tools, new ToolCatalog())).toBe(true);
     });
 
     it('should return false for only write tools', () => {
@@ -393,7 +399,7 @@ describe('toolParallelizer', () => {
         { name: 'create_file', arguments: '{}' },
       ];
 
-      expect(shouldUseParallelExecution(tools)).toBe(false);
+      expect(shouldUseParallelExecution(tools, new ToolCatalog())).toBe(false);
     });
 
     it('should return true for mixed tools with 2+ read-only', () => {
@@ -403,7 +409,7 @@ describe('toolParallelizer', () => {
         { name: 'edit_file', arguments: '{}' },
       ];
 
-      expect(shouldUseParallelExecution(tools)).toBe(true);
+      expect(shouldUseParallelExecution(tools, new ToolCatalog())).toBe(true);
     });
 
     it('should return false for mixed tools with only 1 read-only', () => {
@@ -413,7 +419,7 @@ describe('toolParallelizer', () => {
         { name: 'create_file', arguments: '{}' },
       ];
 
-      expect(shouldUseParallelExecution(tools)).toBe(false);
+      expect(shouldUseParallelExecution(tools, new ToolCatalog())).toBe(false);
     });
   });
 
@@ -439,7 +445,7 @@ describe('toolParallelizer', () => {
         { name: 'file_read', arguments: '{"path": "/c.txt"}' },
       ];
 
-      const plan = categorizeTools(tools);
+      const plan = categorizeTools(tools, new ToolCatalog());
 
       await executeToolsInParallel(plan, executor);
 

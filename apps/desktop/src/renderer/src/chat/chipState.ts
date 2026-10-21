@@ -178,10 +178,12 @@ export function describeChipRow(
       tooltip: worktreeTooltip(project, branches, relocated, inUse, home),
       enabled: branches.isRepository && !inUse,
     },
+    // Never locked: a context folder is one more root, not where commands run, so adding one
+    // leaves nothing in the transcript describing a place the session no longer names.
     addContext: {
       label: 'Add a context folder',
-      tooltip: inUse ? 'Context folders are fixed once the session starts.' : 'Add a folder this session may read.',
-      enabled: !inUse,
+      tooltip: 'Share another folder this session may read and edit (or type /add-dir).',
+      enabled: true,
     },
     branchNotice: inUse ? `Branch ${FIXED}` : branchNotice(project, branches),
   };

@@ -1,5 +1,5 @@
 import { ApiKeyScope, CONFINED_API_KEY_SCOPES } from '@bike4mind/common';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 /**
  * Env var naming the scopes whose route gates are still being rolled out, e.g.

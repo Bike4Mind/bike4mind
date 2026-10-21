@@ -140,7 +140,8 @@ export class ProjectRepository extends BaseRepository<IProjectDocument> implemen
 export const ProjectSchema = new Schema<IProject, IProjectModel, IProjectMethods>(
   {
     name: { type: String, required: true },
-    description: { type: String, required: true },
+    // Optional: mongoose's `required` rejects '' too, and the create form no longer demands one.
+    description: { type: String, default: '' },
     userId: { type: String, required: true },
     sessionIds: [{ type: String, required: true }],
     fileIds: [{ type: String, required: true }],

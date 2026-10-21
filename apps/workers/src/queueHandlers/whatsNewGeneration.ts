@@ -7,10 +7,13 @@ import {
   slackDevWorkspaceRepository,
 } from '@bike4mind/database';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
-import { WhatsNewGenerationPayloadSchema, WhatsNewGenerationPayload } from '@server/whatsNew/whatsNewGeneration.types';
-import { WhatsNewConfigService } from '@client/services/whatsNewConfigService';
+import {
+  WhatsNewGenerationPayloadSchema,
+  WhatsNewGenerationPayload,
+} from '@bike4mind/server-utils/whatsNew/whatsNewGeneration.types';
+import { WhatsNewConfigService } from '@bike4mind/server-utils/services/whatsNewConfigService';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
-import { emitModalGenerationMetrics } from '@server/utils/cloudwatch';
+import { emitModalGenerationMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
@@ -21,7 +24,7 @@ import {
   scrubInternalReferences,
   isNoVariantContent,
 } from '@bike4mind/services';
-import { ChatModels, WHATS_NEW_DEFAULT_REPOSITORY } from '@bike4mind/common';
+import { ChatModels, CHAT_MODELS, WHATS_NEW_DEFAULT_REPOSITORY } from '@bike4mind/common';
 import {
   sanitizeContentForLLM,
   buildWhatsNewPrompt,
@@ -394,9 +397,8 @@ async function processModalGeneration(
   const models = await getAvailableModels(apiKeyTable);
   let resolvedModelId = config.modelId;
 
-  // Validate configured model against ChatModels enum
-  const validModels = Object.values(ChatModels) as string[];
-  if (!validModels.includes(resolvedModelId)) {
+  // Validate configured model against the servable ChatModels
+  if (!CHAT_MODELS.includes(resolvedModelId)) {
     logger.warn('Invalid LLM model configured, falling back to default', {
       configuredModel: resolvedModelId,
       defaultModel: DEFAULT_LLM_MODEL,

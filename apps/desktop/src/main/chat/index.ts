@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { copyFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { PERMISSION_LISTS, type PermissionRuleLists, type PermissionScope } from '@shared/permissions';
 import {
   app,
   BrowserWindow,
@@ -22,33 +23,47 @@ import type {
   ChatSessionStatusEvent,
   ChatSessionSummary,
   ChatStreamEvent,
-  CreateCodeSessionRequest,
   ProjectInspection,
   SendMessageRequest,
+  StartSpawnSuggestionRequest,
   UpdateProjectRequest,
 } from '@shared/chat';
 import type { CookieImportRequest } from '@shared/browserCookies';
+import type {
+  SkillMarketFilters,
+  SkillMarketImportRequest,
+  SkillMarketListingRef,
+  SkillMarketWebTarget,
+} from '@shared/skillMarket';
+import type { ShareDirectoryResult } from '@shared/directoryRequest';
 import {
   IPC_CHANNELS,
+  type BrowserFreezeFrameRequest,
   type BrowserGoAction,
   type BrowserGoRequest,
   type BrowserNavigateRequest,
   type BrowserPaneBounds,
   type BrowserPaneRequest,
   type BrowserPaneState,
+  type BrowserTabAction,
+  type BrowserTabRequest,
 } from '@shared/ipc';
 import type { McpMutationResult, McpServerInput, McpServersState } from '@shared/mcp';
 import type { AuthService } from '../auth';
 import { createMainLogger } from '../logger';
 import { ApprovalModePreference } from './ApprovalModePreference';
+import { SidebarSectionStore } from './SidebarSectionStore';
+import { registerSessionCreateIpc } from './sessionCreateIpc';
+import { placeNewSession, registerSidebarIpc } from './sidebarIpc';
 import { AttachmentStore } from './AttachmentStore';
 import { BrowserManager, NO_PAGE } from './browser/BrowserManager';
 import { IMAGE_BYTE_CAP, isImageMediaType } from './attachments';
 import { ArtifactLibrary } from './artifacts/ArtifactLibrary';
+import { SkillMarket } from './skills/SkillMarket';
 import { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { SharePublisher } from './artifacts/SharePublisher';
 import { registerArtifactProtocol } from './artifacts/sandboxProtocol';
-import { ChatService } from './ChatService';
+import { ChatService, type ChatServiceDeps } from './ChatService';
 import { CHAT_STREAM_TAG } from './devLogTag';
 import { McpManager } from './mcp/McpManager';
 import { McpServerStore, type StoreFile } from './mcp/McpServerStore';
@@ -71,11 +86,17 @@ import {
   projectDisplayName,
   unusableProjectReason,
 } from './project/git';
+import { accountSkillsProvider } from './skills/accountSkills';
 import { ProjectTrustStore } from './skills/ProjectTrustStore';
+import { ClaudeCodeSettings, MANAGED_SETTINGS_PATH } from './permissions/ClaudeCodeSettings';
+import { PermissionRuleStore } from './permissions/PermissionRuleStore';
+import { PermissionService } from './permissions/PermissionService';
 import { SkillCatalog } from './skills/SkillCatalog';
 import { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
 import { DependencyInstaller } from './project/dependencyInstall';
+import { RecentFolderStore } from './project/RecentFolderStore';
+import { folderToRemember } from './project/recentFolderToRecord';
 import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import { parseReasoningEffortSetting, storedReasoningEffortSetting } from './reasoningEffort';
 import { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
@@ -146,6 +167,28 @@ function shrinkImage(bytes: Buffer, mediaType: string, maxEdge: number): { bytes
  * Every channel here is main-side work on purpose: sending a message needs the access token,
  * which never leaves this process, so the renderer asks for a turn and receives text.
  */
+function permissionScope(value: unknown): PermissionScope | null {
+  if (!value || typeof value !== 'object') return null;
+  const scope = value as { kind?: unknown; directory?: unknown };
+  if (scope.kind === 'user') return { kind: 'user' };
+  if (scope.kind === 'project' && typeof scope.directory === 'string' && isAbsolute(scope.directory)) {
+    return { kind: 'project', directory: scope.directory };
+  }
+  return null;
+}
+
+function permissionLists(value: unknown): PermissionRuleLists | null {
+  if (!value || typeof value !== 'object') return null;
+  const lists: PermissionRuleLists = { allow: [], ask: [], deny: [] };
+  for (const list of PERMISSION_LISTS) {
+    const entries = (value as Record<string, unknown>)[list];
+    if (entries === undefined) continue;
+    if (!Array.isArray(entries) || !entries.every(entry => typeof entry === 'string')) return null;
+    lists[list] = entries;
+  }
+  return lists;
+}
+
 export interface RegisteredChat {
   service: ChatService;
   /** Background processes, exposed so main/index.ts can tear them down on every quit path. */
@@ -246,7 +289,10 @@ async function pickDirectory(sender: WebContents): Promise<string | null> {
   return picked.canceled || picked.filePaths.length === 0 ? null : picked.filePaths[0];
 }
 
-export function registerChat(auth: AuthService): RegisteredChat {
+export function registerChat(
+  auth: AuthService,
+  hooks: Pick<ChatServiceDeps, 'sessionClosed'> & { observeStream?(event: ChatStreamEvent): void } = {}
+): RegisteredChat {
   const logger = createMainLogger(VERBOSE);
   const userData = app.getPath('userData');
   // Beside approval-mode.json and app-wide like it; see ModelPreference for why.
@@ -278,15 +324,39 @@ export function registerChat(auth: AuthService): RegisteredChat {
     REASONING_EFFORT
   );
   const access = new AccessStore(join(userData, 'tool-access.json'));
-  // Its own file beside tool-access.json, and for the same reason: both record a consent the
-  // user gave once and should not be asked for again on every launch.
-  const skills = new SkillCatalog(new ProjectTrustStore(join(userData, 'project-skill-trust.json')));
+  // App-wide like approval-mode.json; see SidebarSectionStore.
+  const sidebarSections = new SidebarSectionStore(join(userData, 'sidebar-sections.json'));
+  const recentFolders = new RecentFolderStore(join(userData, 'recent-folders.json'));
+  // The trust file is its own file beside tool-access.json, and for the same reason: both record
+  // a consent the user gave once and should not be asked for again on every launch.
+  const projectTrust = new ProjectTrustStore(join(userData, 'project-skill-trust.json'));
+  const skills = new SkillCatalog(projectTrust, accountSkillsProvider(auth, userData));
+  // App-wide like approval-mode.json. Claude Code's files are only ever read; the protected roots
+  // are folders no allow rule may cover, since a call writing there would grant itself more.
+  const home = app.getPath('home');
+  const claudeCode = new ClaudeCodeSettings({ home, logger, onChange: () => permissions.invalidate() });
+  const permissions: PermissionService = new PermissionService({
+    store: new PermissionRuleStore(join(userData, 'permission-rules.json')),
+    claudeCode,
+    isTrusted: directory => projectTrust.isTrusted(directory),
+    home,
+    protectedRoots: [userData, join(home, '.claude'), dirname(MANAGED_SETTINGS_PATH)],
+    logger,
+  });
+  void permissions.start().catch(error => logger.warn(`PERMISSIONS: could not load rules: ${String(error)}`));
   const attachments = new AttachmentStore(join(userData, 'attachments'), logger, shrinkImage);
   const media = new MediaStore(join(userData, 'media'));
   registerMediaProtocol(media);
   registerArtifactProtocol();
   const artifacts = new ArtifactPublisher(() => auth.getApiClient(), logger);
   const artifactLibrary = new ArtifactLibrary(() => auth.getApiClient(), logger);
+  const skillMarket = new SkillMarket({
+    getApiClient: () => auth.getApiClient(),
+    getEnvironmentUrl: () => auth.getState().environment.url,
+    catalog: skills,
+    openExternal: url => shell.openExternal(url),
+    logger,
+  });
   const models = new ModelCatalog({
     logger,
     getApiClient: () => auth.getApiClient(),
@@ -390,27 +460,38 @@ export function registerChat(auth: AuthService): RegisteredChat {
     preferredModel: PREFERRED_MODEL,
     modelMemory: modelPreference,
     approvals,
+    permissions,
     background,
     foreground,
     dependencies: new DependencyInstaller(background),
     media,
     videoJobs,
     activity,
+    sidebarSections,
     mcp,
     browser,
     artifacts,
     queue,
     skills,
     // userData holds the auth vault. Without this a user who shares their home folder would be
-    // one `cat` away from the access token, which is T4's invariant broken through a side door.
+    // one `cat` away from the access token, which breaks the rule that tokens never leave the main process.
     protectedPaths: [userData],
     getApiClient: () => auth.getApiClient(),
     getEnvironmentUrl: () => auth.getState().environment.url,
-    emit: broadcast,
+    emit: event => {
+      broadcast(event);
+      try {
+        hooks.observeStream?.(event);
+      } catch {
+        logger.warn('FLEET: activity observer failed');
+      }
+    },
     summaryChanged: (summary: ChatSessionSummary) => send(IPC_CHANNELS.chatSessionSummary, summary),
+    sessionClosed: hooks.sessionClosed,
   });
 
   ipcMain.handle(IPC_CHANNELS.chatListModels, (_event, force: boolean) => service.listModels(force));
+  ipcMain.handle(IPC_CHANNELS.chatListSuggestionModels, () => service.listSuggestionModels());
   ipcMain.handle(IPC_CHANNELS.chatSetSessionArchived, (_event, sessionId: string, archived: boolean) =>
     service.setSessionArchived(sessionId, archived)
   );
@@ -419,6 +500,20 @@ export function registerChat(auth: AuthService): RegisteredChat {
   // trust, so anything that is not an explicit `true` has to land as "not trusted".
   ipcMain.handle(IPC_CHANNELS.chatSetProjectSkillsTrusted, (_event, sessionId: string, trusted: boolean) =>
     service.setProjectSkillsTrusted(sessionId, trusted === true)
+  );
+  ipcMain.handle(IPC_CHANNELS.skillMarketBrowse, (_event, filters: SkillMarketFilters, page: number) =>
+    skillMarket.browse(filters, Number.isInteger(page) && page > 0 ? page : 1)
+  );
+  ipcMain.handle(IPC_CHANNELS.skillMarketRecommended, () => skillMarket.recommended());
+  ipcMain.handle(IPC_CHANNELS.skillMarketListing, (_event, ref: SkillMarketListingRef) =>
+    skillMarket.listing(ref ?? {})
+  );
+  ipcMain.handle(IPC_CHANNELS.skillMarketImport, (_event, request: SkillMarketImportRequest) =>
+    skillMarket.importListing(request)
+  );
+  ipcMain.handle(IPC_CHANNELS.skillMarketImports, () => skillMarket.imports());
+  ipcMain.handle(IPC_CHANNELS.skillMarketOpenOnWeb, (_event, target: SkillMarketWebTarget) =>
+    skillMarket.openOnWeb(target)
   );
   ipcMain.handle(IPC_CHANNELS.chatSetSessionModel, (_event, sessionId: string, model: string) =>
     service.setSessionModel(sessionId, model)
@@ -439,17 +534,46 @@ export function registerChat(auth: AuthService): RegisteredChat {
     mode === 'ask' || mode === 'auto' || mode === 'full' ? service.setApprovalMode(sessionId, mode) : null
   );
   ipcMain.handle(IPC_CHANNELS.chatListSessions, () => service.listSessions());
+  ipcMain.handle(IPC_CHANNELS.permissionsGetState, () => permissions.state());
+  // Shapes checked here: this is the only door a rule comes in by besides the approval card.
+  ipcMain.handle(IPC_CHANNELS.permissionsSetRules, (_event, scope: unknown, lists: unknown) => {
+    const parsedScope = permissionScope(scope);
+    const parsedLists = permissionLists(lists);
+    if (!parsedScope || !parsedLists) return { ok: false, error: 'Not a permission rule list.' };
+    return permissions.setRules(parsedScope, parsedLists);
+  });
+  ipcMain.handle(IPC_CHANNELS.permissionsSetSharing, (_event, share: unknown) =>
+    permissions.setShareClaudeCode(share === true)
+  );
   ipcMain.handle(IPC_CHANNELS.chatGetSessionStatuses, () => service.sessionStatuses());
-  ipcMain.handle(IPC_CHANNELS.chatCreateSession, () => service.createSession());
-  ipcMain.handle(IPC_CHANNELS.chatCreateCodeSession, (_event, request: CreateCodeSessionRequest) =>
-    service.createCodeSession(request)
-  );
+  const rememberFolder = (directory: string | null): void => {
+    if (!directory) return;
+    recentFolders
+      .record(directory)
+      .catch(error => logger.warn(`CHAT: could not remember recent folder: ${String(error)}`));
+  };
+  registerSessionCreateIpc(ipcMain, {
+    createSession: () => service.createSession(),
+    createCodeSession: request => service.createCodeSession(request),
+    place: (sessionId, sectionId) =>
+      placeNewSession(sidebarSections, sessionId, sectionId, error =>
+        logger.warn(`CHAT: could not place new session in its sidebar section: ${String(error)}`)
+      ),
+    rememberFolder,
+  });
 
-  ipcMain.handle(IPC_CHANNELS.chatUpdateProject, (_event, request: UpdateProjectRequest) =>
-    service.updateProject(request)
-  );
+  ipcMain.handle(IPC_CHANNELS.chatUpdateProject, async (_event, request: UpdateProjectRequest) => {
+    const result = await service.updateProject(request);
+    rememberFolder(folderToRemember(request, result));
+    return result;
+  });
 
   ipcMain.handle(IPC_CHANNELS.chatPickProjectDirectory, (event): Promise<string | null> => pickDirectory(event.sender));
+  ipcMain.handle(IPC_CHANNELS.chatListRecentFolders, () => recentFolders.list());
+  ipcMain.handle(IPC_CHANNELS.chatRemoveRecentFolder, async (_event, directory: unknown) => {
+    if (typeof directory === 'string') await recentFolders.remove(directory);
+    return recentFolders.list();
+  });
 
   // Reading branches is a git call on a path the user just chose in a native dialog, so it is
   // not gated: nothing here writes, and the alternative is a branch field the user must type
@@ -488,11 +612,15 @@ export function registerChat(auth: AuthService): RegisteredChat {
     }
   });
 
-  ipcMain.handle(IPC_CHANNELS.chatAddContextDirectory, async (event, sessionId: string) => {
-    const directory = await pickDirectory(event.sender);
-    if (!directory) return null;
-    return service.addContextDirectory(sessionId, directory);
-  });
+  ipcMain.handle(
+    IPC_CHANNELS.chatAddContextDirectory,
+    async (event, sessionId: string, path?: unknown): Promise<ShareDirectoryResult> => {
+      if (typeof path === 'string') return service.shareDirectory(sessionId, path);
+      const directory = await pickDirectory(event.sender);
+      if (!directory) return { status: 'cancelled' };
+      return service.shareDirectory(sessionId, directory);
+    }
+  );
 
   ipcMain.handle(IPC_CHANNELS.chatRemoveContextDirectory, (_event, sessionId: string, directory: string) =>
     service.removeContextDirectory(sessionId, directory)
@@ -505,6 +633,12 @@ export function registerChat(auth: AuthService): RegisteredChat {
     await service.deleteSession(sessionId);
     await pullRequests.forget(sessionId);
   });
+  registerSidebarIpc(ipcMain, sidebarSections, sessionId =>
+    store.get(sessionId).then(
+      session => session !== null,
+      () => false
+    )
+  );
   ipcMain.handle(IPC_CHANNELS.chatSendMessage, (_event, request: SendMessageRequest) =>
     service.send(request.sessionId, request.text, request.attachments)
   );
@@ -514,8 +648,8 @@ export function registerChat(auth: AuthService): RegisteredChat {
   ipcMain.handle(IPC_CHANNELS.chatCompactContext, (_event, sessionId: string, focus?: string) =>
     service.compactContext(sessionId, focus ?? '')
   );
-  ipcMain.handle(IPC_CHANNELS.chatSuggestNextPrompt, (_event, sessionId: string) =>
-    service.suggestNextPrompt(sessionId)
+  ipcMain.handle(IPC_CHANNELS.chatSuggestNextPrompt, (_event, sessionId: string, model: unknown) =>
+    service.suggestNextPrompt(sessionId, typeof model === 'string' && model ? model : null)
   );
   ipcMain.handle(IPC_CHANNELS.chatGetQueued, (_event, sessionId: string) => service.queuedMessages(sessionId));
   ipcMain.handle(IPC_CHANNELS.chatCancelQueued, (_event, sessionId: string, queuedId: string) =>
@@ -523,6 +657,12 @@ export function registerChat(auth: AuthService): RegisteredChat {
   );
   ipcMain.handle(IPC_CHANNELS.chatSendQueuedNow, (_event, sessionId: string, queuedId: string) =>
     service.sendQueuedNow(sessionId, queuedId)
+  );
+  ipcMain.handle(IPC_CHANNELS.chatStartSpawnSuggestion, (_event, request: StartSpawnSuggestionRequest) =>
+    service.startSpawnSuggestion(request)
+  );
+  ipcMain.handle(IPC_CHANNELS.chatDismissSpawnSuggestion, (_event, sessionId: string, suggestionId: string) =>
+    service.dismissSpawnSuggestion(sessionId, suggestionId)
   );
   ipcMain.handle(IPC_CHANNELS.chatRespondToApproval, (_event, approvalId: string, answer: ChatApprovalAnswer) =>
     approvals.resolve(approvalId, answer)
@@ -620,6 +760,11 @@ export function registerChat(auth: AuthService): RegisteredChat {
     if (!window) return NO_PAGE;
     return browser.setPane(window, sessionId, paneBounds(request?.bounds));
   });
+  ipcMain.handle(IPC_CHANNELS.browserFreezeFrame, (event, request: BrowserFreezeFrameRequest) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    if (!window || typeof request?.sessionId !== 'string') return null;
+    return browser.freezeFrame(window, request.sessionId);
+  });
 
   // The url bar. Its requests name a conversation rather than being implied by the open pane,
   // for the same reason setPane does: a second app window has a pane of its own.
@@ -635,6 +780,14 @@ export function registerChat(auth: AuthService): RegisteredChat {
       throw new Error('A conversation and one of back, forward or reload are required.');
     }
     return browser.go(request.sessionId, request.action);
+  });
+  ipcMain.handle(IPC_CHANNELS.browserTab, (_event, request: BrowserTabRequest): Promise<BrowserPaneState> => {
+    const actions: readonly BrowserTabAction[] = ['new', 'select', 'close'];
+    if (typeof request?.sessionId !== 'string' || !actions.includes(request?.action)) {
+      throw new Error('A conversation and one of new, select or close are required.');
+    }
+    const tabId = typeof request.tabId === 'number' && Number.isInteger(request.tabId) ? request.tabId : undefined;
+    return browser.tab(request.sessionId, request.action, tabId);
   });
 
   /**

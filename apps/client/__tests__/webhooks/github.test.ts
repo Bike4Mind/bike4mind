@@ -9,7 +9,7 @@ import {
   getRawBody,
   PayloadTooLargeError,
 } from '@server/integrations/github/webhookUtils';
-import { isValidGitHubEventType, SUPPORTED_GITHUB_EVENTS } from '@server/integrations/github/types';
+import { isValidGitHubEventType, SUPPORTED_GITHUB_EVENTS } from '@bike4mind/server-utils/integrations/github/types';
 
 // Mock dependencies
 vi.mock('@bike4mind/observability', () => ({
@@ -34,7 +34,7 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: {
     MONGODB_URI: 'mongodb://localhost:27017/test-%STAGE%',
     STAGE: 'test',
@@ -46,7 +46,7 @@ const { mockSendToQueue } = vi.hoisted(() => ({
   mockSendToQueue: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('@server/utils/sqs', () => ({
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({
   sendToQueue: mockSendToQueue,
 }));
 

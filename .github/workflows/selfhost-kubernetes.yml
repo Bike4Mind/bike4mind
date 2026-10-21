@@ -58,4 +58,6 @@ jobs:
       - name: Validate rendered runtime and DNS guard contracts
         run: python3 -m unittest discover -s selfhost/kubernetes/tests
       - name: Lint deployment package
-        run: helm lint selfhost/kubernetes -f selfhost/kubernetes/images.example.yaml
+        run: |
+          helm lint selfhost/kubernetes -f selfhost/kubernetes/images.example.yaml
+          helm lint selfhost/kubernetes -f selfhost/kubernetes/images.example.yaml -f selfhost/kubernetes/external-mongo.example.yaml

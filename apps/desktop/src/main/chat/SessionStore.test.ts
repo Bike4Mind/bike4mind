@@ -152,4 +152,34 @@ describe('SessionStore', () => {
     await expect(store.delete(id)).resolves.toBeUndefined();
     expect(await store.get(id)).toBeNull();
   });
+  describe('updateProjectWorkspace', () => {
+    const project = {
+      directory: '/repo',
+      name: 'repo',
+      branch: 'main',
+      workspace: true,
+      workingDirectory: '/repo',
+      contextDirectories: ['/notes'],
+    };
+
+    it('changes where the session runs and keeps the folders and branch stored now', async () => {
+      const { id } = await store.create(undefined, { project: { ...project, workspaceBranch: 'b4m/one' } });
+      await store.addContextDirectory(id, '/more');
+
+      await store.updateProjectWorkspace(id, { workingDirectory: '/repo-wt' });
+
+      expect((await store.get(id))?.project).toMatchObject({
+        workingDirectory: '/repo-wt',
+        workspaceBranch: 'b4m/one',
+        contextDirectories: ['/notes', '/more'],
+      });
+    });
+
+    it('leaves a Chat session without a project alone', async () => {
+      const { id } = await store.create();
+
+      expect(await store.updateProjectWorkspace(id, { workingDirectory: '/repo-wt' })).toBeNull();
+      expect((await store.get(id))?.project).toBeUndefined();
+    });
+  });
 });

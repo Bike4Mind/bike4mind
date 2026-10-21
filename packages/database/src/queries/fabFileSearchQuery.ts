@@ -1,6 +1,7 @@
 import {
   CHUNK_STALL_REASONS,
   CODE_FILE_MIME_TYPES,
+  GENERATED_ASSET_TAG,
   LEGACY_CHUNK_STALL_NOTES,
   normalizeTagPrefix,
   type DataLakeMembershipScope,
@@ -363,6 +364,8 @@ export interface FabFileSearchParams {
      * (e.g. a project's file set or an agent's KB scope).
      */
     restrictToFileIds?: string[];
+    /** Only files saved by a generation tool. ANDed with `tags`, which match any of their names. */
+    generated?: boolean;
   };
   pagination: { page: number; limit: number };
   order: { by: 'createdAt' | 'fileName' | 'fileSize'; direction: 'asc' | 'desc' };
@@ -486,6 +489,12 @@ export function buildFabFileSearchQuery(params: FabFileSearchParams): FabFileSea
       tags: {
         $elemMatch: { name: { $in: filters.tags.map(tag => new RegExp(`^${escapeRegex(String(tag))}$`, 'i')) } },
       },
+    });
+  }
+
+  if (filters.generated === true) {
+    andConditions.push({
+      tags: { $elemMatch: { name: new RegExp(`^${escapeRegex(GENERATED_ASSET_TAG)}$`, 'i') } },
     });
   }
 

@@ -107,6 +107,7 @@ vi.mock('@bike4mind/common', async () => {
     visibleReplyText: actual.visibleReplyText,
     joinReplySlots: actual.joinReplySlots,
     stripChoicesFromReplies: actual.stripChoicesFromReplies,
+    stripNarratedToolCallsFromReplies: actual.stripNarratedToolCallsFromReplies,
     stripSearchResultCardFences: actual.stripSearchResultCardFences,
   };
 });
@@ -131,18 +132,18 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
   },
 }));
 
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ download: h.filesDownload }),
   getGeneratedImageStorage: () => ({ download: h.generatedDownload }),
 }));
 
-vi.mock('@server/utils/generatedImageAccess', () => ({
+vi.mock('@bike4mind/server-utils/utils/generatedImageAccess', () => ({
   userCanAccessGeneratedImage: h.canAccessGeneratedImage,
 }));
 
 vi.mock('@server/websocket/utils', () => ({ sendToClient: h.progress }));
 
-vi.mock('@client/shared/subQuestStatusPresentation', () => ({ getSubQuestStatusIcon: () => '' }));
+vi.mock('@bike4mind/server-utils/shared/subQuestStatusPresentation', () => ({ getSubQuestStatusIcon: () => '' }));
 
 vi.mock('./createZipBuffer', () => ({ createZipBuffer: h.createZipBuffer }));
 
@@ -254,7 +255,10 @@ describe('questExport untracked image keys', () => {
       h.canAccessGeneratedImage.mockResolvedValueOnce(true);
       await runExport(h.COLLABORATOR_ID);
 
-      expect(h.canAccessGeneratedImage).toHaveBeenCalledWith(GENERATED_KEY, h.OWNER_ID);
+      expect(h.canAccessGeneratedImage).toHaveBeenCalledWith(
+        GENERATED_KEY,
+        expect.objectContaining({ id: h.OWNER_ID })
+      );
       expect(h.generatedDownload).toHaveBeenCalledWith(GENERATED_KEY);
       expect(h.filesDownload).not.toHaveBeenCalled();
       const [markdown, imageBuffers] = zipOutput();
@@ -268,7 +272,7 @@ describe('questExport untracked image keys', () => {
     seedReply(`![b](${url})`);
     await runExport(h.COLLABORATOR_ID);
 
-    expect(h.canAccessGeneratedImage).toHaveBeenCalledWith(GENERATED_KEY, h.OWNER_ID);
+    expect(h.canAccessGeneratedImage).toHaveBeenCalledWith(GENERATED_KEY, expect.objectContaining({ id: h.OWNER_ID }));
     expect(h.generatedDownload).not.toHaveBeenCalled();
     expect(zipOutput()[0]).toContain('> \u26a0\ufe0f Image unavailable: gen-1.png. Reason: Image is not available.');
   });
@@ -648,4 +652,16 @@ it.each([
     expect.anything(),
     expect.objectContaining({ status: 'failed' })
   );
+});
+
+describe('quest export browser URL audience', () => {
+  it.each([false, true])('opts into browser signing for existing artifact %s', async existing => {
+    if (existing) h.metadata.mockResolvedValue({});
+    await runExport(h.OWNER_ID);
+    expect(h.signedUrl).toHaveBeenCalledWith(
+      expect.stringContaining('exports/quest/'),
+      'get',
+      expect.objectContaining({ audience: 'browser', expiresIn: 3600 })
+    );
+  });
 });

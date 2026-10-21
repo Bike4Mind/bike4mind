@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { APP_DECISION_COOKIE, DECISION_COOKIE, REGION_COOKIE } from '@client/lib/consentCookies';
+import { APP_DECISION_COOKIE, DECISION_COOKIE, REGION_COOKIE } from '@bike4mind/server-utils/lib/consentCookies';
 import { readConsentRegion, readSharedConsent, publishResolvedConsent } from './consentRegion';
 
 function setCookie(raw: string) {
@@ -131,6 +131,37 @@ describe('publishResolvedConsent', () => {
       expect(written).toContain('expires=');
     } finally {
       setSpy.mockRestore();
+    }
+  });
+
+  describe.each([
+    ['https:', true],
+    ['http:', false],
+  ])('on a %s origin', (protocol, secure) => {
+    const written = (value: 'granted' | 'denied' | 'unset') => {
+      vi.stubGlobal('location', { ...window.location, protocol });
+      const setSpy = vi.spyOn(document, 'cookie', 'set');
+      try {
+        publishResolvedConsent(value);
+        return setSpy.mock.calls.map(([v]) => v as string).find(v => v.startsWith(`${APP_DECISION_COOKIE}=`));
+      } finally {
+        setSpy.mockRestore();
+        vi.unstubAllGlobals();
+      }
+    };
+
+    it.each(['granted', 'denied', 'unset'] as const)(`writes %s ${secure ? 'with' : 'without'} Secure`, value => {
+      const cookie = written(value);
+      expect(cookie).toBeDefined();
+      if (secure) expect(cookie).toContain('; Secure');
+      else expect(cookie).not.toContain('Secure');
+    });
+
+    if (!secure) {
+      it('still stores the cookie', () => {
+        publishResolvedConsent('granted');
+        expect(document.cookie).toContain(`${APP_DECISION_COOKIE}=granted`);
+      });
     }
   });
 

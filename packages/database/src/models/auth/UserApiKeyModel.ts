@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import { softDeletePlugin } from '../../utils/mongo';
 import {
   ApiKeyCapPool,
+  ApiKeyStoredSecret,
   ApiKeyStatus,
   ApiKeyScope,
   CreditHolderType,
@@ -90,8 +91,8 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
     );
   }
 
-  // Both lazy heals below run after a slow bcrypt compare, so they are conditioned on the keyHash
-  // that compare read: if a rotation committed in between, the filter misses and nothing is written.
+  // Both lazy heals below run after validation, so they are conditioned on the secret it matched:
+  // if a rotation committed in between, the filter misses and nothing is written.
   async setKeyDigest(id: string, keyDigest: string, expectedKeyHash: string) {
     await this.model.updateOne(
       { _id: id, keyHash: expectedKeyHash, keyDigest: { $in: [null, ''] } },
@@ -99,8 +100,13 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
     );
   }
 
-  async healKeyPrefix(id: string, keyPrefix: string, expectedKeyHash: string) {
-    await this.model.updateOne({ _id: id, keyHash: expectedKeyHash }, { $set: { keyPrefix } });
+  async healKeyPrefix(id: string, keyPrefix: string, matchedSecret: ApiKeyStoredSecret) {
+    // An undefined guard value would serialize as null and match every doc lacking that field.
+    const guardValues = Object.values(matchedSecret);
+    if (guardValues.length !== 1 || typeof guardValues[0] !== 'string' || guardValues[0] === '') {
+      throw new Error('healKeyPrefix requires exactly one non-empty stored secret to guard on');
+    }
+    await this.model.updateOne({ _id: id, ...matchedSecret }, { $set: { keyPrefix } });
   }
 
   findActiveByKeyPrefix(keyPrefix: string) {
@@ -270,7 +276,7 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
   {
     userId: { type: String, required: true },
     name: { type: String, required: true },
-    keyHash: { type: String, required: true },
+    keyHash: { type: String },
     keyDigest: { type: String },
     keyPrefix: { type: String, required: true, unique: true },
     scopes: [{ type: String, enum: Object.values(ApiKeyScope), required: true }],

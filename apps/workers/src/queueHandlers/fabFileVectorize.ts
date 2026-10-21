@@ -15,13 +15,14 @@ import {
   User,
   withTransaction,
 } from '@bike4mind/database';
-import { NotFoundError } from '@server/utils/errors';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { sendToClient } from '@server/websocket/utils';
 import { z } from 'zod';
 import {
   ChunkSchema,
   EmbeddingFactory,
   resolveEmbeddingWithKeylessFallback,
+  EmbeddingAuthError,
   isEmbeddingAuthError,
   EmbeddingSpaceConflictError,
   isEmbeddingSpaceConflictError,
@@ -36,18 +37,17 @@ import {
   fabFilesService,
   recordOperationalUsage,
 } from '@bike4mind/services';
-import { getEmbeddingModelCost } from '@bike4mind/common';
+import { getEmbeddingModelCost, provenancePayloadShape } from '@bike4mind/common';
 import {
   finalizeBatchIfComplete,
   completedBatchStatus,
   deferFailureIfRetryable,
-} from '@server/queueHandlers/dataLakeBatchProgress';
+} from '@server/dataLakes/dataLakeBatchProgress';
 import { notifySlackIndexingComplete } from '@workers/queueHandlers/notifySlackIndexingComplete';
-import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDelivery';
+import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from '@bike4mind/server-utils/utils/sqsDelivery';
 import { dispatchWithLogger, MARK_PAUSED_MAX_ATTEMPTS, MARK_PAUSED_RETRY_DELAY_MS } from '@server/queueHandlers/utils';
-import { isConvergenceHalted } from '@server/queueHandlers/convergenceKillSwitch';
-import { makeDataLakeSpendNotifier } from '@server/utils/dataLakeSpendNotifier';
-import { provenancePayloadShape } from '@server/queueHandlers/convergenceProvenance';
+import { isConvergenceHalted } from '@bike4mind/server-utils/dataLakes/convergenceKillSwitch';
+import { makeDataLakeSpendNotifier } from '@workers/utils/dataLakeSpendNotifier';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { getProviderFromModel } from '@bike4mind/fab-pipeline';
 import { Resource } from 'sst';
@@ -208,6 +208,16 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       apiKeyTable
     );
     if (embeddingModel !== requestedEmbeddingModel) {
+      // Files already embedded with the requested model mean a lost credential, not a keyless
+      // stage: a substitute would land this file where searches over the rest cannot reach it.
+      if (await fabFileRepository.hasVectorizedFileInEmbeddingSpace(requestedEmbeddingModel)) {
+        throw new EmbeddingAuthError(
+          getProviderFromModel(requestedEmbeddingModel),
+          `No credential for ${requestedEmbeddingModel}, which files on this deployment are already ` +
+            `embedded with; refusing to embed with the keyless ${embeddingModel}, which searches could not ` +
+            `match against them. Restore the credential and re-index the file.`
+        );
+      }
       logger.warn(`No credential for ${requestedEmbeddingModel}; embedding with keyless ${embeddingModel} instead`);
     }
 

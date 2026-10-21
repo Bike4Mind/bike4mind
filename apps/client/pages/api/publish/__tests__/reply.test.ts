@@ -7,6 +7,10 @@ const dbMocks = vi.hoisted(() => ({
   questLean: vi.fn(),
   sessionLean: vi.fn(),
   publishedFindOneLean: vi.fn(),
+  publishedFindOne: vi.fn(),
+  invalidatePublishCdn: vi.fn(),
+  restrictDuplicatePublications: vi.fn(),
+  checkPublishQuota: vi.fn(),
   findOneAndUpdate: vi.fn(),
 }));
 
@@ -22,21 +26,48 @@ vi.mock('@bike4mind/database', () => ({
   Quest: { findOne: () => ({ select: () => ({ lean: dbMocks.questLean }) }) },
   Session: { findById: () => ({ select: () => ({ lean: dbMocks.sessionLean }) }) },
   PublishedArtifact: {
-    findOne: () => ({ lean: dbMocks.publishedFindOneLean }),
+    findOne: (filter: unknown) => {
+      dbMocks.publishedFindOne(filter);
+      return { sort: () => ({ lean: dbMocks.publishedFindOneLean }) };
+    },
     findOneAndUpdate: dbMocks.findOneAndUpdate,
   },
 }));
 vi.mock('@server/services/publish', () => ({
-  resolveVisibility: () => ({ ok: true, visibility: 'public' }),
+  resolveVisibility: (_tier: string, visibility?: string) => ({ ok: true, visibility: visibility ?? 'public' }),
   checkScopePermission: () => ({ ok: true }),
-  checkPublishQuota: () => ({ ok: true }),
+}));
+// The real settlePublication runs; its own collaborators are stubbed here.
+vi.mock('@server/services/publish/checkPublishQuota', () => ({ checkPublishQuota: dbMocks.checkPublishQuota }));
+vi.mock('@server/services/publish/invalidatePublishCdn', () => ({
+  invalidatePublishCdn: dbMocks.invalidatePublishCdn,
+  toCacheTarget: (a: { publicId: string }) => ({ publicId: a.publicId }),
+}));
+vi.mock('@server/services/publish/restrictDuplicatePublications', () => ({
+  restrictDuplicatePublications: dbMocks.restrictDuplicatePublications,
 }));
 
-import handler, { deriveTitle } from '../reply';
+import handler, { deriveTitle, truncateAtWord } from '../reply';
 
 describe('deriveTitle', () => {
+  it('cuts a long first line at a word boundary with an ellipsis', () => {
+    const line = 'Here is a long answer about everyday conversation habits '.repeat(5).trim();
+    const title = deriveTitle(line);
+    expect(title.length).toBeLessThanOrEqual(120);
+    expect(title.endsWith('...')).toBe(true);
+    expect(line.startsWith(title.slice(0, -3))).toBe(true);
+    expect(line.charAt(title.length - 3)).toBe(' ');
+  });
+
   it('uses the first prose line, stripped of markdown heading markers', () => {
     expect(deriveTitle('# Hello world\n\nmore text')).toBe('Hello world');
+  });
+
+  it('drops inline markdown markers so the page title reads as plain text', () => {
+    expect(deriveTitle('## Session 1 Recap: *Tides of the Drowned Crown*\n\nbody')).toBe(
+      'Session 1 Recap: Tides of the Drowned Crown'
+    );
+    expect(deriveTitle('**Weekly summary**\n\nbody')).toBe('Weekly summary');
   });
 
   it('prefers prose over a leading artifact block', () => {
@@ -56,6 +87,16 @@ describe('deriveTitle', () => {
     const title = deriveTitle('<artifact type="text/html" title="Real Title"><label>x</label></artifact>');
     expect(title).not.toContain('<artifact');
     expect(title).toBe('Real Title');
+  });
+});
+
+describe('truncateAtWord', () => {
+  it('returns short text unchanged', () => {
+    expect(truncateAtWord('short title', 120)).toBe('short title');
+  });
+
+  it('hard-cuts a single unbroken token that has no usable word boundary', () => {
+    expect(truncateAtWord('x'.repeat(200), 20)).toBe(`${'x'.repeat(17)}...`);
   });
 });
 
@@ -94,6 +135,7 @@ describe('POST /api/publish/reply - ownership', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    dbMocks.checkPublishQuota.mockResolvedValue({ ok: true });
     dbMocks.questLean.mockResolvedValue({ reply: 'Hello world' });
     dbMocks.sessionLean.mockResolvedValue({ userId: OWNER });
     dbMocks.publishedFindOneLean.mockResolvedValue(null);
@@ -150,5 +192,143 @@ describe('POST /api/publish/reply - ownership', () => {
       expect.objectContaining({ $set: expect.objectContaining({ citables: undefined }) }),
       expect.anything()
     );
+  });
+});
+
+// Reopening Publish & Share on a published answer and picking Private must act on the link the
+// owner already handed out: one record per owner+reply, rewritten in place, CDN purged.
+describe('POST /api/publish/reply - re-publish updates the owner record in place', () => {
+  const OWNER = 'owner-user-id';
+  const EXISTING = {
+    _id: 'row1',
+    publicId: 'live123',
+    slug: 'r-live123',
+    tier: 'user',
+    scopeId: OWNER,
+    visibility: 'public',
+  };
+  type Res = { statusCode: number; body: unknown; status: (c: number) => Res; json: (o: unknown) => Res };
+  const makeRes = (): Res => {
+    const res = { statusCode: 0, body: undefined as unknown } as Res;
+    res.status = (c: number) => ((res.statusCode = c), res);
+    res.json = (o: unknown) => ((res.body = o), res);
+    return res;
+  };
+  const run = (user: { id: string; isAdmin?: boolean }, body: Record<string, unknown> = {}) => {
+    const res = makeRes();
+    const req = {
+      user: { isAdmin: false, organizationId: null, username: 'u', ...user },
+      body: { sessionId: 'sess1', messageId: 'msg1', ...body },
+      logger: { info: () => {}, warn: () => {} },
+    };
+    return (handler as (req: unknown, res: unknown) => Promise<void>)(req, res).then(() => res);
+  };
+  const upsertCall = () =>
+    dbMocks.findOneAndUpdate.mock.calls[0] as [Record<string, unknown>, { $set: Record<string, unknown> }];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    dbMocks.checkPublishQuota.mockResolvedValue({ ok: true });
+    dbMocks.questLean.mockResolvedValue({ reply: 'Hello world' });
+    dbMocks.sessionLean.mockResolvedValue({ userId: OWNER });
+    // Only the owner has a publication of this reply.
+    dbMocks.publishedFindOne.mockImplementation(() => undefined);
+    dbMocks.publishedFindOneLean.mockImplementation(async () => {
+      const filter = dbMocks.publishedFindOne.mock.calls.at(-1)?.[0] as { ownerId?: string } | undefined;
+      return filter?.ownerId === OWNER ? EXISTING : null;
+    });
+    dbMocks.findOneAndUpdate.mockImplementation(
+      async (_filter: unknown, update: { $set: Record<string, unknown> }) => ({
+        ...update.$set,
+        source: { kind: 'reply' },
+      })
+    );
+  });
+
+  it('switching to Private rewrites the existing record and keeps its link', async () => {
+    const res = await run({ id: OWNER }, { visibility: 'private' });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toMatchObject({ publicId: 'live123', url: '/p/r/live123', visibility: 'private' });
+    const [filter, update] = upsertCall();
+    expect(filter).toEqual({ _id: 'row1', ownerId: OWNER, deletedAt: null });
+    expect(update.$set).toMatchObject({ publicId: 'live123', visibility: 'private', tier: 'user', scopeId: OWNER });
+  });
+
+  it('purges the CDN when a public page is downgraded, so the public copy stops serving', async () => {
+    await run({ id: OWNER }, { visibility: 'private' });
+    expect(dbMocks.invalidatePublishCdn).toHaveBeenCalledWith({ publicId: 'live123' }, expect.anything());
+  });
+
+  it('narrows any older duplicate of the same reply to the saved record', async () => {
+    await run({ id: OWNER }, { visibility: 'private' });
+    expect(dbMocks.restrictDuplicatePublications).toHaveBeenCalledWith(
+      expect.objectContaining({ publicId: 'live123', visibility: 'private' }),
+      expect.anything()
+    );
+  });
+
+  it('answers 409, not a duplicate-key 500, when the page is removed between lookup and write', async () => {
+    // Models the store: the row is soft-deleted, so the in-place filter matches nothing, and an
+    // upsert would re-insert the same _id over it.
+    dbMocks.findOneAndUpdate.mockImplementation(async (_f: unknown, _u: unknown, opts: { upsert?: boolean }) => {
+      if (opts.upsert) throw Object.assign(new Error('E11000 duplicate key error collection'), { code: 11000 });
+      return null;
+    });
+    const res = await run({ id: OWNER }, { visibility: 'private' });
+    expect(res.statusCode).toBe(409);
+    expect(dbMocks.restrictDuplicatePublications).not.toHaveBeenCalled();
+  });
+
+  it('does not purge when nothing public was or is being served', async () => {
+    dbMocks.publishedFindOneLean.mockResolvedValue(null);
+    await run({ id: OWNER }, { visibility: 'private' });
+    expect(dbMocks.invalidatePublishCdn).not.toHaveBeenCalled();
+  });
+
+  it('moves a Team page to Private in place instead of minting a second record', async () => {
+    dbMocks.publishedFindOneLean.mockResolvedValue({
+      ...EXISTING,
+      tier: 'organization',
+      scopeId: 'org1',
+      visibility: 'organization',
+    });
+    await run({ id: OWNER }, { visibility: 'private' });
+    expect(dbMocks.findOneAndUpdate).toHaveBeenCalledTimes(1);
+    const [filter, update] = upsertCall();
+    expect(filter).toMatchObject({ _id: 'row1' });
+    expect(update.$set).toMatchObject({ publicId: 'live123', tier: 'user', scopeId: OWNER, visibility: 'private' });
+  });
+
+  it("frees the row's OLD Team tier and scope in the quota check, not the requested ones", async () => {
+    dbMocks.publishedFindOneLean.mockResolvedValue({ ...EXISTING, tier: 'organization', scopeId: 'org1' });
+    await run({ id: OWNER }, { visibility: 'private' });
+    expect(dbMocks.checkPublishQuota).toHaveBeenCalledWith(
+      expect.objectContaining({ replacing: { tier: 'organization', scopeId: 'org1', slug: 'r-live123' } })
+    );
+  });
+
+  it('looks up the existing publication by the CALLER as owner, never across users', async () => {
+    await run({ id: OWNER });
+    expect(dbMocks.publishedFindOne).toHaveBeenCalledWith(
+      expect.objectContaining({ ownerId: OWNER, 'source.messageId': 'msg1', deletedAt: null })
+    );
+  });
+
+  it('an admin publishing the same reply never touches the owner record', async () => {
+    const res = await run({ id: 'admin-id', isAdmin: true }, { visibility: 'private' });
+    expect(res.statusCode).toBe(200);
+    expect(dbMocks.publishedFindOne).toHaveBeenCalledWith(expect.objectContaining({ ownerId: 'admin-id' }));
+    const [filter, update] = upsertCall();
+    expect(filter).not.toHaveProperty('_id');
+    expect(filter).toMatchObject({ tier: 'user', scopeId: 'admin-id' });
+    expect(update.$set.publicId).not.toBe('live123');
+    expect(dbMocks.invalidatePublishCdn).not.toHaveBeenCalled();
+  });
+
+  it('a different non-admin user cannot publish (and so cannot change) the owner reply', async () => {
+    const res = await run({ id: 'intruder' }, { visibility: 'private' });
+    expect(res.statusCode).toBe(403);
+    expect(dbMocks.publishedFindOne).not.toHaveBeenCalled();
+    expect(dbMocks.findOneAndUpdate).not.toHaveBeenCalled();
   });
 });

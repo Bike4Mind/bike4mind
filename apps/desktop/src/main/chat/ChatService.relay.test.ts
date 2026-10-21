@@ -7,6 +7,7 @@ import type { ChatQueueEvent, ChatSessionSummary, ChatStreamEvent } from '@share
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import { MessageQueue } from './MessageQueue';
+import { SessionActivity } from './SessionActivity';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 
@@ -35,6 +36,7 @@ describe('ChatService session_send', () => {
   let post: ReturnType<typeof vi.fn>;
   let streams: PassThrough[];
   let project: string;
+  let activity: SessionActivity;
 
   beforeEach(async () => {
     project = await realpath(await mkdtemp(join(tmpdir(), 'b4m-relay-')));
@@ -57,8 +59,10 @@ describe('ChatService session_send', () => {
     post = ownPost;
 
     queue = new MessageQueue(event => ownQueueEvents.push(event));
+    activity = new SessionActivity(() => undefined);
     service = new ChatService({
       store,
+      activity,
       access: { list: async () => [] } as unknown as AccessStore,
       logger: { debug: vi.fn(), warn: vi.fn() },
       queue,
@@ -272,6 +276,66 @@ describe('ChatService session_send', () => {
     const messages = (await store.get(target.id))?.messages ?? [];
     expect(messages[2]).toMatchObject({ system: true, content: 'one more thing' });
     expect(queue.list(target.id)).toHaveLength(0);
+  });
+
+  it('runs two messages sent to one idle session one turn at a time', async () => {
+    const sender = await codeSession('Sender');
+    const target = await codeSession('Target');
+    const started = vi.spyOn(activity, 'replyStarted');
+    const ended = vi.spyOn(activity, 'replyEnded');
+
+    await service.send(sender.id, 'go');
+    await awaitStream(0);
+    // Both in one round, so they run in parallel: the second reaches the target while the first
+    // is still being accepted there, before any reply exists to mark it busy.
+    streams[0].write(
+      frame({
+        type: 'tool_use',
+        tools: ['first relay', 'second relay'].map((message, index) => ({
+          id: `pair-${index}`,
+          name: 'session_send',
+          arguments: JSON.stringify({ session_id: target.id, message }),
+        })),
+      })
+    );
+    streams[0].write(frame('[DONE]'));
+
+    await vi.waitUntil(() => settledCalls('session_send').length === 2, { timeout: 5000, interval: 5 });
+    expect(settledCalls('session_send').every(call => call?.status === 'done')).toBe(true);
+
+    const turnFor = (text: string) =>
+      streams.findIndex((_, index) => {
+        const messages = messagesOf(index);
+        return JSON.stringify(messages[messages.length - 1]?.content ?? '').includes(text);
+      });
+    await vi.waitUntil(() => turnFor('first relay') >= 0 || turnFor('second relay') >= 0, {
+      timeout: 5000,
+      interval: 5,
+    });
+    const firstText = turnFor('first relay') >= 0 ? 'first relay' : 'second relay';
+    const secondText = firstText === 'first relay' ? 'second relay' : 'first relay';
+
+    // Long enough for a racing second accept to have opened its own request.
+    await new Promise(done => setTimeout(done, 200));
+    expect(turnFor(secondText)).toBe(-1);
+    expect(started.mock.calls.filter(([id]) => id === target.id)).toHaveLength(1);
+    expect(queue.list(target.id)).toHaveLength(1);
+
+    endTurn(streams[turnFor(firstText)], 'handled the first');
+    await vi.waitUntil(() => turnFor(secondText) >= 0, { timeout: 5000, interval: 5 });
+    await vi.waitUntil(() => ended.mock.calls.filter(([id]) => id === target.id).length === 1, {
+      timeout: 5000,
+      interval: 5,
+    });
+    expect(started.mock.calls.filter(([id]) => id === target.id)).toHaveLength(2);
+
+    // Stop reaches the turn that is actually running, and its end is reported too.
+    service.stop(target.id);
+    await vi.waitUntil(() => ended.mock.calls.filter(([id]) => id === target.id).length === 2, {
+      timeout: 5000,
+      interval: 5,
+    });
+    expect(service.isSessionBusy(target.id)).toBe(false);
   });
 
   it('fails cleanly when the target has been deleted, archived, or is the caller itself', async () => {

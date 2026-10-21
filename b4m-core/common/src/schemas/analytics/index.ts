@@ -21,6 +21,8 @@ export * from './events/organization';
 export * from './events/userApiKey';
 export * from './events/slack';
 export * from './events/help';
+export * from './events/integrations';
+export * from './events/creditPurchase';
 export * from './events/overwatch';
 export * from './events/marketingReports';
 export * from './events/briefcase';

@@ -11,7 +11,7 @@ import {
   type ModelInfo,
 } from '@bike4mind/common';
 import { stripToolDependentMessages } from './toolPairingUtils';
-import { cachedTokensFromUsage, splitCacheInclusiveInput } from './cacheInclusiveUsage';
+import { appendCacheInclusiveTurn, cachedTokensFromUsage, splitCacheInclusiveInput } from './cacheInclusiveUsage';
 import OpenAI from 'openai';
 import { ChatCompletionChunk, ChatCompletionCreateParams } from 'openai/resources';
 import { Stream } from 'openai/streaming';
@@ -147,6 +147,7 @@ export class DeepSeekBackend implements ICompletionBackend {
     const accumInputTokens = options._internal?.accumInputTokens ?? 0;
     const accumOutputTokens = options._internal?.accumOutputTokens ?? 0;
     const accumCacheReadTokens = options._internal?.accumCacheReadTokens ?? 0;
+    const accumTurnUsage = options._internal?.accumTurnUsage;
 
     const maxToolCalls = options._internal?.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
     if (toolCallCount >= maxToolCalls && options.tools?.length) {
@@ -418,6 +419,12 @@ export class DeepSeekBackend implements ICompletionBackend {
                     accumCacheReadTokens + turnCacheReadTokens
                   ),
                   outputTokens: accumOutputTokens + (response.usage?.completion_tokens || 0),
+                  turnUsage: appendCacheInclusiveTurn(
+                    accumTurnUsage,
+                    response.usage?.prompt_tokens || 0,
+                    turnCacheReadTokens,
+                    response.usage?.completion_tokens || 0
+                  ),
                   stopReason: 'tool_use',
                 }
               );
@@ -436,6 +443,12 @@ export class DeepSeekBackend implements ICompletionBackend {
                   accumInputTokens: accumInputTokens + (response.usage?.prompt_tokens || 0),
                   accumOutputTokens: accumOutputTokens + (response.usage?.completion_tokens || 0),
                   accumCacheReadTokens: accumCacheReadTokens + turnCacheReadTokens,
+                  accumTurnUsage: appendCacheInclusiveTurn(
+                    accumTurnUsage,
+                    response.usage?.prompt_tokens || 0,
+                    turnCacheReadTokens,
+                    response.usage?.completion_tokens || 0
+                  ),
                   artifactGuard,
                 },
               },
@@ -453,6 +466,12 @@ export class DeepSeekBackend implements ICompletionBackend {
                 accumCacheReadTokens + turnCacheReadTokens
               ),
               outputTokens: accumOutputTokens + (response.usage?.completion_tokens || 0),
+              turnUsage: appendCacheInclusiveTurn(
+                accumTurnUsage,
+                response.usage?.prompt_tokens || 0,
+                turnCacheReadTokens,
+                response.usage?.completion_tokens || 0
+              ),
               toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
             });
             return;
@@ -491,6 +510,12 @@ export class DeepSeekBackend implements ICompletionBackend {
       await callback(streamedText, {
         ...splitCacheInclusiveInput(accumInputTokens + (response.usage?.prompt_tokens || 0), totalCacheReadTokens),
         outputTokens: accumOutputTokens + (response.usage?.completion_tokens || 0),
+        turnUsage: appendCacheInclusiveTurn(
+          accumTurnUsage,
+          response.usage?.prompt_tokens || 0,
+          turnCacheReadTokens,
+          response.usage?.completion_tokens || 0
+        ),
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
         cacheStats,
         ...(bestEffortFormat ? { responseFormatMode: 'best-effort' as const } : {}),
@@ -573,6 +598,7 @@ export class DeepSeekBackend implements ICompletionBackend {
       await callback(streamedText, {
         ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
         outputTokens: accumOutputTokens + outputTokens,
+        turnUsage: appendCacheInclusiveTurn(accumTurnUsage, inputTokens, cachedTokensFromStream, outputTokens),
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
         ...(normalizedFinishReason ? { stopReason: normalizedFinishReason } : {}),
       });
@@ -586,6 +612,7 @@ export class DeepSeekBackend implements ICompletionBackend {
       await callback([reasoningEscaper.flush() + '</think>'], {
         ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
         outputTokens: accumOutputTokens + outputTokens,
+        turnUsage: appendCacheInclusiveTurn(accumTurnUsage, inputTokens, cachedTokensFromStream, outputTokens),
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
       });
       isInThinkingBlock = false;
@@ -630,6 +657,7 @@ export class DeepSeekBackend implements ICompletionBackend {
       await callback([''], {
         ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
         outputTokens: accumOutputTokens + outputTokens,
+        turnUsage: appendCacheInclusiveTurn(accumTurnUsage, inputTokens, cachedTokensFromStream, outputTokens),
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
         ...(cacheStats ? { cacheStats } : {}),
         ...(bestEffortFormat ? { responseFormatMode: 'best-effort' as const } : {}),
@@ -765,6 +793,7 @@ export class DeepSeekBackend implements ICompletionBackend {
             toolsUsed,
             ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
             outputTokens: accumOutputTokens + outputTokens,
+            turnUsage: appendCacheInclusiveTurn(accumTurnUsage, inputTokens, cachedTokensFromStream, outputTokens),
             ...(cacheStats ? { cacheStats } : {}),
             stopReason: 'tool_use',
           });
@@ -783,6 +812,12 @@ export class DeepSeekBackend implements ICompletionBackend {
               accumInputTokens: accumInputTokens + inputTokens,
               accumOutputTokens: accumOutputTokens + outputTokens,
               accumCacheReadTokens: accumCacheReadTokens + cachedTokensFromStream,
+              accumTurnUsage: appendCacheInclusiveTurn(
+                accumTurnUsage,
+                inputTokens,
+                cachedTokensFromStream,
+                outputTokens
+              ),
               artifactGuard,
             },
           },
@@ -796,6 +831,7 @@ export class DeepSeekBackend implements ICompletionBackend {
         await callback([null], {
           ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
           outputTokens: accumOutputTokens + outputTokens,
+          turnUsage: appendCacheInclusiveTurn(accumTurnUsage, inputTokens, cachedTokensFromStream, outputTokens),
           toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
           ...(cacheStats ? { cacheStats } : {}),
         });

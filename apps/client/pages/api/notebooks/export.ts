@@ -11,7 +11,7 @@ import {
 } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { z } from 'zod';
 import type { AttachmentLakeAccess } from '@bike4mind/common';
 import { NotebookExportRequestSchema } from '../../../types/api';
@@ -76,7 +76,7 @@ const handler = baseApi().post(
         // Imported at call time and memoized: the resolver's graph reaches the Mongoose models (see
         // the session create route), and one export resolves once however many notebooks it spans.
         resolveLakeAccess: () =>
-          (lakeAccess ??= import('@server/queueHandlers/agentExecutor.attachmentLakeAccess').then(m =>
+          (lakeAccess ??= import('@server/dataLakes/attachmentLakeAccess').then(m =>
             m.createAttachmentLakeAccess(req.user, req.logger)()
           )),
       },

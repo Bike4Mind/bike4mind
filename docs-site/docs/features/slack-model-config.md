@@ -99,9 +99,9 @@ Each field (model, temperature, max tokens) resolves **independently**. A channe
 
 ### Example
 
-Suppose your org default is GPT-4.1 Mini, you have a custom agent `@codebot` configured with Claude 4 Sonnet, and `#engineering` has a channel override for GPT-4.1:
+Suppose your org default is GPT-4.1 Mini, you have a custom agent `@codebot` configured with Claude Sonnet 4, and `#engineering` has a channel override for GPT-4.1:
 
-- Mentioning `@codebot` in `#general` uses **Claude 4 Sonnet** (custom agent config wins, no channel override)
+- Mentioning `@codebot` in `#general` uses **Claude Sonnet 4** (custom agent config wins, no channel override)
 - Mentioning `@codebot` in `#engineering` uses **GPT-4.1** (channel override wins over agent config)
 - Mentioning `@dev` (built-in, no model set) in `#general` uses **GPT-4.1 Mini** (falls through to org default)
 - Mentioning `@dev` in `#engineering` uses **GPT-4.1** (channel override applies)

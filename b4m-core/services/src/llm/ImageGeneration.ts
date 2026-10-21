@@ -60,12 +60,14 @@ import {
   OpenaiModerationsService,
   TiktokenTokenizer,
   usdToCredits,
+  usdToCreditsStochastic,
   UnprocessableEntityError,
   OpenAIImageService,
   BFLImageService,
   XAIImageService,
   GeminiImageService,
   ImageEditResponse,
+  ImageModerationBlockedError,
   BaseStorage,
   getSettingsByNames,
   downloadImageAsBuffer,
@@ -80,6 +82,7 @@ import mongoose from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
 import { recordGeneratedImages } from './recordGeneratedImages';
+import { saveGeneratedImage, type SaveGeneratedAssetFn } from './saveGeneratedImage';
 import { fromZodError } from 'zod-validation-error';
 import {
   OMITTED_QUALITY_TIER,
@@ -124,9 +127,9 @@ export const ImageGenerationBodySchema = OpenAIImageGenerationInput.extend({
   prompt: z.string(),
   organizationId: z.string().nullable().optional(),
   safety_tolerance: BFLSafetyToleranceSchema,
-  prompt_upsampling: z.boolean().optional().prefault(false),
+  prompt_upsampling: z.boolean().prefault(false),
   seed: z.number().nullable().optional(),
-  output_format: ImageOutputFormatSchema.nullable().optional().prefault('png'),
+  output_format: ImageOutputFormatSchema.nullable().prefault('png'),
   width: z.number().optional(),
   height: z.number().optional(),
   aspect_ratio: z.string().optional(),
@@ -137,6 +140,12 @@ export const ImageGenerationBodySchema = OpenAIImageGenerationInput.extend({
   referenceImageFabFileIds: z.array(z.string()).max(MAX_REFERENCE_IMAGES).optional(),
   /** Resolved by the API route. Defaults to 'fresh' if absent. */
   intent: PromptIntentSchema.optional(),
+  /**
+   * Minted per invoke() and carried on the queue message, so a redelivery cannot add duplicate file rows while a
+   * retry of the quest (same questId) saves new ones. It dedupes rows, not content: a redelivery that re-renders
+   * keeps the first run's files while quest.images shows the new render. Absent on messages queued before it existed.
+   */
+  generationId: z.string().optional(),
 });
 export type ImageGenerationBody = z.infer<typeof ImageGenerationBodySchema>;
 
@@ -167,6 +176,8 @@ interface IImageGenerationServiceOptions {
   /** Storage where the generated images will be stored. */
   storage: BaseStorage;
   fabFileStorage: BaseStorage;
+  /** Keeps each generated image in the user's files. Required so the app factory cannot silently drop it. */
+  saveGeneratedAsset: SaveGeneratedAssetFn;
   invokeSessionAutoNaming?: (sessionId: string, userId: string) => Promise<void>;
   /**
    * Publish a `session.summarize` event so the summarization Lambda runs after image generation.
@@ -209,6 +220,7 @@ export class ImageGenerationService {
   private abilityGetter: IImageGenerationServiceOptions['abilityGetter'];
   private storage: BaseStorage;
   private fabFileStorage: BaseStorage;
+  private saveGeneratedAsset: SaveGeneratedAssetFn;
   private tokenizer: TiktokenTokenizer;
   private invokeSessionAutoNaming: IImageGenerationServiceOptions['invokeSessionAutoNaming'];
   private invokeSummarizeSession: IImageGenerationServiceOptions['invokeSummarizeSession'];
@@ -223,6 +235,7 @@ export class ImageGenerationService {
     this.logEvent = options.logEvent;
     this.storage = options.storage;
     this.fabFileStorage = options.fabFileStorage;
+    this.saveGeneratedAsset = options.saveGeneratedAsset;
     this.abilityGetter = options.abilityGetter;
     this.tokenizer = new TiktokenTokenizer({ logger: Logger.globalInstance });
     this.invokeSessionAutoNaming = options.invokeSessionAutoNaming;
@@ -421,6 +434,7 @@ export class ImageGenerationService {
           promptEnhancement,
           organizationId,
           intent,
+          generationId: uuidv4(),
         })
       );
 
@@ -546,7 +560,7 @@ export class ImageGenerationService {
       );
     }
 
-    // usdCost returned only for usage-event analytics; billing still uses requiredCredits.
+    // requiredCredits only gates the request (rounded up); the final debit settles usdCost stochastically.
     return { requiredCredits, usdCost: usdCost * n + inputUsd };
   }
 
@@ -812,6 +826,7 @@ export class ImageGenerationService {
       referenceImageFabFileIds,
       organizationId,
       intent = 'fresh',
+      generationId,
     } = ImageGenerationBodySchema.parse(body);
     const billedN = isKontextModel(model) ? 1 : n;
 
@@ -1414,7 +1429,7 @@ export class ImageGenerationService {
         statusMessage: 'Tucking your image into storage...',
       });
 
-      const imagePaths = await Promise.all(
+      const storedImages = await Promise.all(
         images.map(async (image, index) => {
           Logger.globalInstance.debug('[DEBUG] Processing image for storage:', {
             imageUrl: image,
@@ -1425,7 +1440,7 @@ export class ImageGenerationService {
 
           const buffer = await downloadImageAsBuffer(image);
           const fileType = await fileTypeFromBuffer(buffer);
-          const filename = `${uuidv4()}.${fileType?.ext}`;
+          const filename = `${uuidv4()}.${fileType?.ext ?? 'png'}`;
 
           await moderateImageOrThrow({
             service: this.imageModerationService,
@@ -1436,7 +1451,14 @@ export class ImageGenerationService {
             incidents: this.db.imageModerationIncidents,
             buffer,
             mimeType: `image/${fileType?.ext ?? 'png'}`,
-            incidentMeta: { userId, sessionId: quest.sessionId, questId, provider: modelInfo.backend, model },
+            incidentMeta: {
+              userId,
+              sessionId: quest.sessionId,
+              questId,
+              provider: modelInfo.backend,
+              model,
+              surface: 'generation',
+            },
             logger,
           });
 
@@ -1456,9 +1478,10 @@ export class ImageGenerationService {
             model,
           });
 
-          return path;
+          return { path, buffer, contentType: fileType?.mime ?? 'image/png' };
         })
       );
+      const imagePaths = storedImages.map(stored => stored.path);
 
       this.addStatusToQuest(quest, 'Adding to the notebook...', userId);
       await clientMessageSender.sendToClient(userId, wsEndpoint, {
@@ -1503,6 +1526,18 @@ export class ImageGenerationService {
         totalResponseTime,
       });
 
+      // Per-image prices are exact, so the final debit is the unbiased draw on usageCostUsd
+      // (may be 0), replacing the rounded-up pre-flight figure.
+      const creditTransactions = this.db.creditTransactions;
+      const settlement =
+        adminSettingsEnforceCredits &&
+        typeof quest.creditsUsed === 'number' &&
+        Number.isFinite(quest.creditsUsed) &&
+        creditTransactions
+          ? { creditTransactions, credits: usdToCreditsStochastic(usageCostUsd) }
+          : undefined;
+      if (settlement) quest.creditsUsed = settlement.credits;
+
       await this.db.quests.update({
         id: quest.id,
         reply: quest.reply,
@@ -1542,31 +1577,28 @@ export class ImageGenerationService {
         statusMessage: null,
       });
 
-      // Deduct credits after successful generation
-      if (
-        adminSettingsEnforceCredits &&
-        typeof quest.creditsUsed === 'number' &&
-        Number.isFinite(quest.creditsUsed) &&
-        !!this.db.creditTransactions
-      ) {
-        await deductCreditsWithOrgSupport(
-          {
-            type: 'image_generation_usage',
-            user,
-            organization,
-            credits: quest.creditsUsed,
-            sessionId,
-            questId,
-            model,
-          },
-          {
-            db: {
-              creditTransactions: this.db.creditTransactions,
-              users: this.db.users,
-              organizations: this.db.organizations,
+      // Deduct credits after successful generation. A zero draw writes no ledger row; the usage event still lands.
+      if (settlement) {
+        if (settlement.credits > 0) {
+          await deductCreditsWithOrgSupport(
+            {
+              type: 'image_generation_usage',
+              user,
+              organization,
+              credits: settlement.credits,
+              sessionId,
+              questId,
+              model,
             },
-          }
-        );
+            {
+              db: {
+                creditTransactions: settlement.creditTransactions,
+                users: this.db.users,
+                organizations: this.db.organizations,
+              },
+            }
+          );
+        }
 
         // Dual-write usage event: analytics only, never billing. Awaited because a write still in
         // flight when the Lambda handler returns can be frozen and never land; the catch keeps it
@@ -1590,14 +1622,43 @@ export class ImageGenerationService {
             cacheWriteTokens: 0,
             units: billedN,
             costUsd: usageCostUsd,
-            creditsCharged: quest.creditsUsed,
+            creditsCharged: settlement.credits,
             status: 'ok',
             latencyMs: Date.now() - startTime,
           })
           .catch(err => logger.warn('Failed to record usage event', err));
       }
+
+      // Last, so a run that fails anywhere above (a later image blocked by moderation, billing) leaves no file.
+      await Promise.all(
+        storedImages.map(({ buffer, contentType }, index) =>
+          saveGeneratedImage(
+            this.saveGeneratedAsset,
+            {
+              userId,
+              bytes: buffer,
+              contentType,
+              generation: {
+                generator: 'image',
+                provider: modelInfo.backend,
+                modelId: model,
+                ...(generationId && { jobId: `${generationId}-${index}` }),
+                prompt,
+              },
+              sessionId,
+              questId,
+            },
+            logger
+          )
+        )
+      );
     } catch (error) {
-      logger.error('Error processing image generation:', error);
+      if (error instanceof ImageModerationBlockedError) {
+        // The user's prompt was refused: expected, so keep it out of the error-level Slack alerts.
+        logger.warn('Image generation blocked by content policy:', { requestId: error.requestId });
+      } else {
+        logger.error('Error processing image generation:', error);
+      }
       this.addStatusToQuest(quest, `Error: ${(error as Error).message}`, userId);
       quest.reply = (error as Error).message;
       quest.type = 'error';

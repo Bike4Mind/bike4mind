@@ -80,6 +80,26 @@ describe('trackPurchaseConversion', () => {
     });
   });
 
+  it('sends a credit purchase to Meta as Purchase, not Subscribe, and to Reddit and GA4 as before', () => {
+    trackPurchaseConversion({ ...PURCHASE, transactionId: 'pi_test_1', kind: 'credits' });
+
+    expect(mockTrackMetaEvent).toHaveBeenCalledExactlyOnceWith('Purchase', {
+      value: 30,
+      currency: 'USD',
+      eventId: 'pi_test_1',
+    });
+    expect(mockTrackRedditEvent).toHaveBeenCalledExactlyOnceWith('Purchase', {
+      value: 30,
+      currency: 'USD',
+      transactionId: 'pi_test_1',
+    });
+    expect(mockGtag).toHaveBeenCalledWith(
+      'event',
+      'purchase',
+      expect.objectContaining({ transaction_id: 'pi_test_1' })
+    );
+  });
+
   it('stamps first-touch and session-UTM attribution from the shared cookies', () => {
     setCookie('b4m-first-touch', { source: 'reddit', medium: 'cpc', campaign: 'launch-v1' });
     setCookie('b4m_utm', { source: 'newsletter', medium: 'email' });

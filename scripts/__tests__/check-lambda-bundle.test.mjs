@@ -186,7 +186,7 @@ describe('planEntryPoints', () => {
 describe('isOverlayHandler', () => {
   it('matches the generated overlay path and nothing else', () => {
     expect(isOverlayHandler('apps/client/server/premium-generated/bobRunWorker.dispatch')).toBe(true);
-    expect(isOverlayHandler('apps/client/server/queueHandlers/agentExecutor.handler')).toBe(false);
+    expect(isOverlayHandler('apps/workers/src/queueHandlers/agentExecutor.handler')).toBe(false);
   });
 });
 

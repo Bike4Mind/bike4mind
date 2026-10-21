@@ -49,6 +49,19 @@ describe('parseStreamEvent', () => {
     });
   });
 
+  it('keeps the reasoning-token count on usage (not stripped at the boundary)', () => {
+    const event = parseStreamEvent({
+      type: 'content',
+      text: 'x',
+      usage: { inputTokens: 10, outputTokens: 5, reasoningTokens: 4 },
+    });
+    expect(event && event.type === 'content' && event.usage).toEqual({
+      inputTokens: 10,
+      outputTokens: 5,
+      reasoningTokens: 4,
+    });
+  });
+
   it('parses an error event', () => {
     expect(parseStreamEvent({ type: 'error', message: 'boom' })).toEqual({
       type: 'error',

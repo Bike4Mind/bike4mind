@@ -7,12 +7,14 @@ import type {
   ChatToolDetail,
   ChatMedia,
   ChatSessionSummary,
+  ChatSpawnSuggestion,
   ChatToolNotice,
   ChatUsage,
   RelayRefusal,
   SpawnRefusal,
 } from '@shared/chat';
 
+import type { ScrollTarget } from '../browser/pageScripts';
 import type { CompletionRequest } from '../completions';
 import type { CompletionStreamEvent } from '../streamEvents';
 
@@ -128,12 +130,20 @@ export interface ToolReporter {
    * result text the model and the user both read.
    */
   moved(): void;
+  /**
+   * This call's result is text the user wrote or chose to load - a skill from their own folder or
+   * from a project they trusted - so reading it does not make the reply untrusted. See
+   * ChatToolCall.ownContent.
+   */
+  ownContent(): void;
 }
 
 /** One conversation's agent browser: a hidden window with its own cookie jar. */
 export interface BrowserPage {
   /** Where the page is now; empty before the first navigation. */
   currentUrl(): string;
+  /** Every frame's committed url, the top one included: a screenshot shows them all. */
+  frameUrls(): string[];
   /**
    * Load a URL and wait for it to settle. Resolves with where it ended up; `stillLoading` when it
    * showed a page but was still loading at the deadline, and was stopped there.
@@ -142,8 +152,14 @@ export interface BrowserPage {
   /** Stop whatever the page is loading, as the toolbar's stop button would. */
   stop(): void;
   back(): Promise<void>;
-  snapshot(maxChars: number): Promise<{ url: string; title: string; text: string; truncated: boolean }>;
+  /** With `inView`, only what intersects the viewport. */
+  snapshot(
+    maxChars: number,
+    inView?: boolean
+  ): Promise<{ url: string; title: string; text: string; truncated: boolean }>;
   click(ref: string): Promise<string>;
+  /** Scroll and describe what moved; an element target resolves to its visible name. */
+  scroll(target: ScrollTarget): Promise<string>;
   fill(ref: string, text: string): Promise<string>;
   /** A named key such as Enter, Tab, Escape or ArrowDown, sent as real input to the focused element. */
   press(key: string): Promise<void>;
@@ -165,9 +181,25 @@ export interface BrowserProvider {
   closeSession(sessionId: string): Promise<void>;
 }
 
+/** One of a conversation's tabs, as browser_tabs lists it. */
+export interface BrowserTabInfo {
+  id: number;
+  title: string;
+  url: string;
+  active: boolean;
+}
+
 export interface BrowserContext {
-  /** The session's page, opened on first use. */
+  /** The session's ACTIVE tab, opened on first use. Every page tool acts on this one. */
   page(): Promise<BrowserPage>;
+  /** In strip order. */
+  tabs(): BrowserTabInfo[];
+  /** Open a blank tab and make it the active one. Null when the conversation is at the tab cap. */
+  newTab(): Promise<BrowserPage | null>;
+  /** Make a tab the active one, which the user's pane follows. Throws for an id that is not open. */
+  selectTab(id: number): Promise<BrowserTabInfo>;
+  /** Close a tab; the one beside it becomes active if it was. Throws for an id that is not open. */
+  closeTab(id: number): Promise<BrowserTabInfo>;
   /** Keep a screenshot for the transcript, so the user sees what the model saw. */
   keepScreenshot(bytes: Buffer, caption: string): Promise<ChatMedia | undefined>;
   /**
@@ -247,6 +279,15 @@ export interface ToolContext {
   mcp?: McpToolContext;
   /** Absent outside the chat loop; every tool treats it as optional. */
   report?: ToolReporter;
+  /**
+   * The approval key this call was let through under, whether the user answered the card, a
+   * standing answer covered it, or the mode did. Absent for a call that was never gated. Set by
+   * ChatService only, so a tool can tell what the user agreed to from what it merely ended up
+   * doing - a browser page that redirected somewhere no approval named.
+   */
+  approvedKey?: string;
+  /** Whether the user said "always" to this key in this conversation. Absent outside the chat loop. */
+  isStanding?(key: string): boolean;
 }
 
 /**
@@ -383,6 +424,29 @@ export interface HostContext {
    * ChatRelayOrigin. A refusal here is the bound working, not a transient failure.
    */
   sendTo(sessionId: string, message: string): Promise<RelayOutcome>;
+  /**
+   * Present only when a user is in this conversation to act on a suggestion. session_spawn then
+   * proposes rather than starts, and the turn is never held on the answer. Absent in a spawned
+   * session, which keeps the approval-gated start.
+   */
+  suggestions?: SpawnSuggestionHost;
+}
+
+export interface SpawnSuggestionTask {
+  prompt: string;
+  title?: string;
+  summary?: string;
+}
+
+/** A suggestion the model addressed that cannot take the change, and why. */
+export type SuggestionOutcome = { ok: true; suggestion: ChatSpawnSuggestion } | { ok: false; message: string };
+
+/** The spawn suggestions of the calling conversation, and only that conversation. */
+export interface SpawnSuggestionHost {
+  suggest(task: SpawnSuggestionTask): Promise<ChatSpawnSuggestion>;
+  /** Only a pending suggestion can change. */
+  update(id: string, changes: Partial<SpawnSuggestionTask>): Promise<SuggestionOutcome>;
+  dismiss(id: string): Promise<SuggestionOutcome>;
 }
 
 /** What the user is asked to allow before a tool runs, for tools that declare `approval`. */
@@ -413,9 +477,15 @@ export interface ApprovalPrompt {
   /**
    * Asked in 'auto' as well as 'ask' (only 'full' runs it). For a call that is allowed by
    * default but has a specific reason to stop first: a shell command naming a path outside the
-   * project, or a read of a `.env` file.
+   * project, a read of a `.env` file, or a command that can send data out.
    */
   askInAuto?: true;
+  /**
+   * Proven by the shell scan to keep to this computer or only read from GitHub (see
+   * shellScan's `containedCommand`), so untrusted content read earlier in the reply is no reason
+   * to ask: steered or not, the call has nowhere to send what it reads.
+   */
+  contained?: true;
   /**
    * Asked in every mode, 'full' included, and so stronger than `askInAuto` - a call 'full' must
    * stop for is not one 'auto' may run. For a call whose risk is NOT the filesystem risk that
@@ -431,15 +501,22 @@ export interface ApprovalPrompt {
    * covered by a prefix pattern, and each directory outside the project by the directory.
    */
   always?: ApprovalAlways;
+  /** For an MCP tool: the server's slug and the tool's own name, which an `mcp__server__tool` rule names. */
+  mcp?: { server: string; tool: string };
 }
 
 export interface ApprovalAlways {
   /** The tool the patterns belong to: allowing `npm run dev *` for one tool is not allowing it for the other. */
   namespace: string;
-  /** One per sub-command, as written; matched against remembered `patterns`. */
-  commands: readonly { text: string; pattern: string }[];
+  /**
+   * One per sub-command, as written; matched against remembered `patterns`. Never covered when
+   * not `coverable` (see ShellCommand.coverable).
+   */
+  commands: readonly { text: string; pattern: string; coverable: boolean; words?: string; opaque?: string }[];
   /** Directories outside every granted root that the command reaches. */
   directories: readonly string[];
+  /** Physical paths named by a shell command, used to protect permission files even through aliases. */
+  paths?: readonly string[];
 }
 
 /** See ChatApprovalOption: this is that, plus what main does with the answer. */

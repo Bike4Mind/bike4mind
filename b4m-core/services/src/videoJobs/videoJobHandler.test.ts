@@ -1,11 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { CreditHolderType, MAX_INLINE_PROVIDER_OUTPUT_BYTES } from '@bike4mind/common';
+import {
+  CREDITS_PER_USD_COST,
+  CreditHolderType,
+  estimateVideoCostUsd,
+  MAX_INLINE_PROVIDER_OUTPUT_BYTES,
+  MAX_VIDEO_OUTPUT_BYTES,
+} from '@bike4mind/common';
 import {
   createVideoProviderRegistry,
   ProviderSubmitError,
   TestVideoProvider,
   ProviderOutputUnavailableError,
-  VideoOutputTooLargeError,
+  ProviderOutputTooLargeError,
   type VideoProvider,
 } from '@bike4mind/utils/videoProviders';
 import { Logger } from '@bike4mind/observability';
@@ -18,6 +24,18 @@ import { EXPIRED_KEY_SENTINEL } from '../modelDiscoveryService/credentials';
 import { createVideoJob } from './createVideoJob';
 import { createVideoJobHandler } from './videoJobHandler';
 import type { CreateVideoJobDeps, CreateVideoJobResult, VideoJobDeps } from './types';
+
+// The real stochastic rounding with its draw pinned. estimateVideoCostUsd is wrapped so a test can price one
+// settlement off-catalog (the test model's per-second rate never lands on a half credit).
+const { settlementDraw } = vi.hoisted(() => ({ settlementDraw: vi.fn(() => 0.5) }));
+vi.mock('@bike4mind/common', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/common')>();
+  return {
+    ...actual,
+    estimateVideoCostUsd: vi.fn(actual.estimateVideoCostUsd),
+    usdToCreditsStochastic: (usd: number) => actual.usdToCreditsStochastic(usd, () => settlementDraw()),
+  };
+});
 
 vi.mock('../creditService/creditHold', () => ({
   holdCredits: vi.fn(),
@@ -39,7 +57,7 @@ const setup = (overrides: Partial<VideoJobDeps> = {}) => {
     getSettings: async () => ({ enforceCredits: true, videoGeneration: undefined }),
     resolveApiKey: async () => 'key',
     loadInputImage: async () => ({ bytes: Buffer.from('img'), mimeType: 'image/png' }),
-    saveToFiles: vi.fn(async ({ jobId }: { jobId: string }) => ({
+    saveToFiles: vi.fn(async ({ generation: { jobId } }: { generation: { jobId: string } }) => ({
       saved: true as const,
       fileId: `file-${jobId}`,
       s3Key: `files/${jobId}.mp4`,
@@ -99,6 +117,7 @@ const user = { id: 'u1', organizationId: null };
 const stubProvider = (overrides: Partial<VideoProvider>): VideoProvider => {
   const base = new TestVideoProvider();
   return {
+    mode: 'async',
     id: base.id,
     models: base.models,
     submit: overrides.submit ?? base.submit.bind(base),
@@ -110,6 +129,7 @@ const stubProvider = (overrides: Partial<VideoProvider>): VideoProvider => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  settlementDraw.mockReturnValue(0.5);
   vi.mocked(holdCredits).mockImplementation(async params => ({
     ownerId: params.userId,
     ownerType: CreditHolderType.User,
@@ -158,6 +178,57 @@ describe('video job end to end with the test provider', () => {
     expect(t.deps.recordUsage).toHaveBeenCalledWith(
       expect.objectContaining({ creditsCharged: charged, costUsd: 0.04, durationSeconds: 4, status: 'ok' })
     );
+  });
+
+  describe('final charge rounding', () => {
+    const settleOne = async (billedUsd: number) => {
+      const t = setup();
+      const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
+      // The first price lookup after creation is the settlement's billed price.
+      vi.mocked(estimateVideoCostUsd).mockReturnValueOnce(billedUsd);
+      await t.runToCompletion();
+      return { t, job: t.jobOf(created) };
+    };
+
+    it.each([
+      [0.25, 41],
+      [0.75, 40],
+    ])(
+      'charges N or N+1 for a cost of N + 0.5 credits, against the full hold (draw %s -> %s)',
+      async (draw, expected) => {
+        settlementDraw.mockReturnValue(draw);
+
+        const { t, job } = await settleOne(40.5 / CREDITS_PER_USD_COST);
+
+        const [hold, charged] = vi.mocked(settleCreditHold).mock.calls[0];
+        expect(charged).toBe(expected);
+        // The hold stays the round-up of the full request; settleCreditHold releases the difference.
+        expect(hold).toEqual(job.creditHold);
+        expect(charged).toBeLessThan(job.creditHold?.reservedCredits ?? 0);
+        expect(job.settledCredits).toBe(expected);
+        expect(t.deps.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ creditsCharged: expected }));
+      }
+    );
+
+    it.each([Number.NaN, Number.POSITIVE_INFINITY])(
+      'keeps the full reservation when the price lookup returns %s',
+      async billedUsd => {
+        const { t, job } = await settleOne(billedUsd);
+
+        // Without the finiteness guard the draw reads a non-finite price as free and refunds the hold.
+        expect(vi.mocked(settleCreditHold).mock.calls[0][1]).toBeNaN();
+        expect(job.settledCredits).toBeNaN();
+        expect(t.deps.recordUsage).toHaveBeenCalledTimes(1);
+      }
+    );
+
+    it('can charge 0 for a tiny cost: the whole hold is released and usage is still recorded', async () => {
+      const { t, job } = await settleOne(0.00001);
+
+      expect(vi.mocked(settleCreditHold).mock.calls[0][1]).toBe(0);
+      expect(job.settledCredits).toBe(0);
+      expect(t.deps.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ creditsCharged: 0, status: 'ok' }));
+    });
   });
 
   it('settles on the provider-reported duration when it differs from the request', async () => {
@@ -245,6 +316,30 @@ describe('video job end to end with the test provider', () => {
     expect(job.payload.output).toMatchObject({ location: 'generated', s3Key: `generated-video/u1/${job.id}.mp4` });
     expect(job.payload.output?.fileId).toBeUndefined();
     expect(settleCreditHold).toHaveBeenCalledTimes(1);
+  });
+
+  it('rethrows a rejecting Files save so the store step retries rather than falling back', async () => {
+    const saveError = new Error('dedup lookup failed');
+    const t = setup({ saveToFiles: vi.fn(async () => Promise.reject(saveError)) });
+    const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
+    const pending = t.jobOf(created);
+    const storing = {
+      ...pending,
+      state: 'storing' as const,
+      payload: {
+        ...pending.payload,
+        providerOutput: {
+          kind: 'inline' as const,
+          base64: Buffer.from('clip').toString('base64'),
+          contentType: 'video/mp4',
+        },
+      },
+    };
+
+    await expect(createVideoJobHandler(t.deps).store(storing, { signal: new AbortController().signal })).rejects.toBe(
+      saveError
+    );
+    expect(t.deps.saveToGeneratedBucket).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -538,7 +633,7 @@ describe('video job end to end with the test provider', () => {
       providers: createVideoProviderRegistry([
         stubProvider({
           fetchOutput: async () => {
-            throw new VideoOutputTooLargeError(300 * 1024 * 1024);
+            throw new ProviderOutputTooLargeError(MAX_VIDEO_OUTPUT_BYTES, 300 * 1024 * 1024);
           },
         }),
       ]),
@@ -632,7 +727,7 @@ describe('video job end to end with the test provider', () => {
     const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
     if (!created.ok) throw new Error('expected creation to succeed');
     await t.engine.step(created.job.id); // submit -> running
-    await t.engine.requestCancel(created.job.id);
+    await t.engine.requestCancel(created.job);
     await t.runToCompletion();
     expect(t.jobOf(created).state).toBe('cancelled');
     expect(cancel).not.toHaveBeenCalled();
@@ -665,7 +760,7 @@ describe('video job end to end with the test provider', () => {
     const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
     if (!created.ok) throw new Error('expected creation to succeed');
     await t.engine.step(created.job.id); // submit -> running
-    await t.engine.requestCancel(created.job.id);
+    await t.engine.requestCancel(created.job);
     await t.runToCompletion();
     expect(t.jobOf(created)).toMatchObject({ state: 'cancelled', settledCredits: 0 });
     expect(cancel).toHaveBeenCalledWith(expect.objectContaining({ provider: 'test' }), expect.anything());
@@ -679,6 +774,33 @@ describe('video job end to end with the test provider', () => {
     expect(t.jobOf(created)).toMatchObject({ state: 'succeeded', creditHold: null, settledCredits: 0 });
     expect(settleCreditHold).not.toHaveBeenCalled();
     expect(t.deps.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ creditsCharged: 0 }));
+  });
+
+  it('saves the clip with its generation metadata', async () => {
+    const t = setup();
+    const created = await createVideoJob({ user, request: request('a cat'), source: 'studio' }, t.deps);
+    await t.runToCompletion();
+    expect(t.deps.saveToFiles).toHaveBeenCalledWith({
+      userId: 'u1',
+      bytes: expect.any(Buffer),
+      contentType: expect.any(String),
+      generation: {
+        generator: 'video',
+        provider: 'test',
+        modelId: 'test-video',
+        jobId: created.job.id,
+        prompt: 'a cat',
+        durationSeconds: 4,
+      },
+      signal: expect.any(AbortSignal),
+    });
+  });
+
+  it("passes a chat job's quest so the saved clip joins that notebook", async () => {
+    const t = setup();
+    await createVideoJob({ user, request: request(), source: 'studio', questId: 'q1' }, t.deps);
+    await t.runToCompletion();
+    expect(t.deps.saveToFiles).toHaveBeenCalledWith(expect.objectContaining({ questId: 'q1' }));
   });
 
   it('store may run twice for one job: both runs save under the same job id, which saveToFiles dedups', async () => {
@@ -705,7 +827,10 @@ describe('video job end to end with the test provider', () => {
     expect(first).toMatchObject({ next: 'succeeded', payload: { output: { location: 'files', bytes: 4 } } });
     expect(rerun).toEqual(first);
     expect(t.deps.saveToFiles).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(t.deps.saveToFiles).mock.calls.map(([params]) => params.jobId)).toEqual([pending.id, pending.id]);
+    expect(vi.mocked(t.deps.saveToFiles).mock.calls.map(([params]) => params.generation.jobId)).toEqual([
+      pending.id,
+      pending.id,
+    ]);
   });
 
   it('persists the settlement marker even when recording usage fails', async () => {

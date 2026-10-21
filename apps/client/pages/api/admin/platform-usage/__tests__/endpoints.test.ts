@@ -67,7 +67,7 @@ describe('GET /api/admin/platform-usage/endpoints', () => {
     expect(res._getJSONData()).toMatchObject({ windowDays: 90, endpoints: { byEndpoint: [], overTime: [] } });
   });
 
-  it.each(['api', 'cli'] as const)('passes source %s to the rollup and echoes it', async source => {
+  it.each(['api', 'cli', 'desktop'] as const)('passes source %s to the rollup and echoes it', async source => {
     const { res, run } = call({ query: { source } });
     await run();
     expect(mockPlatformEndpointUsage).toHaveBeenCalledWith({ days: 90, source });

@@ -37,6 +37,9 @@ describe('TIER1_SECRET_SPECS', () => {
       'SECOPS_PROWLER_INGEST_TOKEN',
       'SECOPS_ATTACK_SIMULATION_INGEST_TOKEN',
       'RATE_LIMIT_INGEST_TOKEN',
+      'NCMEC_ESP_ID',
+      'NCMEC_API_KEY',
+      'NCMEC_ESP_EMAIL',
     ]);
   });
 
@@ -106,6 +109,17 @@ describe('evaluateTier1Secrets', () => {
     const status = evaluate(values, 'pr123', false).find(s => s.name === 'SECOPS_ZAP_INGEST_TOKEN');
     expect(status?.status).toBe('placeholder');
     expect(status?.blocksDeploy).toBe(false);
+  });
+
+  it('warn enforcement never blocks even on a production stage', () => {
+    const values = allConfigured();
+    delete values.NCMEC_ESP_ID;
+    delete values.NCMEC_API_KEY;
+    delete values.NCMEC_ESP_EMAIL;
+    const statuses = evaluate(values, 'production', true);
+    expect(statuses.find(s => s.name === 'NCMEC_ESP_ID')?.blocksDeploy).toBe(false);
+    expect(statuses.find(s => s.name === 'NCMEC_API_KEY')?.blocksDeploy).toBe(false);
+    expect(statuses.find(s => s.name === 'NCMEC_ESP_EMAIL')?.blocksDeploy).toBe(false);
   });
 
   it('does not block on a JWT_SECRET that is short but above the hard floor', () => {

@@ -1,4 +1,4 @@
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 /**
  * Read a fetch Response body into a Buffer, aborting as soon as `maxBytes` is exceeded.

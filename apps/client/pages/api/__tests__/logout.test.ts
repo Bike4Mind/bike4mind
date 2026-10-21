@@ -29,7 +29,11 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 
-vi.mock('@bike4mind/database', () => ({ userRepository: {}, authSessionRepository: {} }));
+vi.mock('@bike4mind/database', () => ({
+  userRepository: {},
+  authSessionRepository: {},
+  realtimeConnectionRepository: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
+}));
 vi.mock('@bike4mind/services', () => {
   mockRefs.revokeSession = vi.fn().mockResolvedValue({ sid: 'sid-1' });
   mockRefs.revokeUserSessions = vi.fn().mockResolvedValue(1);
@@ -68,7 +72,10 @@ describe('GET /api/logout - per-device session revocation', () => {
     const { req, res } = mocks({ id: 'user-1', sid: 'sid-1' });
     await mockRefs.getHandler!(req, res);
     expect(res._getStatusCode()).toBe(200);
-    expect(mockRefs.revokeSession).toHaveBeenCalledWith('sid-1', expect.anything());
+    expect(mockRefs.revokeSession).toHaveBeenCalledWith(
+      'sid-1',
+      expect.objectContaining({ db: expect.objectContaining({ realtimeConnections: expect.anything() }) })
+    );
     // The old all-device hammer must be gone.
     expect(mockRefs.revokeUserSessions).not.toHaveBeenCalled();
     expect(mockRefs.updateLogoutTime).toHaveBeenCalled();

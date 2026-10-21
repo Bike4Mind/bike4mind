@@ -90,7 +90,7 @@ export interface ChatMedia {
 }
 
 /**
- * An outcome of a server-backed tool that costs money, surfaced on its own rather than folded
+ * A tool outcome or failed permission save, surfaced on its own rather than folded
  * into the result text.
  *
  * Both of these are things the user is entitled to see without expanding a tool call:
@@ -99,7 +99,7 @@ export interface ChatMedia {
  * are about to hear.
  */
 export interface ChatToolNotice {
-  kind: 'insufficient-credits' | 'provider-substituted';
+  kind: 'insufficient-credits' | 'provider-substituted' | 'permissions-save-failed';
   text: string;
 }
 
@@ -195,6 +195,11 @@ export interface ChatToolCall {
    */
   approvalAlwaysFull?: string;
   /**
+   * Set with `approvalId` when the call can be allowed in every session: the permission rules
+   * (Claude Code syntax) that "Always, in every session" saves. Never on an irreversible call.
+   */
+  approvalRules?: string[];
+  /**
    * Set with `approvalId` when the call can be allowed in more than one way, so the card draws
    * a split button rather than a plain "allow". The chosen option is folded into `input` before
    * the tool runs, which is what makes the settled row report what the user actually picked.
@@ -223,6 +228,12 @@ export interface ChatToolCall {
    * conversation, and only the call that resolved the id knows its title.
    */
   label?: string;
+  /**
+   * A read whose result the user wrote or chose to load, such as a skill from their own folder,
+   * which therefore does not make the reply untrusted the way a web page or an MCP result does.
+   * Kept on the row so a continued reply, which replays it, judges it the same way.
+   */
+  ownContent?: true;
   /**
    * What a write tool actually changed, set only once the bytes landed - see ChatDiff for why
    * the diff planned before the write is a truthful record of it.
@@ -333,6 +344,11 @@ export interface ChatApprovalAnswer {
    * they are never put back on the call, in the transcript, or in anything the model reads.
    */
   secrets?: { env?: Record<string, string>; headers?: Record<string, string> };
+  /**
+   * With decision 'always': also save the card's `approvalRules` as user-level allow rules, for
+   * every later session. Main saves the rules it derived itself; this only says yes to them.
+   */
+  everywhere?: boolean;
 }
 
 /**
@@ -647,6 +663,12 @@ export interface ChatMessage {
    * see which skill ran instead of a screen of prose they never wrote.
    */
   skill?: ChatMessageSkill;
+  /**
+   * App-written context the model reads with this user turn, never drawn in the thread: today
+   * only what the user did with a spawn suggestion since the last turn. Stored rather than added
+   * per request so the replayed history stays byte-identical and the prompt cache holds.
+   */
+  notes?: string[];
 }
 
 /**
@@ -695,6 +717,8 @@ export interface ChatMessageSkill {
   args?: string;
   /** 'project' means these instructions came out of the repository, not the user's own folder. */
   source: SkillSource;
+  /** A Skill Market import: the reply to this message starts as having read untrusted content. */
+  imported?: true;
 }
 
 export type BackgroundProcessStatus = 'running' | 'exited' | 'killed' | 'failed';
@@ -765,7 +789,16 @@ export interface ChatModelOption {
    * absent flag here only means the model was not in a list that had loaded.
    */
   supportsReasoningEffort?: boolean;
+  /**
+   * A local Ollama model that can think. Its server takes no effort, only thinking on or off,
+   * so the effort picker becomes that switch, stored as `default` (on) and
+   * THINKING_OFF_SETTING (off).
+   */
+  thinkingToggle?: boolean;
 }
+
+/** The setting a `thinkingToggle` model's "Off" is stored as; any other setting thinks. */
+export const THINKING_OFF_SETTING = 'minimal' satisfies ReasoningEffortSetting;
 
 /**
  * How hard a model that reasons thinks before answering.
@@ -955,7 +988,8 @@ interface ChatSessionMeta {
    * effort it was held at rather than whatever the last conversation was set to.
    *
    * Only a model in the catalog's reasoning set is actually sent one - see
-   * `ChatModelOption.supportsReasoningEffort`. On any other model this is stored and inert.
+   * `ChatModelOption.supportsReasoningEffort`. For a model with `thinkingToggle`, `minimal`
+   * instead turns thinking off and every other setting turns it on. Otherwise this is inert.
    */
   reasoningEffort: ReasoningEffortSetting;
   /**
@@ -983,6 +1017,17 @@ interface ChatSessionMeta {
 }
 
 /** A session without its messages - what the sidebar needs, so a long thread is not loaded to list it. */
+/**
+ * Long enough to tell two threads apart in the sidebar, short enough not to wrap. SessionStore's
+ * deriveTitle ellipsizes past it; the rename inputs cap at it, so a typed name is kept as typed.
+ */
+export const SESSION_TITLE_MAX_LENGTH = 60;
+
+/** A typed name the way SessionStore will store it, so an optimistic title matches the saved one. */
+export function normalizeSessionTitle(text: string): string {
+  return text.replace(/\s+/g, ' ').trim().slice(0, SESSION_TITLE_MAX_LENGTH);
+}
+
 export interface ChatSessionSummary extends ChatSessionMeta {
   messageCount: number;
 }
@@ -1000,6 +1045,11 @@ export interface ChatSession extends ChatSessionMeta {
    * follow-up like "make it darker" to the image before it.
    */
   remoteSessionId?: string;
+  /**
+   * Tasks the model suggested handing to a new session; see ChatSpawnSuggestion. Kept off
+   * ChatSessionSummary so the sidebar listing never carries them.
+   */
+  spawnSuggestions?: ChatSpawnSuggestion[];
   /**
    * The reply streaming into this conversation right now, and when its turn started. Never
    * stored: ChatService.getSession adds it, so a window joining mid-turn can show the turn's
@@ -1036,7 +1086,18 @@ export type ModelPhase =
   { kind: 'waiting' } | { kind: 'thinking' } | { kind: 'responding' } | { kind: 'writing-tool'; name: string };
 
 export type ChatStreamEvent =
-  | { type: 'start'; sessionId: string; messageId: string }
+  | {
+      type: 'start';
+      sessionId: string;
+      messageId: string;
+      /**
+       * What the reply had already used before the run this event opens, when it resumes one.
+       * Absent on a fresh reply. A resumed run's later `usage` totals carry the earlier part
+       * inside them, so a consumer that already reported that part reads it from here rather
+       * than keeping a total of its own.
+       */
+      baseUsage?: ChatUsage;
+    }
   | { type: 'delta'; sessionId: string; messageId: string; text: string }
   | { type: 'tool-start'; sessionId: string; messageId: string; call: ChatToolCall }
   | { type: 'tool-end'; sessionId: string; messageId: string; call: ChatToolCall }
@@ -1096,7 +1157,9 @@ export type ChatStreamEvent =
    * ends it whether or not the worktree was made - a failure reaches the sender as the turn's
    * refusal.
    */
-  | { type: 'workspace'; sessionId: string; running: boolean; base: string; branch?: string };
+  | { type: 'workspace'; sessionId: string; running: boolean; base: string; branch?: string }
+  /** The conversation's spawn suggestions changed; carries the whole list. No reply in flight. */
+  | { type: 'spawn-suggestions'; sessionId: string; suggestions: ChatSpawnSuggestion[] };
 
 /**
  * What a session is doing, as the sidebar draws it.
@@ -1147,6 +1210,8 @@ export interface ChatQueuedMessage {
   id: string;
   sessionId: string;
   text: string;
+  /** App-written reminders that belong only to the user message this entry becomes. */
+  notes?: string[];
   /** Descriptors whose bytes are already on disk; they are held back from pruning while queued. */
   attachments?: ChatAttachment[];
   queuedAt: string;
@@ -1264,6 +1329,13 @@ export type ContextBoundaryResult = { ok: true; session: ChatSession } | { ok: f
 export interface ToolAccessState {
   /** Absolute paths, each granting its whole subtree. */
   roots: string[];
+}
+
+/** A folder a Code session was recently grounded in, for the folder chip's Recent list. */
+export interface RecentFolder {
+  /** Absolute and resolved; also what tells two folders with the same `name` apart. */
+  path: string;
+  name: string;
 }
 
 /**
@@ -1387,6 +1459,88 @@ export function branchHolder(
  * than retrying, since nothing it can do changes the answer.
  */
 export type SpawnRefusal = 'depth' | 'concurrency' | 'no-project' | 'empty-prompt' | 'branch';
+
+/**
+ * A task the model proposed handing to a new session, waiting on the user.
+ *
+ * session_spawn in a conversation with a user present records one of these and returns at once,
+ * so the turn is never held behind it: the user starts it (with whatever edits they made),
+ * dismisses it, or asks the model in chat to revise it. `revision` counts the model's edits, so
+ * the card can tell an update from the text it was showing.
+ */
+export interface ChatSpawnSuggestion {
+  id: string;
+  title: string;
+  prompt: string;
+  summary?: string;
+  /** What a worktree child is cut from, resolved when the suggestion was made. */
+  base: string;
+  /** The prefilled branch name for a worktree start. */
+  branch: string;
+  /** False when the project is not a git repository, so a worktree start cannot work. */
+  repository?: boolean;
+  status: 'pending' | 'started' | 'dismissed';
+  /**
+   * `title` was cut from the prompt rather than given, so a start that keeps it leaves the
+   * child to be named by the title generator instead of locking in the truncation.
+   */
+  derivedTitle?: boolean;
+  revision: number;
+  createdAt: string;
+  started?: ChatSpawnSuggestionStart;
+  dismissedBy?: 'user' | 'assistant';
+  /** A user outcome the model has not been told yet; cleared when the next turn carries it. */
+  unreported?: boolean;
+}
+
+/** 'here' runs the task as the user's own next message in the suggesting conversation. */
+export type SpawnSuggestionPlacement = 'worktree' | 'local' | 'here';
+
+interface SpawnSuggestionStartBase {
+  title: string;
+  /** The user changed the prompt or title before starting. */
+  edited: boolean;
+}
+
+export type ChatSpawnSuggestionStart =
+  | (SpawnSuggestionStartBase & { placement: 'worktree' | 'local'; sessionId: string; branch?: string })
+  | (SpawnSuggestionStartBase & { placement: 'here' });
+
+/**
+ * How both suggestion cards name the start choices: the tray's split button and session_spawn's
+ * approval card. Shared so the two never drift apart.
+ */
+export const SPAWN_CHOICE_TEXT: Readonly<
+  Record<SpawnSuggestionPlacement, { label: string; action: string; hint: string }>
+> = {
+  worktree: {
+    label: 'New session in a worktree',
+    action: 'Start in new worktree',
+    hint: 'Its own branch and checkout, so it cannot disturb this one.',
+  },
+  local: {
+    label: 'New session in this folder',
+    action: 'Start in this folder',
+    hint: 'Shares these files; both sessions edit them at once.',
+  },
+  here: {
+    label: 'Run here, in this conversation',
+    action: 'Run here',
+    hint: 'This conversation does the work itself. No new session.',
+  },
+};
+
+export interface StartSpawnSuggestionRequest {
+  sessionId: string;
+  suggestionId: string;
+  placement: SpawnSuggestionPlacement;
+  prompt: string;
+  title: string;
+  /** Required for a worktree start; ignored by the others. */
+  branch?: string;
+}
+
+export type SpawnSuggestionResult = { ok: true; suggestion: ChatSpawnSuggestion } | { ok: false; error: string };
 
 /**
  * A session_send that did not happen, and which bound or precondition stopped it.

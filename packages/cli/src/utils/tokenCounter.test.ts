@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TokenCounter, getTokenCounter } from './tokenCounter.js';
 import type { Session } from '../storage/types.js';
 
@@ -44,6 +44,73 @@ describe('TokenCounter', () => {
       expect(counter.countTokens('what does <|endoftext|> mean')).toBeGreaterThan(1);
       expect(counter.countTokens('<|endofprompt|>')).toBeGreaterThan(1);
       expect(counter.countTokens('<|fim_prefix|>')).toBeGreaterThan(1);
+    });
+  });
+
+  describe('count cache', () => {
+    const LONG = 'The quick brown fox jumps over the lazy dog. '.repeat(20);
+
+    // encode is private; spying on it is the only way to see whether a count re-encoded.
+    const spyEncode = (target: TokenCounter) =>
+      vi.spyOn(target as unknown as { encode: (text: string) => number }, 'encode');
+
+    it('returns a repeated long text from the cache without re-encoding', () => {
+      const encode = spyEncode(counter);
+      const first = counter.countTokens(LONG);
+
+      expect(counter.countTokens(LONG)).toBe(first);
+      expect(encode).toHaveBeenCalledTimes(1);
+    });
+
+    it('matches an uncached count exactly', () => {
+      const fresh = new TokenCounter();
+      counter.countTokens(LONG);
+
+      expect(counter.countTokens(LONG)).toBe(fresh.countTokens(LONG));
+      fresh.dispose();
+    });
+
+    it('does not cache short text', () => {
+      const encode = spyEncode(counter);
+      counter.countTokens('short');
+      counter.countTokens('short');
+
+      expect(encode).toHaveBeenCalledTimes(2);
+    });
+
+    it('evicts the least recently used text once over its character cap', () => {
+      const small = new TokenCounter(LONG.length * 2);
+      const encode = spyEncode(small);
+      const [a, b, c] = ['a', 'b', 'c'].map(prefix => prefix + LONG.slice(1));
+
+      small.countTokens(a);
+      small.countTokens(b);
+      small.countTokens(a); // a is now the most recently used
+      small.countTokens(c); // over the cap: evicts b, keeps a
+      encode.mockClear();
+
+      small.countTokens(a);
+      expect(encode).not.toHaveBeenCalled();
+      small.countTokens(b);
+      expect(encode).toHaveBeenCalledTimes(1);
+      small.dispose();
+    });
+
+    it('serves a calibrated view from the raw cache and still scales it', () => {
+      const encode = spyEncode(counter);
+      const raw = counter.countTokens(LONG);
+
+      expect(counter.forModel('claude-sonnet-5').countTokens(LONG)).toBe(Math.ceil((raw * 150) / 100));
+      expect(encode).toHaveBeenCalledTimes(1);
+    });
+
+    it('drops the cache on dispose', () => {
+      const encode = spyEncode(counter);
+      counter.countTokens(LONG);
+      counter.dispose();
+      counter.countTokens(LONG);
+
+      expect(encode).toHaveBeenCalledTimes(2);
     });
   });
 

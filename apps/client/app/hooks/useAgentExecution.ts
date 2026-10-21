@@ -20,6 +20,7 @@
  * first events. Subscriptions live at the WebsocketProvider scope now.
  */
 
+import { settleMirroredPinsOnAgentStart } from '@client/app/utils/messageFilePins';
 import { useEffect, useMemo, useRef } from 'react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
@@ -37,7 +38,12 @@ import {
   type IterationStep,
 } from '@client/app/stores/useAgentExecutionStore';
 import type { IAgentStep, GenerateImageToolCall, AudioGenerationToolCall } from '@bike4mind/common';
-import { appendReplyToLatestOptimisticBubble, swapOptimisticPromptBubbleId } from '@client/app/utils/llm';
+import {
+  addGenerationJobsToRunBubble,
+  setPendingActionOnRunBubble,
+  appendReplyToLatestOptimisticBubble,
+  swapOptimisticPromptBubbleId,
+} from '@client/app/utils/llm';
 import { dispatchUiSideEffects } from '@client/app/utils/uiSideEffectDispatcher';
 import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 
@@ -69,6 +75,8 @@ interface AgentExecuteStart {
   maxIterations?: number;
   // Knowledge / file context forwarded for first-iteration materialization.
   messageFileIds?: string[];
+  /** The subset of `messageFileIds` scoped to this message only; the rest are pinned to the session. */
+  messageOnlyFileIds?: string[];
   sessionFabFileIds?: string[];
   // LLM runtime knobs.
   temperature?: number;
@@ -112,6 +120,13 @@ interface AgentExecuteStart {
    * (classifier- or rule-based complexity-routed).
    */
   routingSource?: 'mention' | 'agent_literal' | 'toggle' | 'classifier' | 'user-default' | 'complexity';
+  /**
+   * Extra system context for this run only (a programmatic launch's `systemContext`). The
+   * executor appends it to the run's system message. Kept off the execution doc's own fields
+   * and the Quest; carried in the server-only checkpoint so continuations keep it.
+   * Server-capped at `PROMPT_TEXT_MAX`.
+   */
+  systemContext?: string;
 }
 
 interface AgentExecuteAbort {
@@ -130,15 +145,27 @@ interface AgentExecutePermissionResponse {
   rememberForSession?: boolean;
 }
 
+interface AgentExecuteGateResponse {
+  action: 'agent_execute';
+  command: 'gate_response';
+  executionId: string;
+  decision: 'continue' | 'stop';
+}
+
 interface AgentExecuteReconnect {
   action: 'agent_execute';
   command: 'reconnect';
+  requestId?: string;
   executionId?: string;
   sessionId?: string;
 }
 
 export type AgentExecuteCommand =
-  AgentExecuteStart | AgentExecuteAbort | AgentExecutePermissionResponse | AgentExecuteReconnect;
+  | AgentExecuteStart
+  | AgentExecuteAbort
+  | AgentExecutePermissionResponse
+  | AgentExecuteGateResponse
+  | AgentExecuteReconnect;
 
 /** Length cap for the background-completion toast preview. The spec asks for
  * 200 chars; server-side truncation on subagent steps is 2KB, so the final
@@ -185,6 +212,20 @@ function notifyBackgroundCompletion(agentName: string, finalAnswer?: string, onV
     duration: 10000,
     ...(onViewTrace ? { action: { label: 'View trace', onClick: onViewTrace } } : {}),
   });
+}
+
+/**
+ * Prompt-bubble text for a `failed` run. A `tool_denied` stop is a decision (the user
+ * clicked Deny, or policy blocks the tool), not a crash, so it shows the server's denial
+ * text - the same text both deny paths persist on the Quest (`apps/client/server/websocket/agentExecute.ts`
+ * and `apps/workers/src/queueHandlers/agentExecutorUtils/toolPermissions.ts`), so the bubble
+ * keeps its wording when the persisted Quest replaces it. Every other reason stays generic
+ * and carries no internal details.
+ */
+export function failedRunReply(reason?: string, toolName?: string, message?: string): string {
+  if (reason !== 'tool_denied') return 'Agent execution failed.';
+  if (message) return message;
+  return toolName ? `Execution stopped: "${toolName}" was denied.` : 'Execution stopped: a tool call was denied.';
 }
 
 export function useAgentExecutionSubscriptions(): void {
@@ -249,6 +290,7 @@ export function useAgentExecutionSubscriptions(): void {
         // Pair this execution with the sessionId the dispatcher enqueued.
         // FIFO match works because WS preserves emit order per connection.
         const sessionId = store().consumePendingDispatch();
+        settleMirroredPinsOnAgentStart(sessionId, true);
         store().startExecution(msg.executionId, sessionId);
         // Swap the optimistic prompt bubble's fake id for the real persisted
         // Quest id so the bubble survives a mid-run reload. Only
@@ -303,6 +345,14 @@ export function useAgentExecutionSubscriptions(): void {
           // value can't silently corrupt store state.
           store().setStatus(msg.executionId, msg.status as AgentExecutionStatus);
         }
+        // sessionId is set by `execution_started`, which the worker sends before any tool can start a job.
+        const sessionId = store().executions[msg.executionId]?.sessionId;
+        if (sessionId && msg.questId && msg.generationJobs?.length) {
+          addGenerationJobsToRunBubble(queryClient, sessionId, msg.questId, msg.generationJobs);
+        }
+        if (sessionId && msg.questId && msg.pendingAction) {
+          setPendingActionOnRunBubble(queryClient, sessionId, msg.questId, msg.pendingAction);
+        }
       })
     );
 
@@ -350,11 +400,15 @@ export function useAgentExecutionSubscriptions(): void {
         store().markFailed(msg.executionId, msg.reason, msg.message);
         // Same rationale as `completed` above: patch the prompt bubble so the
         // user sees a chat-history entry for the failed run without waiting
-        // on the change-stream subscriber. Generic message (no internal
-        // details) mirrors persistRunAsQuest's failure-path Quest body.
+        // on the change-stream subscriber.
         const sessionId = store().executions[msg.executionId]?.sessionId;
         if (sessionId) {
-          appendReplyToLatestOptimisticBubble(queryClient, sessionId, 'Agent execution failed.', msg.executionId);
+          appendReplyToLatestOptimisticBubble(
+            queryClient,
+            sessionId,
+            failedRunReply(msg.reason, msg.toolName, msg.message),
+            msg.executionId
+          );
         }
       })
     );
@@ -379,8 +433,9 @@ export function useAgentExecutionSubscriptions(): void {
           store().markFailed(msg.executionId, 'agent_error', msg.message);
         } else {
           // Pre-creation rejection - drain the orphaned sessionId so the next
-          // `execution_started` pairs with the correct session, not this stale one.
-          store().consumePendingDispatch();
+          // `execution_started` pairs with the correct session, not this stale one. The server
+          // pinned nothing for a refused start, so the send's workbench mirror goes too.
+          settleMirroredPinsOnAgentStart(store().consumePendingDispatch(), false);
         }
       })
     );
@@ -414,9 +469,30 @@ export function useAgentExecutionSubscriptions(): void {
     );
 
     unsubscribers.push(
+      subscribeToAction('confidence_gate', async (msg: IMessageDataToClient) => {
+        if (msg.action !== 'confidence_gate') return;
+        store().setPendingGate(msg.executionId, {
+          iteration: msg.iteration,
+          confidence: msg.confidence,
+          reason: msg.reason,
+          requestedAt: Date.now(),
+        });
+      })
+    );
+
+    unsubscribers.push(
       subscribeToAction('reconnect_result', async (msg: IMessageDataToClient) => {
         if (msg.action !== 'reconnect_result') return;
-        if (!msg.found || !msg.executionId || !msg.status) return;
+        const reconnectSequence = store().consumeReconnectRequest(
+          msg.requestId,
+          msg.found ? msg.executionId : undefined,
+          msg.status
+        );
+        if (reconnectSequence === 'retry') {
+          reconnectRef.current(msg.sessionId, msg.executionId, false);
+          return;
+        }
+        if (!msg.found || !msg.executionId || !msg.status || reconnectSequence === undefined) return;
         const executionId = msg.executionId;
         // Taken from the response, never from request order: responses to a
         // sweep or to concurrent mount probes arrive in any order, and a
@@ -484,6 +560,7 @@ export function useAgentExecutionSubscriptions(): void {
 
         store().hydrateFromReconnect({
           executionId,
+          reconnectSequence,
           sessionId,
           status: msg.status,
           totalCreditsUsed: msg.totalCreditsUsed ?? 0,
@@ -500,6 +577,17 @@ export function useAgentExecutionSubscriptions(): void {
                     ? msg.pendingPermission.requestedAt.getTime()
                     : new Date(msg.pendingPermission.requestedAt).getTime(),
                 toolCallId: msg.pendingPermission.toolCallId,
+              }
+            : undefined,
+          pendingGate: msg.pendingGate
+            ? {
+                iteration: msg.pendingGate.iteration,
+                confidence: msg.pendingGate.confidence,
+                reason: msg.pendingGate.reason,
+                requestedAt:
+                  msg.pendingGate.requestedAt instanceof Date
+                    ? msg.pendingGate.requestedAt.getTime()
+                    : new Date(msg.pendingGate.requestedAt).getTime(),
               }
             : undefined,
         });
@@ -699,11 +787,33 @@ export function useAgentExecutionSubscriptions(): void {
   }, [subscribeToAction, queryClient]);
 }
 
+/**
+ * How long a `gate_response` - either decision - waits for the run to move off
+ * `paused` before the client re-asks the server for the truth. Neither decision
+ * is acknowledged directly: `continue` re-invokes the executor (whose `resumed`
+ * frame moves the run), `stop` ends it with a `completed` frame, and a response
+ * for a pause the stale sweep already closed is dropped in silence (the gate
+ * handler returns without sending anything).
+ */
+export const GATE_ACK_WINDOW_MS = 10_000;
+
 export function useAgentExecutionDispatch() {
   const { sendJsonMessage } = useWebsocket();
 
-  return useMemo(
-    () => ({
+  return useMemo(() => {
+    const reconnect = (sessionId?: string, executionId?: string, retryAllowed = true) => {
+      const requestId = crypto.randomUUID();
+      useAgentExecutionStore.getState().registerReconnectRequest(requestId, sessionId, executionId, retryAllowed);
+      sendJsonMessage({
+        action: 'agent_execute',
+        command: 'reconnect',
+        requestId,
+        sessionId,
+        executionId,
+      } as unknown as Parameters<typeof sendJsonMessage>[0]);
+    };
+
+    return {
       start: (payload: Omit<AgentExecuteStart, 'action' | 'command'>) => {
         // Track the sessionId so the matching `execution_started` event can be
         // associated with it; the server doesn't echo sessionId back.
@@ -735,14 +845,24 @@ export function useAgentExecutionDispatch() {
           approved,
           rememberForSession,
         } as unknown as Parameters<typeof sendJsonMessage>[0]),
-      reconnect: (sessionId?: string, executionId?: string) =>
+      respondToGate: (executionId: string, decision: 'continue' | 'stop') => {
         sendJsonMessage({
           action: 'agent_execute',
-          command: 'reconnect',
-          sessionId,
+          command: 'gate_response',
           executionId,
-        } as unknown as Parameters<typeof sendJsonMessage>[0]),
-    }),
-    [sendJsonMessage]
-  );
+          decision,
+        } as unknown as Parameters<typeof sendJsonMessage>[0]);
+        // A decision the server never answers (the pause was swept to
+        // `aborted`, so `handleGateResponse` drops it silently) leaves the run
+        // painting "Paused" forever. Re-ask once the ack window passes; a
+        // `reconnect_result` then restores the gate or the real status.
+        setTimeout(() => {
+          const execution = useAgentExecutionStore.getState().executions[executionId];
+          if (execution?.status !== 'paused') return;
+          reconnect(execution.sessionId, executionId);
+        }, GATE_ACK_WINDOW_MS);
+      },
+      reconnect,
+    };
+  }, [sendJsonMessage]);
 }

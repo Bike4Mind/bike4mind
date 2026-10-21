@@ -12,16 +12,18 @@ vi.mock('sst', () => ({
   Resource: { websocket: { managementEndpoint: 'https://ws.example.com/dev' } },
 }));
 
-const { connectFunc, disconnectFunc, subscribeFunc, unsubscribeFunc } = vi.hoisted(() => ({
+const { connectFunc, disconnectFunc, subscribeFunc, unsubscribeFunc, reauthFunc } = vi.hoisted(() => ({
   connectFunc: vi.fn().mockResolvedValue({ statusCode: 200 }),
   disconnectFunc: vi.fn().mockResolvedValue({ statusCode: 200 }),
   subscribeFunc: vi.fn().mockResolvedValue({ statusCode: 200 }),
   unsubscribeFunc: vi.fn().mockResolvedValue({ statusCode: 200 }),
+  reauthFunc: vi.fn().mockResolvedValue({ statusCode: 200 }),
 }));
 vi.mock('@server/websocket/connect', () => ({ func: connectFunc }));
 vi.mock('@server/websocket/disconnect', () => ({ func: disconnectFunc }));
 vi.mock('@server/websocket/dataSubscribeRequest', () => ({ func: subscribeFunc }));
 vi.mock('@server/websocket/dataUnsubscribeRequest', () => ({ func: unsubscribeFunc }));
+vi.mock('@server/websocket/reauthConnection', () => ({ func: reauthFunc }));
 
 import handler from '../[action]';
 
@@ -95,5 +97,17 @@ describe('self-host ws bridge: connect', () => {
     await (handler as unknown as (req: unknown, res: unknown) => Promise<unknown>)(req, res);
     expect(res.statusCode).toBe(401);
     expect(connectFunc).not.toHaveBeenCalled();
+  });
+});
+
+describe('self-host ws bridge: message', () => {
+  it('forwards a reauth_connection frame to the reauth handler', async () => {
+    const body = JSON.stringify({ action: 'reauth_connection', accessToken: 'jwt' });
+    const res = await callBridge('message', { connectionId: 'c4', body });
+
+    expect(reauthFunc).toHaveBeenCalledOnce();
+    expect(reauthFunc.mock.calls[0][0]).toEqual({ requestContext: { connectionId: 'c4' }, body });
+    expect(subscribeFunc).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(200);
   });
 });

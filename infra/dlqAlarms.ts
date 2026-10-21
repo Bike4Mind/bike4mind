@@ -104,7 +104,6 @@ if (isMonitoredStage) {
       handler: 'apps/workers/src/events/dlqAlarmToSlack.handler',
       link: [secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL],
       environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
-      logging: { retention: '3 days' },
     },
     {
       transform: {
@@ -197,7 +196,7 @@ type InfraDlqDescriptor = DlqDescriptor & {
 };
 
 // ⚠️  SYNC WARNING: When adding/removing a DLQ here, also update
-// DLQ_REGISTRY in apps/client/server/utils/dlqRegistry.ts to keep the admin replay UI in sync.
+// DLQ_REGISTRY in packages/server-utils/src/utils/dlqRegistry.ts to keep the admin replay UI in sync.
 // Drift is caught automatically by dlqRegistrySync.test.ts.
 const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
   // queues.ts DLQs
@@ -514,7 +513,7 @@ if (isMonitoredStage) {
   }
 
   // FabFile Moderation DLQ — deliberately NOT added to DLQ_DESCRIPTORS above.
-  // It backs apps/client/server/s3/objectCreated's Lambda async-invocation dead-letter
+  // It backs apps/workers/src/s3/objectCreated's Lambda async-invocation dead-letter
   // target (see infra/queues.ts), not an sst.aws.Queue `.subscribe()` consumer. Every
   // DLQ_DESCRIPTORS entry has a `sourceQueue` that DLQ_REGISTRY (apps/client/server/utils/
   // dlqRegistry.ts) resolves to a real SQS queue URL for the admin "replay" UI — but this

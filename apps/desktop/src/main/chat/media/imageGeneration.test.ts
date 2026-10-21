@@ -78,8 +78,8 @@ describe('resolveImageUrls', () => {
     });
   });
 
-  // Self-host and personal dev stages leave `files` empty because the API route reads a CDN base
-  // the desktop client can still get from serverConfig.
+  // An older server leaves `files` empty; the desktop client can still resolve the bare names
+  // from the serverConfig base.
   it('falls back to the serverConfig base when the quest carries only bare names', () => {
     const quest: QuestPoll = { id: 'q1', status: 'done', images: ['a.png', 'notes.xlsx'], files: [] };
     expect(resolveImageUrls(quest, '/api/app-files/serve/')).toEqual({

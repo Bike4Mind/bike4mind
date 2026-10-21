@@ -11,9 +11,10 @@ name: Lockfile Integrity
 # only) key in the resolution flow-map.
 #
 # A second step blocks premium-overlay paths from the lockfile (see
-# scripts/check-no-overlay-lockfile.sh).
+# scripts/check-no-overlay-lockfile.sh). On Dependabot PRs,
+# dependabot-lockfile-repair.yml restores the hash before this guard sees it.
 #
-# A second job checks the root pnpm.overrides block against the ranges packages
+# A second job checks the root pnpm-workspace.yaml overrides block against the ranges packages
 # declare once installed (see scripts/check-pnpm-overrides.mjs). It needs a real
 # node_modules tree, so it installs; the grep job above stays instant.
 
@@ -54,6 +55,9 @@ jobs:
       - name: Check for premium overlay paths in pnpm-lock.yaml
         run: bash scripts/check-no-overlay-lockfile.sh
 
+      - name: Run lockfile repair script tests
+        run: bash .github/scripts/repair-lockfile-integrity.test.sh
+
   overrides:
     name: Overrides agree with declared ranges
     if: github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5')
@@ -84,7 +88,7 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Check pnpm.overrides against declared ranges
+      - name: Check overrides against declared ranges
         run: node scripts/check-pnpm-overrides.mjs
 
       - name: Run overrides guard tests

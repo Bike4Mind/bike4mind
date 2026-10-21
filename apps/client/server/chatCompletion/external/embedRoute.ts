@@ -1,3 +1,4 @@
+import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
 import express, { type Request, type Response, type Express } from 'express';
 import {
   buildMetaEvent,
@@ -60,10 +61,10 @@ import { checkApiKeyRateLimit } from '@server/utils/apiKeyRateLimitCheck';
 import { checkEmbedSessionRateLimit } from '@server/utils/embedSessionRateLimit';
 import { embedCors } from '@server/middlewares/embedCors';
 import { flattenHeaders } from '@server/utils/flattenHeaders';
-import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
+import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { hydrateEmbedAgent } from './embedAgentHydration';
 import { resolveEmbedTools } from './embedToolResolver';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { emitProcessingFailed } from '../processingFailedMetric';
 import { z } from 'zod';
 
@@ -314,6 +315,8 @@ async function buildEmbedServerTools(args: {
       scopedSettings: scopedSettingsRepository,
     },
     entitlementKeys: [],
+    // An anonymous widget visitor, running as the embed's owner: neither their session nor a b4m_live_ key.
+    authOrigin: 'internal',
     kbScope: { fileIds: kbFileIds },
     storage: getFilesStorage(),
     imageGenerateStorage: getGeneratedImageStorage(),
@@ -633,6 +636,7 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
 
       try {
         await executeCompletion({
+          creditHolds: createCompletionCreditHolds(logger),
           userId: actorUserId,
           model: hydrated.model,
           messages,

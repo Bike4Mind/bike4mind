@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
+import type { ISessionDocument } from '@bike4mind/common';
 
 /**
  * The composer's tool indicators (the green primary-tool icons and the "+N" badge)
@@ -33,8 +34,10 @@ const mocks = vi.hoisted(() => {
   useLLM.setState = vi.fn();
   const toolAvailability = { value: undefined as Record<string, boolean> | undefined };
   const toolsButtonProps = { value: null as Record<string, unknown> | null };
+  const modalProps = { value: null as Record<string, unknown> | null };
   const mcpServers = { value: [] as Array<{ name: string; enabled: boolean }> };
-  return { state, useLLM, toolAvailability, toolsButtonProps, mcpServers };
+  const adminFeatureFlags = { value: {} as Record<string, boolean> };
+  return { state, useLLM, toolAvailability, toolsButtonProps, modalProps, mcpServers, adminFeatureFlags };
 });
 
 vi.mock('@client/app/contexts/LLMContext', () => ({ useLLM: mocks.useLLM }));
@@ -53,23 +56,24 @@ vi.mock('@client/app/hooks/data/useModelInfo', () => ({
 }));
 vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsMobile: () => false, useIsTablet: () => false }));
 vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
-  useFeatureEnabled: () => ({ isFeatureEnabled: () => false, isAdminFeatureEnabled: () => false }),
+  useFeatureEnabled: () => ({
+    isFeatureEnabled: () => false,
+    isAdminFeatureEnabled: (feature: string) => mocks.adminFeatureFlags.value[feature] ?? false,
+  }),
 }));
 vi.mock('./AISettings/useHydrateModelFromSession', () => ({ useHydrateModelFromSession: () => {} }));
 vi.mock('./AISettings/useAdvancedAISettingsStore', () => ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- same shape of test double as useLLM
-  useAdvancedAISettings: (selector: any) =>
-    selector({ showAdvancedSettings: false, setShowAdvancedSettings: vi.fn(), setPromptBuilderOpen: vi.fn() }),
-}));
-vi.mock('./PromptBuilder/usePromptBuilderFirstRun', () => ({
-  usePromptBuilderFirstRun: () => ({ showHint: false, markSeen: vi.fn() }),
+  useAdvancedAISettings: (selector: any) => selector({ showAdvancedSettings: false, setShowAdvancedSettings: vi.fn() }),
 }));
 vi.mock('./AISettings/InspectableSettingsButton', () => ({ default: () => null }));
-vi.mock('./AISettings/AdvancedAIModal', () => ({ AdvancedAIModal: () => null }));
+vi.mock('./AISettings/AdvancedAIModal', () => ({
+  AdvancedAIModal: (props: Record<string, unknown>) => {
+    mocks.modalProps.value = props;
+    return null;
+  },
+}));
 vi.mock('./AISettings/AgentsButton', () => ({ default: () => null }));
-vi.mock('./AISettings/BriefcaseButton', () => ({ default: () => null }));
-vi.mock('./AISettings/ResearchModeIndicator', () => ({ default: () => null }));
-vi.mock('./ImageTemplates/ImageTemplateControls', () => ({ ImageTemplateControls: () => null }));
 vi.mock('./PromptBuilder/PromptBuilderModal', () => ({ PromptBuilderModal: () => null }));
 vi.mock('./AISettings/ToolsButton', () => ({
   default: (props: Record<string, unknown>) => {
@@ -85,7 +89,7 @@ const Wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
 );
 
-const renderIndicators = () => {
+const renderSettings = (currentSession: ISessionDocument | null = null) =>
   render(
     <AdvancedAISettings
       stream={false}
@@ -93,7 +97,20 @@ const renderIndicators = () => {
       spokenWords={0}
       setSpokenWords={vi.fn()}
       onRollDice={vi.fn()}
-      currentSession={null}
+      currentSession={currentSession}
+    />,
+    { wrapper: Wrapper }
+  );
+
+const renderIndicators = (currentSession: ISessionDocument | null = null) => {
+  render(
+    <AdvancedAISettings
+      stream={false}
+      setStream={vi.fn()}
+      spokenWords={0}
+      setSpokenWords={vi.fn()}
+      onRollDice={vi.fn()}
+      currentSession={currentSession}
     />,
     { wrapper: Wrapper }
   );
@@ -103,6 +120,7 @@ const renderIndicators = () => {
     otherActiveToolsCount: props?.otherActiveToolsCount as number,
     tools: props?.tools as string[],
     enabledMcpServers: props?.enabledMcpServers as string[] | null,
+    disabledTools: props?.disabledTools as string[] | undefined,
   };
 };
 
@@ -110,9 +128,12 @@ beforeEach(() => {
   mocks.state.tools = [];
   mocks.toolAvailability.value = undefined;
   mocks.toolsButtonProps.value = null;
+  mocks.modalProps.value = null;
   mocks.mcpServers.value = [];
   mocks.state.enabledMcpServers = null;
   mocks.state.skipAutoOffers = false;
+  mocks.state.model = 'gpt-4o';
+  mocks.adminFeatureFlags.value = {};
 });
 
 describe('AdvancedAISettings tool indicators vs availability', () => {
@@ -198,5 +219,66 @@ describe('AdvancedAISettings MCP indicators vs "Only tools I pick"', () => {
     mocks.state.enabledMcpServers = ['notion'];
     mocks.state.skipAutoOffers = true;
     expect(renderIndicators().enabledMcpServers).toEqual([]);
+  });
+});
+
+/**
+ * `session.disabledTools` is enforced server-side ahead of every other gate, so a denied tool
+ * never reaches the model. The indicators must not advertise it, and the panel must hide it.
+ */
+describe('AdvancedAISettings indicators vs session-denied tools', () => {
+  const sessionDenying = (...disabledTools: string[]) => ({ disabledTools }) as unknown as ISessionDocument;
+
+  it('drops a denied primary tool from the indicator icons', () => {
+    mocks.state.tools = ['web_search', 'image_generation'];
+    expect(renderIndicators(sessionDenying('image_generation')).activePrimaryTools).toEqual(['web_search']);
+  });
+
+  it('drops a denied non-primary tool from the "+N" badge count', () => {
+    mocks.state.tools = ['music_generation', 'math_evaluate'];
+    expect(renderIndicators(sessionDenying('music_generation')).otherActiveToolsCount).toBe(1);
+  });
+
+  it('hands the denylist to ToolsButton, with the preference array unfiltered', () => {
+    mocks.state.tools = ['image_generation'];
+    const indicators = renderIndicators(sessionDenying('image_generation'));
+    expect(indicators.disabledTools).toEqual(['image_generation']);
+    expect(indicators.tools).toEqual(['image_generation']);
+  });
+
+  it('changes nothing without a session', () => {
+    mocks.state.tools = ['web_search', 'image_generation'];
+    const indicators = renderIndicators(null);
+    expect(indicators.activePrimaryTools).toEqual(['web_search', 'image_generation']);
+    expect(indicators.disabledTools).toBeUndefined();
+  });
+});
+
+describe('AdvancedAISettings row after the plus-menu move', () => {
+  // Prompt Builder, dice and the rest moved into the plus menu (AttachFileButton); their
+  // session-denylist rules are tested there and in ImageOptionsPanel.test.tsx.
+  it('renders neither the Prompt Builder nor the dice, even when both would apply', () => {
+    mocks.adminFeatureFlags.value = { EnablePromptBuilder: true };
+    mocks.state.model = 'gpt-image-1';
+    mocks.state.tools = ['dice_roll'];
+    const { container, queryByTestId } = renderSettings(null);
+    expect(queryByTestId('prompt-builder-open-btn')).toBeNull();
+    expect(container.querySelector('[data-testid="CasinoIcon"]')).toBeNull();
+  });
+});
+
+describe('AdvancedAISettings modal vs session-denied tools', () => {
+  const sessionDenying = (...disabledTools: string[]) => ({ disabledTools }) as unknown as ISessionDocument;
+
+  it('hands the session denylist to AdvancedAIModal', () => {
+    renderSettings(sessionDenying('dice_roll'));
+    expect(mocks.modalProps.value).not.toBeNull();
+    expect(mocks.modalProps.value?.disabledTools).toEqual(['dice_roll']);
+  });
+
+  it('hands it no denylist without a session', () => {
+    renderSettings(null);
+    expect(mocks.modalProps.value).not.toBeNull();
+    expect(mocks.modalProps.value?.disabledTools).toBeUndefined();
   });
 });

@@ -4,6 +4,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mockCreateUser = vi.fn();
 const mockSendOTC = vi.fn();
 const mockStoreNonce = vi.fn();
+const mockEmitSignupFunnelEvents = vi.fn();
+const mockRecordSyntheticIdentity = vi.fn();
 
 vi.mock('@bike4mind/services', () => ({
   userService: {
@@ -19,6 +21,9 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
+const mockRequireStepUp = vi.fn();
+vi.mock('@server/auth/stepUp', () => ({ requireStepUp: (...args: unknown[]) => mockRequireStepUp(...args) }));
+
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => ({
     post: (handler: (...args: unknown[]) => unknown) => handler,
@@ -29,7 +34,7 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (handler: (...args: unknown[]) => unknown) => handler,
 }));
 
-vi.mock('@server/utils/errors', () => ({
+vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   ForbiddenError: class ForbiddenError extends Error {},
   BadRequestError: class BadRequestError extends Error {},
 }));
@@ -38,13 +43,17 @@ vi.mock('@server/utils/eventBus', () => ({
   EmailEvents: { Send: { publish: vi.fn() } },
 }));
 
-vi.mock('@server/utils/mailer/emailHelpers', () => ({
+vi.mock('@bike4mind/server-utils/utils/mailer/emailHelpers', () => ({
   getLogoUrl: () => 'https://example.com/logo.png',
   buildEmailLogoImg: () => '',
 }));
 
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { JWT_SECRET: 'test-secret' },
+}));
+vi.mock('@server/analytics/funnel', () => ({
+  emitSignupFunnelEvents: (...args: unknown[]) => mockEmitSignupFunnelEvents(...args),
+  recordSyntheticIdentity: (...args: unknown[]) => mockRecordSyntheticIdentity(...args),
 }));
 
 vi.mock('jsonwebtoken', () => ({ default: { sign: () => 'signed-token' } }));
@@ -70,10 +79,11 @@ describe('admin/create-user', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockSendOTC.mockResolvedValue({ nonce: null });
+    mockRecordSyntheticIdentity.mockResolvedValue(false);
   });
 
   it('stores password: null + hasUsablePassword: false for a passwordless shell account', async () => {
-    mockCreateUser.mockResolvedValue({ id: 'u1', email: 'shell@example.com', username: 'shell' });
+    mockCreateUser.mockResolvedValue({ id: 'u1', email: 'shell@example.com', username: 'shell', currentCredits: 0 });
 
     await runHandler(makeReq({ username: 'shell', email: 'shell@example.com', name: 'Shell User' }), makeRes());
 
@@ -82,6 +92,25 @@ describe('admin/create-user', () => {
         record: expect.objectContaining({ password: null, hasUsablePassword: false }),
       }),
       expect.any(Object)
+    );
+    expect(mockEmitSignupFunnelEvents).toHaveBeenCalledWith({
+      user: expect.objectContaining({ id: 'u1', isSynthetic: false }),
+      method: 'admin',
+      emailVerified: false,
+      creditsGranted: 0,
+    });
+  });
+
+  it('passes a synthetic classification into the signup emitter', async () => {
+    const user = { id: 'u-synthetic', email: 'seed@test.example', username: 'persona-seed', currentCredits: 50 };
+    mockCreateUser.mockResolvedValue(user);
+    mockRecordSyntheticIdentity.mockResolvedValue(true);
+
+    await runHandler(makeReq({ username: 'persona-seed', email: 'seed@test.example', name: 'Seed' }), makeRes());
+
+    expect(mockRecordSyntheticIdentity).toHaveBeenCalledWith(user);
+    expect(mockEmitSignupFunnelEvents).toHaveBeenCalledWith(
+      expect.objectContaining({ user: expect.objectContaining({ id: 'u-synthetic', isSynthetic: true }) })
     );
   });
 
@@ -99,5 +128,49 @@ describe('admin/create-user', () => {
       }),
       expect.any(Object)
     );
+  });
+
+  it('rejects a username outside the allowed characters with the rules message', async () => {
+    await expect(
+      runHandler(makeReq({ username: '<b>x</b>', email: 'x@example.com', name: 'X' }), makeRes())
+    ).rejects.toThrow("username: Usernames can contain letters, numbers, spaces and . _ - ' (up to 64 characters).");
+    expect(mockCreateUser).not.toHaveBeenCalled();
+  });
+
+  it('passes the username on trimmed', async () => {
+    mockCreateUser.mockResolvedValue({ id: 'u3', email: 'trim@example.com', username: 'Trim Me' });
+
+    await runHandler(makeReq({ username: '  Trim Me ', email: 'trim@example.com', name: 'Trim' }), makeRes());
+
+    expect(mockCreateUser).toHaveBeenCalledWith(expect.objectContaining({ username: 'Trim Me' }), expect.any(Object));
+  });
+
+  describe('credential and admin-role gate', () => {
+    const base = { username: 'new', email: 'new@example.com', name: 'New User' };
+    const gated: Array<[string, Record<string, unknown>]> = [['the admin role', { ...base, isAdmin: true }]];
+
+    it.each(gated)('requires recent verification for %s and creates nothing without it', async (_label, body) => {
+      mockRequireStepUp.mockRejectedValueOnce(new Error('step_up_required'));
+      await expect(runHandler(makeReq(body), makeRes())).rejects.toThrow('step_up_required');
+      expect(mockCreateUser).not.toHaveBeenCalled();
+    });
+
+    it.each(gated)('refuses %s from an API key before any write', async (_label, body) => {
+      const req = { ...makeReq(body), apiKeyInfo: { scopes: ['admin'] } };
+      await expect(runHandler(req, makeRes())).rejects.toThrow(/signed-in session/);
+      expect(mockRequireStepUp).not.toHaveBeenCalled();
+      expect(mockCreateUser).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['passwordless', base],
+      ['password', { ...base, password: 'hunter2secret' }],
+    ])('leaves a %s non-admin account ungated, for a session and an API key', async (_label, body) => {
+      mockCreateUser.mockResolvedValue({ id: 'u3', email: 'new@example.com', username: 'new' });
+      await runHandler(makeReq(body), makeRes());
+      await runHandler({ ...makeReq(body), apiKeyInfo: { scopes: ['admin'] } }, makeRes());
+      expect(mockRequireStepUp).not.toHaveBeenCalled();
+      expect(mockCreateUser).toHaveBeenCalledTimes(2);
+    });
   });
 });

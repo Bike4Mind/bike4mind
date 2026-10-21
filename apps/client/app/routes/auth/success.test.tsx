@@ -75,6 +75,28 @@ vi.mock('@mui/joy', () => ({
   CircularProgress: () => <div data-testid="spinner" />,
 }));
 
+type MfaChallengeOptions = {
+  onComplete: (result: { accessToken: string; user: unknown }) => void;
+  onCancel: (mode: 'verify' | 'setup') => void;
+};
+const { mockBeginMfa, mfaOptions } = vi.hoisted(() => ({
+  mockBeginMfa: vi.fn(),
+  mfaOptions: { current: null as MfaChallengeOptions | null },
+}));
+
+vi.mock('@client/app/hooks/useMfaChallenge', () => ({
+  useMfaChallenge: (options: MfaChallengeOptions) => {
+    mfaOptions.current = options;
+    return { begin: mockBeginMfa, modalProps: {} };
+  },
+}));
+
+vi.mock('@client/app/hooks/data/settings', () => ({
+  usePublicConfig: () => ({ data: { allowTrustedDevices: true } }),
+}));
+
+vi.mock('@client/app/components/common/MFAModal', () => ({ default: () => null }));
+
 import AuthSuccessPage from './success';
 
 const TOKENS = { token: 'tok', userId: 'u1', error: undefined };
@@ -203,5 +225,95 @@ describe('AuthSuccessPage', () => {
     );
 
     await waitFor(() => expect(mockApplyRedirect).toHaveBeenCalledTimes(1));
+  });
+
+  describe('second-factor handoff', () => {
+    const MFA_PARAMS = { userId: 'u1', mfa: { token: 'pending', mode: 'verify', passkeyAvailable: true } };
+
+    it('opens the MFA challenge with the pending token instead of adopting a session', async () => {
+      mockParseAuthParams.mockReturnValue(MFA_PARAMS);
+
+      render(<AuthSuccessPage />);
+
+      await waitFor(() =>
+        expect(mockBeginMfa).toHaveBeenCalledWith({
+          userId: 'u1',
+          mfaToken: 'pending',
+          mode: 'verify',
+          passkeyAvailable: true,
+        })
+      );
+      expect(mockSetVerifiedSession).not.toHaveBeenCalled();
+      expect(fetch).not.toHaveBeenCalled();
+      expect(mockApplyRedirect).not.toHaveBeenCalled();
+    });
+
+    it('sets the user, fires a pending signup conversion and redirects once MFA completes', async () => {
+      mockParseAuthParams.mockReturnValue({ ...MFA_PARAMS, isNewUser: true, signupMethod: 'github' });
+      render(<AuthSuccessPage />);
+      await waitFor(() => expect(mockBeginMfa).toHaveBeenCalled());
+
+      mfaOptions.current?.onComplete({ accessToken: 'full', user: USER_DATA });
+
+      expect(mockSetCurrentUser).toHaveBeenCalledWith(USER_DATA);
+      expect(mockTrackSignupConversion).toHaveBeenCalledExactlyOnceWith('github');
+      expect(mockApplyRedirect).toHaveBeenCalledWith(mockRouterHistory, '/new');
+    });
+
+    it.each([
+      ['verify', 'mfa_required'],
+      ['setup', 'mfa_setup_required'],
+    ] as const)('sends an abandoned %s challenge back to /login with %s', async (mode, error) => {
+      mockParseAuthParams.mockReturnValue(MFA_PARAMS);
+      render(<AuthSuccessPage />);
+      await waitFor(() => expect(mockBeginMfa).toHaveBeenCalled());
+
+      mfaOptions.current?.onCancel(mode);
+
+      expect(mockNavigate).toHaveBeenCalledWith({ to: '/login', search: { error, redirectTo: '/new' } });
+    });
+
+    it('omits redirectTo from the /login search when the handoff carried none', async () => {
+      mockSearch = {};
+      mockParseAuthParams.mockReturnValue(MFA_PARAMS);
+      render(<AuthSuccessPage />);
+      await waitFor(() => expect(mockBeginMfa).toHaveBeenCalled());
+
+      mfaOptions.current?.onCancel('verify');
+
+      expect(mockNavigate).toHaveBeenCalledWith({ to: '/login', search: { error: 'mfa_required' } });
+    });
+
+    it('returns a still-signed-in user to their destination when the challenge is abandoned', async () => {
+      mockGetState.mockReturnValue({ accessToken: null, hasSession: true });
+      mockParseAuthParams.mockReturnValue(MFA_PARAMS);
+      render(<AuthSuccessPage />);
+      await waitFor(() => expect(mockBeginMfa).toHaveBeenCalled());
+
+      mfaOptions.current?.onCancel('verify');
+
+      expect(mockApplyRedirect).toHaveBeenCalledWith(mockRouterHistory, '/new');
+      expect(mockNavigate).not.toHaveBeenCalled();
+    });
+
+    it('runs the challenge for the same user, since it mints a fresh session', async () => {
+      mockCurrentUser = { id: 'u1' };
+      mockParseAuthParams.mockReturnValue(MFA_PARAMS);
+
+      render(<AuthSuccessPage />);
+
+      await waitFor(() => expect(mockBeginMfa).toHaveBeenCalled());
+      expect(mockApplyRedirect).not.toHaveBeenCalled();
+    });
+
+    it('refuses a handoff for a different user than the signed-in one', async () => {
+      mockCurrentUser = { id: 'other' };
+      mockParseAuthParams.mockReturnValue(MFA_PARAMS);
+
+      render(<AuthSuccessPage />);
+
+      await waitFor(() => expect(mockApplyRedirect).toHaveBeenCalledWith(mockRouterHistory, '/new'));
+      expect(mockBeginMfa).not.toHaveBeenCalled();
+    });
   });
 });

@@ -27,11 +27,11 @@ vi.mock('@bike4mind/common', () => ({
   // exactly this test, so a mock that answered "everything is a document" would pass vacuously.
   isDocumentSource: (sourceId: string) => !sourceId.startsWith('finding:'),
 }));
-vi.mock('./ledgerMemoryStore', () => ({
+vi.mock('@bike4mind/server-utils/memory/ledgerMemoryStore', () => ({
   appendMemoryEvent: (...a: unknown[]) => appendMemoryEventMock(...a),
   createLedgerMemoryStore: () => ({ readProfile: (...a: unknown[]) => readProfileMock(...a) }),
 }));
-vi.mock('./factCipher', () => ({ createKeyProvider: () => ({}) }));
+vi.mock('@bike4mind/server-utils/memory/factCipher', () => ({ createKeyProvider: () => ({}) }));
 
 const { createLedgerAppendSession, writeFactToLedger } = await import('./mementoLedgerMirror');
 const { figureScopedSubject, resolveSubject } = await import('@bike4mind/memory');

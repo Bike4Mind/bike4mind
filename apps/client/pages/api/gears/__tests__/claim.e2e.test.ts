@@ -4,6 +4,7 @@ import mongoose from 'mongoose';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
 import {
   createMongoReplSet,
+  settleAutoIndexBuilds,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../packages/database/src/__test__/createMongoServer';
 import { User, Project, CreditTransaction, userRepository } from '@bike4mind/database';
@@ -32,8 +33,9 @@ let post: Handler;
 
 beforeAll(async () => {
   replSet = await createMongoReplSet();
-  await mongoose.connect(replSet.getUri());
+  await mongoose.connect(replSet.getUri(), { autoIndex: false });
   await import('../claim');
+  await settleAutoIndexBuilds(mongoose);
   post = mockRefs.postHandler!;
 });
 

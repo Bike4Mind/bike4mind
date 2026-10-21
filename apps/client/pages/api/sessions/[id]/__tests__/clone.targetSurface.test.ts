@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   rateLimiter: (() => undefined) as RouteHandler,
   cloneSession: vi.fn(),
   getRequestEntitlements: vi.fn(),
+  copyEntitlements: { 'some-workspace': ['base:pro'] } as Record<string, string[]>,
 }));
 
 vi.mock('@server/middlewares/defineNextRoute', () => {
@@ -37,6 +38,12 @@ vi.mock('@server/middlewares/rateLimit', () => ({
   },
 }));
 vi.mock('@server/entitlements', () => ({ getRequestEntitlements: h.getRequestEntitlements }));
+// The build's copy grant table, stood in for so the test can see whether the route hands it on.
+vi.mock('@client/app/premium-generated/premiumWorkspaceCopyEntitlements.generated', () => ({
+  get premiumWorkspaceCopyEntitlements() {
+    return h.copyEntitlements;
+  },
+}));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@bike4mind/services', () => ({ sessionService: { cloneSession: h.cloneSession } }));
 vi.mock('@bike4mind/database', () => ({
@@ -99,6 +106,17 @@ describe('POST /api/sessions/[id]/clone - targetSurface', () => {
     const [, params, adapters] = h.cloneSession.mock.calls[0];
     expect(params).toEqual({ id: 'session-1', targetSurface: OPTI_SURFACE });
     await expect(adapters.resolveSurfaceAccess()).resolves.toMatchObject({ entitlements: ['optihashi:pro'] });
+  });
+
+  // Fork, snip and clone are the only callers of the copy-aware resolver. Without the grant table a
+  // grant holder's copy silently drops to the main list, so pin that this route hands it on.
+  it("hands the service the build's copy grant table", async () => {
+    await call().run();
+
+    const [, , adapters] = h.cloneSession.mock.calls[0];
+    await expect(adapters.resolveSurfaceAccess()).resolves.toMatchObject({
+      copyEntitlements: { 'some-workspace': ['base:pro'] },
+    });
   });
 
   it('400s a malformed target before cloning', async () => {

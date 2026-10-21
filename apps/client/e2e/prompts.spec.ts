@@ -27,7 +27,7 @@ test.describe('Prompts & AI Chat', () => {
 
     await chatPage.sendMessageAndWaitForResponse(prompts.capital.prompt);
 
-    await verifyAnswers(prompts.capital.answer, { selector: '[data-testid="ai-response"]' });
+    await verifyAnswers(prompts.capital.answer, { selector: '[data-testid="ai-response-body"]' });
   });
 
   test('should handle multiple sequential prompts', async ({
@@ -43,11 +43,11 @@ test.describe('Prompts & AI Chat', () => {
 
     // First prompt - general knowledge
     await chatPage.sendMessageAndWaitForResponse(prompts.capital.prompt);
-    await verifyAnswers(prompts.capital.answer, { selector: '[data-testid="ai-response"]' });
+    await verifyAnswers(prompts.capital.answer, { selector: '[data-testid="ai-response-body"]' });
 
     // Second prompt - general knowledge
     await chatPage.sendMessageAndWaitForResponse(prompts.movie.prompt);
-    await verifyAnswers(prompts.movie.answer, { selector: '[data-testid="ai-response"]' });
+    await verifyAnswers(prompts.movie.answer, { selector: '[data-testid="ai-response-body"]' });
   });
 
   test('should upload text file and answer questions about it', async ({
@@ -60,14 +60,14 @@ test.describe('Prompts & AI Chat', () => {
     test.setTimeout(5 * TIMEOUTS.TEST);
 
     await navigationPage.navigateToNewChat();
-    await modelSelector.selectTextModel('Claude 4.5 Haiku', { disableSmartTools: true });
+    await modelSelector.selectTextModel('Claude Haiku 4.5', { disableSmartTools: true });
     await fileUpload.uploadFile(prompts['txt-recipe'].filepath);
 
     const query = prompts['txt-recipe'].queries[0];
     await chatPage.sendMessageAndWaitForResponse(query.prompt);
     await verifyAnswers(query.answer, {
       logic: query.answerLogic as 'or',
-      selector: '[data-testid="ai-response"]',
+      selector: '[data-testid="ai-response-body"]',
     });
   });
 
@@ -81,14 +81,14 @@ test.describe('Prompts & AI Chat', () => {
     test.setTimeout(5 * TIMEOUTS.TEST);
 
     await navigationPage.navigateToNewChat();
-    await modelSelector.selectTextModel('Claude 4.5 Haiku', { disableSmartTools: true });
+    await modelSelector.selectTextModel('Claude Haiku 4.5', { disableSmartTools: true });
     await fileUpload.uploadFile(prompts['image-cat'].filepath);
 
     const query = prompts['image-cat'].queries[0];
     await chatPage.sendMessageAndWaitForResponse(query.prompt);
     await verifyAnswers(query.answer, {
       logic: query.answerLogic as 'or',
-      selector: '[data-testid="ai-response"]',
+      selector: '[data-testid="ai-response-body"]',
     });
   });
 
@@ -102,14 +102,14 @@ test.describe('Prompts & AI Chat', () => {
     test.setTimeout(5 * TIMEOUTS.TEST);
 
     await navigationPage.navigateToNewChat();
-    await modelSelector.selectTextModel('Claude 4.5 Haiku', { disableSmartTools: true });
+    await modelSelector.selectTextModel('Claude Haiku 4.5', { disableSmartTools: true });
     await fileUpload.uploadFile(prompts['pdf-lorem'].filepath);
 
     const query = prompts['pdf-lorem'].queries[0];
     await chatPage.sendMessageAndWaitForResponse(query.prompt, prompts['pdf-lorem'].timeout);
     await verifyAnswers(query.answer, {
       logic: query.answerLogic as 'or',
-      selector: '[data-testid="ai-response"]',
+      selector: '[data-testid="ai-response-body"]',
     });
   });
 });

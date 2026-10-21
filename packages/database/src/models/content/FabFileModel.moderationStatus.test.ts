@@ -1,8 +1,8 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import mongoose from 'mongoose';
 import { KnowledgeType } from '@bike4mind/common';
 import { createMongoServer } from '../../__test__/createMongoServer';
-import { FabFile } from './FabFileModel';
+import { FabFile, fabFileRepository } from './FabFileModel';
 
 let server: Awaited<ReturnType<typeof createMongoServer>>;
 
@@ -14,6 +14,9 @@ afterAll(async () => {
   await mongoose.disconnect();
   await server.stop();
 });
+
+const makeFabFile = (overrides: Record<string, unknown> = {}) =>
+  FabFile.create({ userId: 'u1', fileName: 'x.png', mimeType: 'image/png', type: KnowledgeType.FILE, filePath: 'x.png', ...overrides });
 
 describe('FabFile moderationStatus', () => {
   it('defaults to pending and round-trips clean/blocked', async () => {
@@ -92,5 +95,44 @@ describe('FabFile moderationStatus', () => {
     const reloaded = await FabFile.findById(f.id);
     expect(reloaded?.moderationStatus).toBe('blocked');
     expect(reloaded?.blockReason).toBeUndefined();
+  });
+});
+
+describe('FabFile hard-delete legal-hold guard', () => {
+  beforeEach(async () => {
+    await FabFile.deleteMany({});
+  });
+
+  it('hardDeleteOneById throws for a blocked file and leaves it in the DB', async () => {
+    const f = await makeFabFile({ moderationStatus: 'blocked' });
+    await expect(fabFileRepository.hardDeleteOneById(String(f._id))).rejects.toThrow('legal hold');
+    expect(await FabFile.findById(f._id).setOptions({ includeDeleted: true })).not.toBeNull();
+  });
+
+  it('hardDeleteOneById succeeds for a non-blocked file', async () => {
+    const f = await makeFabFile({ moderationStatus: 'clean' });
+    const deleted = await fabFileRepository.hardDeleteOneById(String(f._id));
+    expect(deleted).toBe(true);
+    expect(await FabFile.findById(f._id).setOptions({ includeDeleted: true })).toBeNull();
+  });
+
+  it('hardDeleteByIds throws when any file in the batch is blocked', async () => {
+    const clean = await makeFabFile({ moderationStatus: 'clean' });
+    const blocked = await makeFabFile({ moderationStatus: 'blocked' });
+    const ids = [String(clean._id), String(blocked._id)];
+    await expect(fabFileRepository.hardDeleteByIds(ids)).rejects.toThrow('legal hold');
+    // Neither file is deleted: the throw fires before deleteMany.
+    expect(await FabFile.findById(clean._id).setOptions({ includeDeleted: true })).not.toBeNull();
+    expect(await FabFile.findById(blocked._id).setOptions({ includeDeleted: true })).not.toBeNull();
+  });
+
+  it('hardDeleteByIds succeeds when no file in the batch is blocked', async () => {
+    const f1 = await makeFabFile({ moderationStatus: 'clean' });
+    const f2 = await makeFabFile({ moderationStatus: 'pending' });
+    const ids = [String(f1._id), String(f2._id)];
+    const result = await fabFileRepository.hardDeleteByIds(ids);
+    expect(result).toHaveLength(2);
+    expect(await FabFile.findById(f1._id).setOptions({ includeDeleted: true })).toBeNull();
+    expect(await FabFile.findById(f2._id).setOptions({ includeDeleted: true })).toBeNull();
   });
 });

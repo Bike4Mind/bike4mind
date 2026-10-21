@@ -1,11 +1,11 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { groupRepository } from '@bike4mind/database/social';
 import { userRepository } from '@bike4mind/database/auth';
 import { organizationService } from '@bike4mind/services';
-import { AdminOrgAuditEvents, logAuditEvent } from '@server/utils/auditLog';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 /**
  * DELETE /api/organizations/[id]/groups/[groupId]/members/[userId] - unassign a user from a group.
@@ -27,16 +27,13 @@ const handler = baseApi().delete(
     );
 
     // "Who removed user X from the group" - best-effort, never fails the write.
-    await logAuditEvent(
-      {
-        userId: req.user!.id,
-        action: AdminOrgAuditEvents.ORG_GROUP_MEMBER_UNASSIGNED,
-        ip: req.ip,
-        userAgent: req.headers['user-agent'] || 'unknown',
-        metadata: { organizationId, groupId, targetUserId: userId },
-      },
-      req.logger
-    );
+    await recordAdminActionFromRequest(req, {
+      action: 'org.group_member.unassigned',
+      actorScope: 'organization',
+      target: { kind: 'organization', id: organizationId, displayName: organizationId },
+      summary: 'removed a user from a group',
+      details: { groupId, targetUserId: userId },
+    });
 
     res.status(200).json({ success: true });
   })

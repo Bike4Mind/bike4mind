@@ -50,13 +50,17 @@ describe('ChatService write gate', () => {
     await writeFile(target, 'alpha\nbeta\ngamma\n', 'utf8');
 
     approvals = new ApprovalGate();
-    events = [];
-    streams = [];
-    post = vi.fn().mockImplementation(() => {
+    // Bound per test: a previous service replying late must not push into this test's events.
+    const emitted: ChatStreamEvent[] = [];
+    events = emitted;
+    const opened: PassThrough[] = [];
+    streams = opened;
+    const boundPost = vi.fn().mockImplementation(() => {
       const stream = new PassThrough();
-      streams.push(stream);
+      opened.push(stream);
       return Promise.resolve({ data: stream, status: 200 });
     });
+    post = boundPost;
 
     service = new ChatService({
       store: new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-write-sessions-')), 'test-model'),
@@ -66,10 +70,10 @@ describe('ChatService write gate', () => {
       getApiClient: () =>
         ({
           get: vi.fn().mockResolvedValue({}),
-          getAxiosInstance: () => ({ post }),
+          getAxiosInstance: () => ({ post: boundPost }),
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
-      emit: event => events.push(event),
+      emit: event => emitted.push(event),
     });
   });
 
@@ -82,7 +86,7 @@ describe('ChatService write gate', () => {
     await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
   }
 
-  // The whole point of T11: the user answers a diff, not a filename.
+  // The point of the write gate: the user answers a diff, not a filename.
   it('shows the diff before asking, with the file still untouched', async () => {
     await startTurn('fix the second line');
     streams[0].write(toolTurn('c1', 'file_edit', { path: target, oldText: 'beta', newText: 'BETA' }));
@@ -151,7 +155,7 @@ describe('ChatService write gate', () => {
     expect(lastToolResult()).toMatchObject({ is_error: true, content: expect.stringMatching(/does not appear/) });
   });
 
-  // T34. The transcript keeps these rows for good, so a diff on one is a claim about the past:
+  // The transcript keeps these rows for good, so a diff on one is a claim about the past:
   // it is there when the bytes went down and absent every other time.
   describe('the diff kept on the settled call', () => {
     /** The call as one of those events carries it. `toolEvents` only filters; this narrows. */

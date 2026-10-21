@@ -1,4 +1,5 @@
-import * as fs from 'node:fs';
+import * as fsp from 'node:fs/promises';
+import type { Stats } from 'node:fs';
 import * as path from 'node:path';
 import { isPathAllowed } from '@bike4mind/services/llm/tools/cliTools';
 import { isPathWithinCwd, isBinaryFile, MAX_FILE_SIZE, formatFileSize } from './fileSearch.js';
@@ -23,10 +24,10 @@ export { extractFileReferences, hasFileReferences };
  * When it is omitted (a human typing `@path` in the prompt), the legacy
  * cwd-relative check applies and absolute paths the user typed are honored.
  */
-function readFileContents(
+async function readFileContents(
   filePath: string,
   confineTo?: string[]
-): { content: string; size: number } | { error: string } {
+): Promise<{ content: string; size: number } | { error: string }> {
   const cwd = process.cwd();
   const isAbsolutePath = path.isAbsolute(filePath);
 
@@ -46,22 +47,22 @@ function readFileContents(
 
   // For relative paths, additionally verify they resolve within cwd
   // (absolute paths are trusted if they don't contain .. traversal)
-  if (confineTo === undefined && !isAbsolutePath && !isPathWithinCwd(filePath)) {
+  if (confineTo === undefined && !isAbsolutePath && !(await isPathWithinCwd(filePath))) {
     return { error: `Security: Relative path "${filePath}" escapes the current working directory` };
   }
 
-  // Check if path exists
-  if (!fs.existsSync(absolutePath)) {
+  let stats: Stats;
+  try {
+    stats = await fsp.stat(absolutePath);
+  } catch {
+    // Any stat failure (ENOENT, ENOTDIR, EACCES) reads as "not found", as existsSync did.
     return { error: `File not found: "${filePath}"` };
   }
-
-  // Get file stats
-  const stats = fs.statSync(absolutePath);
 
   // Handle directories
   if (stats.isDirectory()) {
     try {
-      const entries = fs.readdirSync(absolutePath);
+      const entries = await fsp.readdir(absolutePath);
       const fileCount = entries.length;
       return {
         content: `(Directory with ${fileCount} items. Use file tools to explore if needed.)`,
@@ -86,7 +87,7 @@ function readFileContents(
 
   // Read file contents
   try {
-    const content = fs.readFileSync(absolutePath, 'utf-8');
+    const content = await fsp.readFile(absolutePath, 'utf-8');
     return { content, size: stats.size };
   } catch (err) {
     return { error: `Cannot read file "${filePath}": ${err instanceof Error ? err.message : 'Unknown error'}` };
@@ -121,7 +122,7 @@ export async function processFileReferences(message: string, confineTo?: string[
 
   // Process each reference
   for (const ref of references) {
-    const result = readFileContents(ref, confineTo);
+    const result = await readFileContents(ref, confineTo);
 
     if ('error' in result) {
       errors.push(result.error);

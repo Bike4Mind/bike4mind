@@ -1,6 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { v4 as uuidv4 } from 'uuid';
-import { getPublishedArtifactsStorage } from '@server/utils/storage';
+import { getPublishedArtifactsStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { PublishedArtifact } from '@bike4mind/database';
 import {
   UploadUrlRequestSchema,
   PUBLISH_LIMITS,
@@ -14,6 +15,8 @@ import {
   resolveVisibility,
   checkPublishQuota,
   mintDraftUploadUrl,
+  mayRepublishSlug,
+  SLUG_OWNED_BY_OTHER,
   type PublishUser,
 } from '@server/services/publish';
 
@@ -98,6 +101,18 @@ const handler = baseApi().post(async (req, res) => {
     return res.status(400).json({ error: viz.error, code: viz.code });
   }
 
+  const existing = await PublishedArtifact.findOne({
+    tier: body.tier,
+    scopeId: body.scopeId,
+    slug: body.slug,
+    deletedAt: null,
+  })
+    .select('ownerId')
+    .lean<{ ownerId: string } | null>();
+  if (existing && !mayRepublishSlug(existing.ownerId, publishUser)) {
+    return res.status(403).json({ error: 'Only the owner can republish this slug', code: SLUG_OWNED_BY_OTHER });
+  }
+
   // ── Cumulative per-owner quota (count + bytes) ──
   // Checked here so we reject before issuing presigned URLs (no wasted S3 PUTs).
   // A bundle publish targets a fixed {tier,scopeId,slug}: if a row already exists
@@ -160,6 +175,7 @@ const handler = baseApi().post(async (req, res) => {
         draftId,
         path: file.path,
         mimeType: file.mimeType,
+        size: file.size,
         expiresIn: PRESIGNED_URL_EXPIRY_SECONDS,
       });
       return { path: file.path, url, expiresAt };

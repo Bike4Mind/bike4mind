@@ -12,6 +12,8 @@ const PAGE: BrowserPaneState = {
   canGoForward: false,
   loading: false,
   error: '',
+  tabs: [{ id: 1, title: 'Local', url: 'http://localhost:3000/', loading: false }],
+  activeTabId: 1,
 };
 const NOTHING: CookieImportState = { supported: true, unsupported: '', sites: [] };
 

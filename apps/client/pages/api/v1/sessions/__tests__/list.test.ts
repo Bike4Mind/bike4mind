@@ -53,7 +53,6 @@ vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@server/managers/sessionOrigin', () => ({ resolveSessionOrigin: vi.fn() }));
 vi.mock('@server/entitlements/surfaceAccess', () => ({ surfaceAccessForRequest: vi.fn() }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: vi.fn() }));
-vi.mock('@client/config/activities', () => ({ ActivityType: {} }));
 
 const { default: handler } = await import('@pages/api/v1/sessions/index');
 

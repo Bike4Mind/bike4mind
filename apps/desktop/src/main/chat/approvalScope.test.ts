@@ -8,7 +8,7 @@ const CWD = '/Users/jude/Javascript/bike4mind';
 function always(patterns: string[], directories: string[] = []): ApprovalAlways {
   return {
     namespace: 'bash_execute',
-    commands: patterns.map(pattern => ({ text: pattern.replace(' *', ''), pattern })),
+    commands: patterns.map(pattern => ({ text: pattern.replace(' *', ''), pattern, coverable: true })),
     directories,
   };
 }

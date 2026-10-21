@@ -1,10 +1,10 @@
 import { userRepository } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { subscriptionRepository } from '@server/models/Subscription';
-import { SUBSCRIPTION_PLANS_MAP } from '@client/lib/userSubscriptions/constants';
+import { getActiveSubscriptionsForUser } from '@server/entitlements/activeSubscriptions';
+import { getEntitlingPlanByPriceId } from '@client/lib/userSubscriptions/utils';
 import {
   DOMAIN_GRANTS,
   IMPLIED_ENTITLEMENTS,
@@ -18,7 +18,7 @@ import {
 } from '@client/lib/entitlements/registry';
 import { partnerEntitlementsForEmail } from '@server/entitlements/partnerRules';
 import { ApiKeyScope, hasDeveloperUserTag } from '@bike4mind/common';
-import type { EntitlementKey } from '@client/lib/entitlements/types';
+import type { EntitlementKey } from '@bike4mind/server-utils/lib/entitlements/types';
 
 type EntitlementSourceType = 'tag' | 'domain' | 'subscription' | 'implied' | 'admin-bypass' | 'developer-bypass';
 
@@ -75,7 +75,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
     })();
 
     const [activeSubscriptions, partnerKeys] = await Promise.all([
-      subscriptionRepository.findActiveUserSubscriptions(userId),
+      getActiveSubscriptionsForUser(userId),
       partnerEntitlementsForEmail(user.email, user.emailVerified),
     ]);
 
@@ -110,7 +110,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
 
       for (const subscription of activeSubscriptions) {
         if (PRICE_ENTITLEMENTS.get(subscription.priceId)?.includes(key)) {
-          const planName = SUBSCRIPTION_PLANS_MAP[subscription.priceId]?.name ?? subscription.priceId;
+          const planName = getEntitlingPlanByPriceId(subscription.priceId)?.name ?? subscription.priceId;
           sources.push({ type: 'subscription', detail: planName });
         }
       }

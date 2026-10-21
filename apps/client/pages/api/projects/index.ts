@@ -16,7 +16,7 @@ import { logEvent } from '@server/utils/analyticsLog';
 
 const createProjectBodySchema = z.object({
   name: z.string().min(1),
-  description: z.string().min(1),
+  description: z.string().optional(),
   sessionIds: z.array(z.string()).optional(),
   fileIds: z.array(z.string()).optional(),
 });

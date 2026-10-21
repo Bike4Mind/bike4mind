@@ -51,7 +51,6 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: h.logEvent }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
-vi.mock('@client/config/activities', () => ({ ActivityType: { NOTEBOOK_ADDED_TO_PROJECT: 'added' } }));
 vi.mock('@bike4mind/services', () => ({
   sessionService: {
     createSession: h.createSession,

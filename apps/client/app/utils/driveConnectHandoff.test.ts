@@ -4,8 +4,10 @@ import {
   DRIVE_CONNECT_HANDOFF_TTL_MS,
   DRIVE_PICKER_RESUME_TTL_MS,
   rebindDriveConnectHandoff,
+  requestDriveLakeResyncResume,
   requestDrivePickerResume,
   saveDriveConnectHandoff,
+  takeDriveLakeResyncResume,
   takeDrivePickerResume,
   type DriveConnectHandoffInput,
 } from './driveConnectHandoff';
@@ -36,6 +38,7 @@ afterEach(() => {
   sessionStorage.clear();
   vi.restoreAllMocks();
   takeDrivePickerResume();
+  takeDriveLakeResyncResume();
 });
 
 describe('driveConnectHandoff', () => {
@@ -139,6 +142,39 @@ describe('driveConnectHandoff', () => {
     requestDrivePickerResume('user-1', T0);
     expect(takeDrivePickerResume(userId, now)).toBe(false);
     expect(takeDrivePickerResume('user-1', T0 + 1)).toBe(false);
+  });
+
+  it('hands out the lake re-sync signal once, naming the lake, to the user it was raised for', () => {
+    requestDriveLakeResyncResume('user-1', 'lake-1', T0);
+    expect(takeDriveLakeResyncResume('user-1', T0 + 1)).toBe('lake-1');
+    expect(takeDriveLakeResyncResume('user-1', T0 + 1)).toBeNull();
+  });
+
+  it.each([
+    ['another user', 'user-2', T0 + 1],
+    ['no signed-in user', undefined, T0 + 1],
+    ['a signal past its TTL', 'user-1', T0 + DRIVE_PICKER_RESUME_TTL_MS + 1],
+  ])('refuses and clears the lake re-sync signal for %s', (_label, userId, now) => {
+    requestDriveLakeResyncResume('user-1', 'lake-1', T0);
+    expect(takeDriveLakeResyncResume(userId, now)).toBeNull();
+    expect(takeDriveLakeResyncResume('user-1', T0 + 1)).toBeNull();
+  });
+
+  it('keeps the re-sync flag through a rebind to a retry', () => {
+    const lakeUrl = 'https://accounts.google.com/o/oauth2/v2/auth?state=st-1';
+    saveDriveConnectHandoff(
+      { kind: 'lake', userId: 'user-1', organizationId: 'org-1', dataLakeId: 'lake-1', resync: true },
+      lakeUrl,
+      T0
+    );
+    rebindDriveConnectHandoff({
+      userId: 'user-1',
+      organizationId: 'org-1',
+      fromState: 'st-1',
+      authUrl: 'https://accounts.google.com/o/oauth2/v2/auth?state=st-9',
+      now: T0 + 1,
+    });
+    expect(consumeDriveConnectHandoff({ ...match, oauthState: 'st-9' })).toMatchObject({ resync: true });
   });
 
   describe('rebinding to a retry', () => {

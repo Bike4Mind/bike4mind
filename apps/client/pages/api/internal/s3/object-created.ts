@@ -1,9 +1,14 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { FabFile, adminSettingsRepository } from '@bike4mind/database';
+import { FabFile, User, adminSettingsRepository, withTransaction } from '@bike4mind/database';
 import { decodeS3Key, findWithRetry } from '@server/s3/utils';
 import { isUntrackedFabFileKey } from '@server/s3/untrackedFabFileKey';
-import { sendToQueue } from '@server/utils/sqs';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { chargeUploadedObject } from '@bike4mind/server-utils/s3/storageCharge';
+import { recordLandedObject } from '@server/s3/moderationScan';
+import { admitLandedUpload } from '@server/s3/uploadSizeGate';
+import { recordRejectedUploadBatch } from '@server/s3/recordRejectedUploadBatch';
 import { recomputeStatsForUploadedFile } from '@server/dataLakes/recomputeStatsForUploadedFile';
 import { dispatch as historyUploadComplete } from '@server/s3/historyUploadComplete';
 import { dispatch as notebookImportComplete } from '@server/s3/notebookImportComplete';
@@ -16,11 +21,12 @@ import crypto from 'crypto';
 /**
  * Self-host S3 ObjectCreated webhook.
  *
- * In AWS, an S3 ObjectCreated event invokes objectCreated.ts (server/s3) to mark the
+ * In AWS, an S3 ObjectCreated event invokes apps/workers/src/s3/objectCreated.ts to mark the
  * FabFile complete and kick off RAG ingestion. Self-host has no S3 events: MinIO instead
  * POSTs an S3-compatible notification here (configured via MINIO_NOTIFY_WEBHOOK_* in
  * compose.selfhost.yaml + an `mc event add` on the fab-file bucket). This mirrors the
- * objectCreated path - mark complete, enqueue chunking, run the upload-time moderation scan.
+ * objectCreated path - mark complete, charge the uploader's storage, enqueue chunking, run the
+ * upload-time moderation scan.
  * A file is unservable until that scan resolves it, so skipping it here held every self-host
  * file for the rescue sweep's 30-minute floor. On self-host the scan is the type sniff only:
  * the image check returns early without Rekognition (see imageModerationGate.ts). A scheduler
@@ -31,7 +37,8 @@ import crypto from 'crypto';
  */
 
 interface MinioS3Record {
-  s3?: { bucket?: { name?: string }; object?: { key?: string } };
+  eventTime?: string;
+  s3?: { bucket?: { name?: string }; object?: { key?: string; size?: number; eTag?: string } };
 }
 
 /**
@@ -130,15 +137,61 @@ const handler = baseApi({ auth: false }).post(
       }
 
       // Retry/backoff: the notification can beat the metadata write.
-      const metadata = await findWithRetry(() => FabFile.findOne({ filePath: objectKey }), 4, 500);
+      const metadata = await findWithRetry(
+        () =>
+          FabFile.findOne(
+            { filePath: objectKey, $or: [{ deletedAt: null }, { uploadRejectedAt: { $ne: null } }] },
+            null,
+            { includeDeleted: true }
+          ),
+        4,
+        500
+      );
       if (!metadata) {
         req.logger.warn(`Metadata not found for uploaded file: ${objectKey}`);
         continue;
       }
 
+      const statusBeforeUpload = metadata.status;
+      const payloadSize = record.s3?.object?.size;
+      const size = metadata.uploadRejectedAt
+        ? 0
+        : typeof payloadSize === 'number' && Number.isFinite(payloadSize) && payloadSize >= 0
+          ? payloadSize
+          : (await getFilesStorage().getMetadata(objectKey)).size;
+      // Unjudged bytes must not go complete; a 500 has MinIO redeliver the event.
+      if (size === undefined) throw new Error(`No object size for ${objectKey}; upload not admitted`);
+
+      // Same measured-size gate as the hosted event (objectCreated.ts), before the row is complete.
+      if (!(await admitLandedUpload(metadata, size, objectKey, req.logger))) {
+        await recordRejectedUploadBatch(metadata, req.logger);
+        continue;
+      }
+
       metadata.status = 'complete';
       await metadata.save();
+
+      // Reconcile against the current stored version before scanning. A failed HEAD or a competing
+      // reconciliation must retry, so an old event cannot reopen a newer terminal verdict.
+      await recordLandedObject(metadata._id, objectKey);
       req.logger.info(`Marked FabFile complete: ${metadata.id} (${objectKey})`);
+
+      // Charged from the stored object's size, never the row's client-claimed fileSize. The
+      // storageChargedAt claim makes a redelivery free. A failure must not 500: the row is already
+      // complete and a redelivery would enqueue chunking twice.
+      try {
+        const eventTime = record.eventTime ? new Date(record.eventTime) : undefined;
+        const uploadedAt = eventTime && !isNaN(eventTime.getTime()) ? eventTime : new Date();
+        await withTransaction(async session => {
+          const user = await User.findById(metadata.userId).session(session);
+          // A won claim records `size` as the row's fileSize, so a later refund and the recalc agree.
+          if (user && (await chargeUploadedObject(metadata._id, user, size, uploadedAt, statusBeforeUpload, session))) {
+            await user.save({ session });
+          }
+        });
+      } catch (error) {
+        req.logger.error(`Failed to charge storage for ${objectKey}: ${error}`);
+      }
 
       // Mirrors the hosted event: the bytes have landed, so the lakes this file joined can be
       // counted - and, if one is still a draft, activated.

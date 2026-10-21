@@ -5,6 +5,13 @@ import { z } from 'zod';
 /** OTC codes expire after 10 minutes */
 export const OTC_EXPIRY_MS = 10 * 60 * 1000;
 
+/**
+ * Digits in a newly issued code. Codes issued before this grew from 6 still verify while their
+ * token is live (verifyPendingOTC compares any length). The client input mirrors it in
+ * apps/client/app/utils/otcCode.ts; keep the two in sync.
+ */
+export const OTC_CODE_LENGTH = 8;
+
 const sendOTCSchema = z.object({
   email: z.string().email(),
 });
@@ -16,21 +23,25 @@ interface SendOTCAdapters {
     sendOTCEmail: (email: string, code: string) => Promise<void>;
   };
   /**
-   * Signs a short-lived JWT containing the hashed OTC + email.
-   * Used for all users so the response shape never reveals
-   * whether an account exists (prevents user enumeration).
+   * Signs a short-lived JWT carrying email, attempts, expiry and the nonce (jti). Used for all
+   * users so the response shape never reveals whether an account exists (prevents user enumeration).
    */
-  signPendingToken: (payload: { email: string; otcHash: string; attempts: number; exp: number; jti: string }) => string;
+  signPendingToken: (payload: { email: string; attempts: number; exp: number; jti: string }) => string;
 }
 
 export interface SendOTCResult {
   /**
-   * Signed JWT containing the hashed OTC. Always returned regardless
+   * Signed JWT referencing the code by nonce. Always returned regardless
    * of whether the user exists (prevents user enumeration).
    */
   pendingToken: string;
   /** Nonce embedded in the token, for server-side tracking */
   nonce: string;
+  /**
+   * bcrypt hash of the code. The caller stores it on the server-side record for `nonce`
+   * (PendingOtcTokenRepository).
+   */
+  otcHash: string;
   /**
    * The plaintext OTC that was emailed. The route persists this ONLY on non-production
    * stages (gated by isE2EEnabled) for the test-only otc-code endpoint; it is never
@@ -40,10 +51,9 @@ export interface SendOTCResult {
 }
 
 /**
- * Generates a 6-digit OTC and emails the code. The hashed code is carried in
- * the signed pending token rather than stored in the DB, so this never touches
- * the database - issuance is uniform regardless of whether an account exists
- * (OWASP user enumeration prevention).
+ * Generates an OTC_CODE_LENGTH-digit OTC and emails the code. Never touches the database: the
+ * caller persists `otcHash` against `nonce` for every address, so issuance is uniform regardless
+ * of whether an account exists (OWASP user enumeration prevention).
  */
 export const sendOTC = async (
   params: SendOTCParameters,
@@ -52,8 +62,7 @@ export const sendOTC = async (
   const { email } = sendOTCSchema.parse(params);
   const normalizedEmail = email.toLowerCase().trim();
 
-  // Generate a 6-digit numeric code
-  const code = String(randomInt(0, 1000000)).padStart(6, '0');
+  const code = String(randomInt(0, 10 ** OTC_CODE_LENGTH)).padStart(OTC_CODE_LENGTH, '0');
   const hashedCode = await bcrypt.hash(code, 10);
   const now = new Date();
   const expiresAt = new Date(now.getTime() + OTC_EXPIRY_MS);
@@ -65,11 +74,10 @@ export const sendOTC = async (
   const nonce = randomUUID();
   const pendingToken = signPendingToken({
     email: normalizedEmail,
-    otcHash: hashedCode,
     attempts: 0,
     exp: Math.floor(expiresAt.getTime() / 1000),
     jti: nonce,
   });
 
-  return { pendingToken, nonce, code };
+  return { pendingToken, nonce, otcHash: hashedCode, code };
 };

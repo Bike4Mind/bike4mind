@@ -6,7 +6,9 @@ import {
   AgentExecutionStatusResponseSchema,
   AgentExecutionIdParamSchema,
 } from '../../schemas/agentExecution';
-import { ApiErrorSchema } from '../../schemas/chat';
+import { BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION } from '../../schemas/billingOrganization';
+import { ApiErrorSchema, BillingOrganizationForbiddenErrorSchema } from '../../schemas/chat';
+import { BILLING_ORGANIZATION_MISMATCH_ERROR_CODE } from '../../apiErrorCodes';
 
 /**
  * Contracts for the agent-executor (ReAct) pipeline over REST.
@@ -46,14 +48,23 @@ export const startAgentExecutionContract = defineEndpoint({
   request: AgentExecutionStartRequestSchema,
   requestExample: { session_id: '<sessionId>', message: 'Audit this data set and summarize what stands out.' },
   // Served by baseApi (via nextRouteForContract), so apiKeyRateLimit sets the windowed
-  // X-RateLimit-* headers on every API-key-authenticated response.
+  // X-RateLimit-* headers on API-key responses (not the injected 401/403; CONVENTIONS.md section 6).
   emitsRateLimitHeaders: true,
   responses: {
     202: {
       description: 'Run accepted and dispatched. Poll `tracking_info.poll_url` for status and the answer.',
       schema: AgentExecutionAckSchema,
     },
-    400: { description: 'No usable default chat model is configured and none was supplied.', schema: ApiErrorSchema },
+    400: {
+      description: `No usable default chat model is configured and none was supplied. ${BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION}`,
+      schema: ApiErrorSchema,
+    },
+    403: {
+      description:
+        'The API key holds neither the `ai:chat` nor the `ai:generate` scope, or an organization-billed API key ' +
+        `names any organization but its own (\`errorCode: ${BILLING_ORGANIZATION_MISMATCH_ERROR_CODE}\`).`,
+      schema: BillingOrganizationForbiddenErrorSchema,
+    },
     404: {
       description:
         'No session with the given `session_id` is owned by the caller, or `organization_id` names an ' +

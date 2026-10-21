@@ -2,12 +2,20 @@ import ConfirmActionModal from '@client/app/components/ConfirmActionModal';
 import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useSessions, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
+import { useNotebookContextFiles } from '@client/app/hooks/useNotebookContextFiles';
+import { useActiveNotebook } from '@client/app/hooks/useActiveNotebook';
 import {
   updateFileUtility,
   createFabFileOnServerWithUpload,
   getFabFileByIdFromServer,
 } from '@client/app/utils/filesAPICalls';
-import { IFabFileDocument, IFabFileListItemDocument, ISystemFileEntry, KnowledgeType } from '@bike4mind/common';
+import {
+  IFabFileDocument,
+  IFabFileListItemDocument,
+  isMediaOnlyMimeType,
+  ISystemFileEntry,
+  KnowledgeType,
+} from '@bike4mind/common';
 import HistoryIcon from '@mui/icons-material/History';
 import SaveIcon from '@mui/icons-material/Save';
 import {
@@ -37,6 +45,7 @@ import { userCanUpdateDoc } from '@client/app/utils/userPermission';
 import { useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { useQueryClient } from '@tanstack/react-query';
 import { getContentFromFabfile } from '@client/app/utils/fabFileUtils';
+import { serverStorageLimitMessage } from '@client/app/utils/storageQuota';
 import { useParams } from '@tanstack/react-router';
 import rehypeSanitize from 'rehype-sanitize';
 import { updateUserToServer } from '@client/app/utils/userAPICalls';
@@ -44,6 +53,8 @@ import { whiteAlpha } from '@client/app/utils/themes/colors';
 import { COMMON_FILE_FORMATS, getFormatByMimeType, updateFileNameExtension } from '@client/app/utils/fileFormatUtils';
 import CodeIcon from '@mui/icons-material/Code';
 import { ContextHelpButton } from '@client/app/components/help';
+import MediaPlayer from '@client/app/components/Media/MediaPlayer';
+import GenerationDetails from '@client/app/components/Media/GenerationDetails';
 
 // Dynamic imports to avoid SSR issues
 const MDEditor = dynamic(() => import('@uiw/react-md-editor'), { ssr: false });
@@ -125,6 +136,10 @@ const KnowledgeModal: React.FC = () => {
   const queryClient = useQueryClient();
   const { setFilesMetaDataVersion, currentSessionId } = useSessions();
   const { setWorkBenchFiles } = useWorkBenchActions();
+  const { addToNotebookContext } = useNotebookContextFiles();
+  // This modal also opens over projects, profile and admin pages: a create there must not land
+  // in a notebook the user is not looking at.
+  const activeNotebook = useActiveNotebook();
 
   const { currentUser } = useUser();
 
@@ -169,10 +184,13 @@ const KnowledgeModal: React.FC = () => {
       const fullFabFile = await getFabFileByIdFromServer(fabFileId);
 
       if (fullFabFile) {
-        const content = await getContentFromFabfile({
-          fileUrl: fullFabFile.fileUrl,
-          mimeType: fullFabFile.mimeType,
-        });
+        // Audio and video have no text to edit; fetching one would download the whole file for nothing.
+        const content = isMediaOnlyMimeType(fullFabFile.mimeType)
+          ? ''
+          : await getContentFromFabfile({
+              fileUrl: fullFabFile.fileUrl,
+              mimeType: fullFabFile.mimeType,
+            });
 
         setFabFile(fullFabFile);
         setFileContent(content);
@@ -327,8 +345,14 @@ const KnowledgeModal: React.FC = () => {
         }
       } else {
         const newFabFile = await createFabFileOnServerWithUpload(fileData, new File([editedContent], 'temp'));
-        setFabFile(newFabFile as IFabFileDocument);
-        setWorkBenchFiles(currentSessionId ?? '', files => [...files, newFabFile as IFabFileDocument]);
+        setFabFile(newFabFile);
+        if (activeNotebook.onScreen) {
+          // Saving a file is an automatic attach, not a gesture toward every project containing
+          // this notebook - so it stays notebook-scoped (see AddToNotebookContextOptions).
+          void addToNotebookContext(activeNotebook.sessionId, newFabFile, { propagateToProjects: false }).catch(() => {
+            // Already rolled back and surfaced by the hook; the file itself is saved.
+          });
+        }
 
         // If system is enabled for new file, add it to user's systemFiles
         if (systemEnabled && currentUser && newFabFile) {
@@ -370,8 +394,8 @@ const KnowledgeModal: React.FC = () => {
       }
 
       setFileContent(editedContent);
-    } catch {
-      toast.error('Failed to save file content');
+    } catch (error) {
+      toast.error(serverStorageLimitMessage(error) ?? 'Failed to save file content');
     } finally {
       setSavingEditedContent(false);
     }
@@ -395,6 +419,9 @@ const KnowledgeModal: React.FC = () => {
   );
 
   const isPdf = useMemo(() => fabFile?.mimeType === 'application/pdf', [fabFile?.mimeType]);
+  const isMedia = isMediaOnlyMimeType(fabFile?.mimeType);
+  // PDF and media files are shown, not edited: no text editor, format picker or system-instruction controls.
+  const isNonText = isPdf || isMedia;
   const isDirty = contentDirty || titleDirty || systemDirty;
 
   const canUpdate = !viewOnly && (!!fabFile?.id || userCanUpdateDoc(currentUser, fabFile));
@@ -429,7 +456,7 @@ const KnowledgeModal: React.FC = () => {
         >
           <Typography level="h4" sx={{ flexGrow: 1, mr: 2 }}>
             {fabFile?.fileName
-              ? viewOnly
+              ? viewOnly || isNonText
                 ? `Viewing: ${fabFile.fileName}`
                 : `Editing: ${fabFile.fileName}`
               : 'Create New Knowledge'}
@@ -494,7 +521,7 @@ const KnowledgeModal: React.FC = () => {
             )}
 
             {/* Action Buttons */}
-            {!isPdf && canUpdate && (
+            {!isNonText && canUpdate && (
               <Stack
                 className="knowledge-modal-action-buttons"
                 direction="row"
@@ -513,7 +540,12 @@ const KnowledgeModal: React.FC = () => {
                   </Button>
                 </Tooltip>
                 <Tooltip title="Save Changes">
-                  <Button sx={{ marginLeft: '0!important' }} disabled={!isDirty} onClick={handleSave}>
+                  <Button
+                    sx={{ marginLeft: '0!important' }}
+                    disabled={!isDirty}
+                    onClick={handleSave}
+                    data-testid="knowledge-modal-save-btn"
+                  >
                     {savingEditedContent ? <CircularProgress /> : <SaveIcon />}
                     <Box sx={{ marginLeft: '3px' }}>Save Changes</Box>
                   </Button>
@@ -523,7 +555,7 @@ const KnowledgeModal: React.FC = () => {
             )}
 
             {/* Title Input */}
-            {!isPdf && canUpdate && (
+            {!isNonText && canUpdate && (
               <Box sx={{ mb: 2 }}>
                 <FormControl>
                   <FormLabel>File Name</FormLabel>
@@ -533,6 +565,7 @@ const KnowledgeModal: React.FC = () => {
                       onChange={viewOnly ? undefined : e => setEditedFileName(e.target.value)}
                       placeholder={viewOnly ? '' : 'Enter filename...'}
                       readOnly={viewOnly}
+                      slotProps={{ input: { 'data-testid': 'knowledge-modal-name-input' } }}
                       sx={{
                         width: '100%',
                         backgroundColor: viewOnly ? 'background.level2' : undefined,
@@ -544,7 +577,7 @@ const KnowledgeModal: React.FC = () => {
             )}
 
             {/* Read-only file name display when not editable */}
-            {!isPdf && !canUpdate && fabFile?.fileName && (
+            {!isNonText && !canUpdate && fabFile?.fileName && (
               <Box sx={{ mb: 2 }}>
                 <FormControl>
                   <FormLabel>File Name</FormLabel>
@@ -558,7 +591,7 @@ const KnowledgeModal: React.FC = () => {
             )}
 
             {/* File Format Selector - Editable */}
-            {!isPdf && canUpdate && (
+            {!isNonText && canUpdate && (
               <Box sx={{ mb: 2 }}>
                 <FormControl>
                   <FormLabel>File Format</FormLabel>
@@ -606,7 +639,7 @@ const KnowledgeModal: React.FC = () => {
             )}
 
             {/* File Format Display - Read-only */}
-            {!isPdf && !canUpdate && fabFile?.mimeType && (
+            {!isNonText && !canUpdate && fabFile?.mimeType && (
               <Box sx={{ mb: 2 }}>
                 <FormControl>
                   <FormLabel>File Format</FormLabel>
@@ -620,6 +653,13 @@ const KnowledgeModal: React.FC = () => {
               </Box>
             )}
 
+            {isMedia && fabFile?.id && (
+              <Stack spacing={2} sx={{ mb: 2 }}>
+                <MediaPlayer file={{ ...fabFile, id: fabFile.id }} />
+                <GenerationDetails file={fabFile} />
+              </Stack>
+            )}
+
             {/* PDF Viewer */}
             {isPdf && fabFile?.fileUrl && (
               <Box sx={{ minHeight: '70vh', height: '100%', flexGrow: 1, overflow: 'auto' }}>
@@ -627,7 +667,7 @@ const KnowledgeModal: React.FC = () => {
               </Box>
             )}
             {/* Text Edit Area */}
-            {!isPdf && !fabFile?.mimeType.startsWith('image/') && (
+            {!isNonText && !fabFile?.mimeType.startsWith('image/') && (
               <Box
                 sx={{
                   width: '100%',
@@ -670,8 +710,9 @@ const KnowledgeModal: React.FC = () => {
                 <img src={fabFile.fileUrl} alt={fabFile.fileName} style={{ maxWidth: '100%', maxHeight: '100%' }} />
               </Box>
             )}
+            {fabFile?.mimeType.startsWith('image/') && <GenerationDetails file={fabFile} />}
 
-            {!isPdf && (
+            {!isNonText && (
               <Box sx={{ mb: 2, p: 2, backgroundColor: 'background.level2', borderRadius: 1 }}>
                 <Stack
                   direction={{ xs: 'column', sm: 'row' }}

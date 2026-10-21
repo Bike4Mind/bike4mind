@@ -27,13 +27,7 @@ export type SlackAuditAction =
  * Resource types that can be accessed/modified
  */
 export type SlackAuditResourceType =
-  | 'notebook'
-  | 'message'
-  | 'user'
-  | 'workspace'
-  | 'settings'
-  | 'integration'
-  | 'none';
+  'notebook' | 'message' | 'user' | 'workspace' | 'settings' | 'integration' | 'none';
 
 export interface ISlackAuditLogDocument extends Document {
   id: string;
@@ -148,8 +142,15 @@ SlackAuditLogSchema.index({ slackTeamId: 1, timestamp: -1 }); // Compound: works
 SlackAuditLogSchema.index({ slackUserId: 1, timestamp: -1 }); // Compound: user + time
 SlackAuditLogSchema.index({ success: 1 }); // Filter failures
 
-// TTL index to auto-delete old audit logs after 90 days
-SlackAuditLogSchema.index({ createdAt: 1 }, { expireAfterSeconds: 90 * 24 * 60 * 60 });
+/**
+ * TTL on createdAt: these audit logs are kept for 12 months.
+ *
+ * Mongo does not apply a changed expireAfterSeconds to an index that already exists, so changing
+ * this value needs a collMod migration (see 20260921235952_set-slack-audit-log-retention).
+ */
+export const SLACK_AUDIT_LOG_RETENTION_SECONDS = 365 * 24 * 60 * 60;
+
+SlackAuditLogSchema.index({ createdAt: 1 }, { expireAfterSeconds: SLACK_AUDIT_LOG_RETENTION_SECONDS });
 
 class SlackAuditLogRepository extends BaseRepository<ISlackAuditLogDocument> implements ISlackAuditLogRepository {
   constructor() {

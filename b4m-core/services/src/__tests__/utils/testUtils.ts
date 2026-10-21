@@ -14,6 +14,7 @@ import {
   ICreditTransactionRepository,
   ICreditTransactionDocument,
   IAuthSessionRepository,
+  IRealtimeConnectionRepository,
   IAuthSessionDocument,
   ISessionAgentConfigRepository,
   ISessionAgentConfigDocument,
@@ -110,6 +111,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   updateTagsByUserId: vi.fn(),
   dedupeTagByUserId: vi.fn(),
   pullTagsByFabFileId: vi.fn(),
+  setOwnerOrganizationIfUnchanged: vi.fn(),
   pushTagsByFabFileId: vi.fn(),
   pushTagReturningPriorState: vi.fn().mockResolvedValue(null),
   bulkUpdateTags: vi.fn(),
@@ -153,10 +155,12 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   findFileIdsWithPositiveVectorizedCount: vi.fn(),
   findChunkedFilesByScope: vi.fn(),
   findFilesOutsideEmbeddingSpaceByScope: vi.fn(),
+  hasVectorizedFileInEmbeddingSpace: vi.fn(),
   findConvergencePausedFilesByScope: vi.fn(),
   resetChunkStateByIds: vi.fn(),
   markConvergencePaused: vi.fn(),
   countFailedFilesByScope: vi.fn(),
+  countRebuildingFilesByScope: vi.fn(),
   countDataLakeFilesByMembership: vi.fn(),
   countDataLakeFilesByMembershipArm: vi.fn(),
   countDistinctDataLakeFilesByMembership: vi.fn(),
@@ -173,7 +177,13 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   findIdsByDataLakeTag: vi.fn(),
   findLiveMembersByDataLakeTag: vi.fn(),
   findByUserId: vi.fn(),
+  listOwnedBeforeId: vi.fn(),
   sumFileSizeByUserId: vi.fn(),
+  sumFileSizeByOrganizationId: vi.fn(),
+  summarizeChargedStorageByUserId: vi.fn(),
+  summarizeChargedStorageByOrganizationId: vi.fn(),
+  commitContentRewrite: vi.fn(),
+  findChargeState: vi.fn(),
 });
 
 export const createMockUser = (overrides = {}) => ({
@@ -209,6 +219,8 @@ export const createMockSessionRepository = (): MockedObject<ISessionRepository> 
     findAllByIds: vi.fn(),
     findSessionIdsByUserId: vi.fn(),
     attachAgent: vi.fn(),
+    // Returns a promise so the caller's `.catch(...)` on the auto-add write works in every test.
+    addAutoAddedTools: vi.fn().mockResolvedValue(undefined),
     detachAgent: vi.fn(),
     getAttachedAgents: vi.fn(),
     addArtifact: vi.fn(),
@@ -218,6 +230,11 @@ export const createMockSessionRepository = (): MockedObject<ISessionRepository> 
     populateMessageCounts: vi.fn(),
     countByUserId: vi.fn(),
     countActiveVoiceSessionsByUserId: vi.fn(),
+    addVoiceBilledCredits: vi.fn(),
+    findStaleVoiceHolds: vi.fn(),
+    claimVoiceHold: vi.fn(),
+    openVoiceHold: vi.fn(),
+    recordVoiceActivity: vi.fn(),
   });
 
 export const createMockAuthSessionRepository = (): MockedObject<IAuthSessionRepository> =>
@@ -228,17 +245,31 @@ export const createMockAuthSessionRepository = (): MockedObject<IAuthSessionRepo
     rotateHash: vi.fn(),
     recoverRotateHash: vi.fn(),
     registerReplayUse: vi.fn(),
+    markStepUp: vi.fn(),
+    setStepUpEmailChallenge: vi.fn(),
+    findStepUpEmailChallenge: vi.fn(),
+    recordStepUpEmailChallengeFailure: vi.fn(),
+    recordStepUpPasswordFailure: vi.fn(),
+    consumeStepUpEmailChallenge: vi.fn(),
     revokeBySid: vi.fn(),
     revokeAllByUserId: vi.fn(),
+  });
+
+export const createMockRealtimeConnectionRepository = (): MockedObject<IRealtimeConnectionRepository> =>
+  vi.mocked({
+    endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }),
   });
 
 export const createMockUserRepository = (): MockedObject<IUserRepository> =>
   vi.mocked({
     ...createMockRepository<IUserDocument>(),
     findByEmail: vi.fn(),
+    existsOtherUserWithEmail: vi.fn().mockResolvedValue(false),
+    existsOtherUserWithUsername: vi.fn().mockResolvedValue(false),
     removeGroupsFromAllUsers: vi.fn(),
     clearOrganizationPointer: vi.fn(),
     addGroupToUser: vi.fn(),
+    addTagsToUser: vi.fn(),
     removeGroupFromUser: vi.fn(),
     recordReferrals: vi.fn(),
     removeGroupsFromUser: vi.fn(),
@@ -254,11 +285,18 @@ export const createMockUserRepository = (): MockedObject<IUserRepository> =>
     findByStripeCustomerId: vi.fn(),
     incrementCredits: vi.fn(),
     incrementCurrentStorage: vi.fn(),
+    setCurrentStorageIfUnchanged: vi.fn(),
+    findCurrentStorageSize: vi.fn(),
+    listUserIdsAfter: vi.fn(),
     incrementTokenVersion: vi.fn(),
     findBySlackUserId: vi.fn(),
     findByIdWithNotionToken: vi.fn(),
     findByIdWithMfaSecrets: vi.fn(),
     atomicRecordMfaFailedAttempt: vi.fn(),
+    atomicReserveMfaAttempt: vi.fn(),
+    atomicClaimTotpStep: vi.fn(),
+    atomicConsumeBackupCode: vi.fn(),
+    atomicEnableMfa: vi.fn(),
     findOrCreateByEmail: vi.fn(),
     recordModerationHit: vi.fn(),
     setModerationStatus: vi.fn(),
@@ -271,6 +309,10 @@ export const createMockOrganizationRepository = (): MockedObject<IOrganizationRe
     shareable: createMockShareableRepository<IOrganizationDocument>(),
     search: vi.fn(),
     findByStripeCustomerId: vi.fn(),
+    incrementCurrentStorage: vi.fn(),
+    setCurrentStorageIfUnchanged: vi.fn(),
+    findCurrentStorageSize: vi.fn(),
+    listOrganizationIdsAfter: vi.fn(),
     addMemberRaisingSeats: vi.fn(),
     addMemberIfUnderCeiling: vi.fn(),
     findIdsAdministeredBy: vi.fn(),
@@ -282,6 +324,7 @@ export const createMockOrganizationRepository = (): MockedObject<IOrganizationRe
     setMemberMaxCredits: vi.fn(),
     updateUserDetails: vi.fn(),
     findMembershipOrgIds: vi.fn(),
+    findPlanHolderOrgIds: vi.fn(),
     findMemberUserIds: vi.fn(),
   });
 

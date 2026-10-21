@@ -113,6 +113,9 @@ export interface ISearchFabFilesParams {
     type?: FabFileTypeFilter;
     shared?: boolean;
     curated?: boolean;
+    generated?: boolean;
+    /** Only the caller's own files, without the group, personal-share and data-lake widening of the default view. */
+    owned?: boolean;
   };
   pagination?: { page: number; limit: number };
   order?: { by: 'fileName' | 'fileSize' | 'createdAt'; direction: 'asc' | 'desc' };

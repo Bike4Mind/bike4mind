@@ -1,13 +1,14 @@
 import { afterAll, beforeAll, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
 import { KnowledgeType } from '@bike4mind/common';
-import { createMongoReplSet } from '../../__test__/createMongoServer';
+import { createMongoReplSet, settleAutoIndexBuilds } from '../../__test__/createMongoServer';
 import { FabFile, FabFileChunk, fabFileRepository } from './FabFileModel';
 
 let server: Awaited<ReturnType<typeof createMongoReplSet>>;
 beforeAll(async () => {
   server = await createMongoReplSet();
-  await mongoose.connect(server.getUri());
+  await mongoose.connect(server.getUri(), { autoIndex: false });
+  await settleAutoIndexBuilds(mongoose);
 }, 60000);
 afterAll(async () => {
   await mongoose.disconnect();

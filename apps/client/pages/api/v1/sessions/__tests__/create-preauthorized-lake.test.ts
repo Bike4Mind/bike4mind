@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { ApiKeyScope } from '@bike4mind/common';
 
 /**
  * Phase 3 (manage-but-not-member admission): a caller may ask POST /api/sessions/create to admit
@@ -60,7 +61,6 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: h.logEvent }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: vi.fn() }));
-vi.mock('@client/config/activities', () => ({ ActivityType: { NOTEBOOK_ADDED_TO_PROJECT: 'added' } }));
 vi.mock('@bike4mind/services', () => ({
   sessionService: { createSession: h.createSession },
   dataLakeService: { resolveCanManageLake: h.resolveCanManageLake, assertLakeAccess: vi.fn() },
@@ -211,7 +211,14 @@ describe('POST /api/sessions/create - preauthorizedLakeIds', () => {
 
 describe('POST /api/sessions/create - preauthorizedLakeIds API key containment', () => {
   const postAsApiKey = (body: Record<string, unknown>, apiKeyInfo: { preauthorizedLakeIds?: string[] }) =>
-    ({ method: 'POST', user: { id: 'u1' }, ability: {}, body, apiKeyInfo }) as never;
+    ({
+      method: 'POST',
+      user: { id: 'u1' },
+      ability: {},
+      body,
+      // The route gate admits only keys holding notebooks:write or ai:generate.
+      apiKeyInfo: { scopes: [ApiKeyScope.WRITE_NOTEBOOKS], ...apiKeyInfo },
+    }) as never;
 
   beforeEach(() => {
     vi.clearAllMocks();

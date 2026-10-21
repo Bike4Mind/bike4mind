@@ -1,6 +1,7 @@
 import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
 import { IChatHistoryItemDocument } from './SessionTypes';
+import type { GenerationJobRef } from './GenerationJobTypes';
 
 export type QuestItem = {
   quest: string; // The description of the quest
@@ -27,10 +28,16 @@ export interface IChatHistoryItemRepository extends IBaseRepository<IChatHistory
     timestamp: Date
   ): Promise<IChatHistoryItemDocument[]>;
   getMostRecentChatHistory: (sessionId: string, limit: number) => Promise<IChatHistoryItemDocument[]>;
+  // Live (not soft-deleted) quests in the session, the current turn included. Served from the session index alone.
+  countBySessionId: (sessionId: string) => Promise<number>;
   findBySessionIdAndId: (sessionId: string, id: string) => Promise<IChatHistoryItemDocument | null>;
   // Partial update matched on the quest id AND sessionId; null when no live (not soft-deleted) quest of that session matches.
   updateInSession: (
     sessionId: string,
+    data: Partial<IChatHistoryItemDocument> & { id: string }
+  ) => Promise<IChatHistoryItemDocument | null>;
+  // `update` that matches only while the stored status is not terminal ('done' / 'stopped'); null otherwise.
+  updateIfUnfinished: (
     data: Partial<IChatHistoryItemDocument> & { id: string }
   ) => Promise<IChatHistoryItemDocument | null>;
   // Lightweight method for status checks
@@ -44,8 +51,10 @@ export interface IChatHistoryItemRepository extends IBaseRepository<IChatHistory
   // The only server-side ownership signal for owner-less generated-image keys - see
   // userCanAccessGeneratedImage.
   findSessionIdsByImage: (image: string) => Promise<string[]>;
-  // Atomic $addToSet onto `videoJobIds`, so a chat's video card survives the chat process dying.
-  addVideoJobIds: (questId: string, jobIds: string[]) => Promise<void>;
+  // The subset of `keys` referenced as generated media (`images`/`videos`) by a quest in this session.
+  findGeneratedMediaKeysInSession: (sessionId: string, keys: string[]) => Promise<string[]>;
+  // Atomic $addToSet onto `generationJobs`, so a chat's job card survives the chat process dying.
+  addGenerationJobs: (questId: string, jobs: GenerationJobRef[]) => Promise<void>;
 }
 
 /**

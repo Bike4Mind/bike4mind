@@ -6,6 +6,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { userIsCustomer, userIsDeveloper } from '../utils/user';
 import { api, isPublicPath, getAxiosErrorStatus } from '@client/app/contexts/ApiContext';
 import { buildLoginRedirectUrl } from '@client/app/utils/authRedirect';
+import { setFunnelSyntheticUser } from '@client/app/utils/funnelEvents';
 import ExpiredSession from '../components/ExpiredSession';
 import { useSubscribeCollection } from '../utils/react-query';
 import { useGetIdentify } from '@client/app/hooks/data/user';
@@ -299,6 +300,9 @@ export const useUser = create<UserContextProps>()(
   )
 );
 
+// Keeps synthetic test personas out of client funnel events (funnelEvents.ts).
+useUser.subscribe(state => setFunnelSyntheticUser(!!state.currentUser?.isSynthetic));
+
 /**
  * Decide whether a real-time `users` update should force a graceful sign-out
  * (the JWT kill switch): true when the user's DB tokenVersion has advanced
@@ -363,10 +367,9 @@ export function resolveIdentifyEffect(params: {
 /**
  * Whether identify's access token may be written into the token store.
  *
- * Only when we hold none. /api/identify echoes back whatever token the request carried and mints
- * a fresh one ONLY when there was none, so for a browser this value is almost always a copy of
- * what we already have - and `identity.data` is a CACHED react-query payload that can be several
- * rotations old.
+ * Only when we hold none. /api/identify never mints; it only echoes back the bearer token the
+ * request carried, so for a browser this value is a copy of what we already have - and
+ * `identity.data` is a CACHED react-query payload that can be several rotations old.
  *
  * The identify effect re-runs on every accessToken change, so writing unconditionally means each
  * freshly rotated token is immediately overwritten by the older one captured in the cache. The

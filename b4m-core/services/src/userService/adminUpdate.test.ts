@@ -11,7 +11,7 @@ const TARGET_ID = 'user-1';
  * addCredits/subtractCredits primitives run end-to-end (transaction record +
  * atomic increment) against in-memory fakes.
  */
-function makeAdapters(startingCredits: number, { withCreditTransactions = true } = {}) {
+function makeAdapters(startingCredits: number) {
   const target: any = {
     id: TARGET_ID,
     currentCredits: startingCredits,
@@ -38,16 +38,17 @@ function makeAdapters(startingCredits: number, { withCreditTransactions = true }
       }),
       findByIdWithPassword: vi.fn().mockImplementation(async () => target),
       update,
+      existsOtherUserWithUsername: vi.fn().mockResolvedValue(false),
+      existsOtherUserWithEmail: vi.fn().mockResolvedValue(false),
       setModerationStatus: vi.fn().mockResolvedValue(undefined),
       incrementCredits,
     },
     organizations: { findById: vi.fn(), update: vi.fn() },
     friendship: {},
     userApiKeys: { deactivateAllByUserId: vi.fn().mockResolvedValue(undefined) },
+    realtimeConnections: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
+    creditTransactions: { createTransaction },
   };
-  if (withCreditTransactions) {
-    db.creditTransactions = { createTransaction };
-  }
   return {
     adapters: { db },
     createTransaction,
@@ -55,6 +56,7 @@ function makeAdapters(startingCredits: number, { withCreditTransactions = true }
     update,
     target,
     deactivateAllByUserId: db.userApiKeys.deactivateAllByUserId,
+    endConnections: db.realtimeConnections.endConnections,
   };
 }
 
@@ -222,14 +224,39 @@ describe('adminUpdateUser — audited credit adjustments', () => {
     expect(incrementCredits).not.toHaveBeenCalled();
   });
 
-  it('falls back to the direct overwrite when no creditTransactions adapter is wired', async () => {
-    const { adapters, incrementCredits, update } = makeAdapters(100, { withCreditTransactions: false });
+  it('never writes currentCredits on the doc, so the ledger is the only balance writer', async () => {
+    const { adapters, createTransaction, update } = makeAdapters(100);
 
     await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, currentCredits: 150 }, adapters);
 
-    expect(incrementCredits).not.toHaveBeenCalled();
-    // Legacy path sets the balance directly on the doc write.
-    expect(update.mock.calls[0][0].currentCredits).toBe(150);
+    expect(createTransaction).toHaveBeenCalledTimes(1);
+    expect(update.mock.calls[0][0]).not.toHaveProperty('currentCredits');
+  });
+
+  it('returns the applied credit adjustment for the caller to audit', async () => {
+    const { adapters } = makeAdapters(100);
+
+    const result = await adminUpdateUser(
+      ADMIN_ID,
+      { id: TARGET_ID, creditDelta: -150, creditReason: ' Refund chargeback ' },
+      adapters
+    );
+
+    // The floor clamps the deduction to the balance; the returned delta is what was applied.
+    expect(result.creditAdjustment).toEqual({
+      credits: -100,
+      previousBalance: 100,
+      resultingBalance: 0,
+      note: 'Refund chargeback',
+    });
+  });
+
+  it('returns no credit adjustment when the balance does not change', async () => {
+    const { adapters } = makeAdapters(100);
+
+    const result = await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, tags: ['vip'] }, adapters);
+
+    expect(result.creditAdjustment).toBeNull();
   });
 });
 
@@ -272,16 +299,6 @@ describe('adminUpdateUser - signed creditDelta path', () => {
       previousBalance: -100,
       resultingBalance: -150,
     });
-  });
-
-  it('applies a creditDelta to the doc write when no creditTransactions adapter is wired', async () => {
-    const { adapters, incrementCredits, update } = makeAdapters(100, { withCreditTransactions: false });
-
-    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, creditDelta: 50 }, adapters);
-
-    // No ledger adapter: the delta must not be silently dropped - it lands on the doc write.
-    expect(incrementCredits).not.toHaveBeenCalled();
-    expect(update.mock.calls[0][0].currentCredits).toBe(150);
   });
 });
 
@@ -366,6 +383,79 @@ describe('adminUpdateUser - preferences merge', () => {
   });
 });
 
+describe('adminUpdateUser - username changes', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('rejects a changed username outside the allowed characters', async () => {
+    const { adapters, update, target } = makeAdapters(100);
+    target.username = 'oldname';
+
+    await expect(adminUpdateUser(ADMIN_ID, { id: TARGET_ID, username: 'bad<name>' }, adapters)).rejects.toThrow(
+      "Usernames can contain letters, numbers, spaces and . _ - ' (up to 64 characters)."
+    );
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('rejects a username another account holds', async () => {
+    const { adapters, update, target } = makeAdapters(100);
+    target.username = 'oldname';
+    adapters.db.users.existsOtherUserWithUsername.mockResolvedValue(true);
+
+    await expect(adminUpdateUser(ADMIN_ID, { id: TARGET_ID, username: 'Taken' }, adapters)).rejects.toThrow(
+      'That username is taken.'
+    );
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('writes a valid changed username trimmed', async () => {
+    const { adapters, update, target } = makeAdapters(100);
+    target.username = 'oldname';
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, username: ' New Name ' }, adapters);
+
+    expect(update.mock.calls[0][0].username).toBe('New Name');
+  });
+});
+
+describe('adminUpdateUser - email changes', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('writes the email trimmed and lowercased after checking availability', async () => {
+    const { adapters, update, target } = makeAdapters(100);
+    target.email = 'old@x.com';
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, email: ' New@X.com ' }, adapters);
+
+    expect(adapters.db.users.existsOtherUserWithEmail).toHaveBeenCalledWith('new@x.com', TARGET_ID);
+    expect(update.mock.calls[0][0].email).toBe('new@x.com');
+  });
+
+  it('rejects an address another account holds with a 409', async () => {
+    const { adapters, update, target } = makeAdapters(100);
+    target.email = 'old@x.com';
+    adapters.db.users.existsOtherUserWithEmail.mockResolvedValue(true);
+
+    const error = await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, email: 'taken@x.com' }, adapters).catch(
+      (caught: unknown) => caught
+    );
+
+    expect(error).toMatchObject({ statusCode: 409, message: 'That email address is already in use.' });
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('maps a duplicate-key error on email from the write to the same 409', async () => {
+    const { adapters, update, target } = makeAdapters(100);
+    target.email = 'old@x.com';
+    update.mockRejectedValue(Object.assign(new Error('E11000'), { code: 11000, keyPattern: { email: 1 } }));
+
+    const error = await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, email: 'new@x.com' }, adapters).catch(
+      (caught: unknown) => caught
+    );
+
+    expect(error).toMatchObject({ statusCode: 409, message: 'That email address is already in use.' });
+  });
+});
+
 describe('adminUpdateUser - API key deactivation on entering a blocked state', () => {
   beforeEach(() => vi.clearAllMocks());
 
@@ -375,13 +465,16 @@ describe('adminUpdateUser - API key deactivation on entering a blocked state', (
     ['suspension', { moderation: { status: 'active' } }, { moderationStatus: 'suspended' as const }],
     ['ban and suspension in one save', {}, { isBanned: true, moderationStatus: 'suspended' as const }],
   ])('deactivates once on %s', async (_label, seed, patch) => {
-    const { adapters, target, deactivateAllByUserId } = makeAdapters(100);
+    const { adapters, target, deactivateAllByUserId, endConnections } = makeAdapters(100);
     Object.assign(target, seed);
 
     await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, ...patch }, adapters);
 
     expect(deactivateAllByUserId).toHaveBeenCalledTimes(1);
     expect(deactivateAllByUserId).toHaveBeenCalledWith(TARGET_ID);
+    // Every realtime connection ends with the account, API-key ones included.
+    expect(endConnections).toHaveBeenCalledTimes(1);
+    expect(endConnections).toHaveBeenCalledWith({ userId: TARGET_ID });
   });
 
   it.each([
@@ -398,12 +491,13 @@ describe('adminUpdateUser - API key deactivation on entering a blocked state', (
     ['active', { moderation: { status: 'suspended' } }, { moderationStatus: 'active' as const }],
     ['unban', { isBanned: true }, { isBanned: false }],
   ])('does not touch keys on %s', async (_label, seed, patch) => {
-    const { adapters, target, deactivateAllByUserId } = makeAdapters(100);
+    const { adapters, target, deactivateAllByUserId, endConnections } = makeAdapters(100);
     Object.assign(target, seed);
 
     await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, ...patch }, adapters);
 
     expect(deactivateAllByUserId).not.toHaveBeenCalled();
+    expect(endConnections).not.toHaveBeenCalled();
   });
 
   it('does not deactivate when the user write fails', async () => {

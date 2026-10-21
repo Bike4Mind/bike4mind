@@ -74,10 +74,10 @@ describe('GET /api/v1/credits', () => {
     expect(res.getHeader('Cache-Control')).toBe('private, no-store');
   });
 
-  it('admits me:read, ai:chat and ai:generate keys, and exempts reads from the daily limit', () => {
+  it('admits me:read, ai:chat, ai:generate and ai:decide keys, and exempts reads from the daily limit', () => {
     expect(baseApiOptions[0]).toMatchObject({
       auth: true,
-      requiredScopes: [ApiKeyScope.ME_READ, ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE],
+      requiredScopes: [ApiKeyScope.ME_READ, ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE, ApiKeyScope.AI_DECIDE],
       exemptReadsFromDailyRateLimit: true,
     });
   });

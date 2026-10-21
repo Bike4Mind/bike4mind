@@ -18,6 +18,10 @@ vi.mock('@server/middlewares/csrfProtection', () => ({
 }));
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => (_req: any, _res: any, next: any) => next?.() }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+const mockEmitVerifiedFunnel = vi.fn().mockResolvedValue(undefined);
+vi.mock('@server/analytics/funnel', () => ({
+  emitEmailVerifiedFunnelEvents: (...a: any[]) => mockEmitVerifiedFunnel(...a),
+}));
 vi.mock('@server/utils/auditLog', () => ({
   logAuditEvent: vi.fn(),
   EmailAuditEvents: {
@@ -40,6 +44,10 @@ vi.mock('@server/entitlements/partnerRules', () => ({
 const mockFindByToken = vi.fn();
 const mockUpdate = vi.fn();
 const mockFindBySettingName = vi.fn();
+// Pulled in transitively by signupDomainGrant; these tests never reach a rule with a subscription.
+vi.mock('@server/subscriptions/grantIndividualAdminSubscription', () => ({
+  grantIndividualAdminSubscription: vi.fn(),
+}));
 vi.mock('@bike4mind/database', () => ({
   userRepository: {
     findByEmailVerificationToken: (...a: any[]) => mockFindByToken(...a),
@@ -53,8 +61,12 @@ vi.mock('@bike4mind/database', () => ({
 
 const mockVerifyEmailToken = vi.fn();
 const mockAddCredits = vi.fn();
+const mockReleasePending = vi.fn();
 vi.mock('@bike4mind/services', () => ({
-  userService: { verifyEmailToken: (...a: any[]) => mockVerifyEmailToken(...a) },
+  userService: {
+    verifyEmailToken: (...a: unknown[]) => mockVerifyEmailToken(...a),
+    releasePendingFreeCredits: (...a: unknown[]) => mockReleasePending(...a),
+  },
   creditService: { addCredits: (...a: any[]) => mockAddCredits(...a) },
 }));
 
@@ -94,7 +106,22 @@ function mockUser(overrides: { email?: string; tags?: string[]; pendingCreditGra
 
 const domainGrantCall = () =>
   mockAddCredits.mock.calls.find(([p]) => p.transactionId === 'domain-grant-credits:user-1');
-const flatGrantCall = () => mockAddCredits.mock.calls.find(([p]) => p.transactionId === 'verify-grant:user-1');
+// The flat-grant arithmetic (amount resolution, transactionId) is covered in
+// userService/freeCredits.test.ts; this fake honours the same contract at the handler seam.
+const FLAT_GRANT_AMOUNT = 1000;
+function fakeReleasePending(user: { tags?: string[]; pendingCreditGrant?: number | null }) {
+  if (!user.tags?.includes(PENDING_FREE_CREDITS_TAG)) {
+    return { released: false, creditsGranted: 0, currentCredits: null, patch: {} };
+  }
+  return {
+    released: true,
+    creditsGranted: user.pendingCreditGrant ?? FLAT_GRANT_AMOUNT,
+    currentCredits: null,
+    patch: { tags: user.tags.filter(t => t !== PENDING_FREE_CREDITS_TAG), pendingCreditGrant: null },
+  };
+}
+const flatGrantCall = () =>
+  mockReleasePending.mock.calls.find(([user]) => user.tags?.includes(PENDING_FREE_CREDITS_TAG));
 
 describe('/api/email/verify — domain-grant signup credits', () => {
   beforeEach(() => {
@@ -102,6 +129,7 @@ describe('/api/email/verify — domain-grant signup credits', () => {
     mockVerifyEmailToken.mockResolvedValue(undefined);
     mockUpdate.mockResolvedValue(undefined);
     mockAddCredits.mockResolvedValue({});
+    mockReleasePending.mockImplementation(async user => fakeReleasePending(user));
     mockFindBySettingName.mockResolvedValue({ settingValue: 1000 });
     mockPartnerGrant.mockResolvedValue({ matched: false, entitlements: new Set(), signupCredits: 0 });
   });
@@ -131,9 +159,12 @@ describe('/api/email/verify — domain-grant signup credits', () => {
         transactionId: 'domain-grant-credits:user-1',
       })
     );
-    // No pending tag -> the flat defaultFreeCredits grant must NOT fire.
-    expect(flatGrantCall()).toBeFalsy();
-    expect(mockFindBySettingName).not.toHaveBeenCalled();
+    // No pending tag -> nothing is released: no tag-strip write, and only the domain grant
+    // counts toward credits_granted.
+    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(mockEmitVerifiedFunnel).toHaveBeenCalledWith(
+      expect.objectContaining({ method: 'link', creditsGranted: EXPECTED_DOMAIN_CREDITS })
+    );
   });
 
   it('does NOT grant domain credits to a verified non-domain user', async () => {
@@ -154,9 +185,7 @@ describe('/api/email/verify — domain-grant signup credits', () => {
 
     expect(res._getStatusCode()).toBe(200);
     // Both grants fire, each with its own stable transactionId (distinct -> additive).
-    expect(flatGrantCall()?.[0]).toEqual(
-      expect.objectContaining({ credits: 1000, transactionId: 'verify-grant:user-1' })
-    );
+    expect(flatGrantCall()).toBeTruthy();
     expect(domainGrantCall()?.[0]).toEqual(
       expect.objectContaining({ credits: EXPECTED_DOMAIN_CREDITS, transactionId: 'domain-grant-credits:user-1' })
     );
@@ -171,11 +200,8 @@ describe('/api/email/verify — domain-grant signup credits', () => {
     await handler(req, res);
 
     expect(res._getStatusCode()).toBe(200);
-    expect(flatGrantCall()?.[0]).toEqual(
-      expect.objectContaining({ credits: 500, transactionId: 'verify-grant:user-1' })
-    );
-    // The defaultFreeCredits setting is not consulted when a pending amount travels on the doc...
-    expect(mockFindBySettingName).not.toHaveBeenCalled();
+    // The pending amount travels on the user doc into the service...
+    expect(flatGrantCall()?.[0]).toEqual(expect.objectContaining({ id: 'user-1', pendingCreditGrant: 500 }));
     // ...and the tag and the pending amount are cleared together.
     expect(mockUpdate).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'user-1', tags: [], pendingCreditGrant: null })
@@ -244,5 +270,60 @@ describe('/api/email/verify — domain-grant signup credits', () => {
     expect(res._getStatusCode()).toBe(200);
     // 0 credits -> no domain grant credit call at all, and definitely not the env 250k.
     expect(domainGrantCall()).toBeFalsy();
+  });
+});
+
+describe('/api/email/verify - funnel events', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockVerifyEmailToken.mockResolvedValue(undefined);
+    mockUpdate.mockResolvedValue(undefined);
+    mockAddCredits.mockResolvedValue({});
+    mockReleasePending.mockImplementation(async user => fakeReleasePending(user));
+    mockFindBySettingName.mockResolvedValue({ settingValue: 1000 });
+    mockPartnerGrant.mockResolvedValue({ matched: false, entitlements: new Set(), signupCredits: 0 });
+  });
+
+  it('reports the summed credits for both grants', async () => {
+    mockUser({ email: DOMAIN_EMAIL, tags: [PENDING_FREE_CREDITS_TAG] });
+    const { req, res } = makeReqRes();
+
+    await handler(req, res);
+
+    expect(mockEmitVerifiedFunnel).toHaveBeenCalledWith({
+      user: expect.objectContaining({ id: 'user-1' }),
+      method: 'link',
+      creditsGranted: 1000 + EXPECTED_DOMAIN_CREDITS,
+    });
+  });
+
+  it('reports zero credits when nothing was granted', async () => {
+    mockUser({ email: NON_DOMAIN_EMAIL, tags: [] });
+    const { req, res } = makeReqRes();
+
+    await handler(req, res);
+
+    expect(mockEmitVerifiedFunnel).toHaveBeenCalledWith(expect.objectContaining({ method: 'link', creditsGranted: 0 }));
+  });
+
+  it('leaves a failed grant out of the reported credits', async () => {
+    mockUser({ email: NON_DOMAIN_EMAIL, tags: [PENDING_FREE_CREDITS_TAG] });
+    mockReleasePending.mockResolvedValue({ released: false, creditsGranted: 0, currentCredits: null, patch: {} });
+    const { req, res } = makeReqRes();
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockEmitVerifiedFunnel).toHaveBeenCalledWith(expect.objectContaining({ creditsGranted: 0 }));
+  });
+
+  it('reports nothing when the token does not verify', async () => {
+    mockUser({ email: NON_DOMAIN_EMAIL, tags: [] });
+    mockVerifyEmailToken.mockRejectedValue(new Error('Token has expired'));
+    const { req, res } = makeReqRes();
+
+    await Promise.resolve(handler(req, res)).catch(() => {});
+
+    expect(mockEmitVerifiedFunnel).not.toHaveBeenCalled();
   });
 });

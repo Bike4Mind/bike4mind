@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PrSummaryEvent } from '@shared/pullRequest';
-import { PrMonitor } from './PrMonitor';
-import { REF, collector, fakeGithub, quietLogger, snapshot, tempStore } from './prTestSupport';
+import { REF, TrackedMonitor, collector, fakeGithub, quietLogger, snapshot, tempStore } from './prTestSupport';
 
 const SESSION = 'session-1';
 
@@ -10,7 +9,7 @@ function setup() {
   const fake = fakeGithub();
   const out = collector();
   const pushed: PrSummaryEvent[] = [];
-  const monitor = new PrMonitor({
+  const monitor = new TrackedMonitor({
     store,
     github: fake.github,
     chat: {
@@ -28,7 +27,6 @@ function setup() {
   return { store, fake, out, monitor, pushed };
 }
 
-const settle = () => new Promise(resolve => setTimeout(resolve, 20));
 const bound = { ...REF, source: 'shell' as const, boundAt: '' };
 
 describe('PrMonitor sidebar summaries', () => {
@@ -50,7 +48,7 @@ describe('PrMonitor sidebar summaries', () => {
       { sessionId: 'merged', summary: { number: 611, state: 'merged' } },
       { sessionId: 'dismissed', summary: { number: 611, state: 'closed' } },
     ]);
-    await settle();
+    await monitor.idle();
     expect(fake.calls).toEqual([]);
     expect(fake.batches).toEqual([]);
     monitor.dispose();
@@ -59,7 +57,7 @@ describe('PrMonitor sidebar summaries', () => {
   it('pushes only when a session icon actually changes', async () => {
     const { fake, monitor, pushed } = setup();
     await monitor.bindManual(SESSION, REF.url);
-    await settle();
+    await monitor.idle();
     expect(pushed).toEqual([{ sessionId: SESSION, summary: { number: 611, state: 'open' } }]);
 
     await monitor.refresh(SESSION);
@@ -77,7 +75,7 @@ describe('PrMonitor sidebar summaries', () => {
     const { fake, out, monitor, pushed } = setup();
     fake.answer(snapshot({ state: 'CLOSED' }));
     await monitor.bindManual(SESSION, REF.url);
-    await settle();
+    await monitor.idle();
     expect(out.last()?.snapshot?.state).toBe('CLOSED');
     expect(pushed[pushed.length - 1]?.summary?.state).toBe('closed');
     monitor.dispose();
@@ -86,7 +84,7 @@ describe('PrMonitor sidebar summaries', () => {
   it('keeps the icon when the bar is dismissed, and drops it when the session is deleted', async () => {
     const { monitor, pushed } = setup();
     await monitor.bindManual(SESSION, REF.url);
-    await settle();
+    await monitor.idle();
     const before = pushed.length;
     await monitor.dismiss(SESSION);
     expect(pushed).toHaveLength(before);
@@ -102,7 +100,7 @@ describe('PrMonitor sidebar summaries', () => {
     const { store, fake, monitor } = setup();
     fake.answer(snapshot({ isDraft: true }));
     await monitor.bindManual(SESSION, REF.url);
-    await settle();
+    await monitor.idle();
     expect(await store.get(SESSION)).toMatchObject({ lastState: 'OPEN', lastDraft: true });
     monitor.dispose();
   });

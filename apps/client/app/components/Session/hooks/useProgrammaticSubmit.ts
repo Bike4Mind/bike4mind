@@ -10,7 +10,7 @@ interface UseProgrammaticSubmitParams {
   /** The send function to drive - typically `useSendMessage`'s `handleSendClick`. */
   handleSendClick: (
     prompt?: string,
-    options?: { forceEnableQuestMaster?: boolean; toolsOverride?: B4MLLMTools[] }
+    options?: { forceEnableQuestMaster?: boolean; toolsOverride?: B4MLLMTools[]; systemContext?: string }
   ) => Promise<IChatHistoryItemDocument | undefined>;
   readyState: ReadyState;
   submitting: boolean;
@@ -25,7 +25,8 @@ interface UseProgrammaticSubmitParams {
  *  - `programmaticSubmit`: a bare prompt string set by callers like the opti
  *    consoles' "Draft a problem with AI".
  *  - `programmaticLaunch`: a briefcase one-click dispatch carrying prompt content,
- *    required tools, an optional target `sessionId`, and a dedup nonce.
+ *    required tools, an optional target `sessionId`, a dedup nonce, and optional
+ *    per-send `systemContext`.
  *
  * Uses `useChatInput.subscribe()` rather than a hook+useEffect read so the trigger
  * is reliable even when SessionBottom is lazy-loaded inside Suspense.
@@ -94,13 +95,18 @@ export function useProgrammaticSubmit({
     useChatInput.getState().setProgrammaticLaunch(null);
     const toolsOverride = dispatch.requiredTools ?? undefined;
     const content = dispatch.promptContent;
+    // Rides the send options, never the prompt text, so it reaches the model without
+    // appearing in the user's bubble. Spread only when set, so a launch without it
+    // makes exactly the call it always did. The send trims and caps it (resolveSystemContext);
+    // the launch is already cleared, so a refused one is not retried.
+    const systemContext = dispatch.systemContext || undefined;
     // The elected session at consume time - the send is dropped if it changes
     // during the settle delay (election must hold through to the actual send).
     const electedSessionId = session?.id ?? null;
     const timer = setTimeout(() => {
       launchTimersRef.current.delete(timer);
       if ((currentSessionRef.current?.id ?? null) !== electedSessionId) return;
-      handleSendClickRef.current(content, { toolsOverride });
+      handleSendClickRef.current(content, { toolsOverride, ...(systemContext ? { systemContext } : {}) });
     }, 150);
     launchTimersRef.current.add(timer);
   }, []);

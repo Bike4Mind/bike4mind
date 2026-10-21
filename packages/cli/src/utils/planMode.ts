@@ -2,8 +2,6 @@ import path from 'path';
 
 const PLAN_MODE_DIR = '.b4m-cli/plans';
 
-const PATH_TOOLS = new Set(['create_file', 'edit_local_file', 'delete_file']);
-
 /**
  * Directory plan-mode artifacts are written to (under the working directory).
  * Writes to paths under this directory are permitted while plan mode is active.
@@ -21,14 +19,13 @@ export function getPlanModeFilePath(sessionId: string, cwd: string = process.cwd
 }
 
 /**
- * Whether a write/edit/delete tool call targets a path inside the plan-mode directory.
- * Used to allow incremental plan-file writes while plan mode blocks other writes.
+ * Whether a file write's target path is inside the plan-mode directory. Used to allow
+ * incremental plan-file writes while plan mode blocks other writes. The path comes from the
+ * tool descriptor's writePathArg (tools/gateway/toolPolicy.ts writePathOf).
  */
-export function isWriteTargetingPlanFile(toolName: string, args: unknown, cwd: string = process.cwd()): boolean {
-  if (!PATH_TOOLS.has(toolName)) return false;
-  const argPath = (args as { path?: unknown })?.path;
-  if (typeof argPath !== 'string' || argPath.length === 0) return false;
-  const resolved = path.resolve(cwd, argPath);
+export function isWriteTargetingPlanFile(writePath: string | undefined, cwd: string = process.cwd()): boolean {
+  if (!writePath) return false;
+  const resolved = path.resolve(cwd, writePath);
   const planDir = getPlanModeFileDir(cwd);
   const rel = path.relative(planDir, resolved);
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));

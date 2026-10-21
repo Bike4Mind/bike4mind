@@ -3,7 +3,7 @@ import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import {
   integrationHealthCheckRepository,
   integrationAuditLogRepository,
@@ -12,7 +12,7 @@ import {
 } from '@bike4mind/database';
 import type { IntegrationName } from '@bike4mind/database';
 import { getHealthSummary, runAllProbes, runProbe } from '@server/services/integrationHealthService';
-import { getStatus } from '@server/services/integrationCircuitBreaker';
+import { getStatus } from '@bike4mind/server-utils/services/integrationCircuitBreaker';
 import { getAllBreakerStates } from '@server/services/mcpCircuitBreakers';
 import { rateLimit } from '@server/middlewares/rateLimit';
 
@@ -199,7 +199,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     const logger = new Logger();
 
     if (integration) {
-      const result = await runProbe(integration as IntegrationName, logger);
+      const result = await runProbe(integration as IntegrationName);
       return res.json({
         integration: result.integration,
         status: result.status,

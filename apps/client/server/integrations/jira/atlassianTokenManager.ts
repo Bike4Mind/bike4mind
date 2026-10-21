@@ -1,6 +1,6 @@
 import { userRepository, mcpServerRepository } from '@bike4mind/database';
 import { McpServerName } from '@bike4mind/common';
-import { getAtlassianOAuthConfig } from '@server/integrations/jira/atlassianConfig';
+import { getAtlassianOAuthConfig } from '@bike4mind/server-utils/integrations/jira/atlassianConfig';
 import { encryptToken, decryptToken, encryptEnvVariables } from '@server/security/tokenEncryption';
 
 /**
@@ -87,7 +87,14 @@ export class AtlassianTokenManager {
       throw new Error(`Token refresh failed: ${errorText}`);
     }
 
-    const tokenData = await response.json();
+    const tokenData = (await response.json()) as {
+      access_token?: string;
+      refresh_token?: string;
+      expires_in?: number;
+    };
+    if (!tokenData.access_token || typeof tokenData.expires_in !== 'number') {
+      throw new Error('Access token or expiry missing from Atlassian response');
+    }
     const nextRefreshToken = tokenData.refresh_token ?? user.atlassianConnect.refreshToken;
     if (!nextRefreshToken) {
       throw new Error('Refresh token missing from Atlassian response');

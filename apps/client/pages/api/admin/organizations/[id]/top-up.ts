@@ -5,13 +5,13 @@ import {
   withTransaction,
 } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { creditService } from '@bike4mind/services';
 import { ApiKeyScope, CreditHolderType } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sendToClient } from '@server/websocket/utils';
-import { AdminOrgAuditEvents, logAuditEvent } from '@server/utils/auditLog';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { z } from 'zod';
 import { Resource } from 'sst';
 
@@ -21,7 +21,6 @@ const MAX_TOPUP_CREDITS = 10_000_000;
 
 const TopUpSchema = z.object({
   credits: z.number().int().positive().max(MAX_TOPUP_CREDITS),
-  reason: z.string().min(1).max(500).optional(),
   // Required idempotency key. The client generates a UUID per submit click so
   // a double-click / retry doesn't double-credit. We piggy-back on the credit-
   // transaction sparse unique index on `stripePaymentIntentId` for atomic
@@ -46,7 +45,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
     const { id } = req.query as RequestQuery;
     if (!id) throw new BadRequestError('Organization id required');
 
-    const { credits, reason, idempotencyKey } = TopUpSchema.parse(req.body);
+    const { credits, idempotencyKey } = TopUpSchema.parse(req.body);
+    const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
     const dedupeKey = `admin_topup_${id}_${idempotencyKey}`;
 
     const organization = await organizationRepository.findById(id);
@@ -76,20 +76,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
           }
         );
 
-        await logAuditEvent(
-          {
-            userId: organization.userId,
-            action: AdminOrgAuditEvents.ORG_TOPPED_UP,
-            adminUserId: req.user!.id,
-            adminUsername: req.user!.username,
-            reason,
-            metadata: {
-              organizationId: organization.id,
-              credits,
-            },
-          },
-          req.logger
-        );
+        await recordAdminActionFromRequest(req, {
+          action: 'org.credits.topped_up',
+          target: { kind: 'organization', id: organization.id, displayName: organization.name },
+          summary: `topped up ${credits} credits`,
+          reason,
+          details: { credits, ownerId: organization.userId },
+        });
       });
     } catch (err: unknown) {
       if (typeof err === 'object' && err !== null && 'code' in err && (err as { code: unknown }).code === 11000) {

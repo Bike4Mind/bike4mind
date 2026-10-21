@@ -588,6 +588,30 @@ jobs:
               ]
             }
 
+      # Same run, posted to production's /status too. Last in the job on purpose: a slow or
+      # hung prod must not hold up the Slack post or the promotion stamp above. No --counts-out:
+      # the Slack comparison reads the staging ingest's counts.
+      - name: Ingest QA run to production
+        if: ${{ !cancelled() && steps.e2e.outputs.preview_skipped != 'true' && vars.QA_INGEST_URL_PROD != '' }}
+        continue-on-error: true
+        timeout-minutes: 10
+        env:
+          QA_INGEST_URL: ${{ vars.QA_INGEST_URL_PROD }}
+          QA_INGEST_KEY: ${{ secrets.QA_INGEST_KEY_PROD }}
+          QA_PRODUCT: ${{ vars.QA_PRODUCT }}
+          QA_SUITE: ${{ inputs.suite_name || 'Full' }}
+          QA_ENV: ${{ steps.config.outputs.env_label }}
+          QA_BRANCH: ${{ inputs.pr_number && format('pr-{0}', inputs.pr_number) || github.ref_name }}
+          QA_TRIGGER: ${{ inputs.trigger_label }}
+          QA_SHA: ${{ steps.tested_sha.outputs.sha || github.sha }}
+          SHOW_CREDITS: ${{ inputs.show_credits }}
+        run: |
+          args=(--results apps/client/pw-results.json --report-dir apps/client/playwright-report)
+          if [ "$SHOW_CREDITS" = "true" ]; then
+            args+=(--credits apps/client/e2e/fixtures/credits.json)
+          fi
+          node scripts/qa-report.mjs "${args[@]}"
+
       # Asymmetry by design: this fails the job only on a real test failure, but the
       # commit-status step above also posts `failure` when not_started > 0 (specs
       # registered but never executed). So the run conclusion can be green while the

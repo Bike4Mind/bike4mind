@@ -11,6 +11,8 @@ import {
   type AgentExecutionStatus,
   type GenerateImageToolCall,
   type AudioGenerationToolCall,
+  type AuthOrigin,
+  AuthOriginSchema,
 } from '@bike4mind/common';
 export { AGENT_EXECUTION_STATUSES, ACTIVE_AGENT_EXECUTION_STATUSES, type AgentExecutionStatus };
 
@@ -364,6 +366,12 @@ export interface IAgentExecution {
    * forwarded to ToolContext.apiKeyId so a tool-driven lake write is audited under the key.
    */
   apiKeyId?: string;
+  /**
+   * How the request that started the run was authenticated, forwarded to ToolContext.authOrigin and
+   * inherited by child and DAG-node runs. Optional only for runs started before the field existed;
+   * read it through `executionTurnAuth` (apps/client/server/auth/turnAuth.ts), which fails those closed.
+   */
+  authOrigin?: AuthOrigin;
   /** IDs of mementos injected into the first-iteration prompt. Written once at iteration 0;
    * read by persistRunAsQuest so all terminal paths (continuation, gate-stop, abort) get the badge. */
   usedMementoIds?: string[];
@@ -752,6 +760,7 @@ const AgentExecutionSchema = new mongoose.Schema(
     resolvedEnabledTools: { type: [String], default: undefined },
     scopeDeniedTools: { type: [String], default: undefined },
     apiKeyId: { type: String },
+    authOrigin: { type: String, enum: AuthOriginSchema.options },
     usedMementoIds: [{ type: String }],
     // Memory gates resolved once at execution start and persisted so read/write/
     // stop-at-gate all agree even if the underlying flags flip mid-run. Typed
@@ -1620,7 +1629,8 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
     const update: Record<string, unknown> = {
       $set: {
         status: 'failed',
-        error: { message: opts.errorMessage },
+        // Our own denial text, so the trace API publishes it verbatim (see `toCallerSafeError`).
+        error: { message: opts.errorMessage, callerSafe: true },
         completedAt: new Date(),
       },
       $unset: { pendingPermission: '' },

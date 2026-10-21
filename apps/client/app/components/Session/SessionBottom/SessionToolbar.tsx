@@ -1,40 +1,36 @@
 import type { AttachScopeMode } from '@bike4mind/common';
 import React, { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { Box, CircularProgress, Dropdown, IconButton, Menu, MenuButton } from '@mui/joy';
+import { Box, CircularProgress } from '@mui/joy';
 import Button from '@mui/joy/Button';
 import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
-import { StopCircleSharp, Close, Check } from '@mui/icons-material';
+import { StopCircleSharp, Check } from '@mui/icons-material';
 import SendIcon from '@mui/icons-material/Send';
 import { useTranslation } from 'react-i18next';
 
 import { IFabFileDocument, ISessionDocument } from '@bike4mind/common';
-import { api } from '@client/app/contexts/ApiContext';
 import { fixedIconSize } from './sessionBottomConstants';
 import { getSendBlockedLabel, type SendBlockedReason } from './sendBlockedReason';
 import { useChatInput } from '@client/app/hooks/useChatInput';
-import { sessionTheme } from '@client/app/utils/themes/components/session';
-import { brand, red } from '@client/app/utils/themes/colors';
 
 import AttachFileButton from '@client/app/components/Session/AttachFileButton';
-import FilesSection from '@client/app/components/Session/AISettings/FilesSection';
 import AdvancedAISettings from '@client/app/components/Session/AdvancedAISettings';
 import RephraseButton from '@client/app/components/Session/RephraseButton';
-import AgentModeToggleButton from '@client/app/components/Session/SessionBottom/AgentModeToggleButton';
-import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import VoiceRecordButton, { VoiceRecordButtonRef } from '@client/app/components/common/VoiceRecordButton';
 import VoiceInlineButton, {
   VoiceControlsStrip,
   VOICE_DEBUG_STATE,
 } from '@client/app/components/Session/VoiceSessionModal/VoiceInlineIndicator';
 import ConversationalVoiceButton from '@client/app/components/Session/ConversationalVoice/ConversationalVoiceButton';
-import FileViewerIcon from '../../svgs/icons/FileViewerIcon';
+import {
+  isCallActivePhase,
+  useConversationalVoiceStore,
+} from '@client/app/components/Session/ConversationalVoice/useConversationalVoice';
 
 interface SessionToolbarProps {
   // Layout
   isMobile: boolean;
-  mode: 'dark' | 'light';
 
   // File attach
   canAttachFiles: boolean;
@@ -52,12 +48,7 @@ interface SessionToolbarProps {
   attachScopeMode: AttachScopeMode;
   setAttachScopeMode: (mode: AttachScopeMode) => void;
   totalFilesCount: number;
-  hasEmbeddingMismatches: boolean;
   model: string;
-
-  // Files dropdown
-  filesDropdownOpen: boolean;
-  setFilesDropdownOpen: (open: boolean) => void;
 
   // Chat input
   chatInputValue: string;
@@ -100,7 +91,6 @@ export function SessionToolbar(props: SessionToolbarProps) {
   const { t } = useTranslation();
   const {
     isMobile,
-    mode,
     canAttachFiles,
     workBenchFiles,
     currentSessionId,
@@ -113,10 +103,7 @@ export function SessionToolbar(props: SessionToolbarProps) {
     attachScopeMode,
     setAttachScopeMode,
     totalFilesCount,
-    hasEmbeddingMismatches,
     model,
-    filesDropdownOpen,
-    setFilesDropdownOpen,
     chatInputValue,
     setChatInputValue,
     setRephraseGlow,
@@ -139,18 +126,15 @@ export function SessionToolbar(props: SessionToolbarProps) {
   } = props;
 
   // Toolbar-local state
-  const filesMenuRef = useRef<HTMLDivElement>(null);
   const voiceRecordRef = useRef<VoiceRecordButtonRef>(null);
   const [recording, setRecording] = useState(false);
+  const voiceCallActive = useConversationalVoiceStore(s => isCallActivePhase(s.phase));
+  // On phones and when the row is collapsed (a split view, a narrow window) the voice pill takes over
+  // the model, Tools and Agents' space, reaching to the plus button; at full desktop width they keep
+  // their place beside it.
+  const [rowCompact, setRowCompact] = useState(false);
+  const stretchVoice = (recording || voiceCallActive) && (rowCompact || isMobile);
   const [isSettingsExiting] = useState(false);
-
-  // Layer-1 admin gate via `useFeatureEnabled('agentMode')` - honors the
-  // EnableAgentMode / EnableAgentModeDefault admin settings, not just the raw
-  // per-user pref, so the org-wide kill switch and admin default both reach the
-  // composer. When false, the toggle button renders nothing - non-gated users
-  // see zero change to the composer surface.
-  const { isFeatureEnabled } = useFeatureEnabled();
-  const agentModeFeatureEnabled = isFeatureEnabled('agentMode');
 
   const sendBlockedLabel = sendBlockedReason ? getSendBlockedLabel(sendBlockedReason, t) : null;
   // VoiceRecordButton captures onRecordingEnd when recording starts, so the gate has to be
@@ -170,7 +154,8 @@ export function SessionToolbar(props: SessionToolbarProps) {
           maxHeight: isSettingsExiting ? '0px' : '500px',
           opacity: isSettingsExiting ? 0 : 1,
           transition: 'max-height 300ms ease-out, opacity 280ms ease-out',
-          py: '8px',
+          // No padding: the composer box owns the 12px to its edges (SessionBottom), and the gap
+          // above comes from the editor's own bottom padding.
         }}
       >
         <Box className="session-bottom-actions-row" sx={{ display: 'flex', alignItems: 'center', width: '100%' }}>
@@ -182,6 +167,7 @@ export function SessionToolbar(props: SessionToolbarProps) {
           >
             <Box
               className="session-bottom-actions"
+              data-testid="session-bottom-actions"
               sx={{
                 display: 'flex',
                 flexDirection: 'row',
@@ -204,154 +190,28 @@ export function SessionToolbar(props: SessionToolbarProps) {
                   attachScopeMode={attachScopeMode}
                   onAttachScopeModeChange={setAttachScopeMode}
                   totalFilesCount={totalFilesCount}
-                  chatInputValue={chatInputValue}
-                  onOptimizePrompt={async () => {
-                    if (!chatInputValue?.trim()) return;
-                    try {
-                      const response = await api.post('/api/ai/optimize-input', {
-                        text: chatInputValue,
-                        style: 'optimized',
-                        maxLength: Math.min(chatInputValue.length * 2, 1000),
-                      });
-                      if (response.data?.optimizedText) {
-                        setChatInputValue(response.data.optimizedText);
-                        setRephraseGlow(true);
-                        setTimeout(() => setRephraseGlow(false), 900);
-                        toast.success('Input optimized');
-                      }
-                    } catch (error) {
-                      console.error('Failed to optimize input:', error);
-                      toast.error('Failed to optimize input');
-                    }
-                  }}
+                  agentModeDisabled={submitting}
                 />
               )}
 
-              {!isMobile && totalFilesCount > 0 && (
-                <Dropdown
-                  open={filesDropdownOpen}
-                  onOpenChange={(_, isOpen) => {
-                    setFilesDropdownOpen(isOpen);
-                    if (isOpen) {
-                      setTimeout(() => {
-                        filesMenuRef.current?.focus();
-                      }, 100);
-                    }
-                  }}
-                >
-                  <Tooltip title="Session Files" placement="top">
-                    <MenuButton
-                      variant="outlined"
-                      sx={{
-                        display: 'flex',
-                        borderRadius: '6px',
-                        p: 0,
-                        ...fixedIconSize,
-                      }}
-                      data-testid="session-files-btn"
-                    >
-                      <Box
-                        sx={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          width: '100%',
-                          height: '100%',
-                          p: 0,
-                        }}
-                      >
-                        <FileViewerIcon
-                          fill={sessionTheme[mode === 'dark' ? 'dark' : 'light'].iconFill}
-                          width={14}
-                          height={14}
-                          style={{
-                            position: 'absolute',
-                            top: '50%',
-                            left: '50%',
-                            transform: 'translate(-50%, -50%)',
-                          }}
-                        />
-                        <Box
-                          sx={{
-                            position: 'absolute',
-                            top: -6,
-                            right: -6,
-                            backgroundColor: hasEmbeddingMismatches ? red[400] : brand[800],
-                            color: 'white',
-                            borderRadius: '50%',
-                            width: '20px',
-                            height: '20px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            fontSize: '11px',
-                            fontWeight: 'bold',
-                            minWidth: '20px',
-                          }}
-                        >
-                          {totalFilesCount}
-                        </Box>
-                      </Box>
-                    </MenuButton>
-                  </Tooltip>
-                  <Menu
-                    ref={filesMenuRef}
-                    placement="top-end"
-                    autoFocus
-                    sx={{
-                      zIndex: 1400,
-                      minWidth: '400px',
-                      maxHeight: '400px',
-                      overflow: 'auto',
-                      '--List-padding': '0px',
-                      backgroundColor: 'background.panel',
-                      position: 'relative',
-                    }}
-                  >
-                    <Box
-                      sx={{
-                        position: 'sticky',
-                        top: 0,
-                        display: 'flex',
-                        justifyContent: 'flex-end',
-                        pt: 1,
-                        px: 1,
-                        zIndex: 10,
-                      }}
-                    >
-                      <IconButton
-                        size="sm"
-                        variant="plain"
-                        color="neutral"
-                        onClick={() => setFilesDropdownOpen(false)}
-                        data-testid="close-files-dropdown"
-                      >
-                        <Close sx={{ fontSize: '1rem' }} />
-                      </IconButton>
-                    </Box>
-                    <Box sx={{ p: 1 }}>
-                      <FilesSection model={model} />
-                    </Box>
-                  </Menu>
-                </Dropdown>
-              )}
+              {/* In a collapsed row, while dictating or on a Voice v2 call, the voice status pill takes
+                  this space (it stretches, see VoiceStatusPill), so the row keeps its width and nothing
+                  shifts. Hidden, not unmounted: remounting would re-run its model hydration. */}
+              <Box sx={{ display: stretchVoice ? 'none' : 'contents' }}>
+                <AdvancedAISettings
+                  stream={stream}
+                  setStream={setStream}
+                  spokenWords={spokenWords}
+                  setSpokenWords={setSpokenWords}
+                  onRollDice={rollRandomDice}
+                  currentSession={currentSession}
+                  onCompactChange={setRowCompact}
+                />
+              </Box>
 
-              <AdvancedAISettings
-                stream={stream}
-                setStream={setStream}
-                spokenWords={spokenWords}
-                setSpokenWords={setSpokenWords}
-                onRollDice={rollRandomDice}
-                currentSession={currentSession}
-              />
-
-              {/* Agent-mode toggle. Layer-1 gated - completely hidden
-                  when the gate (`useFeatureEnabled('agentMode')`, resolved above)
-                  is false, so non-gated users see the composer exactly as before. */}
-              {agentModeFeatureEnabled && <AgentModeToggleButton disabled={submitting} />}
-
-              {/* Action buttons: Rephrase, Voice Record, Stop/Send */}
-              {!isMobile && chatInputValue && chatInputValue.trim() !== '' && (
+              {/* Action buttons: Rephrase, Voice Record, Stop/Send. Once there is text, Rephrase takes
+                  the dictation mic's place beside Send, on phones too. */}
+              {!stretchVoice && chatInputValue && chatInputValue.trim() !== '' && (
                 <RephraseButton
                   currentText={chatInputValue}
                   onRephrase={text => {
@@ -373,11 +233,14 @@ export function SessionToolbar(props: SessionToolbarProps) {
                   in progress even if the user types - unmounting mid-recording
                   would orphan the live MediaStream (mic stays on) and strand the
                   Confirm button with a null ref. The button disappears once
-                  recording ends. */}
+                  recording ends. Hidden too while a Voice v2 call is up: the call's own
+                  status pill and end button take the spot. */}
               {!(isVoiceSessionEnabled && (voiceEngine.isActive || VOICE_DEBUG_STATE)) &&
+                (!voiceCallActive || recording) &&
                 (!chatInputValue || chatInputValue.trim() === '' || recording) && (
                   <VoiceRecordButton
                     ref={voiceRecordRef}
+                    stretch={stretchVoice}
                     onRecordingStart={() => setRecording(true)}
                     onRecordingError={() => setRecording(false)}
                     onRecordingEnd={async (prompt: string) => {
@@ -399,9 +262,14 @@ export function SessionToolbar(props: SessionToolbarProps) {
                 )}
               {/* Voice v2 - model-agnostic conversational voice (ElevenLabs CAI).
                   Gated by voiceV2Enabled admin setting; renders nothing otherwise.
-                  Hidden once the composer has text so only the send button shows. */}
-              {(!chatInputValue || chatInputValue.trim() === '') && (
-                <ConversationalVoiceButton currentSessionId={currentSessionId} reasoningModelId={model} />
+                  Hidden once the composer has text so only the send button shows, and while a
+                  prompt is being dictated so only the recording and its confirm button show. */}
+              {!recording && (!chatInputValue || chatInputValue.trim() === '') && (
+                <ConversationalVoiceButton
+                  currentSessionId={currentSessionId}
+                  reasoningModelId={model}
+                  stretch={stretchVoice}
+                />
               )}
               {shouldShowStopButton ? (
                 <Tooltip title="Stop Generation">

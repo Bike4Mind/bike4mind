@@ -1,6 +1,6 @@
 import { Logger } from '@bike4mind/observability';
 import { connectDB } from '@bike4mind/database';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { contextToLogs } from '@server/utils/logger';
 import { Context, S3Event } from 'aws-lambda';
 

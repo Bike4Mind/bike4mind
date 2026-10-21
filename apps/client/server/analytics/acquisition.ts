@@ -4,7 +4,7 @@ import {
   ACQUISITION_FIELD_LIMIT,
   readAcquisitionCookies,
   type AcquisitionTouches,
-} from '@client/lib/subscriptions/acquisition';
+} from '@bike4mind/server-utils/lib/subscriptions/acquisition';
 import { parseCookies } from './cookies';
 import { resolveServerConsent } from './serverConsent';
 
@@ -47,6 +47,23 @@ export function acquisitionToStripeMetadata(touches: AcquisitionTouches): Record
     for (const f of UTM_FIELDS) if (utm[f]) out[`${PREFIX[touch]}${f}`] = utm[f]!;
   }
   return out;
+}
+
+/**
+ * A checkout session's attribution metadata: the touches this browser carries, else the ones stored
+ * on the buyer at signup (an org admin often checks out on another device, with no cookies). Empty
+ * unless the client sent `attributionConsent: true` - the same flag individual checkout has always
+ * gated on. The stored touches were themselves written only with consent (funnel.ts).
+ */
+export function checkoutAcquisitionMetadata(
+  req: Pick<Request, 'headers'>,
+  attributionConsent: boolean | undefined,
+  stored?: AcquisitionTouches | null
+): Record<string, string> {
+  if (attributionConsent !== true) return {};
+  const touches = readAcquisitionTouches(req);
+  if (touches.firstTouch || touches.lastTouch) return acquisitionToStripeMetadata(touches);
+  return stored ? acquisitionToStripeMetadata({ firstTouch: stored.firstTouch, lastTouch: stored.lastTouch }) : {};
 }
 
 /**

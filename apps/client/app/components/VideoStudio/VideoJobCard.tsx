@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback } from 'react';
 import { Box, Button, Card, Chip, LinearProgress, Stack, Typography, type ColorPaletteProp } from '@mui/joy';
 import { toast } from 'sonner';
 import type { GenerationJobState, VideoGeneration } from '@bike4mind/common';
 import { useFileBrowser } from '@client/app/components/Files/fileBrowserStore';
+import { STATE_COLORS, useStablePlayerSrc } from '@client/app/hooks/data/generationJobCard';
 import { isTerminalVideoState } from '@client/app/hooks/data/videoGenerationCache';
 import { useCancelVideoGeneration, useVideoGeneration } from '@client/app/hooks/data/videoGenerations';
 import { downloadData, downloadUrl } from '@client/app/utils/download';
@@ -17,16 +18,6 @@ const STATE_LABELS: Record<GenerationJobState, string> = {
   cancelled: 'Cancelled',
 };
 
-const STATE_COLORS: Record<GenerationJobState, ColorPaletteProp> = {
-  pending: 'neutral',
-  running: 'primary',
-  storing: 'primary',
-  succeeded: 'success',
-  failed: 'danger',
-  blocked: 'warning',
-  cancelled: 'neutral',
-};
-
 // Used only if a terminal job somehow has no public error; the server normally sends a code-derived message.
 const FAILURE_FALLBACK: Partial<Record<GenerationJobState, string>> = {
   failed: 'This video could not be generated.',
@@ -36,47 +27,6 @@ const FAILURE_FALLBACK: Partial<Record<GenerationJobState, string>> = {
 
 // The server refuses to cancel a storing job: the provider has already produced, and charged for, the clip.
 const CANCELLABLE_STATES: readonly GenerationJobState[] = ['pending', 'running'];
-
-// A refreshed URL that fails again (the file was removed or blocked) must not loop.
-export const MAX_PLAYER_URL_REFRESHES = 2;
-
-/**
- * Re-signing (every ~14 minutes) must not restart a clip mid-play: keep the URL the player started with until the
- * element reports an error, then take the newest URL, asking for a fresh one at most MAX_PLAYER_URL_REFRESHES times.
- */
-export function useStablePlayerSrc(latestUrl: string | null, refresh: () => void) {
-  const [src, setSrc] = useState<string | null>(latestUrl);
-  const [awaitingFresh, setAwaitingFresh] = useState(false);
-  const refreshes = useRef(0);
-
-  useEffect(() => {
-    if (src === null && latestUrl) {
-      setSrc(latestUrl);
-      return;
-    }
-    if (awaitingFresh && latestUrl && latestUrl !== src) {
-      setSrc(latestUrl);
-      setAwaitingFresh(false);
-    }
-  }, [latestUrl, src, awaitingFresh]);
-
-  const onError = useCallback(() => {
-    if (latestUrl && latestUrl !== src) {
-      setSrc(latestUrl);
-      return;
-    }
-    if (refreshes.current >= MAX_PLAYER_URL_REFRESHES) return;
-    refreshes.current += 1;
-    setAwaitingFresh(true);
-    refresh();
-  }, [latestUrl, src, refresh]);
-
-  const onLoaded = useCallback(() => {
-    refreshes.current = 0;
-  }, []);
-
-  return { src, onError, onLoaded };
-}
 
 const videoFileName = (jobId: string, contentType: string | undefined): string =>
   `video-${jobId}.${contentType === 'video/webm' ? 'webm' : 'mp4'}`;

@@ -14,6 +14,12 @@ const DEFAULT_CONTEXT_WINDOW = 200_000;
 // estimate to keep windowing on the safe side.
 const IMAGE_BLOCK_TOKEN_ESTIMATE = 1_600;
 
+// Count cache bounds. Shorter text encodes about as fast as it hashes, so it is not cached. The
+// character cap bounds the text the cache keeps alive (~2 bytes a char), several context windows'
+// worth, so a whole session's history stays cached.
+const TOKEN_CACHE_MIN_CHARS = 256;
+const DEFAULT_TOKEN_CACHE_MAX_CHARS = 4_000_000;
+
 /**
  * Token counting utility for context window management.
  * Uses tiktoken (cl100k_base encoding), the encoding GPT-4 reports. Claude's tokenizers spend more
@@ -22,6 +28,13 @@ const IMAGE_BLOCK_TOKEN_ESTIMATE = 1_600;
  */
 export class TokenCounter {
   private encoder: Tiktoken | null = null;
+  // Raw cl100k_base counts keyed by the text itself, least recently used first. Every turn re-counts
+  // the same history, system prompt and tool schemas (compaction check, history window, /context);
+  // re-encoding them costs ~0.6 ms per 1k tokens on the main thread, hashing the key a fraction of that.
+  private readonly countCache = new Map<string, number>();
+  private cachedChars = 0;
+
+  constructor(private readonly cacheMaxChars: number = DEFAULT_TOKEN_CACHE_MAX_CHARS) {}
 
   private getEncoder(): Tiktoken {
     if (!this.encoder) {
@@ -46,6 +59,30 @@ export class TokenCounter {
    * Count tokens in a text string
    */
   countTokens(text: string): number {
+    if (text.length < TOKEN_CACHE_MIN_CHARS || text.length > this.cacheMaxChars) {
+      return this.encode(text);
+    }
+
+    const cached = this.countCache.get(text);
+    if (cached !== undefined) {
+      // Re-insert so Map order stays least-recently-used first.
+      this.countCache.delete(text);
+      this.countCache.set(text, cached);
+      return cached;
+    }
+
+    const count = this.encode(text);
+    this.countCache.set(text, count);
+    this.cachedChars += text.length;
+    for (const [oldest] of this.countCache) {
+      if (this.cachedChars <= this.cacheMaxChars) break;
+      this.countCache.delete(oldest);
+      this.cachedChars -= oldest.length;
+    }
+    return count;
+  }
+
+  private encode(text: string): number {
     // encode_ordinary, not encode: pasted text, file content and tool output can all contain a
     // special-token literal ("<|endoftext|>"), which makes encode reject. Callers here do not guard
     // it (turnController, ConversationContext, /context), so that throw breaks the turn or command.
@@ -134,6 +171,8 @@ export class TokenCounter {
    * Free encoder resources when done
    */
   dispose(): void {
+    this.countCache.clear();
+    this.cachedChars = 0;
     if (this.encoder) {
       this.encoder.free();
       this.encoder = null;

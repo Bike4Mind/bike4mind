@@ -43,6 +43,12 @@ vi.mock('sonner', () => ({
   toast: { success: (...a: unknown[]) => mockToastSuccess(...a), error: (...a: unknown[]) => mockToastError(...a) },
 }));
 
+// The interceptor tags a dismissed verification prompt with a private symbol; stand in a marker.
+const CANCELLED = 'verification-dismissed';
+vi.mock('@client/app/utils/stepUpInterceptor', () => ({
+  isStepUpCancelled: (error: unknown) => error instanceof Error && error.message === CANCELLED,
+}));
+
 const renderCard = () =>
   render(
     <QueryClientProvider client={new QueryClient()}>
@@ -150,6 +156,34 @@ describe('ChangeEmailCard', () => {
     rerender(ui);
     // The dialog must NOT auto-open for the just-created change.
     expect(screen.queryByTestId('profile-cancel-email-confirm-btn')).not.toBeInTheDocument();
+  });
+
+  describe('change request that fails', () => {
+    const submitNewEmail = async () => {
+      mockCurrentUser = { email: 'current@example.com', emailVerified: true, pendingEmail: null };
+      renderCard();
+      fireEvent.click(screen.getByTestId('profile-change-email-btn'));
+      fireEvent.change(screen.getByTestId('profile-email-input').querySelector('input')!, {
+        target: { value: 'new@example.com' },
+      });
+      fireEvent.click(screen.getByTestId('profile-email-submit-btn'));
+      await waitFor(() => expect(mockPost).toHaveBeenCalledWith('/api/email/change', { newEmail: 'new@example.com' }));
+      // Let the rejected mutation settle so a (wrongly) reported error would have rendered.
+      await waitFor(() => expect(screen.getByTestId('profile-email-submit-btn')).not.toBeDisabled());
+    };
+
+    it('shows no error and no toast when the verification prompt was dismissed', async () => {
+      mockPost.mockRejectedValueOnce(new Error(CANCELLED));
+      await submitNewEmail();
+      expect(screen.queryByText(CANCELLED)).not.toBeInTheDocument();
+      expect(mockToastError).not.toHaveBeenCalled();
+    });
+
+    it('shows the error for any other failure', async () => {
+      mockPost.mockRejectedValueOnce(new Error('request failed'));
+      await submitNewEmail();
+      expect(await screen.findByText('request failed')).toBeInTheDocument();
+    });
   });
 
   // An account created via OAuth without a provider-verified email has no address on

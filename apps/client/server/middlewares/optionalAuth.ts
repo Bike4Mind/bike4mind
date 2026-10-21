@@ -1,7 +1,7 @@
 import passport from 'passport';
 import type { Request, Response, NextFunction } from 'express';
 import { apiKeyAuth } from '@server/middlewares/apiKeyAuth';
-import { admitsOptionalAuthUser } from '@server/middlewares/oauthRouteGate';
+import { admitsOptionalAuthSession } from '@server/middlewares/oauthRouteGate';
 
 /**
  * Optional authentication for public-facing publish surfaces. Populates
@@ -47,16 +47,16 @@ export async function optionalAuth(req: Request, res: Response, next: NextFuncti
   //    invalid/expired token (reads stay gated by checkVisibility; writes still
   //    require req.user). Strategy errors are logged for observability.
   if (req.headers.authorization?.startsWith('Bearer ')) {
-    await new Promise<void>(resolve => {
-      passport.authenticate('jwt', { session: false }, (err: Error | null, user: Express.User | false) => {
+    const user = await new Promise<Express.User | false>(resolve => {
+      passport.authenticate('jwt', { session: false }, (err: Error | null, verified: Express.User | false) => {
         if (err) req.logger?.warn(`[optionalAuth] JWT verify error (continuing anonymous): ${err.message}`);
-        // Admit only a user the shared guard accepts: a pre-MFA session or a relying-party OAuth
-        // token must degrade to anonymous here, or an OAuth token could mint a gate-proof cookie /
-        // write annotations as the subject user on these auth:false routes. See oauthRouteGate.ts.
-        if (admitsOptionalAuthUser(user)) req.user = user as Express.User;
-        resolve();
-      })(req, res, () => resolve());
+        resolve(verified);
+      })(req, res, () => resolve(false));
     });
+    // Admit only a session the shared guard accepts: a pre-MFA session, a relying-party OAuth
+    // token or a session that owes MFA enrollment must degrade to anonymous here, or it could mint
+    // a gate-proof cookie / write annotations as the subject user on these auth:false routes.
+    if (await admitsOptionalAuthSession(user)) req.user = user as Express.User;
   }
 
   return next();

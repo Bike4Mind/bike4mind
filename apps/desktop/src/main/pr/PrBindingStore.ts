@@ -7,7 +7,7 @@ const MAX_HANDLED = 200;
 
 function normalize(value: unknown): PrBinding | null {
   if (!value || typeof value !== 'object') return null;
-  const { finalSnapshot, ...raw } = value as Partial<PrBinding>;
+  const { finalSnapshot, autoFixMax, ...raw } = value as Partial<PrBinding>;
   if (typeof raw.owner !== 'string' || typeof raw.repo !== 'string' || typeof raw.number !== 'number') return null;
   if (typeof raw.url !== 'string') return null;
   return {
@@ -19,6 +19,8 @@ function normalize(value: unknown): PrBinding | null {
     source: raw.source === 'manual' || raw.source === 'branch' ? raw.source : 'shell',
     boundAt: typeof raw.boundAt === 'string' ? raw.boundAt : new Date(0).toISOString(),
     ...(Array.isArray(raw.autoFixHandled) ? { autoFixHandled: raw.autoFixHandled.slice(-MAX_HANDLED) } : {}),
+    // A damaged budget is dropped so the default applies; kept only when it is a whole positive count.
+    ...(typeof autoFixMax === 'number' && Number.isInteger(autoFixMax) && autoFixMax > 0 ? { autoFixMax } : {}),
     // Dropped when it is not a finished read, so a damaged one costs a single re-read, not a broken bar.
     ...(finalSnapshot && isFinishedState(finalSnapshot.state) && Array.isArray(finalSnapshot.checks)
       ? { finalSnapshot }

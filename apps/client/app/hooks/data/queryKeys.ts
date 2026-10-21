@@ -26,6 +26,14 @@ export const ADMIN_SETTINGS_ARRAY_QUERY_KEY = ['adminsettings'] as const;
 export const BRANDING_SETTINGS_QUERY_KEY = ['brandingSettings'] as const;
 
 /**
+ * Query key for the authenticated server config
+ * Used by useConfig() - returns toolAvailability, websocketUrl, etc.
+ * Must be invalidated when anything it derives changes (e.g. a personal API key
+ * that tool availability resolves against)
+ */
+export const SERVER_CONFIG_QUERY_KEY = ['server-config'] as const;
+
+/**
  * Query key for the scoped setting override inventory (admin only)
  * Used by useScopedSettingOverrides() - returns IScopedSetting[]
  * Must be invalidated when an override is set or cleared

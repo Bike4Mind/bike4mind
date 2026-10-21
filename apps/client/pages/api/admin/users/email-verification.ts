@@ -3,7 +3,7 @@ import { User } from '@bike4mind/database';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 
 const EmailVerificationQuerySchema = z.object({
@@ -51,7 +51,7 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] }).get
     // Get users with verification info
     const users = await User.find(filter)
       .select(
-        'username email name emailVerified emailVerifiedAt emailVerificationSentAt emailVerificationExpires pendingEmail pendingEmailToken pendingEmailSentAt pendingEmailExpires createdAt'
+        'username email name emailVerified emailVerifiedAt emailVerificationSentAt emailVerificationExpires pendingEmail pendingEmailSentAt pendingEmailExpires createdAt'
       )
       .sort({ emailVerificationSentAt: -1, createdAt: -1 })
       .skip(skip)

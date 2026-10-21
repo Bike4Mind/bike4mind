@@ -51,7 +51,7 @@ async function publishSelfHost(eventName: string, detail: unknown, requiredAccep
   }
   try {
     // Lazy import so modules that never publish don't pull the SQS client at load.
-    const { sendToQueue } = await import('./sqs');
+    const { sendToQueue } = await import('@bike4mind/server-utils/utils/sqs');
     await sendToQueue(queueUrl, { detailType: eventName, detail });
   } catch (error) {
     if (requiredAcceptance) throw error;
@@ -228,7 +228,7 @@ export const SpiderEvents = {
       userId: z.string(),
       totalNotebooks: z.number(),
       operations: z.array(z.enum(['messageCount', 'curation', 'summarize', 'tags', 'embeddings'])),
-      dryRun: z.boolean().optional().prefault(false),
+      dryRun: z.boolean().prefault(false),
     })
   ),
   Progress: event(

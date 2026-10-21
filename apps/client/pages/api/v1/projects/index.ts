@@ -10,18 +10,15 @@ import { fabFileRepository, projectRepository, sessionRepository } from '@bike4m
 import { projectService } from '@bike4mind/services';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
-import { rateLimit } from '@server/middlewares/rateLimit';
-import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
+import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { decodeCursor, encodeCursor } from '@server/utils/cursorPagination';
-import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
-import { isValidObjectId } from '@server/utils/objectId';
+import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { logEventSafe } from '@server/utils/analyticsLog';
-import { UnprocessableEntityError } from '@server/utils/errors';
+import { UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
 import { toPublicProject } from '@server/projects/toPublicProject';
 
 const CURSOR_SCOPE = 'v1.projects';
-const perUserRateLimit = (bucket: string) =>
-  rateLimit({ limit: req => resolveUserRateLimitPerMin(req.user), windowMs: 60 * 1000, bucket });
 
 const listRoute = nextRouteForContract(listProjectsContract, {
   rateLimit: perUserRateLimit('GET /api/v1/projects'),

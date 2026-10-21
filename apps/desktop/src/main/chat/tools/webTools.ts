@@ -303,7 +303,8 @@ export const webFetch: ToolDefinition = {
       required: ['url'],
     },
   },
-  // The same policy as browser_navigate to a real site: asked per origin in 'ask', run in 'auto'.
+  // The same policy as browser_navigate to a real site: asked per origin in 'ask', run in 'auto'
+  // unless the reply has read untrusted content (see ChatService's DirectoryTurn.untrusted).
   // The URL is the model's choice, and a query string is how an injected page would ask for
   // something to be sent out; web_search has no such destination, so it is not gated.
   needsApproval: () => true,

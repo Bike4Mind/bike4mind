@@ -18,26 +18,34 @@ const FROM_IMPORT_LINE = /^[ \t]*from[ \t]+([\w.]+)[ \t]+import\b/gm;
 
 const topLevelModule = (dotted: string): string => dotted.split('.')[0];
 
+// Drops what the line regex can catch that is not a module: `*`, a `\` continuation.
+const MODULE_NAME = /^[A-Za-z_]\w*$/;
+
 /**
- * Supported packages referenced by import statements, deduplicated, as top-level import names.
+ * Every module referenced by import statements, deduplicated, as top-level import names.
  * Handles `import a.b`, `import a, b as c`, and `from a.b import c`; relative imports are ignored.
  */
-export function detectPythonPackages(code: string): string[] {
+export function detectPythonImports(code: string): string[] {
   const found = new Set<string>();
 
   for (const match of code.matchAll(IMPORT_LINE)) {
     for (const clause of match[1].split(',')) {
       const name = topLevelModule(clause.trim().split(/\s+/)[0] ?? '');
-      if (DETECTABLE_IMPORTS.has(name)) found.add(name);
+      if (MODULE_NAME.test(name)) found.add(name);
     }
   }
 
   for (const match of code.matchAll(FROM_IMPORT_LINE)) {
     const name = topLevelModule(match[1]);
-    if (DETECTABLE_IMPORTS.has(name)) found.add(name);
+    if (MODULE_NAME.test(name)) found.add(name);
   }
 
   return Array.from(found);
+}
+
+/** The supported packages among `detectPythonImports`. */
+export function detectPythonPackages(code: string): string[] {
+  return detectPythonImports(code).filter(name => DETECTABLE_IMPORTS.has(name));
 }
 
 const MILP_HINT = 'Use scipy.optimize.milp (HiGHS-backed) or scipy.optimize.linprog instead.';

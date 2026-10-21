@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { Button, DialogActions, DialogContent, DialogTitle, Modal, ModalDialog, Typography } from '@mui/joy';
 import type { SxProps } from '@mui/joy/styles/types';
-import type { DataLakeStatus } from '@bike4mind/common';
+import type { DataLakeStatus, ISessionDocument } from '@bike4mind/common';
 import { toast } from 'sonner';
 import useStartChatWithLake from '@client/app/hooks/useStartChatWithLake';
 import { usePromoteDataLake } from '@client/app/hooks/data/dataLakes';
@@ -16,6 +16,10 @@ type StartLakeChatButtonProps = {
   ariaLabel?: string;
   testId: string;
   sx?: SxProps;
+  /** Lets a surface own lake-scoped session creation instead of using the default notebook flow. Takes precedence over onChatStarted, which is not called when this is set. */
+  startChatForLake?: (dataLakeId: string) => Promise<void>;
+  /** Lets a surface embedding this button handle the created session instead of navigating to the notebook. */
+  onChatStarted?: (session: ISessionDocument) => void | Promise<void>;
 };
 
 /**
@@ -29,6 +33,8 @@ export default function StartLakeChatButton({
   ariaLabel,
   testId,
   sx,
+  startChatForLake,
+  onChatStarted,
 }: StartLakeChatButtonProps) {
   const startChatWithLake = useStartChatWithLake();
   const promoteLake = usePromoteDataLake();
@@ -39,7 +45,9 @@ export default function StartLakeChatButton({
     setDraftChatOpen(false);
     setStartingChat(true);
     try {
-      await startChatWithLake(lake.id);
+      if (startChatForLake) await startChatForLake(lake.id);
+      else
+        await (onChatStarted ? startChatWithLake(lake.id, { onCreated: onChatStarted }) : startChatWithLake(lake.id));
     } catch (error) {
       console.error('Start chat failed for lake', lake.id, error);
       toast.error(failureMessage);

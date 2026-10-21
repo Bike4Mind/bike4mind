@@ -13,7 +13,6 @@ export interface CircuitBreakerStatus {
   mode: CircuitBreakerMode;
   autoTripped: boolean;
   noData?: boolean;
-  allConfigMissing?: boolean;
 }
 
 export interface RateLimitSummary {

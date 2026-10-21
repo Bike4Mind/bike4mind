@@ -19,6 +19,8 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeProposalRepository: { name: 'proposals' },
   dataLakeResearchConfigRepository: { name: 'configs' },
   dataLakeResearchRunRepository: { name: 'runs' },
+  userRepository: { name: 'users' },
+  organizationRepository: { name: 'organizations' },
 }));
 vi.mock('@bike4mind/services', () => ({
   dataLakeResearchService: { runDueResearchSchedules: h.runDueResearchSchedules },
@@ -26,7 +28,7 @@ vi.mock('@bike4mind/services', () => ({
 vi.mock('@bike4mind/utils', () => ({ getSettingByName: h.getSettingByName }));
 vi.mock('@bike4mind/observability', () => ({ Logger: vi.fn() }));
 vi.mock('@server/dataLakes/queueResearchRun', () => ({ queueResearchRun: h.queueResearchRun }));
-vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://localhost/%STAGE%' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://localhost/%STAGE%' } }));
 vi.mock('sst', () => ({ Resource: h.resource }));
 
 import { runResearchScheduleTick } from './dataLakeResearchSchedule';
@@ -52,6 +54,8 @@ describe('runResearchScheduleTick', () => {
       dataLakeProposals: { name: 'proposals' },
       lakeConfigChangeEvents: {},
       adminSettings: {},
+      users: { name: 'users' },
+      organizations: { name: 'organizations' },
     });
     const run = { id: 'run-1' };
     const lake = { id: 'lake-1' };

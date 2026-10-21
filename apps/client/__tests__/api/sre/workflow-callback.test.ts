@@ -17,11 +17,11 @@ const mockSendToQueue = vi.fn();
 const mockGetSourceQueueUrl = vi.fn(() => 'https://sqs.us-east-2.amazonaws.com/123/sreJobQueue');
 const mockPostSreCiRetryMessage = vi.fn();
 
-vi.mock('@server/utils/sqs', () => ({
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({
   sendToQueue: (...args: unknown[]) => mockSendToQueue(...args),
 }));
 
-vi.mock('@server/utils/dlqRegistry', () => ({
+vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({
   getSourceQueueUrl: (...args: unknown[]) => mockGetSourceQueueUrl(...args),
 }));
 
@@ -41,7 +41,7 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: {
     MONGODB_URI: 'mongodb://localhost:27017/%STAGE%',
     STAGE: 'dev',
@@ -62,7 +62,7 @@ vi.mock('@bike4mind/common', () => ({
 }));
 
 const mockDecryptSecret = vi.fn();
-vi.mock('@server/security/secretEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({
   decryptSecret: (...args: unknown[]) => mockDecryptSecret(...args),
 }));
 

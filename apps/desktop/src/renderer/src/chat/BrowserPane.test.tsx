@@ -3,7 +3,14 @@ import { act, createRef, type RefObject } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { BrowserPaneBounds, BrowserPaneRequest, BrowserPaneState } from '@shared/ipc';
+import type {
+  BrowserFreezeFrameRequest,
+  BrowserPageStateEvent,
+  BrowserPaneBounds,
+  BrowserPaneRequest,
+  BrowserPaneState,
+  BrowserTabRequest,
+} from '@shared/ipc';
 import { BROWSER_PANE_WIDTH } from './agentBrowser';
 import { BrowserPane } from './BrowserPane';
 
@@ -34,9 +41,19 @@ const PAGE: BrowserPaneState = {
   canGoForward: false,
   loading: false,
   error: '',
+  tabs: [
+    { id: 1, title: 'Example Domain', url: 'https://example.com/', loading: false },
+    { id: 4, title: '', url: '', loading: false },
+  ],
+  activeTabId: 1,
 };
 
+const STILL = 'data:image/jpeg;base64,c3RpbGw=';
+
 const setPane = vi.fn<(request: BrowserPaneRequest) => Promise<BrowserPaneState>>();
+const tab = vi.fn<(request: BrowserTabRequest) => Promise<BrowserPaneState>>();
+const freezeFrame = vi.fn<(request: BrowserFreezeFrameRequest) => Promise<string | null>>();
+let pageState: ((event: BrowserPageStateEvent) => void) | null = null;
 let frames = new Map<number, FrameRequestCallback>();
 let nextFrame = 1;
 /** Every live ResizeObserver's callback; jsdom has no layout to fire them from. */
@@ -154,12 +171,22 @@ beforeEach(() => {
 
   setPane.mockReset();
   setPane.mockResolvedValue(PAGE);
+  tab.mockReset();
+  tab.mockResolvedValue(PAGE);
+  freezeFrame.mockReset();
+  freezeFrame.mockResolvedValue(STILL);
+  pageState = null;
   (window as unknown as { b4m: unknown }).b4m = {
     browser: {
       setPane,
+      freezeFrame,
       navigate: vi.fn(),
       go: vi.fn(),
-      onPageState: () => () => {},
+      tab,
+      onPageState: (listener: (event: BrowserPageStateEvent) => void) => {
+        pageState = listener;
+        return () => {};
+      },
       cookies: {
         getState: () => Promise.resolve({ supported: false, unsupported: '', sites: [] }),
         onChanged: () => () => {},
@@ -380,5 +407,175 @@ describe('the browser pane resize handle', () => {
     mount();
     // 1100px between the pane and the conversation; the conversation keeps 400 of it.
     expect(paneWidth()).toBe(700);
+  });
+});
+
+describe('the browser pane tab strip', () => {
+  const tabs = () => [...(host?.querySelectorAll<HTMLElement>('[data-testid="browser-tab-select-btn"]') ?? [])];
+  const address = () => host?.querySelector<HTMLInputElement>('[data-testid="chat-browser-url"]') ?? null;
+  const settled = () => act(async () => undefined);
+  const key = (target: HTMLElement | null, code: string, shiftKey = false) =>
+    act(() => {
+      target?.dispatchEvent(
+        new KeyboardEvent('keydown', { code, shiftKey, metaKey: true, ctrlKey: true, bubbles: true, cancelable: true })
+      );
+    });
+
+  it('draws each tab with the active one selected, and a blank one as a new tab', async () => {
+    mount();
+    await settled();
+    expect(tabs().map(element => [element.textContent, element.getAttribute('aria-selected')])).toEqual([
+      ['Example Domain', 'true'],
+      ['New tab', 'false'],
+    ]);
+  });
+
+  it('switches on a click, and closes on the close button or a middle-click without switching', async () => {
+    mount();
+    await settled();
+
+    act(() => tabs()[1].click());
+    expect(tab).toHaveBeenLastCalledWith({ sessionId: 's1', action: 'select', tabId: 4 });
+
+    act(() => tabs()[1].querySelector<HTMLElement>('[data-testid="browser-tab-close-btn"]')?.click());
+    expect(tab).toHaveBeenLastCalledWith({ sessionId: 's1', action: 'close', tabId: 4 });
+    expect(tab).toHaveBeenCalledTimes(2);
+
+    act(() => {
+      tabs()[0].dispatchEvent(new MouseEvent('auxclick', { button: 1, bubbles: true }));
+    });
+    expect(tab).toHaveBeenLastCalledWith({ sessionId: 's1', action: 'close', tabId: 1 });
+  });
+
+  it('opens a tab from the plus and puts the cursor in the address', async () => {
+    mount();
+    await settled();
+
+    act(() => host?.querySelector<HTMLElement>('[data-testid="browser-tab-new-btn"]')?.click());
+
+    expect(tab).toHaveBeenLastCalledWith({ sessionId: 's1', action: 'new', tabId: undefined });
+    expect(document.activeElement).toBe(address());
+  });
+
+  it('takes the tab shortcuts while focus is in the pane, and swallows them', async () => {
+    mount();
+    await settled();
+    const field = address();
+
+    key(field, 'BracketRight', true);
+    expect(tab).toHaveBeenLastCalledWith({ sessionId: 's1', action: 'select', tabId: 4 });
+    key(field, 'BracketLeft', true);
+    expect(tab).toHaveBeenLastCalledWith({ sessionId: 's1', action: 'select', tabId: 4 });
+    key(field, 'KeyW');
+    expect(tab).toHaveBeenLastCalledWith({ sessionId: 's1', action: 'close', tabId: 1 });
+    key(field, 'KeyT');
+    expect(tab).toHaveBeenLastCalledWith({ sessionId: 's1', action: 'new', tabId: undefined });
+
+    const plain = new KeyboardEvent('keydown', { code: 'KeyW', bubbles: true, cancelable: true });
+    act(() => {
+      field?.dispatchEvent(plain);
+    });
+    expect(plain.defaultPrevented).toBe(false);
+    expect(tab).toHaveBeenCalledTimes(4);
+  });
+
+  it('says the conversation has no tabs once the last one closed', async () => {
+    setPane.mockResolvedValue({ ...PAGE, url: '', tabs: [], activeTabId: null });
+    mount();
+    await settled();
+
+    expect(tabs()).toEqual([]);
+    expect(host?.querySelector('[data-testid="chat-browser-pane-empty"]')?.textContent).toBe(
+      "This conversation's browser has no tabs open."
+    );
+  });
+});
+
+describe('the browser pane under overlays', () => {
+  const layers: HTMLElement[] = [];
+  /** Over the bottom-left of the page's hole, the way the context ring's tooltip reached it. */
+  const overPage = rect(1300, 300, 700, 40);
+
+  /** A portalled layer as Joy appends it to the body; the observer hears it on a microtask. */
+  const portal = async (role: string, html: string) => {
+    const layer = document.createElement('div');
+    layer.setAttribute('role', role);
+    layer.innerHTML = html;
+    layer.getBoundingClientRect = () => overPage;
+    await act(async () => {
+      document.body.appendChild(layer);
+    });
+    flushFrames();
+    layers.push(layer);
+    return layer;
+  };
+  const remove = async (layer: HTMLElement) => {
+    await act(async () => layer.remove());
+    flushFrames();
+    await act(async () => undefined);
+  };
+  const still = () => host?.querySelector<HTMLImageElement>('[data-testid="chat-browser-pane-still"]') ?? null;
+  /** Past the still's delay, with the capture's promise settled. */
+  const waitForStill = () => act(() => vi.advanceTimersByTimeAsync(80));
+
+  // In production the still's delay is a 50ms timer, and the awaited acts between a layer's coming
+  // and going can take that long on a loaded runner. Only timeouts are faked: frames are scripted above.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    for (const layer of layers.splice(0)) layer.remove();
+  });
+
+  it('keeps the page up under a tooltip that only shows text', async () => {
+    mount();
+    setPane.mockClear();
+    await portal('tooltip', 'Context 27k / 400k');
+    expect(setPane).not.toHaveBeenCalledWith(expect.objectContaining({ bounds: null }));
+  });
+
+  it('takes the page down under a menu over it', async () => {
+    mount();
+    setPane.mockClear();
+    await portal('menu', '<li role="menuitem" tabindex="-1">GPT-5</li>');
+    expect(lastBounds()).toBeNull();
+  });
+
+  it('draws a still of the page while it is held, and drops it once the page is back', async () => {
+    mount();
+    await act(async () => undefined);
+    const menu = await portal('menu', '<li role="menuitem" tabindex="-1">GPT-5</li>');
+    expect(still()).toBeNull();
+
+    await waitForStill();
+    expect(freezeFrame).toHaveBeenCalledTimes(1);
+    expect(freezeFrame).toHaveBeenCalledWith({ sessionId: 's1' });
+    expect(still()?.getAttribute('src')).toBe(STILL);
+
+    await remove(menu);
+    expect(lastBounds()).not.toBeNull();
+    expect(still()).toBeNull();
+  });
+
+  it('asks for no still when the page is back within the delay', async () => {
+    mount();
+    const menu = await portal('menu', '<li role="menuitem" tabindex="-1">GPT-5</li>');
+    await remove(menu);
+    await waitForStill();
+    expect(freezeFrame).not.toHaveBeenCalled();
+    expect(still()).toBeNull();
+  });
+
+  it('drops the still when the active tab changes underneath it', async () => {
+    mount();
+    await act(async () => undefined);
+    await portal('menu', '<li role="menuitem" tabindex="-1">GPT-5</li>');
+    await waitForStill();
+    expect(still()).not.toBeNull();
+
+    act(() => pageState?.({ ...PAGE, activeTabId: 4, sessionId: 's1' }));
+    expect(still()).toBeNull();
   });
 });

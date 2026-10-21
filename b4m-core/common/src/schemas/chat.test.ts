@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { SimplifiedChatRequestSchema, ChatAckSchema, ChatQuestPollResultSchema, ChatWaitResponseSchema } from './chat';
+import {
+  SimplifiedChatRequestSchema,
+  InsufficientCreditsErrorSchema,
+  ChatAckSchema,
+  ChatQuestPollResultSchema,
+  ChatWaitResponseSchema,
+} from './chat';
 import { chatContract } from '../api-contract/contracts/chat.contract';
 import { CHAT_HISTORY_ITEM_TYPES } from '../types/entities/SessionTypes';
 import { filterKnownTools, B4MLLMToolsList } from './llm';
@@ -181,5 +187,14 @@ describe('ChatWaitResponseSchema', () => {
     const schema = chatContract.responses[200].schema!;
     expect(schema.safeParse(waitBody).success).toBe(true);
     expect(schema.safeParse(baseAck).success).toBe(true);
+  });
+});
+
+describe('InsufficientCreditsErrorSchema', () => {
+  it('accepts both billing codes and rejects an unknown one', () => {
+    for (const errorCode of ['insufficient_credits', 'spend_cap_exceeded']) {
+      expect(InsufficientCreditsErrorSchema.safeParse({ error: 'e', errorCode }).success).toBe(true);
+    }
+    expect(InsufficientCreditsErrorSchema.safeParse({ error: 'e', errorCode: 'nope' }).success).toBe(false);
   });
 });

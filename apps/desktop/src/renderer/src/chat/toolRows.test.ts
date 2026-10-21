@@ -42,15 +42,15 @@ describe('toolRowLabel', () => {
   // would name nothing a reader recognises without the tool supplying the target's title.
   it('prefers a label the tool supplied over anything its arguments could say', () => {
     const sent = call('1', 'session_send', { session_id: 'b4e1', message: 'move MCP under Customize' });
-    expect(toolRowLabel({ ...sent, label: 'Messaged @T27: move MCP under Customize' })).toBe(
-      'Messaged @T27: move MCP under Customize'
+    expect(toolRowLabel({ ...sent, label: 'Messaged @Customize: move MCP under Customize' })).toBe(
+      'Messaged @Customize: move MCP under Customize'
     );
   });
 
   it('does not let a supplied label claim a call that failed or was refused', () => {
     const sent = call('1', 'session_send', { session_id: 'b4e1', message: 'hello' }, 'denied');
-    expect(toolRowLabel({ ...sent, label: 'Messaged @T27: hello' })).toBe('Did not message a session');
-    expect(toolRowLabel({ ...sent, status: 'error', label: 'Messaged @T27: hello' })).toBe(
+    expect(toolRowLabel({ ...sent, label: 'Messaged @Customize: hello' })).toBe('Did not message a session');
+    expect(toolRowLabel({ ...sent, status: 'error', label: 'Messaged @Customize: hello' })).toBe(
       'Failed to message a session'
     );
   });
@@ -292,5 +292,39 @@ describe('apply_patch rows', () => {
     const several = patched({ diffs: [diff('/r/a.ts', 3, 1), diff('/r/b.ts', 2, 0)] });
     expect(diffTotals([several, wrote('2', '/r/c.ts', 1, 1)])).toEqual({ added: 6, removed: 2 });
     expect(groupToolCalls([several])[0].diffstat).toEqual({ added: 5, removed: 1 });
+  });
+});
+
+describe('browser_scroll rows', () => {
+  it('reads as where the page was scrolled to, from the label the tool wrote', () => {
+    const scrolled = call('1', 'browser_scroll', { direction: 'down' });
+    expect(toolRowLabel({ ...scrolled, label: 'Scrolled down' })).toBe('Scrolled down');
+    expect(toolRowLabel(call('2', 'browser_scroll', { text: 'Pricing' }))).toBe('Scrolled to Pricing');
+  });
+
+  it('does not claim a scroll that failed', () => {
+    expect(toolRowLabel(call('1', 'browser_scroll', { text: 'Pricing' }, 'error'))).toBe('Failed to scroll to Pricing');
+    expect(toolRowLabel(call('2', 'browser_scroll', { ref: '12' }, 'error'))).toBe('Failed to scroll the page');
+  });
+
+  it('counts a run of scrolls', () => {
+    const [group] = groupToolCalls([call('1', 'browser_scroll'), call('2', 'browser_scroll')]);
+    expect(group.label).toBe('Scrolled 2 times');
+  });
+});
+
+describe('browser_tabs rows', () => {
+  it('reads as what happened to the tabs, from the label the tool wrote', () => {
+    const opened = call('1', 'browser_tabs', { action: 'new', url: 'https://example.com' });
+    expect(toolRowLabel({ ...opened, label: 'Opened tab: example.com' })).toBe('Opened tab: example.com');
+    expect(
+      toolRowLabel({ ...call('2', 'browser_tabs', { action: 'select', id: 2 }), label: 'Switched to tab: Docs' })
+    ).toBe('Switched to tab: Docs');
+  });
+
+  it('does not claim a tab change that failed', () => {
+    expect(toolRowLabel(call('1', 'browser_tabs', { action: 'select', id: 9 }, 'error'))).toBe(
+      'Failed to change browser tabs'
+    );
   });
 });

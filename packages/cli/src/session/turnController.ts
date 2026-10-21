@@ -14,6 +14,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { ReActAgent } from '@bike4mind/agents';
 import { isEarlyStop } from '@bike4mind/common';
 import type { ModelInfo } from '@bike4mind/common';
+import { PENDING_ASSISTANT_CONTENT } from '../storage';
 import type { SessionStore, ConfigStore, CommandHistoryStore, Session, Message, CliConfig } from '../storage';
 import type { CustomCommandStore } from '../storage/CustomCommandStore.js';
 import type { MessageBuilder } from '../utils/messageBuilder.js';
@@ -33,8 +34,8 @@ import { buildWorkflowState, withFlushedWorkflowState, type WorkflowStores } fro
 import { formatStep, extractCompactInstructions } from '../utils';
 import { renderWorkflowReminder } from '../utils/workflowReminder.js';
 import { logger } from '../utils/Logger';
-import { isTransientNetworkError } from '../llm/retryPolicy';
-import { isReadOnlyTool } from '../config/toolSafety.js';
+import { isConnectionDrop } from '../llm/modelCallError';
+import type { ToolCatalog } from '../tools/gateway/toolCatalog.js';
 import type { TodoStore } from '../tools/writeTodosTool.js';
 import type { DecisionStore } from '../tools/decisionLogTool.js';
 import type { BlockerStore } from '../tools/blockerTool.js';
@@ -59,6 +60,8 @@ export interface TurnContext {
   additionalDirectories: string[];
   featureRegistry: FeatureModuleRegistry | null;
   backgroundManager: BackgroundAgentManager | null;
+  /** Resolves which tools are read-only for parallel execution. */
+  toolCatalog: ToolCatalog;
   /**
    * Live workflow stores (todos / decisions / blockers) backing the
    * per-iteration workflow reminder (issue: re-inject live workflow state).
@@ -91,6 +94,16 @@ export interface TurnContext {
  * recurses with the same context for messages submitted mid-turn.
  */
 export async function runTurn(message: string, ctx: TurnContext): Promise<void> {
+  // Held across the whole turn: it snapshots the session below and writes it back after awaits.
+  const releaseSession = useCliStore.getState().holdSession();
+  try {
+    await runHeldTurn(message, ctx);
+  } finally {
+    releaseSession();
+  }
+}
+
+async function runHeldTurn(message: string, ctx: TurnContext): Promise<void> {
   const {
     agent,
     sessionStore,
@@ -105,6 +118,7 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
     additionalDirectories,
     featureRegistry,
     backgroundManager,
+    toolCatalog,
     todoStore,
     decisionStore,
     blockerStore,
@@ -185,7 +199,7 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
         });
 
         if (compactionPrompt) {
-          const result = await agent.run(compactionPrompt, { maxIterations: 1 });
+          const result = await agent.run(compactionPrompt, { maxIterations: 1, streamText: false });
 
           // Flush decisions/blockers logged in prior turns but not yet synced
           // onto the session, so the compacted session carries current workflow
@@ -247,7 +261,7 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
     const pendingAssistantMessage: Message = {
       id: uuidv4(),
       role: 'assistant',
-      content: '...',
+      content: PENDING_ASSISTANT_CONTENT,
       timestamp: new Date().toISOString(),
       metadata: {
         steps: [],
@@ -315,7 +329,7 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
         previousMessages: previousMessages.length > 0 ? previousMessages : undefined,
         signal: abortController.signal,
         parallelExecution: cliConfig.preferences.enableParallelToolExecution === true,
-        isReadOnlyTool,
+        isReadOnlyTool: toolName => toolCatalog.isReadOnly(toolName),
         workflowReminder,
         drainFeedback: diagnostics
           ? phase => diagnostics.drain(DRAIN_BUDGET_MS[phase], abortController.signal)
@@ -323,7 +337,7 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
         // Mid-loop recovery if a provider context-window error interrupts this
         // turn: compact the in-flight history once and retry, instead of
         // failing the turn and losing the user's work.
-        onContextLimit: createReactiveCompactionHandler(agent, activeSession, 1 + previousMessages.length + 1),
+        onContextLimit: createReactiveCompactionHandler(agent, activeSession),
       });
     } finally {
       diagnostics?.endTurn();
@@ -450,14 +464,13 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
     // Defense in depth: a bare network-level abort (e.g. `Error: aborted`
     // from a TLS socket close, the symptom that rendered as a cryptic
     // "❌ aborted") is not the user cancelling - it's the connection dropping.
-    // The streaming backend retries these and rewrites the message, but if a
+    // The streaming backend retries these (until reply text has streamed) and
+    // rewrites the message either way, but if a
     // bare one ever reaches here from another path (other backends, etc.),
     // surface something the user can act on rather than a one-word error.
-    // Reuse the shared retry-policy classifier so this stays in lockstep with
-    // the full set of transient patterns both transports retry (ETIMEDOUT,
-    // terminated, fetch failed, UND_ERR_SOCKET, ...) - not a hand-maintained subset.
+    // Same classifier the retry decision uses, so the two cannot drift.
     const rawMessage = error instanceof Error ? error.message : String(error);
-    if (error instanceof Error && isTransientNetworkError(error)) {
+    if (isConnectionDrop(error)) {
       console.error('\n❌ The connection to the server dropped mid-response. Type "continue" to resume.\n');
       logger.debug(`Full error details: ${error.stack || error.message}`);
       return;

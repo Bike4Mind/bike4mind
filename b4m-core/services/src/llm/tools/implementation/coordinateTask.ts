@@ -7,10 +7,14 @@ import {
 } from '@bike4mind/agents';
 import type { Logger } from '@bike4mind/observability';
 import type { ICompletionBackend, ICompletionOptionTools, ApiKeyTable } from '@bike4mind/llm-adapters';
-import { getLlmByModel } from '@bike4mind/llm-adapters';
+import { getLlmByModel, resolveDeprecatedModelId } from '@bike4mind/llm-adapters';
 import type { ModelInfo } from '@bike4mind/common';
 import { ServerSubagentOrchestrator } from '../../agents/ServerSubagentOrchestrator';
-import type { ServerSubagentTracker, SubagentHandoffSignal } from '../../agents/ServerSubagentOrchestrator';
+import type {
+  ServerSubagentTracker,
+  SubagentHandoffSignal,
+  SubagentToolPermissions,
+} from '../../agents/ServerSubagentOrchestrator';
 import { ServerAgentStore } from '../../agents/ServerAgentStore';
 import { isMemberCreditCapError } from '../../../creditService';
 
@@ -165,6 +169,13 @@ export interface CoordinateTaskToolDeps {
    * coordinator agent in-process; see `ServerOrchestratorDeps.checkMemberCreditCap`.
    */
   checkMemberCreditCap?: () => boolean | Promise<boolean>;
+
+  /**
+   * The parent run's tool-permission lists, forwarded to the coordinator's orchestrator;
+   * see `ServerOrchestratorDeps.toolPermissions`. DAG nodes inherit the same lists through
+   * their execution rows (`makeDagDispatcher` in apps/workers).
+   */
+  toolPermissions?: SubagentToolPermissions;
 }
 
 /**
@@ -232,6 +243,7 @@ export function createCoordinateTaskTool(deps: CoordinateTaskToolDeps): IComplet
         handoffSignal: deps.subagentHandoffSignal,
         optInTools: deps.optInTools,
         checkMemberCreditCap: deps.checkMemberCreditCap,
+        toolPermissions: deps.toolPermissions,
       });
 
       try {
@@ -310,7 +322,7 @@ export function createCoordinateTaskTool(deps: CoordinateTaskToolDeps): IComplet
         // user's session model (which can be a UI shortcut not provisioned
         // in every stage).
         const agentDef = agentStore.getAgent(resolvedAgentName);
-        const agentModel = agentDef?.model ?? deps.llm.currentModel;
+        const agentModel = resolveDeprecatedModelId(agentDef?.model ?? deps.llm.currentModel, 'coordinateTask');
         // Resolve the iteration cap from the agent def so the snapshot stored
         // on the child doc matches what `delegateToAgent` will enforce at run
         // time. Fall back to a safe default if the agent has no profile (the

@@ -1,10 +1,16 @@
-import type {
-  IDataLakeResearchConfigRepository,
-  IDataLakeResearchRunDocument,
-  IDataLakeResearchRunRepository,
-  ResearchScheduleSkipReason,
+import {
+  getQuestErrorCode,
+  insufficientCreditsError,
+  usdToCredits,
+  type IDataLakeResearchConfigRepository,
+  type IDataLakeResearchRunDocument,
+  type IDataLakeResearchRunRepository,
+  type IOrganizationRepository,
+  type IUserRepository,
+  type ResearchScheduleSkipReason,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { areCreditsEnforced } from '../billing/isOperationalBillingEnabled';
 import { researchRunChange } from '../dataLakeService/diffLakeConfig';
 import type { LakeGrant, ManageActor } from '../dataLakeService/manageRule';
 import {
@@ -27,7 +33,10 @@ import { normalizeResearchLevers } from './researchLevers';
 export type ResearchRunStarter =
   { trigger: 'on_demand'; actor: ManageActor; grants: readonly LakeGrant[] } | { trigger: 'periodic' };
 
-type ResearchRunRefusalReason = Exclude<ResearchScheduleSkipReason, 'review_backlog' | 'lake_inactive'>;
+type ResearchRunRefusalReason = Exclude<
+  ResearchScheduleSkipReason,
+  'review_backlog' | 'lake_inactive' | 'insufficient_credits'
+>;
 
 /**
  * A spend rail refused the start. Tagged so the scheduler can record WHICH rail as a skip reason
@@ -48,12 +57,28 @@ export function isResearchRunRefusal(error: unknown): error is ResearchRunRefuse
   return error instanceof BadRequestError && 'reason' in error && REFUSAL_REASONS.has(error.reason);
 }
 
+/**
+ * The credit pre-flight's refusal, recognized apart from the rails above because it is a 422
+ * `insufficient_credits` - the classifier the web UI's Add Credits CTA keys on - rather than one of
+ * this module's own 400 rails. The scheduler treats it as a skip like any other refusal: a broke
+ * owner clears, so a retry on the next tick is right and a `failed` tick is not.
+ */
+export function isResearchRunCreditRefusal(error: unknown): boolean {
+  return getQuestErrorCode(error) === 'insufficient_credits';
+}
+
 export interface StartResearchRunAdapters extends LakeConfigAuditAdapters {
   db: LakeConfigAuditAdapters['db'] & {
     dataLakeResearchConfigs: Pick<IDataLakeResearchConfigRepository, 'findByIdInLake' | 'recordRunStarted'>;
     dataLakeResearchRuns: Pick<IDataLakeResearchRunRepository, 'createRun' | 'countActiveByLake' | 'countStartedSince'>;
     // REQUIRED - see the matching note on ResearchConfigAdapters.
     lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
+    // REQUIRED, not optional: the balance pre-flight cannot run without them, and a caller that
+    // omitted them would silently regain the "spend with no balance behind it" behaviour this gate
+    // exists to close. `adminSettings` is already wired by `lakeConfigAuditDb` on both real paths.
+    adminSettings: NonNullable<LakeConfigAuditAdapters['db']['adminSettings']>;
+    users: Pick<IUserRepository, 'findById'>;
+    organizations: Pick<IOrganizationRepository, 'findById'>;
   };
   now?: () => Date;
 }
@@ -66,6 +91,66 @@ export interface StartResearchRunAdapters extends LakeConfigAuditAdapters {
 export const RESEARCH_RUNS_PER_LAKE_PER_DAY = 25;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Refuse to start a run the lake owner cannot pay for. The per-run ceiling bounds ONE run; this is
+ * what bounds them across runs, and it is the rail the 25-runs-a-day cap deliberately does not
+ * substitute for ($125/day per lake at the $5 ceiling).
+ *
+ * The ceiling, not the expected spend, is what has to be covered: a run may legitimately spend its
+ * whole ceiling, and `executeResearchRun` only stops once `spentMicroUsd` reaches it.
+ *
+ * Keys off `enforceCredits` alone, the same switch the settlement (`recordOperationalUsage` with
+ * `forceCreditBilling`, from `runLakeResearch`) keys off - a deployment that does not meter credits
+ * must not start refusing research, or the pre-flight would reject work it never charges. This is
+ * why it cannot be the settings-free `assertOwnerHasCredits` the embed path uses.
+ *
+ * A CHECK, not a reservation, the same gap every check-then-charge pre-flight in this codebase
+ * accepts: settlement moves the balance itself (once per run, for the ACTUAL spend), so reserving
+ * the ceiling here would double-charge and would need refunding on an early cancel.
+ *
+ * The holder lookup is deliberately NOT caught (unlike the org read below): every read before this
+ * one already fails the start closed, and starting a run whose balance could not be read is exactly
+ * the unbilled spend this gate exists to prevent.
+ */
+async function assertResearchRunAffordable(
+  lake: LakeConfigAuditLakeRef,
+  costCeilingMicroUsd: number,
+  { db }: Pick<StartResearchRunAdapters, 'db'>
+): Promise<void> {
+  // No logger: this path's logger is the narrower LakeConfigAuditLogger, and the settings read only
+  // uses the logger for its own cache diagnostics.
+  const settings = { adminSettings: db.adminSettings };
+  if (!(await areCreditsEnforced(settings))) return;
+
+  const owner = await db.users.findById(lake.createdByUserId);
+  if (!owner) {
+    // No owner means nothing can be billed (runLakeResearch drops the spend the same way), so the
+    // run must not start rather than spend with no balance behind it.
+    throw insufficientCreditsError('This data lake has no owner able to pay for a research run');
+  }
+
+  // The SAME holder the settlement charges - the owner's org pool when they belong to one, the owner
+  // otherwise - resolved the same best-effort way `runLakeResearch` does, so the check and the
+  // charge cannot disagree about who pays.
+  const organization = owner.organizationId
+    ? await db.organizations.findById(owner.organizationId).catch(() => null)
+    : null;
+  const holder = organization ?? owner;
+
+  // Deterministic round-up, never the stochastic settlement rounding: eligibility must not turn on a
+  // coin flip. The ceiling floors at 1 micro-USD (normalizeResearchLevers), so this is at least the
+  // 1-credit floor `usdToCredits` guarantees.
+  const requiredCredits = usdToCredits(costCeilingMicroUsd / 1_000_000);
+  const balance = holder.currentCredits ?? 0;
+  if (balance < requiredCredits) {
+    throw insufficientCreditsError(
+      organization
+        ? `The organization that owns this data lake does not have enough credits for a research run. It has ${Math.floor(balance)} credits and this run can spend up to ${requiredCredits}.`
+        : `This data lake's owner does not have enough credits for a research run. They have ${Math.floor(balance)} credits and this run can spend up to ${requiredCredits}.`
+    );
+  }
+}
 
 export async function startResearchRun(
   configId: string,
@@ -102,13 +187,22 @@ export async function startResearchRun(
     );
   }
 
+  // Normalized ONCE: this snapshot is what the loop executes AND what the pre-flight below prices,
+  // so a second call could only let the two disagree.
+  //
+  // Re-normalized at START, not copied raw: this snapshot is what the loop executes and what the
+  // run reports it ran with, so it has to be the post-clamp values or the two would disagree for
+  // any config stored before a bound tightened.
+  const levers = normalizeResearchLevers(config);
+
+  // Last of the three rails, so the two cheap common mistakes (a double-clicked Run, a burst) keep
+  // their clearer messages, and before the row is written so a refusal leaves no run behind.
+  await assertResearchRunAffordable(lake, levers.costCeilingMicroUsd, { db });
+
   const run = await db.dataLakeResearchRuns.createRun({
     dataLakeId,
     configId,
-    // Re-normalized at START, not copied raw: this snapshot is what the loop executes and what the
-    // run reports it ran with, so it has to be the post-clamp values or the two would disagree for
-    // any config stored before a bound tightened.
-    levers: normalizeResearchLevers(config),
+    levers,
     // How THIS run started, not the config's trigger: Run now on a scheduled config is still on-demand.
     trigger: starter.trigger,
     startedByUserId: starter.trigger === 'on_demand' ? starter.actor.userId : null,

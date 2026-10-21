@@ -30,21 +30,45 @@ import type {
   ChatVideoJob,
   ChatVideoLinkResult,
   CreateCodeSessionRequest,
-  CreateCodeSessionResult,
   ProjectInspection,
+  RecentFolder,
   ContextBoundaryResult,
   ReasoningEffortSetting,
   SendMessageRequest,
   SendMessageResult,
+  SpawnSuggestionResult,
+  StartSpawnSuggestionRequest,
   ToolAccessState,
   UpdateProjectRequest,
   UpdateProjectResult,
 } from './chat';
 import type { DevLogRecord, DevLogSnapshot } from './devLog';
+import type { ShareDirectoryResult } from './directoryRequest';
 import type { PrActionResult, PrBarState, PrOption, PrSummaryEvent } from './pullRequest';
+import type { SidebarSectionsState } from './sidebarSections';
 import type { SkillsState } from './skills';
+import type { PermissionMutationResult, PermissionRuleLists, PermissionScope, PermissionsState } from './permissions';
+import type {
+  SkillMarketDetailResult,
+  SkillMarketFilters,
+  SkillMarketImportRequest,
+  SkillMarketImportResult,
+  SkillMarketImportsResult,
+  SkillMarketListingRef,
+  SkillMarketPage,
+  SkillMarketWebTarget,
+} from './skillMarket';
+import type {
+  TerminalAttachment,
+  TerminalCreateRequest,
+  TerminalCreateResult,
+  TerminalDataEvent,
+  TerminalInfo,
+  TerminalsChangedEvent,
+} from './terminal';
 import type { UpdateInstallResult, UpdateState } from './update';
 import type { AccountUsageResult, UsageWindowId } from './usage';
+import type { FleetState } from './fleet';
 
 /**
  * IPC contract shared by the main process and the preload bridge.
@@ -69,7 +93,14 @@ export const IPC_CHANNELS = {
   accountGetCredits: 'account:get-credits',
   accountGetProfile: 'account:get-profile',
   usageGetHistory: 'usage:get-history',
+  fleetGetState: 'fleet:get-state',
+  fleetRefresh: 'fleet:refresh',
+  fleetSetConsent: 'fleet:set-consent',
+  fleetSendNow: 'fleet:send-now',
+  /** main -> renderer push of the integration's state; never carries the key. */
+  fleetStateChanged: 'fleet:state-changed',
   chatListModels: 'chat:list-models',
+  chatListSuggestionModels: 'chat:list-suggestion-models',
   chatSetSessionModel: 'chat:set-session-model',
   chatSetSessionReasoningEffort: 'chat:set-session-reasoning-effort',
   chatSetSessionPinned: 'chat:set-session-pinned',
@@ -84,6 +115,8 @@ export const IPC_CHANNELS = {
   chatCreateCodeSession: 'chat:create-code-session',
   chatUpdateProject: 'chat:update-project',
   chatPickProjectDirectory: 'chat:pick-project-directory',
+  chatListRecentFolders: 'chat:list-recent-folders',
+  chatRemoveRecentFolder: 'chat:remove-recent-folder',
   chatInspectProject: 'chat:inspect-project',
   chatAddContextDirectory: 'chat:add-context-directory',
   chatRemoveContextDirectory: 'chat:remove-context-directory',
@@ -105,6 +138,8 @@ export const IPC_CHANNELS = {
   chatSendQueuedNow: 'chat:send-queued-now',
   /** main -> renderer push; one session's queue of typed-ahead messages changed. */
   chatQueueChanged: 'chat:queue-changed',
+  chatStartSpawnSuggestion: 'chat:start-spawn-suggestion',
+  chatDismissSpawnSuggestion: 'chat:dismiss-spawn-suggestion',
   chatRespondToApproval: 'chat:respond-to-approval',
   chatPickAttachments: 'chat:pick-attachments',
   chatAddAttachments: 'chat:add-attachments',
@@ -145,6 +180,13 @@ export const IPC_CHANNELS = {
    * nothing the MODEL can reach may widen this - the same rule as toolsGrantAccess.
    */
   chatSetProjectSkillsTrusted: 'chat:set-project-skills-trusted',
+  skillMarketBrowse: 'skills:market-browse',
+  skillMarketRecommended: 'skills:market-recommended',
+  skillMarketListing: 'skills:market-listing',
+  /** Only from the Import / Update buttons: it writes a skill to the user's account. */
+  skillMarketImport: 'skills:market-import',
+  skillMarketImports: 'skills:market-imports',
+  skillMarketOpenOnWeb: 'skills:market-open-on-web',
   mcpGetServers: 'mcp:get-servers',
   mcpAddServer: 'mcp:add-server',
   mcpUpdateServer: 'mcp:update-server',
@@ -156,6 +198,13 @@ export const IPC_CHANNELS = {
   toolsGetAccess: 'tools:get-access',
   toolsGrantAccess: 'tools:grant-access',
   toolsRevokeAccess: 'tools:revoke-access',
+  /**
+   * Standing permission rules. Renderer -> main only, from Settings: like toolsGrantAccess,
+   * nothing the MODEL can reach may write a rule.
+   */
+  permissionsGetState: 'permissions:get-state',
+  permissionsSetRules: 'permissions:set-rules',
+  permissionsSetSharing: 'permissions:set-sharing',
   updateGetState: 'update:get-state',
   updateCheck: 'update:check',
   updateDownload: 'update:download',
@@ -170,6 +219,11 @@ export const IPC_CHANNELS = {
    */
   browserSetPane: 'browser:set-pane',
   /**
+   * A still of the page the pane is holding off screen, for the renderer to draw in its place.
+   * Renderer -> main.
+   */
+  browserFreezeFrame: 'browser:freeze-frame',
+  /**
    * Open what the user typed in the pane's url bar. Renderer -> main.
    *
    * The USER's navigation, not the agent's, so it goes nowhere near the tool approval gate -
@@ -179,6 +233,8 @@ export const IPC_CHANNELS = {
   browserNavigate: 'browser:navigate',
   /** Back, forward or reload from the pane's url bar. Renderer -> main. */
   browserGo: 'browser:go',
+  /** Open, switch to or close a tab from the pane's tab strip. Renderer -> main. */
+  browserTab: 'browser:tab',
   /**
    * main -> renderer push; one conversation's page moved, started loading, or failed to.
    *
@@ -234,6 +290,28 @@ export const IPC_CHANNELS = {
   prGetSummaries: 'pr:get-summaries',
   /** main -> renderer push; one conversation's sidebar PR icon changed. */
   prSummaryChanged: 'pr:summary-changed',
+  /** The user's sidebar sections. Every change answers with the whole state. */
+  sidebarGetSections: 'sidebar:get-sections',
+  sidebarCreateSection: 'sidebar:create-section',
+  sidebarRenameSection: 'sidebar:rename-section',
+  sidebarDeleteSection: 'sidebar:delete-section',
+  sidebarMoveSession: 'sidebar:move-session',
+  /**
+   * The user's terminals; see @shared/terminal. Input and resize are one-way sends rather than
+   * invokes: a keystroke has nothing to wait for, and a round trip each would be felt.
+   */
+  terminalList: 'terminal:list',
+  terminalCreate: 'terminal:create',
+  terminalAttach: 'terminal:attach',
+  terminalDetach: 'terminal:detach',
+  terminalInput: 'terminal:input',
+  terminalResize: 'terminal:resize',
+  terminalRestart: 'terminal:restart',
+  terminalClose: 'terminal:close',
+  /** main -> renderer push, batched; only to a window attached to that terminal. */
+  terminalData: 'terminal:data',
+  /** main -> renderer push; one conversation's tab list changed. */
+  terminalsChanged: 'terminal:changed',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
@@ -285,9 +363,31 @@ export interface BrowserPaneState {
    * of carrying it rather than letting the pane show a page that is quietly out of date.
    */
   error: string;
+  /**
+   * Every tab the conversation has open, in strip order. The fields above are the ACTIVE tab's;
+   * main owns which one that is, so the agent switching tabs and the user clicking one are the
+   * same push.
+   */
+  tabs: BrowserTabSummary[];
+  /** Null when the conversation has no tab open. */
+  activeTabId: number | null;
+}
+
+/** One entry in the pane's tab strip. */
+export interface BrowserTabSummary {
+  /** Stable for the tab's life and never reused within a conversation. */
+  id: number;
+  title: string;
+  url: string;
+  loading: boolean;
 }
 
 export type BrowserPageStateEvent = BrowserPaneState & { sessionId: string };
+
+/** Which conversation's held page to capture. */
+export interface BrowserFreezeFrameRequest {
+  sessionId: string;
+}
 
 /** Which conversation's browser to send to `url`. The url is resolved again in main. */
 export interface BrowserNavigateRequest {
@@ -302,6 +402,43 @@ export interface BrowserGoRequest {
   sessionId: string;
   action: BrowserGoAction;
 }
+
+export type BrowserTabAction = 'new' | 'select' | 'close';
+
+/** `tabId` names the tab for select and close; new ignores it. */
+export interface BrowserTabRequest {
+  sessionId: string;
+  action: BrowserTabAction;
+  tabId?: number;
+}
+
+/** The request half of starting a session; see CreatedSession for the reply. */
+export interface CreateSessionRequest {
+  /**
+   * The user sidebar section the new session belongs to. Main assigns it right after minting the
+   * id and before replying, so the row never shows in the default groups first.
+   */
+  sectionId?: string;
+}
+
+/**
+ * A new session, plus the sidebar sections as main left them when the request named a section.
+ * The renderer applies both together, so the row's first render is already inside the section.
+ *
+ * `placementFailed` means a section was asked for but the change could not be saved; the
+ * session still exists and starts in the default groups.
+ */
+export interface CreatedSession {
+  session: ChatSessionSummary;
+  sidebarSections?: SidebarSectionsState;
+  placementFailed?: boolean;
+}
+
+/** A Code session's create request, plus the same optional section the Chat one takes. */
+export type CreateCodeSessionIpcRequest = CreateCodeSessionRequest & CreateSessionRequest;
+
+/** A Code session's create reply - `ok: false` never carries placement. */
+export type CreateCodeSessionIpcResult = ({ ok: true } & CreatedSession) | { ok: false; error: string };
 
 /** The whole surface exposed on `window.b4m`. Mirrored in src/preload/index.d.ts. */
 export interface DesktopApi {
@@ -357,12 +494,23 @@ export interface DesktopApi {
      */
     getHistory(window: UsageWindowId, force?: boolean): Promise<AccountUsageResult>;
   };
+  fleet: {
+    getState(): Promise<FleetState>;
+    /** Read Fleet's installer file again. Its key stays in main; the state never carries it. */
+    refresh(): Promise<FleetState>;
+    /** Off empties the unsent queue, and nothing is recorded until it is on again. */
+    setConsent(consent: boolean): Promise<FleetState>;
+    sendNow(): Promise<FleetState>;
+    onStateChanged(listener: (state: FleetState) => void): () => void;
+  };
   chat: {
     /**
      * Models this deployment offers the agent, from the server's own catalog. `force` skips
      * the main-process cache, which is what a "try again" affordance needs.
      */
     listModels(force?: boolean): Promise<ChatModelCatalog>;
+    /** The models Settings may pin the next-prompt hint to: small hosted ones, then local ones. */
+    listSuggestionModels(): Promise<ChatModelCatalog>;
     /** Pin a conversation to a model. Null when the session is gone. */
     setSessionModel(sessionId: string, model: string): Promise<ChatSessionSummary | null>;
     /** How hard this conversation's model should think. Null when the session is gone. */
@@ -378,12 +526,12 @@ export interface DesktopApi {
     setSessionArchived(sessionId: string, archived: boolean): Promise<ChatSessionSummary | null>;
     listSessions(): Promise<ChatSessionSummary[]>;
     /** Start a Chat session: no project, the mode everything before this was. */
-    createSession(): Promise<ChatSessionSummary>;
+    createSession(request?: CreateSessionRequest): Promise<CreatedSession>;
     /**
      * Start a Code session, creating or adopting its worktree first when one is asked for.
      * A request with no `directory` creates an UNBOUND session, which the chip row then binds.
      */
-    createCodeSession(request: CreateCodeSessionRequest): Promise<CreateCodeSessionResult>;
+    createCodeSession(request: CreateCodeSessionIpcRequest): Promise<CreateCodeSessionIpcResult>;
     /**
      * Ground a Code session that already exists: its first directory, or a different directory,
      * branch or workspace choice. Refused while the session is busy - see UpdateProjectResult.
@@ -391,10 +539,17 @@ export interface DesktopApi {
     updateProject(request: UpdateProjectRequest): Promise<UpdateProjectResult>;
     /** Open the OS folder picker for a project root. Null when the user cancels. */
     pickProjectDirectory(): Promise<string | null>;
+    /** Recently used project folders that still exist, most recent first. */
+    listRecentFolders(): Promise<RecentFolder[]>;
+    /** Forget one; the folder itself is untouched. Resolves to the list that is left. */
+    removeRecentFolder(directory: string): Promise<RecentFolder[]>;
     /** Read a directory's branches, for the branch chip. */
     inspectProject(directory: string): Promise<ProjectInspection>;
-    /** Grant one more folder to a Code session. Opens the folder picker; null when cancelled. */
-    addContextDirectory(sessionId: string): Promise<ChatSessionSummary | null>;
+    /**
+     * Share one more folder with this conversation: `path` when given (`/add-dir <path>`), the
+     * folder picker otherwise. Allowed at any point in the session, a running turn included.
+     */
+    addContextDirectory(sessionId: string, path?: string): Promise<ShareDirectoryResult>;
     removeContextDirectory(sessionId: string, directory: string): Promise<ChatSessionSummary | null>;
     /** Null when the session is gone (deleted in another window, or a stale id). */
     getSession(sessionId: string): Promise<ChatSession | null>;
@@ -431,8 +586,9 @@ export interface DesktopApi {
      * whether to call is the renderer's decision (see promptSuggestions.ts).
      *
      * The result is a DRAFT for the input box. Nothing on this channel can send a message.
+     * `model` is the Settings pick; null or omitted is automatic.
      */
-    suggestNextPrompt(sessionId: string): Promise<string | null>;
+    suggestNextPrompt(sessionId: string, model?: string | null): Promise<string | null>;
     /**
      * Messages typed ahead for this conversation, waiting for the live turn to finish. Read on
      * open for the same reason as getSessionStatuses: the pushes below carry only CHANGES, and
@@ -452,6 +608,13 @@ export interface DesktopApi {
     sendQueuedMessageNow(sessionId: string, queuedId: string): Promise<void>;
     /** Subscribe to queue changes; returns the unsubscribe. */
     onQueueChanged(listener: (event: ChatQueueEvent) => void): () => void;
+    /**
+     * Start a pending spawn suggestion with the user's edits; allowed while a reply is running.
+     * Suggestions arrive with the session itself, and changes as the 'spawn-suggestions' stream
+     * event carrying the whole list.
+     */
+    startSpawnSuggestion(request: StartSpawnSuggestionRequest): Promise<SpawnSuggestionResult>;
+    dismissSpawnSuggestion(sessionId: string, suggestionId: string): Promise<SpawnSuggestionResult>;
     /** Open the OS file picker and take in whatever is chosen. Resolves empty if the user cancels. */
     pickAttachments(sessionId: string): Promise<AddAttachmentsResult>;
     /** Take in dropped or pasted files. The bytes are written to disk before this resolves. */
@@ -560,6 +723,26 @@ export interface DesktopApi {
     setProjectSkillsTrusted(sessionId: string, trusted: boolean): Promise<SkillsState>;
   };
   /**
+   * The Skill Market, read through main (SkillMarket.ts). Nothing here rejects: a signed-out or
+   * failed call comes back as `error` (or `ok: false`) on the result, which the panel renders.
+   */
+  skillMarket: {
+    /** One page of listings, 1-based, with the web's filters. */
+    browse(filters: SkillMarketFilters, page: number): Promise<SkillMarketPage>;
+    recommended(): Promise<SkillMarketPage>;
+    /** A listing's detail, with an update offer when the user's imported copy is behind. */
+    listing(ref: SkillMarketListingRef): Promise<SkillMarketDetailResult>;
+    /**
+     * Import a listing, or update an imported copy in place. On success the next skills read
+     * (picker, Customize, a turn) sees it without waiting for the account-skill cache.
+     */
+    importListing(request: SkillMarketImportRequest): Promise<SkillMarketImportResult>;
+    /** The account's market imports, and which have a newer approved version. */
+    imports(): Promise<SkillMarketImportsResult>;
+    /** Open a market page on the web. False when there was nothing valid to open. */
+    openOnWeb(target: SkillMarketWebTarget): Promise<boolean>;
+  };
+  /**
    * The agent's browser, as something the user can watch.
    *
    * The page takes the user's own clicks and keystrokes directly, and the agent drives it
@@ -569,9 +752,15 @@ export interface DesktopApi {
   browser: {
     /** Draw this conversation's page at these bounds, or nothing. Returns what the bar draws. */
     setPane(request: BrowserPaneRequest): Promise<BrowserPaneState>;
+    /**
+     * The page held off screen since the last null-bounds report, as an image data URL, or null
+     * when nothing is held or it painted nothing.
+     */
+    freezeFrame(request: BrowserFreezeFrameRequest): Promise<string | null>;
     /** Open a url the user typed. Rejects with a reason for a scheme that is refused. */
     navigate(request: BrowserNavigateRequest): Promise<BrowserPaneState>;
     go(request: BrowserGoRequest): Promise<BrowserPaneState>;
+    tab(request: BrowserTabRequest): Promise<BrowserPaneState>;
     /** Subscribe to page state; returns the unsubscribe. */
     onPageState(listener: (event: BrowserPageStateEvent) => void): () => void;
     /**
@@ -617,11 +806,28 @@ export interface DesktopApi {
     /** Subscribe to connection-state pushes; returns the unsubscribe. */
     onChanged(listener: (state: McpServersState) => void): () => void;
   };
+  /** User-made sidebar sections; see @shared/sidebarSections. */
+  sidebar: {
+    getSections(): Promise<SidebarSectionsState>;
+    /** Makes a section and, when given a session, moves it in. A blank name changes nothing. */
+    createSection(name: string, sessionId?: string): Promise<SidebarSectionsState>;
+    renameSection(sectionId: string, name: string): Promise<SidebarSectionsState>;
+    /** Deletes the section only; its sessions go back to the default groups. */
+    deleteSection(sectionId: string): Promise<SidebarSectionsState>;
+    /** Null takes the session out of its section. */
+    moveSession(sessionId: string, sectionId: string | null): Promise<SidebarSectionsState>;
+  };
   tools: {
     getAccess(): Promise<ToolAccessState>;
     /** Opens the OS folder picker. Resolves unchanged if the user cancels. */
     grantAccess(): Promise<ToolAccessState>;
     revokeAccess(root: string): Promise<ToolAccessState>;
+  };
+  permissions: {
+    getState(): Promise<PermissionsState>;
+    /** Replaces one scope's lists. Refused, with the reason, when any rule does not parse. */
+    setRules(scope: PermissionScope, lists: PermissionRuleLists): Promise<PermissionMutationResult>;
+    setSharing(share: boolean): Promise<PermissionsState>;
   };
   pullRequests: {
     /**
@@ -642,6 +848,26 @@ export interface DesktopApi {
     /** Every conversation's PR icon for the sidebar, from what main already knows. */
     getSummaries(): Promise<PrSummaryEvent[]>;
     onSummaryChanged(listener: (event: PrSummaryEvent) => void): () => void;
+  };
+  /**
+   * The user's own terminals. Reached from the terminal panel and from nowhere else; the agent
+   * has no tool on this surface. See @shared/terminal.
+   */
+  terminal: {
+    list(sessionId: string): Promise<TerminalInfo[]>;
+    /** Spawns the conversation's login shell in its working directory, or home with none. */
+    create(request: TerminalCreateRequest): Promise<TerminalCreateResult>;
+    /** Start receiving one terminal's output; answers with what it already printed. */
+    attach(terminalId: string): Promise<TerminalAttachment | null>;
+    detach(terminalId: string): void;
+    write(terminalId: string, data: string): void;
+    resize(terminalId: string, cols: number, rows: number): void;
+    /** A fresh shell in the same tab; the old one is ended first. */
+    restart(terminalId: string): Promise<TerminalInfo | null>;
+    /** Ends the shell and drops the tab. */
+    close(terminalId: string): Promise<void>;
+    onData(listener: (event: TerminalDataEvent) => void): () => void;
+    onChanged(listener: (event: TerminalsChangedEvent) => void): () => void;
   };
   shell: {
     /**

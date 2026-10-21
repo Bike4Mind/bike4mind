@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { lakeMembershipRemovalRepository } from '@bike4mind/database';
-import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
-import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
+import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
+import { lakeMembershipAuditDb } from '@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb';
 import { lakeWriteToolDb } from '@server/dataLakes/lakeWriteToolDb';
 
 describe('lakeWriteToolDb', () => {

@@ -19,15 +19,31 @@ directories:
 files:
   - out/**
   - package.json
+  # node-pty ships prebuilt binaries for every platform, plus Windows debug symbols (~20 MB)
+  # and the sources it would compile from without them; none of that is needed to run.
+  - "!**/node_modules/node-pty/prebuilds/*/*.pdb"
+  - "!**/node_modules/node-pty/{src,third_party,scripts,binding.gyp}"
+  - "!**/node_modules/node-pty/lib/*.test.js"
 
 asar: true
+# node-pty is the only native dependency, and it is N-API with prebuilt binaries for every target,
+# so Electron's ABI is irrelevant to it. A rebuild would compile it from source (needing a C++
+# toolchain on the packaging machine) and ship a different binary from the one dev runs.
+npmRebuild: false
+# A native module cannot be loaded from inside the archive, and node-pty's spawn-helper has to be
+# a real executable on disk: node-pty rewrites its path to app.asar.unpacked itself. Listed
+# rather than left to electron-builder's native-module detection, which looks for .node files and
+# would not know the helper binary beside them is needed too.
+asarUnpack:
+  - "**/node_modules/node-pty/**"
+artifactName: ${productName}-${version}-${arch}.${ext}
 
 mac:
   icon: build/icon.icns
   category: public.app-category.developer-tools
   target:
-    # zip alongside dmg because that is the format an auto-updater consumes on macOS
-    # (T44); the dmg is only the human-facing installer.
+    # zip alongside dmg because that is the format an auto-updater consumes on macOS;
+    # the dmg is only the human-facing installer.
     - target: dmg
       arch: [arm64, x64]
     - target: zip
@@ -66,12 +82,23 @@ win:
   # from WIN_CSC_LINK + WIN_CSC_KEY_PASSWORD (or the platform-neutral CSC_LINK +
   # CSC_KEY_PASSWORD). Unsigned installers work, behind a SmartScreen warning.
 
+linux:
+  icon: build/icon.png
+  executableName: bike4mind
+  category: Development
+  target:
+    - target: AppImage
+      arch: [x64]
+
+appImage:
+  artifactName: ${productName}-${version}-x64.${ext}
+
 nsis:
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
   artifactName: ${productName}-${version}-setup.${ext}
 
-# The auto-updater lands in T44. Nothing publishes from here yet, and `--publish never`
+# The auto-updater does not publish from here yet, and `--publish never`
 # on the package scripts keeps a stray GH_TOKEN in the environment from changing that.
 publish: null

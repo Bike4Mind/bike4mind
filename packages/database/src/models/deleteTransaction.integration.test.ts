@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import mongoose from 'mongoose';
 import type { IMongoDocument } from '@bike4mind/common';
 import { BaseRepository, softDeletePlugin, withTransaction } from '@bike4mind/db-core';
-import { createMongoReplSet } from '../__test__/createMongoServer';
+import { createMongoReplSet, settleAutoIndexBuilds } from '../__test__/createMongoServer';
 
 /**
  * Regression guard for org-groups #1228: `withTransaction(() => repo.delete(id))` must actually
@@ -32,11 +32,12 @@ let softRepo: TxnRepo;
 
 beforeAll(async () => {
   server = await createMongoReplSet();
-  await mongoose.connect(server.getUri());
+  await mongoose.connect(server.getUri(), { autoIndex: false });
   HardModel = mongoose.model<TxnDoc>('TxnHard', hardSchema);
   SoftModel = mongoose.model<TxnDoc>('TxnSoft', softSchema);
   hardRepo = new TxnRepo(HardModel);
   softRepo = new TxnRepo(SoftModel);
+  await settleAutoIndexBuilds(mongoose);
 }, 60000);
 
 afterAll(async () => {

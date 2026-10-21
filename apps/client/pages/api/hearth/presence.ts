@@ -1,7 +1,7 @@
 import { hearthRepository, MAX_ROSTER_ROWS } from '@bike4mind/database';
 import { ApiKeyScope, NotFoundError, UnauthorizedError } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { requireUser } from '@server/middlewares/requireUser';
 import { toWireHearthPresence } from '@server/utils/hearthWire';

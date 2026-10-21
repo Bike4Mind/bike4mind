@@ -30,7 +30,8 @@
     "title": "Dziennik zmian"
   },
   "feedback": {
-    "send": "Wyślij opinie"
+    "send": "Wyślij opinie",
+    "rollupTitle": "Twoje opinie"
   },
   "terms_policies": "Warunki i zasady",
   "login": "Zaloguj się",
@@ -166,7 +167,8 @@
     "messages": "Wiadomości",
     "invites": "Zaproszenia",
     "sendMessage": "Wyślij wiadomość",
-    "noMessages": "Brak wiadomości"
+    "noMessages": "Brak wiadomości",
+    "title_unread": "Skrzynka odbiorcza, nieprzeczytane elementy"
   },
   "addSomething": "Dodaj {{ name }}",
   "deleteAllSomething": "Usuń wszystkie {{ name }}",
@@ -286,7 +288,30 @@
     "renews_on": "Odnowi się w {{ date }}"
   },
   "billing": {
-    "title": "Fakturowanie"
+    "title": "Fakturowanie",
+    "balance": "Saldo",
+    "credits_heading": "Doładuj kredyty",
+    "credits_sub": "Jednorazowe pakiety dodawane do salda. Bez subskrypcji.",
+    "credits_sub_with_plan": "Jednorazowe pakiety, dodatkowo do miesięcznego limitu.",
+    "free_plan": "Darmowy",
+    "free_plan_detail": "Płać za użycie pakietami kredytów",
+    "low_org": "Administrator organizacji może dodać kredyty do tego konta.",
+    "low_with_plan": "Doładuj, aby pracować dalej do odnowienia limitu.",
+    "low_without_plan": "Plan dodaje kredyty co miesiąc; pakiet doładowuje od razu.",
+    "payment_failed": "Płatność nie powiodła się",
+    "plan": "Plan",
+    "plan_fallback": "Subskrypcja",
+    "plan_unavailable": "Niedostępne",
+    "plan_unavailable_detail": "Nie udało się wczytać Twojego planu.",
+    "plans_change": "Twój plan",
+    "plans_change_sub": "Zarządzaj subskrypcją, zmień ją lub anuluj.",
+    "plans_heading": "Plany",
+    "plans_heading_sub": "Plany miesięczne z limitem kredytów.",
+    "plans_upgrade": "Ulepsz",
+    "plans_upgrade_sub": "Otrzymuj miesięczny limit kredytów zamiast doładowywać ręcznie.",
+    "retry": "Spróbuj ponownie",
+    "see_plans": "Zobacz plany",
+    "top_up": "Doładuj"
   },
   "credits": {
     "title": "Kredyty",
@@ -314,7 +339,8 @@
     "usage_pattern": "Na podstawie wzorca użycia z ostatnich {{days}} dni",
     "credits_used": "Użyte Kredyty",
     "credits_purchased": "Kupione Kredyty",
-    "net_credits": "Kredyty Netto"
+    "net_credits": "Kredyty Netto",
+    "unit": "kredyty"
   },
   "time": {
     "last_7_days": "Ostatnie 7 dni",
@@ -362,7 +388,15 @@
       "completed": "Zakończone",
       "pending": "Oczekujące",
       "failed": "Niepowodzenie"
-    }
+    },
+    "buy_pack": "Kup {{credits}} kredytów za {{price}}",
+    "choose_pack": "Wybierz pakiet kredytów",
+    "history_usage_hint": "Tu widać tylko zakupy.",
+    "organization_credits_active": "Kredyty organizacji są aktywne",
+    "rate_per_thousand": "{{rate}} za 1000 kredytów",
+    "see_usage": "Zobacz użycie",
+    "shared_rate": "Każdy pakiet ma tę samą stawkę: {{rate}} za 1000 kredytów.",
+    "switch_to_personal": "Przełącz się na konto osobiste, aby kupić kredyty do użytku osobistego."
   },
   "settings": {
     "title": "Ustawienia",
@@ -531,7 +565,7 @@
   },
   "subscription_modal": {
     "title": "Subskrypcja",
-    "description": "Uzyskaj dostęp do każdego głównego modelu AI za pośrednictwem jednego zintegrowanego interfejsu. Uruchom zaawansowane modele, takie jak Deepseek R1, prywatnie.",
+    "description": "Uzyskaj dostęp do każdego głównego modelu AI za pośrednictwem jednego zintegrowanego interfejsu.",
     "no_free_tier": "BRAK BEZPŁATNEGO POZIOMU - SKONCENTROWANE NA PROFESJONALISTACH.",
     "credits_rollover": "Niewykorzystane kredyty przechodzą na 3 miesiące.",
     "monthly_billing": "Fakturowanie miesięczne",
@@ -543,7 +577,9 @@
     "personal": "Osobisty",
     "business": "Biznesowy",
     "team": "Zespół",
-    "enterprise": "Przedsiębiorstwo"
+    "enterprise": "Przedsiębiorstwo",
+    "audience_label": "Rodzaj planu",
+    "includes": "Zawiera"
   },
   "agents": {
     "title": "Agenci",
@@ -572,5 +608,13 @@
   "skills": {
     "title": "Umiejętności",
     "command_palette_description": "Zarządzaj wielokrotnego użytku wzorcami instrukcji"
+  },
+  "apiKeys": {
+    "title": "Klucze API"
+  },
+  "connections": {
+    "menuTooltip": "Integracje, takie jak Google Drive i Slack, oraz klucze API do Twojego kodu",
+    "sections": "Sekcje połączeń",
+    "title": "Połączenia"
   }
 }

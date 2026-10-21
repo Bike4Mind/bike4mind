@@ -10,7 +10,7 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 // Direct file imports (NOT the @server/deepAgent barrel - its subtree pulls the
 // Lambda-runtime import graph, which deadlocks module init under Next dev).
 import { enrollMissionForAgent, listMissionsForAgent } from '@server/deepAgent/missions';
-import { MongoDeepAgentStore } from '@server/deepAgent/store';
+import { MongoDeepAgentStore } from '@bike4mind/server-utils/deepAgent/store';
 import { runMissionFirstWake } from '@server/deepAgent/firstWake';
 
 /**

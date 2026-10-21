@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-vi.mock('@server/utils/config', () => ({ Config: { OAUTH_RSA_PRIVATE_KEY: 'not-configured' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { OAUTH_RSA_PRIVATE_KEY: 'not-configured' } }));
 vi.mock('@bike4mind/database', () => ({
   oauthClientRepository: {},
   oauthAuthorizationCodeRepository: {},
@@ -30,5 +30,11 @@ describe('getOidcDiscovery', () => {
     const discovery = getOidcDiscovery();
     expect(discovery.issuer).toBe(APP_URL);
     expect(discovery.id_token_signing_alg_values_supported).toContain('RS256');
+  });
+
+  it('advertises offline_access and the refresh_token grant', () => {
+    const discovery = getOidcDiscovery();
+    expect(discovery.scopes_supported).toContain('offline_access');
+    expect(discovery.grant_types_supported).toEqual(['authorization_code', 'refresh_token']);
   });
 });

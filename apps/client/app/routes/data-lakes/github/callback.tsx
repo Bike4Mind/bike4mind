@@ -23,6 +23,7 @@ const GitHubLakeCallbackPage = () => {
   const router = useRouter();
   const openManager = useDataLakeWizardStore(s => s.openManager);
   const openGitHubRepoPicker = useDataLakeWizardStore(s => s.openGitHubRepoPicker);
+  const setGitHubConnectFailure = useDataLakeWizardStore(s => s.setGitHubConnectFailure);
   const authorize = useAuthorizeLakeGitHubConnect();
   // GitHub's `code` is single-use, so a second run (StrictMode, a re-render) must never re-post it.
   const handled = useRef(false);
@@ -53,14 +54,20 @@ const GitHubLakeCallbackPage = () => {
       if (openPicker) openGitHubRepoPicker(dataLakeId);
     };
 
+    // With a lake to land on, the reason goes on that lake's finish-connect banner next to a Try again;
+    // without one there is nowhere to show it but a toast.
+    const landFailed = (dataLakeId: string | undefined, message: string) => {
+      if (dataLakeId) setGitHubConnectFailure({ lakeId: dataLakeId, message });
+      else toast.error(message);
+      land(dataLakeId, false);
+    };
+
     switch (step.kind) {
       case 'cancelled':
-        toast.error('GitHub connection cancelled.');
-        land(handoff?.dataLakeId, false);
+        landFailed(handoff?.dataLakeId, 'GitHub connection cancelled.');
         return;
       case 'failed':
-        toast.error(step.message);
-        land(handoff?.dataLakeId, false);
+        landFailed(handoff?.dataLakeId, step.message);
         return;
       case 'repaired':
         toast.info('GitHub access updated. Use Re-sync on the lake to resume syncing.');
@@ -77,15 +84,12 @@ const GitHubLakeCallbackPage = () => {
             onSuccess: ({ dataLakeId }) => land(dataLakeId, true),
             // The server's reason is the actionable part: an expired/mismatched state, a lake that
             // can no longer take a connection.
-            onError: (e: unknown) => {
-              toast.error(getServerErrorField(e) || 'Could not connect GitHub.');
-              land(step.dataLakeId, false);
-            },
+            onError: (e: unknown) => landFailed(step.dataLakeId, getServerErrorField(e) || 'Could not connect GitHub.'),
           }
         );
         return;
     }
-  }, [router, openManager, openGitHubRepoPicker, authorize]);
+  }, [router, openManager, openGitHubRepoPicker, setGitHubConnectFailure, authorize]);
 
   return <LinearProgress data-testid="github-lake-callback-progress" />;
 };

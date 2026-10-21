@@ -1,5 +1,7 @@
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import type { Credits, StreamEvent, ToolUse, Usage } from './streamEvents';
+import type { CompletionCallback } from './streamTransport';
+import { VisibleTextFilter } from './visibleTextFilter';
 
 /**
  * Strip <think>...</think> blocks from text.
@@ -25,8 +27,11 @@ function extractUsageInfo(parsed: { usage?: Usage; credits?: Credits }): Complet
 
 /**
  * Reduces a stream of {@link StreamEvent}s (text, tool calls, thinking blocks,
- * usage) into a single accumulated assistant turn, then fires the completion
- * callback once at the end.
+ * usage) into a single accumulated assistant turn. Visible text can be handed
+ * out early as deltas via {@link flushText}; {@link finalize} then delivers the
+ * remaining text together with tools and usage. The deltas plus the final frame
+ * add up to exactly the text a buffered turn would carry, which is what
+ * ReActAgent's delta-concatenating callback expects.
  *
  * Both backends - `ServerLlmBackend` (SSE) and `WebSocketLlmBackend` (WebSocket
  * frames) - decode their wire payloads into the shared event union and feed
@@ -42,6 +47,9 @@ export class StreamAccumulator {
   // usage-bearing event: stopReason can arrive on a different event than the final
   // usage numbers, so folding it in there would let a later event drop it.
   private stopReason: string | undefined;
+  private readonly visibleText = new VisibleTextFilter();
+  private undeliveredText = '';
+  private textDelivered = false;
 
   /**
    * Fold one streaming event into the accumulated turn. `error` events carry no
@@ -51,14 +59,14 @@ export class StreamAccumulator {
   apply(event: StreamEvent): void {
     switch (event.type) {
       case 'content':
-        this.accumulatedText += event.text ?? '';
+        this.appendText(event.text ?? '');
         if (event.usage || event.credits) {
           this.lastUsageInfo = extractUsageInfo(event);
         }
         if (event.stopReason) this.stopReason = event.stopReason;
         break;
       case 'tool_use':
-        if (event.text) this.accumulatedText += event.text;
+        if (event.text) this.appendText(event.text);
         if (event.tools && event.tools.length > 0) this.toolsUsed = event.tools;
         if (event.thinking && event.thinking.length > 0) this.thinkingBlocks = event.thinking;
         if (event.usage || event.credits) {
@@ -69,6 +77,11 @@ export class StreamAccumulator {
       case 'error':
         break;
     }
+  }
+
+  private appendText(text: string): void {
+    this.accumulatedText += text;
+    this.undeliveredText += this.visibleText.push(text);
   }
 
   /** True when neither text nor tools have been accumulated (stream produced nothing useful). */
@@ -94,14 +107,31 @@ export class StreamAccumulator {
     return this.accumulatedText;
   }
 
+  /** True once any text reached the callback: from then on the turn can no longer be retried or replaced. */
+  get hasDeliveredText(): boolean {
+    return this.textDelivered;
+  }
+
+  get hasUndeliveredText(): boolean {
+    return this.undeliveredText.length > 0;
+  }
+
+  /** Deliver the visible text accumulated since the last flush as a text-only delta. */
+  async flushText(callback: CompletionCallback): Promise<void> {
+    if (!this.undeliveredText) return;
+    const delta = this.undeliveredText;
+    this.undeliveredText = '';
+    this.textDelivered = true;
+    await callback([delta]);
+  }
+
   /**
-   * Calls the completion callback with all accumulated content.
-   * Strips thinking blocks from text before delivering.
+   * Deliver the final frame: any text not yet flushed (thinking blocks stripped),
+   * plus tools and usage. Runs once, at the end of the stream.
    */
-  async finalize(
-    callback: (text: (string | null | undefined)[], info?: CompletionInfo) => Promise<void>
-  ): Promise<void> {
-    const cleanedText = stripThinkingBlocks(this.accumulatedText);
+  async finalize(callback: CompletionCallback): Promise<void> {
+    const remainingText = this.undeliveredText + this.visibleText.end();
+    this.undeliveredText = '';
 
     if (this.toolsUsed.length > 0) {
       const info: CompletionInfo = {
@@ -110,9 +140,9 @@ export class StreamAccumulator {
         ...this.lastUsageInfo,
         stopReason: this.stopReason,
       };
-      await callback([cleanedText], info);
-    } else if (cleanedText) {
-      await callback([cleanedText], { ...this.lastUsageInfo, stopReason: this.stopReason });
+      await callback([remainingText], info);
+    } else if (remainingText || this.textDelivered) {
+      await callback([remainingText], { ...this.lastUsageInfo, stopReason: this.stopReason });
     }
   }
 }

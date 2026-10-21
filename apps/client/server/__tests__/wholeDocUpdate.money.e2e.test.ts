@@ -79,7 +79,6 @@ describe('org: removing a member keeps concurrent roster and credit writes', () 
     const org = await Organization.create({
       name: 'Acme',
       userId: 'owner',
-      managerId: 'leaver',
       adminUserIds: ['leaver', 'stayer'],
       users: [
         { userId: 'leaver', permissions: [Permission.read] },
@@ -120,6 +119,5 @@ describe('org: removing a member keeps concurrent roster and credit writes', () 
     expect(after?.users.map(u => u.userId).sort()).toEqual(['joiner', 'stayer']);
     expect(after?.userDetails?.map(d => [d.id, d.usedCredits])).toEqual([['stayer', 5]]);
     expect(after?.adminUserIds).toEqual(['stayer']);
-    expect(after?.managerId).toBeNull();
   });
 });

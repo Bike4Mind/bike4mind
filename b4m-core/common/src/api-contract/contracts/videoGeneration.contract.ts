@@ -1,8 +1,12 @@
 import { defineEndpoint } from '../defineEndpoint';
+import {
+  BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION,
+  BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION,
+} from '../../schemas/billingOrganization';
 import { EXAMPLE_RESOURCE_ID } from '../exampleIds';
 import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 // Specific files, not the barrel (`../../schemas`) - see the note in tools.contract.ts.
-import { ApiErrorSchema, ScopeForbiddenErrorSchema } from '../../schemas/chat';
+import { ApiErrorSchema, BillingOrganizationForbiddenErrorSchema, ScopeForbiddenErrorSchema } from '../../schemas/chat';
 import {
   CreateVideoGenerationBodySchema,
   ListVideoGenerationsQuerySchema,
@@ -77,7 +81,11 @@ export const createVideoGenerationContract = defineEndpoint({
     'before rejecting it and billed it: then the requested duration is charged and `credits.settled` shows it. ' +
     'Send an `Idempotency-Key` header (1-255 printable ASCII characters) to make retries safe: a repeat with ' +
     'the same key and body returns the original job, and the same key with a different body is a 422 ' +
-    '`idempotency_key_reused`. Omitted fields take the model defaults from `GET /api/v1/video-models`.',
+    '`idempotency_key_reused`. Omitted fields take the model defaults from `GET /api/v1/video-models`. ' +
+    'Set `organization_id` to bill an organization you belong to, or `null` to bill your personal credits; ' +
+    'omitted, the job bills your home organization (or your personal credits if you have none). Keys are ' +
+    'scoped to the billed account, so the same key sent for a different `organization_id` starts a new job. ' +
+    'An organization-billed API key always bills its own organization (see `organization_id`).',
   tags: ['Videos'],
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.AI_GENERATE],
@@ -89,9 +97,15 @@ export const createVideoGenerationContract = defineEndpoint({
       schema: VideoGenerationSchema,
       example: exampleJob,
     },
-    403: scopeForbidden,
+    403: {
+      description: `The API key lacks the \`ai:generate\` scope, or ${BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION}`,
+      schema: BillingOrganizationForbiddenErrorSchema,
+    },
+    400: { description: BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION, schema: ApiErrorSchema },
     404: {
-      description: '`input_image_file_id` does not name an image you own (`errorCode: input_image_not_found`).',
+      description:
+        '`input_image_file_id` does not name an image you own (`errorCode: input_image_not_found`). A ' +
+        'nonexistent `organization_id` is `404` only for an admin caller; for anyone else it is `403`.',
       schema: VideoGenerationErrorResponseSchema,
     },
     422: {

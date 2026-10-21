@@ -106,6 +106,10 @@ function withDisambiguatingSuffix(baseSlug: string, attempt: number): string {
  * `datalakeTag` cannot see that second collision - and the meta-tag is an ownership BYPASS in
  * buildOwnershipConditions, so a lake minting `datalake:<registry-slug>` would read every
  * tenant's files in that registry lake.
+ *
+ * Also taken if any lake, in any scope, already carries the tag it would mint: setLakeVisibility
+ * moves a lake between scopes without re-minting its tag, so the scope check alone can pass a slug
+ * whose tag the globally unique index then rejects.
  */
 async function disambiguateSlug(
   db: { dataLakes: Pick<IDataLakeRepository, 'find'> },
@@ -116,9 +120,12 @@ async function disambiguateSlug(
   const reservedTags = new Set(DATA_LAKES.map(lake => lake.datalakeTag));
   for (let attempt = 0; attempt < 50; attempt++) {
     const slug = attempt === 0 ? baseSlug : withDisambiguatingSuffix(baseSlug, attempt);
-    if (reservedTags.has(buildDatalakeTag(slug, organizationId))) continue;
+    const datalakeTag = buildDatalakeTag(slug, organizationId);
+    if (reservedTags.has(datalakeTag)) continue;
     const existing = await db.dataLakes.find({ ...scope, slug });
-    if (existing.length === 0) return slug;
+    if (existing.length > 0) continue;
+    const tagHolders = await db.dataLakes.find({ datalakeTag });
+    if (tagHolders.length === 0) return slug;
   }
   throw new BadRequestError(
     `Could not find an available slug for "${baseSlug}" after 50 attempts — choose another name`

@@ -49,6 +49,9 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   sessionRepository: {},
   questRepository: {},
+  artifactRepository: {},
+  artifactContentRepository: {},
+  artifactVersionRepository: {},
   Quest: {},
   FabFile: {},
   Artifact: {},
@@ -76,13 +79,13 @@ vi.mock('@bike4mind/observability', () => ({ Logger: class {} }));
 // dispatch-idempotency test stays isolated (the moderation path is not exercised here).
 vi.mock('@bike4mind/utils', () => ({ getSettingsMap: vi.fn(), getSettingsValue: vi.fn() }));
 vi.mock('@bike4mind/utils/imageModeration', () => ({ RekognitionImageModerationService: class {} }));
-vi.mock('@server/s3/moderateUploadedFile', () => ({ moderateUploadedFile: vi.fn() }));
+vi.mock('@bike4mind/server-utils/s3/moderateUploadedFile', () => ({ moderateUploadedFile: vi.fn() }));
 vi.mock('@server/s3/moderateImportedKnowledgeFiles', () => ({ moderateImportedKnowledgeFiles: vi.fn() }));
-vi.mock('@server/s3/storageCharge', () => ({
+vi.mock('@bike4mind/server-utils/s3/storageCharge', () => ({
   stampImportedKnowledgeRows: h.stampImportedKnowledgeRows,
   chargeStampedKnowledgeStorage: h.chargeStampedKnowledgeStorage,
 }));
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ delete: h.deleteFile, upload: vi.fn(), getContentAsBuffer: vi.fn() }),
 }));
 vi.mock('@server/utils/importHistoryProgress', () => ({

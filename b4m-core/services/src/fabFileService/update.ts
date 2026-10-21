@@ -6,8 +6,10 @@ import {
   IDataLakeRepository,
   IFabFileDocument,
   IFabFileRepository,
+  IOrganizationRepository,
   IScopedSettingsRepository,
   IUserDocument,
+  IUserRepository,
   KnowledgeType,
   LakeAuditPrincipal,
   isImageServeable,
@@ -16,6 +18,9 @@ import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
 import { reconcileLakeTags } from './reconcileLakeTags';
+import { assertRewriteFits, commitContentRewrite } from './rewriteStorage';
+import { assertStorageOwnerTransferFits, reassignStorageOwner } from './reassignStorageOwner';
+import { storedTagNames } from '../tagService/bulkTagNames';
 import type { LakeConfigAuditAdapters } from '../dataLakeService/recordLakeConfigChange';
 import type { LakeMembershipAuditAdapters } from '../dataLakeService/recordLakeMembershipChange';
 
@@ -52,9 +57,22 @@ interface UpdateFabFileAdapters extends LakeConfigAuditAdapters, LakeMembershipA
     LakeMembershipAuditAdapters['db'] & {
       fabFiles: Pick<
         IFabFileRepository,
-        'shareable' | 'update' | 'findById' | 'pullTagsByFabFileId' | 'computeDataLakeStats'
+        | 'shareable'
+        | 'update'
+        | 'findById'
+        | 'pullTagsByFabFileId'
+        | 'computeDataLakeStats'
+        | 'commitContentRewrite'
+        | 'findChargeState'
+        | 'setOwnerOrganizationIfUnchanged'
       >;
-      dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'setStats' | 'activateIfDraft' | 'find'>;
+      /** Charges a content rewrite to the file's OWNER, who may not be `user` (an update share). */
+      users: Pick<IUserRepository, 'findById' | 'incrementCurrentStorage'>;
+      organizations: Pick<IOrganizationRepository, 'findById' | 'incrementCurrentStorage'>;
+      dataLakes: Pick<
+        IDataLakeRepository,
+        'findByDatalakeTag' | 'findByDatalakeTags' | 'setStats' | 'activateIfDraft' | 'find'
+      >;
       // Optional: forwarded to reconcileLakeTags; absent -> createdByUserId + org-rung fallback there.
       dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'listActiveByLakes'>;
       // Forwarded to reconcileLakeTags for the admission contract's lever (#1680). Required for the
@@ -115,12 +133,55 @@ export const updateFabFile = async (
   ) as IFabFileDocument;
 
   const contentChanges: Partial<IFabFileDocument> = {};
-  if (fileContent !== undefined && !fabFile.mimeType.startsWith('image/')) {
+  // Measured up front so a joining tag write can be quota-gated against the bytes this rewrite will
+  // charge, before anything is uploaded or persisted. Refreshed from storage metadata after upload.
+  const rewrite =
+    fileContent !== undefined && !fabFile.mimeType.startsWith('image/')
+      ? { content: fileContent, size: Buffer.byteLength(fileContent, 'utf8') }
+      : undefined;
+
+  // A tag replacement can join a data lake but never leave one (see reconcileLakeTags). Resolved
+  // and gated before any write, applied after; the org-admin rungs on this actor are intentional.
+  const lakeTags =
+    params.tags === undefined
+      ? undefined
+      : await reconcileLakeTags(
+          { userId: user.id, isAdmin: !!user.isAdmin, administeredOrgIds: administeredOrgIds ?? [], auditPrincipal },
+          id,
+          storedTagNames(fabFile),
+          params.tags,
+          {
+            db,
+            logger,
+            fileOwnerUserId: fabFile.userId,
+            // Already in hand, so the admission contract grades this file on the target its chunks
+            // WERE built with instead of re-fetching it or predicting from policy.
+            fileChunkedPassageTokenTarget: fabFile.chunkedPassageTokenTarget,
+            assertWriteScope,
+          }
+        );
+
+  // A join moves the file's bytes onto the new owner, so it is gated before any upload or charge,
+  // on the rewrite's size when there is one (graded as charged even for a still-pending file).
+  const ownerTransfer = lakeTags
+    ? await assertStorageOwnerTransferFits(
+        rewrite ? { ...fabFile, fileSize: rewrite.size, storageChargedAt: new Date() } : fabFile,
+        lakeTags.tagsToPersist.map(t => t.name),
+        db
+      )
+    : null;
+
+  if (rewrite) {
+    const { content, size } = rewrite;
     const mimeType = params.mimeType ?? fabFile.mimeType;
     const ext = mime.extension(mimeType) || null;
     const filePath = fabFile.filePath ?? `${uuidv4()}${ext ? `.${ext}` : '.txt'}`;
 
-    await storage.upload(filePath, fileContent, {
+    let fileSize = size;
+    // A transfer moves every byte off the current owner, and the gate above graded the new owner on this size.
+    if (!ownerTransfer) await assertRewriteFits(fabFile, fileSize, db, user);
+
+    await storage.upload(filePath, content, {
       ContentType: mimeType,
     });
 
@@ -129,11 +190,19 @@ export const updateFabFile = async (
       try {
         const metadata = await storage.getMetadata(filePath);
         if (metadata.size !== undefined) {
-          contentChanges.fileSize = metadata.size;
+          fileSize = metadata.size;
         }
       } catch (error) {
         Logger.globalInstance.warn('Failed to retrieve file metadata from S3:', error);
       }
+    }
+    // Persisted only by commitContentRewrite (with the counter move); kept out of the trailing write.
+    fabFile.fileSize = fileSize;
+    if (!fabFile.filePath) contentChanges.filePath = filePath;
+    const committed = await commitContentRewrite({ fabFileId: fabFile.id, newSize: fileSize }, db);
+    if (!committed) {
+      // The row vanished (soft-deleted) after it was read: the bytes are uploaded but nothing was charged.
+      Logger.globalInstance.warn(`Content rewrite of FabFile ${fabFile.id} matched no live row; storage not charged`);
     }
 
     contentChanges.fileUrl = await storage.generateSignedUrl(filePath, EXPIRE_IN_SECONDS);
@@ -149,31 +218,6 @@ export const updateFabFile = async (
     Object.assign(fabFile, contentChanges);
   }
 
-  // A tag replacement can join a data lake but can never leave one - see reconcileLakeTags for
-  // why. Resolved (and gated) BEFORE the write below, applied after it. This actor also widens
-  // what an org admin can do beyond the join gate itself: content tags under an org lake's prefix
-  // that were previously force-carried become droppable, and a manageable prefix-arm join now
-  // lands in `joins` rather than `statsOnlyJoins` - which can flip a draft lake to active. Both
-  // follow from the same fix and are wanted, but the activation is one-way.
-  const lakeTags =
-    params.tags === undefined
-      ? undefined
-      : await reconcileLakeTags(
-          { userId: user.id, isAdmin: !!user.isAdmin, administeredOrgIds: administeredOrgIds ?? [], auditPrincipal },
-          id,
-          (fabFile.tags ?? []).map(t => t?.name).filter((name): name is string => typeof name === 'string'),
-          params.tags,
-          {
-            db,
-            logger,
-            fileOwnerUserId: fabFile.userId,
-            // Already in hand, so the admission contract grades this file on the target its chunks
-            // WERE built with instead of re-fetching it or predicting from policy.
-            fileChunkedPassageTokenTarget: fabFile.chunkedPassageTokenTarget,
-            assertWriteScope,
-          }
-        );
-
   const changes: Partial<IFabFileDocument> = {
     ...contentChanges,
     ...params,
@@ -181,7 +225,7 @@ export const updateFabFile = async (
     systemPriority: params.system && params.systemPriority === undefined ? 999 : params.systemPriority,
     updatedAt: new Date(),
   };
-  const updatedFabFile: Partial<IFabFileDocument> = { ...fabFile, ...changes };
+  const updatedFabFile: IFabFileDocument = { ...fabFile, ...changes };
 
   // An edit (rename/tag/notes/etc.) must not echo back a working GET url for an image
   // that isn't clean (pending scan) or was quarantined (blocked) by upload moderation.
@@ -205,6 +249,8 @@ export const updateFabFile = async (
   // assigned into updatedFabFile above - is always the true final array; commit() only needs to
   // recompute stats for any new join.
   if (lakeTags) {
+    const transfer = await reassignStorageOwner(fabFile.id, db);
+    if (transfer) updatedFabFile.organizationId = transfer.nextOrganizationId;
     await lakeTags.commit();
   }
 

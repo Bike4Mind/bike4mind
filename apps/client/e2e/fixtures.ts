@@ -59,12 +59,15 @@ function projectNameToSpecKey(projectName: string): string {
 }
 
 /** Access token + userId for the user backing an authenticated project, or null for projects that
- *  seed no user (unauthenticated, setup) or before core data exists. The `admin` project runs off
- *  the shared core admin rather than a per-spec user. */
+ *  seed no user (unauthenticated, setup) or before core data exists. The `admin` and `warmup`
+ *  projects run off the shared core admin rather than a per-spec user. */
 function specAuthForProject(projectName: string): SpecAuth | null {
   try {
     const users = getTestUsers();
-    const u = projectName === 'admin' ? users.admin : users.specUsers[projectNameToSpecKey(projectName)];
+    const u =
+      projectName === 'admin' || projectName === 'warmup'
+        ? users.admin
+        : users.specUsers[projectNameToSpecKey(projectName)];
     return u ? { accessToken: u.accessToken, userId: u.userId } : null;
   } catch {
     return null;

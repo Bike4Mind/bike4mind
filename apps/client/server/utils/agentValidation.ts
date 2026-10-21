@@ -6,7 +6,14 @@
  */
 
 import { BadRequestError } from '@bike4mind/utils';
-import { triggerWordsSchema } from '@bike4mind/common';
+import { IAgent, supportedChatModels, supportedImageModels, triggerWordsSchema } from '@bike4mind/common';
+
+/**
+ * A body field failed one of these validators. A BadRequestError (400) on the SPA routes; the
+ * /api/v1 routes remap exactly this class to a 422 (server/agents/v1AgentErrors.ts), so any other
+ * 400 a shared helper throws keeps its status.
+ */
+export class AgentValidationError extends BadRequestError {}
 
 // Mirrors `MAX_ITERATIONS_UPPER_BOUND` in `packages/database/src/models/AgentModel.ts`.
 // Kept in sync so the API rejects out-of-range values before the Mongoose
@@ -20,17 +27,17 @@ type MaxIterationsByThoroughness = { quick: number; medium: number; very_thoroug
 export function validateToolList(value: unknown, field: string): string[] | undefined {
   if (value === undefined) return undefined;
   if (!Array.isArray(value)) {
-    throw new BadRequestError(`${field} must be an array of strings`);
+    throw new AgentValidationError(`${field} must be an array of strings`);
   }
   if (value.length > 100) {
-    throw new BadRequestError(`${field} may contain at most 100 entries`);
+    throw new AgentValidationError(`${field} may contain at most 100 entries`);
   }
   return value.map((entry, i) => {
     if (typeof entry !== 'string') {
-      throw new BadRequestError(`${field}[${i}] must be a string`);
+      throw new AgentValidationError(`${field}[${i}] must be a string`);
     }
     if (entry.length > 256) {
-      throw new BadRequestError(`${field}[${i}] exceeds 256-character limit`);
+      throw new AgentValidationError(`${field}[${i}] exceeds 256-character limit`);
     }
     return entry;
   });
@@ -39,14 +46,14 @@ export function validateToolList(value: unknown, field: string): string[] | unde
 export function validateMaxIterations(value: unknown): MaxIterationsByThoroughness | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new BadRequestError('maxIterations must be an object with quick/medium/very_thorough entries');
+    throw new AgentValidationError('maxIterations must be an object with quick/medium/very_thorough entries');
   }
   const record = value as Record<string, unknown>;
   for (const level of THOROUGHNESS_LEVELS) {
     const n = record[level];
     if (n === undefined) continue;
     if (typeof n !== 'number' || !Number.isInteger(n) || n < 1 || n > MAX_ITERATIONS_UPPER_BOUND) {
-      throw new BadRequestError(
+      throw new AgentValidationError(
         `maxIterations.${level} must be an integer between 1 and ${MAX_ITERATIONS_UPPER_BOUND}`
       );
     }
@@ -57,7 +64,7 @@ export function validateMaxIterations(value: unknown): MaxIterationsByThoroughne
 export function validateDefaultThoroughness(value: unknown): (typeof THOROUGHNESS_LEVELS)[number] | undefined {
   if (value === undefined || value === null || value === '') return undefined;
   if (typeof value !== 'string' || !THOROUGHNESS_LEVELS.includes(value as (typeof THOROUGHNESS_LEVELS)[number])) {
-    throw new BadRequestError(`defaultThoroughness must be one of: ${THOROUGHNESS_LEVELS.join(', ')}`);
+    throw new AgentValidationError(`defaultThoroughness must be one of: ${THOROUGHNESS_LEVELS.join(', ')}`);
   }
   return value as (typeof THOROUGHNESS_LEVELS)[number];
 }
@@ -71,17 +78,17 @@ export function validateDefaultThoroughness(value: unknown): (typeof THOROUGHNES
 export function validateStringList(value: unknown, field: string): string[] | undefined {
   if (value === undefined) return undefined;
   if (!Array.isArray(value)) {
-    throw new BadRequestError(`${field} must be an array of strings`);
+    throw new AgentValidationError(`${field} must be an array of strings`);
   }
   if (value.length > 100) {
-    throw new BadRequestError(`${field} may contain at most 100 entries`);
+    throw new AgentValidationError(`${field} may contain at most 100 entries`);
   }
   return value.map((entry, i) => {
     if (typeof entry !== 'string') {
-      throw new BadRequestError(`${field}[${i}] must be a string`);
+      throw new AgentValidationError(`${field}[${i}] must be a string`);
     }
     if (entry.length > 256) {
-      throw new BadRequestError(`${field}[${i}] exceeds 256-character limit`);
+      throw new AgentValidationError(`${field}[${i}] exceeds 256-character limit`);
     }
     return entry;
   });
@@ -101,28 +108,28 @@ const DEFAULT_VARIABLES_MAX_VALUE_LEN = 1024;
 export function validateDefaultVariables(value: unknown): Record<string, string> | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value !== 'object' || Array.isArray(value)) {
-    throw new BadRequestError('defaultVariables must be a flat object of string values');
+    throw new AgentValidationError('defaultVariables must be a flat object of string values');
   }
   const record = value as Record<string, unknown>;
   const entries = Object.entries(record);
   if (entries.length > DEFAULT_VARIABLES_MAX_ENTRIES) {
-    throw new BadRequestError(`defaultVariables may contain at most ${DEFAULT_VARIABLES_MAX_ENTRIES} entries`);
+    throw new AgentValidationError(`defaultVariables may contain at most ${DEFAULT_VARIABLES_MAX_ENTRIES} entries`);
   }
   const out: Record<string, string> = {};
   for (const [key, v] of entries) {
     if (!key.trim()) {
-      throw new BadRequestError('defaultVariables keys must be non-empty');
+      throw new AgentValidationError('defaultVariables keys must be non-empty');
     }
     if (key.length > DEFAULT_VARIABLES_MAX_KEY_LEN) {
-      throw new BadRequestError(
+      throw new AgentValidationError(
         `defaultVariables key "${key}" exceeds ${DEFAULT_VARIABLES_MAX_KEY_LEN}-character limit`
       );
     }
     if (typeof v !== 'string') {
-      throw new BadRequestError(`defaultVariables["${key}"] must be a string`);
+      throw new AgentValidationError(`defaultVariables["${key}"] must be a string`);
     }
     if (v.length > DEFAULT_VARIABLES_MAX_VALUE_LEN) {
-      throw new BadRequestError(
+      throw new AgentValidationError(
         `defaultVariables["${key}"] exceeds ${DEFAULT_VARIABLES_MAX_VALUE_LEN}-character limit`
       );
     }
@@ -145,7 +152,57 @@ export function validateTriggerWords(value: unknown): string[] | undefined {
   if (value === undefined || value === null) return undefined;
   const result = triggerWordsSchema.safeParse(value);
   if (!result.success) {
-    throw new BadRequestError(result.error.issues[0]?.message ?? 'Invalid triggerWords');
+    throw new AgentValidationError(result.error.issues[0]?.message ?? 'Invalid triggerWords');
   }
   return result.data;
+}
+
+/**
+ * Validates and normalizes the fields of an agent body in place, for PUT /api/agents/[id],
+ * PATCH /api/v1/agents/[id] and createAgent (both POST routes). Only fields present on `agentData` are checked. `label` renames a field
+ * in an error message, so the v1 route can name its snake_case spelling.
+ */
+export function validateAgentUpdate(agentData: Partial<IAgent>, label: (field: string) => string = field => field) {
+  if (agentData.preferredModel && !supportedChatModels.safeParse(agentData.preferredModel).success) {
+    throw new AgentValidationError(`Invalid model: ${agentData.preferredModel}`);
+  }
+  if (agentData.preferredImageModel && !supportedImageModels.safeParse(agentData.preferredImageModel).success) {
+    throw new AgentValidationError(`Invalid image model: ${agentData.preferredImageModel}`);
+  }
+  if (agentData.temperature !== undefined && (agentData.temperature < 0 || agentData.temperature > 2)) {
+    throw new AgentValidationError('Temperature must be between 0 and 2');
+  }
+  if (agentData.maxTokens !== undefined && (agentData.maxTokens < 1 || agentData.maxTokens > 128000)) {
+    throw new AgentValidationError('Max tokens must be between 1 and 128000');
+  }
+
+  // Reject malformed trigger words before they reach MongoDB - keeps updates in sync with create
+  // and stops a silent regression where a valid create is followed by a malformed edit.
+  if (agentData.triggerWords !== undefined) {
+    agentData.triggerWords = validateTriggerWords(agentData.triggerWords);
+  }
+
+  // Orchestration fields - mirror the create bounds so an update can't bypass the array-size /
+  // max-iteration guards.
+  if (agentData.allowedTools !== undefined) {
+    agentData.allowedTools = validateToolList(agentData.allowedTools, label('allowedTools'));
+  }
+  if (agentData.deniedTools !== undefined) {
+    agentData.deniedTools = validateToolList(agentData.deniedTools, label('deniedTools'));
+  }
+  if (agentData.maxIterations !== undefined) {
+    agentData.maxIterations = validateMaxIterations(agentData.maxIterations);
+  }
+  if (agentData.defaultThoroughness !== undefined) {
+    agentData.defaultThoroughness = validateDefaultThoroughness(agentData.defaultThoroughness);
+  }
+  if (agentData.defaultVariables !== undefined) {
+    agentData.defaultVariables = validateDefaultVariables(agentData.defaultVariables);
+  }
+  if (agentData.exclusiveMcpServers !== undefined) {
+    agentData.exclusiveMcpServers = validateStringList(agentData.exclusiveMcpServers, 'exclusiveMcpServers');
+  }
+  if (agentData.fallbackModels !== undefined) {
+    agentData.fallbackModels = validateStringList(agentData.fallbackModels, 'fallbackModels');
+  }
 }

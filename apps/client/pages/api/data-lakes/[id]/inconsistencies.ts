@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
-import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
   dataLakeRepository,
@@ -23,9 +23,9 @@ import {
 import { Request, Response } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { isDevelopment } from '@server/utils/config';
-import { sendToQueue } from '@server/utils/sqs';
-import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
+import { isDevelopment } from '@bike4mind/server-utils/utils/config';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
+import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 
 const HOUR_MS = 60 * 60 * 1000;
 

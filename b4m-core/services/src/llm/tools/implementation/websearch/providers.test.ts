@@ -356,6 +356,138 @@ describe('SerpAPI geo-targeting', () => {
   });
 });
 
+describe('outgoing search request logging', () => {
+  const FAKE_KEY = 'fake-serp-key-1234567890';
+  let logSpy: ReturnType<typeof vi.spyOn>;
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+
+  const loggedRequest = (spy: ReturnType<typeof vi.spyOn>, message: string) =>
+    (
+      spy.mock.calls.find(([msg]) => String(msg).includes(message))?.[1] as
+        { request?: Record<string, string> } | undefined
+    )?.request;
+  const allLoggedText = () => JSON.stringify([...logSpy.mock.calls, ...warnSpy.mock.calls, ...errorSpy.mock.calls]);
+
+  beforeEach(() => {
+    mockGetSerperKey.mockResolvedValue(FAKE_KEY);
+    logSpy = vi.spyOn(Logger.globalInstance, 'log').mockImplementation(() => undefined);
+    warnSpy = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => undefined);
+    errorSpy = vi.spyOn(Logger.globalInstance, 'error').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    logSpy.mockRestore();
+    warnSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+
+  it('logs the SerpAPI query, result count, recency and geo-targeting, never the key', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ organic_results: [] }));
+
+    await serpApiSearch(adapters, 'job shop scheduling', 10, { recencyDays: 30 });
+
+    expect(loggedRequest(logSpy, 'WebSearch Tool: SerpAPI response')).toEqual({
+      q: 'job shop scheduling',
+      num: '10',
+      tbs: 'qdr:m',
+      location: 'United States',
+      gl: 'us',
+    });
+    expect(allLoggedText()).not.toContain(FAKE_KEY);
+  });
+
+  it('logs no geo-targeting for a query that names its own place', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ organic_results: [] }));
+
+    await serpApiSearch(adapters, 'coffee in Tokyo', 3, { locationInQuery: true });
+
+    expect(loggedRequest(logSpy, 'WebSearch Tool: SerpAPI response')).toEqual({ q: 'coffee in Tokyo', num: '3' });
+  });
+
+  it('logs the request on a failed SerpAPI attempt, never the key', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ error: 'Invalid API key' }, false, 401));
+
+    await expect(serpApiSearch(adapters, 'job shop scheduling', 5, { maxAttempts: 1 })).rejects.toThrow();
+    fetchMock.mockRejectedValue(new Error('boom'));
+    await expect(serpApiSearch(adapters, 'job shop scheduling', 5, { maxAttempts: 1 })).rejects.toThrow('boom');
+
+    for (const message of ['WebSearch Tool: API error details:', 'WebSearch Tool: SerpAPI request failed:']) {
+      expect(loggedRequest(errorSpy, message)).toMatchObject({ q: 'job shop scheduling', num: '5' });
+    }
+    expect(allLoggedText()).not.toContain(FAKE_KEY);
+  });
+
+  it('logs the SearXNG query, recency, limit and hit count on success', async () => {
+    fetchMock.mockResolvedValue(
+      jsonRes({
+        results: [
+          { url: 'https://a.com', title: 'A', content: 'a' },
+          { url: 'https://b.com', title: 'B', content: 'b' },
+        ],
+      })
+    );
+
+    await createSearxngProvider('http://searxng:8080').search('job shop scheduling', 5, { recencyDays: 30 });
+
+    expect(logSpy).toHaveBeenCalledWith('WebSearch Tool: SearXNG response', {
+      status: 200,
+      request: { q: 'job shop scheduling', time_range: 'month', limit: 5 },
+      hits: 2,
+    });
+  });
+
+  it('logs the SearXNG request on a non-OK response', async () => {
+    fetchMock.mockResolvedValue(jsonRes({}, false, 500));
+
+    await createSearxngProvider('http://searxng:8080').search('job shop scheduling', 5, { recencyDays: 30 });
+
+    expect(loggedRequest(errorSpy, 'WebSearch Tool: SearXNG error')).toEqual({
+      q: 'job shop scheduling',
+      time_range: 'month',
+      limit: 5,
+    });
+  });
+
+  it('logs a permanent SearXNG client error at error under a hedge', async () => {
+    fetchMock.mockResolvedValue(jsonRes({}, false, 403));
+
+    await expect(
+      createSearxngProvider('http://searxng:8080').search('job shop scheduling', 5, { throwOnError: true })
+    ).rejects.toThrow('SearXNG error: HTTP 403');
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('SearXNG error'),
+      expect.objectContaining({ status: 403 })
+    );
+  });
+
+  it('keeps a rate-limited SearXNG attempt at warn under a hedge', async () => {
+    fetchMock.mockResolvedValue(jsonRes({}, false, 429));
+
+    await expect(
+      createSearxngProvider('http://searxng:8080').search('job shop scheduling', 5, { throwOnError: true })
+    ).rejects.toThrow('SearXNG error: HTTP 429');
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('SearXNG error'),
+      expect.objectContaining({ status: 429 })
+    );
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it('logs the SearXNG request when the fetch throws', async () => {
+    fetchMock.mockRejectedValue(new Error('boom'));
+
+    await createSearxngProvider('http://searxng:8080').search('job shop scheduling', 5);
+
+    expect(errorSpy).toHaveBeenCalledWith('❌ WebSearch Tool: SearXNG request failed:', {
+      request: { q: 'job shop scheduling', limit: 5 },
+      error: 'boom',
+    });
+  });
+});
+
 describe('resolveWebSearchProvider precedence', () => {
   it('forces SearXNG when the admin choice is searxng and a URL is set', async () => {
     mockGetProvider.mockResolvedValue('searxng');
@@ -543,12 +675,19 @@ function neverSettlingFetch(): (url: string, init?: RequestInit) => Promise<Resp
 }
 
 describe('serpApiSearch retry behavior', () => {
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
   beforeEach(() => {
     vi.useFakeTimers();
+    errorSpy = vi.spyOn(Logger.globalInstance, 'error').mockImplementation(() => undefined);
+    warnSpy = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => undefined);
   });
 
   afterEach(() => {
     vi.useRealTimers();
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
   });
 
   it('retries once on a timeout and throws the explicit timeout error after 2 attempts', async () => {
@@ -567,7 +706,7 @@ describe('serpApiSearch retry behavior', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it('returns results when the first attempt times out and the second succeeds', async () => {
+  it('returns results when the first attempt times out and the second succeeds, without an error log', async () => {
     mockGetSerperKey.mockResolvedValue('serp-key');
     let calls = 0;
     fetchMock.mockImplementation((url: string, init?: RequestInit) => {
@@ -585,6 +724,12 @@ describe('serpApiSearch retry behavior', () => {
 
     await pending;
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    // A recovered attempt must not raise an error-level log: those page the production alert channel.
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('SerpAPI request failed'),
+      expect.objectContaining({ timedOut: true })
+    );
+    expect(errorSpy).not.toHaveBeenCalled();
   });
 
   it('retries a 500 and succeeds on the second attempt', async () => {
@@ -609,6 +754,12 @@ describe('serpApiSearch retry behavior', () => {
 
     await pending;
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    // A retryable attempt a retry recovers must not raise an error-level log.
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('API error details'),
+      expect.objectContaining({ status: 429 })
+    );
+    expect(errorSpy).not.toHaveBeenCalled();
   });
 
   it('retries a network-level TypeError (DNS/connection reset/TLS) and succeeds on the second attempt', async () => {
@@ -626,6 +777,12 @@ describe('serpApiSearch retry behavior', () => {
 
     await pending;
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    // A network-level failure is transient, so a retry that recovers it must not raise error.
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('SerpAPI request failed'),
+      expect.objectContaining({ timedOut: false })
+    );
+    expect(errorSpy).not.toHaveBeenCalled();
   });
 
   // Regression: the final error used to read ONLY the last attempt's outcome, so a first

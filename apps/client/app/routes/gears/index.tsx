@@ -59,7 +59,7 @@ import { DataLakeIcon } from '@client/app/components/datalake/dataLakeBranding';
 import { openInNewTab } from '@client/app/utils/externalLinks';
 import PageFrame from '@client/app/components/common/PageFrame';
 import FeatureDetailView from '@client/app/components/common/FeatureDetailView';
-import Bike4MindIcon from '@client/app/components/svgs/icons/Bike4MindIcon';
+import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import { gray, grayAlpha } from '@client/app/utils/themes/colors';
 import HelpCenterButton from '@client/app/components/common/HelpCenterButton';
 import { PageTab, pageTabListSx } from '@client/app/components/common/pageTabs';
@@ -155,7 +155,7 @@ const RewardChip = ({
       size="sm"
       variant="soft"
       color={reward === 'claimable' ? 'success' : 'neutral'}
-      startDecorator={<Bike4MindIcon size="12" />}
+      startDecorator={<CreditIcon sx={{ fontSize: 12, color: 'var(--Icon-color)' }} />}
       data-testid={`gear-reward-${gear.key}`}
       {...(clickable && {
         onClick: (event: React.MouseEvent) => {
@@ -189,7 +189,7 @@ const RewardChip = ({
           '--variant-softActiveColor': ink,
           border: `1px solid ${stroke}`,
           color: ink,
-          // Bike4MindIcon fills with var(--Icon-color), which Joy's
+          // CreditIcon reads var(--Icon-color), which Joy's
           // variant would otherwise set from its own palette.
           '--Icon-color': ink,
         };
@@ -215,7 +215,7 @@ const RewardChip = ({
             size="sm"
             variant="soft"
             color="warning"
-            startDecorator={<Bike4MindIcon size="12" />}
+            startDecorator={<CreditIcon sx={{ fontSize: 12, color: 'var(--Icon-color)' }} />}
             data-testid={`gear-pending-${gear.key}`}
             // Joy sets gap as a plain declaration per size (3px on sm), not
             // as a variable, so it is overridden directly.
@@ -616,7 +616,7 @@ const GearsPage = () => {
                   // The same token the soft chip paints its own text with.
                   sx={{ mt: '16px', fontSize: '13px', color: 'warning.softColor' }}
                 >
-                  Once someone else opens your artifact link, you can claim {creditText(gear)}.
+                  Once someone else opens your artifact link while signed in, you can claim {creditText(gear)}.
                 </Typography>
               )}
               {/* Pinned to the bottom so the CTAs line up across a row of uneven cards. */}

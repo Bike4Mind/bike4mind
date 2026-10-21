@@ -5,6 +5,7 @@ import { Chip, Tooltip } from '@mui/joy';
 import { estimateImageCredits } from '@bike4mind/services/imageCost';
 import { isGPTImageModel } from '@bike4mind/common';
 import { useLLM } from '@client/app/contexts/LLMContext';
+import { formatCreditAmount } from '@client/app/utils/formatCredits';
 import { useShallow } from 'zustand/react/shallow';
 import { useModelInfo } from '../../../hooks/data/useModelInfo';
 
@@ -46,7 +47,7 @@ export const CostPreviewChip: FC = () => {
     >
       <Chip size="sm" variant="soft" color="neutral" data-testid="image-cost-preview-chip">
         {hasVariableInputCost ? 'From ' : '~ '}
-        {credits.toLocaleString()} credits
+        {formatCreditAmount(credits)} credits
       </Chip>
     </Tooltip>
   );

@@ -26,8 +26,8 @@ import {
   RateLimitInfo,
 } from '@bike4mind/common';
 import { orgGitHubConnectionRepository } from '@bike4mind/database';
-import { Config } from '@server/utils/config';
-import { encryptSecret, isEncrypted } from '@server/security/secretEncryption';
+import { Config } from '@bike4mind/server-utils/utils/config';
+import { encryptSecret, isEncrypted } from '@bike4mind/server-utils/security/secretEncryption';
 import { decryptToken } from '@server/security/tokenEncryption';
 
 const USER_AGENT = 'bike4mind-github-service/1.0';

@@ -96,6 +96,11 @@ describe('POST /api/oauth/device/token client binding', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.body?.access_token).toBe('a.jwt');
+    expect(h.issueSessionForRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      'u1',
+      expect.objectContaining({ createdVia: 'device', clientId: 'b4m-desktop' })
+    );
   });
 
   it.each([
@@ -132,6 +137,11 @@ describe('POST /api/oauth/device/token client binding', () => {
     (h.findByDeviceCode as Mock).mockResolvedValue(approvedFor(undefined));
 
     expect((await call('b4m-cli')).statusCode).toBe(200);
+    expect(h.issueSessionForRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      'u1',
+      expect.objectContaining({ createdVia: 'device', clientId: 'b4m-cli' })
+    );
 
     vi.clearAllMocks();
     (h.findByDeviceCode as Mock).mockResolvedValue(approvedFor(undefined));

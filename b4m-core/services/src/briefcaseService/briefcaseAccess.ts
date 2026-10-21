@@ -4,7 +4,8 @@ import { UnauthorizedError } from '@bike4mind/common';
 /**
  * The briefcase access contract. Three decisions read as one:
  *  - read gate: any authenticated caller may read the catalog
- *  - personal scoping: enforced in getPersonalPrompts (caller-bound, never client id)
+ *  - personal scoping: owner-bound by the repository (never client id), and never
+ *    to an API key (canSeePersonalPrompts)
  *  - visibility scoping: this file - system prompts gated by the caller's tags
  */
 
@@ -27,6 +28,27 @@ export function canSeeSystemPrompt(
   if (!scopes || scopes.length === 0) return true;
   const held = new Set(caller.entitlements.map(e => e.toLowerCase()));
   return scopes.some(s => held.has(s.toLowerCase()));
+}
+
+/**
+ * Whether the caller may see personal prompts at all. An API key is a headless
+ * integration, not the owning human - handing it the key-user's personal prompts
+ * is a confused-deputy exfiltration path.
+ */
+export function canSeePersonalPrompts(caller: ICaller): boolean {
+  return !caller.isApiKey;
+}
+
+/**
+ * By-id read decision for a prompt the repository already owner-scoped to the
+ * caller: system prompts pass the catalog's visibility gate, personal prompts the
+ * API-key gate. Keeps the by-id path from bypassing either catalog rule.
+ */
+export function canReadPrompt(
+  prompt: Pick<IBriefcasePromptDocument, 'userId' | 'visibilityScopes'>,
+  caller: ICaller
+): boolean {
+  return prompt.userId == null ? canSeeSystemPrompt(prompt, caller) : canSeePersonalPrompts(caller);
 }
 
 /** Filter a system-prompt list to those visible to the caller (admins bypass). */

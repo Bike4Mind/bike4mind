@@ -85,12 +85,31 @@ export interface DeductSoundEffectsCreditsParams extends DeductCreditsCommonPara
 }
 
 /**
+ * Parameters for text-to-speech credit deduction. Quest-less, like sound effects.
+ */
+export interface DeductTtsCreditsParams extends DeductCreditsCommonParams {
+  type: 'text_to_speech_usage';
+}
+
+/**
  * Parameters for music-generation credit deduction. Quest-less, like sound
  * effects: music generation is a stateless API call with only a synthetic
  * sessionId, so it extends the common base rather than the quest-scoped one.
  */
 export interface DeductMusicGenerationCreditsParams extends DeductCreditsCommonParams {
   type: 'music_generation_usage';
+}
+
+/**
+ * Parameters for decision credit deduction. Quest-less: POST /api/v1/decisions
+ * is a stateless synchronous call, so it extends the common base.
+ */
+export interface DeductDecisionCreditsParams extends DeductCreditsCommonParams {
+  type: 'decision_usage';
+  inputTokens: number;
+  outputTokens: number;
+  /** Present for API key auth, undefined for JWT */
+  apiKeyId?: string;
 }
 
 /**
@@ -102,7 +121,9 @@ export type DeductCreditsParams =
   | DeductVideoGenerationCreditsParams
   | DeductTextGenerationCreditsParams
   | DeductSoundEffectsCreditsParams
-  | DeductMusicGenerationCreditsParams;
+  | DeductTtsCreditsParams
+  | DeductMusicGenerationCreditsParams
+  | DeductDecisionCreditsParams;
 
 /**
  * Database adapters required for credit deduction.
@@ -213,9 +234,21 @@ export async function deductCreditsWithOrgSupport(
   } else if (type === 'sound_effects_usage') {
     // Quest-less: sound effects has no questId.
     transactionParams = { ...baseParams, type: 'sound_effects_usage' };
+  } else if (type === 'text_to_speech_usage') {
+    // Quest-less: speech is a stateless API call, like sound effects.
+    transactionParams = { ...baseParams, type: 'text_to_speech_usage' };
   } else if (type === 'music_generation_usage') {
     // Quest-less: music generation has no questId.
     transactionParams = { ...baseParams, type: 'music_generation_usage' };
+  } else if (type === 'decision_usage') {
+    // Quest-less: decisions have no questId.
+    transactionParams = {
+      ...baseParams,
+      type: 'decision_usage',
+      inputTokens: params.inputTokens,
+      outputTokens: params.outputTokens,
+      apiKeyId: params.apiKeyId,
+    };
   } else {
     // Quest-scoped image/edit/video types; questId is guaranteed by their param shape.
     transactionParams = {

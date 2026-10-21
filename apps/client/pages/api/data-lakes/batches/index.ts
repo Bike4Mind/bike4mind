@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
-import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import {
   withTransaction,
   dataLakeBatchRepository,
@@ -14,9 +14,9 @@ import { dataLakeService } from '@bike4mind/services';
 import { CreateBatchRequestInput, isLakeIngestable } from '@bike4mind/common';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
-import { recordReconcilerForcedTerminal } from '@server/utils/cloudwatch';
-import { enqueueTaxonomyAnalysisIfWanted } from '@server/queueHandlers/dataLakeBatchProgress';
-import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { recordReconcilerForcedTerminal } from '@bike4mind/server-utils/utils/cloudwatch';
+import { enqueueTaxonomyAnalysisIfWanted } from '@server/dataLakes/dataLakeBatchProgress';
+import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 
 const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))

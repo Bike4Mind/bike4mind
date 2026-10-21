@@ -14,7 +14,8 @@ import { TtsProviderNotConfiguredError } from '@server/utils/resolveTtsProvider'
 import { synthesizeTts, upstreamStatus, isCredentialRejection } from '@server/utils/synthesizeTts';
 import { deductTtsCredits } from '@server/utils/deductTtsCredits';
 import { assertPreflightCredits, InsufficientCreditsPreflightError } from '@server/utils/creditPreflight';
-import { persistGeneratedAudio } from '@server/utils/persistGeneratedAudio';
+import { resolveAudioBillingOrgId } from '@server/billing/resolveAudioBillingOrgId';
+import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
 
 /**
@@ -28,17 +29,26 @@ import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
  *   configured provider stands in (see synthesizeTts) and the response reports the
  *   substitution via { provider, fallbackFrom } / the X-B4M-Tts-Provider* headers.
  *
- * Mirrors the multi-vendor image API (aiImageService). The legacy
- * /api/ai/text-to-speech and /api/elabs/text-to-speech routes remain as thin
- * adapters over the same aiVoiceService abstraction.
+ * Mirrors the multi-vendor image API (aiImageService).
  *
  * Auth mode and request validation come from synthesizeSpeechContract (the same
  * source of truth that drives the OpenAPI spec), so `req.validated` is the parsed,
  * typed body.
  */
 const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, res) => {
-  const { text, provider, model, voice, format, encoding, stability, similarityBoost, languageCode, preview } =
-    req.validated;
+  const {
+    text,
+    provider,
+    model,
+    voice,
+    format,
+    encoding,
+    stability,
+    similarityBoost,
+    languageCode,
+    preview,
+    organization_id,
+  } = req.validated;
 
   const vendor = provider ?? DEFAULT_TTS_PROVIDER;
 
@@ -62,7 +72,9 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
     );
   }
 
-  // Pre-flight credit gate: reject before incurring provider cost.
+  // Pre-flight credit gate: reject before incurring provider cost. Omitted keeps the historical
+  // personal default; a key bills its own account (resolveAudioBillingOrgId 403s any other target).
+  const billingOrganizationId = await resolveAudioBillingOrgId(req, organization_id, 'user');
   const userId = req.user?.id;
   if (userId) {
     try {
@@ -70,6 +82,7 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
         userId,
         estimatedCredits: estimateTtsCreditCost(vendor, model ?? TTS_DEFAULT_MODEL[vendor], text.length),
         featureLabel: 'text-to-speech',
+        billingOrganizationId,
       });
     } catch (error) {
       if (error instanceof InsufficientCreditsPreflightError) {
@@ -122,25 +135,33 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
         vendor: usedVendor,
         model: result.model,
         characters: result.characters,
+        billingOrganizationId,
         logger: req.logger,
       });
     }
 
-    // Persist a browsable copy of the audio unless the user opted out or the
-    // call is a throwaway preview (the Settings voice audition). Best-effort: a
-    // save failure (e.g. over quota) never blocks returning the audio already paid for.
+    // Best-effort browsable copy, skipped only for a throwaway `preview` call: a
+    // save failure never blocks returning audio the caller was already charged for.
     const save =
-      userId &&
-      shouldPersistGeneratedAudio({ userId, saveGeneratedAudio: req.user?.preferences?.saveGeneratedAudio, preview })
-        ? await persistGeneratedAudio({
-            userId,
-            audio: result.audio,
-            contentType: result.contentType,
-            format: result.format,
-            source: 'tts',
-            text,
-            logger: req.logger,
-          })
+      userId && shouldPersistGeneratedAudio({ userId, preview })
+        ? await saveGeneratedAssetToFiles(
+            {
+              userId,
+              bytes: result.audio,
+              contentType: result.contentType,
+              generation: {
+                generator: 'speech',
+                provider: usedVendor,
+                modelId: result.model,
+                prompt: text,
+                format: result.format,
+                // A voice names a voice of the requested provider, so it is meaningless once another stood in.
+                ...(voice && !fallbackFrom && { voice }),
+                ...(languageCode && { languageCode }),
+              },
+            },
+            req.logger
+          )
         : undefined;
 
     return await deliverGeneratedAudio(res, {

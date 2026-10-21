@@ -61,7 +61,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('@server/utils/isDuplicateKeyError', () => ({ isDuplicateKeyError: () => false }));
+vi.mock('@bike4mind/server-utils/utils/isDuplicateKeyError', () => ({ isDuplicateKeyError: () => false }));
 vi.mock('@bike4mind/common', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/common')>()),
   ProjectEvents: { UPDATE_PROJECT: 'update_project', DELETE_PROJECT: 'delete_project' },
@@ -79,7 +79,7 @@ vi.mock('@server/projects/projectScopes', async importOriginal => {
 import '@pages/api/projects/[id]/index';
 import { ApiKeyScope } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { assertProjectsReadScope, assertProjectsWriteScope } from '@server/projects/projectScopes';
 
 function request(method: 'GET' | 'DELETE', query: Record<string, unknown>) {

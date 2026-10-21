@@ -22,6 +22,7 @@ import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest
 import mongoose from 'mongoose';
 import {
   createMongoReplSet,
+  settleAutoIndexBuilds,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 
@@ -34,9 +35,11 @@ vi.mock('@server/queueHandlers/utils', () => ({
   MARK_PAUSED_MAX_ATTEMPTS: 3,
   MARK_PAUSED_RETRY_DELAY_MS: 0,
 }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn(async () => undefined) }));
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: vi.fn(() => ({ getContentAsBuffer: vi.fn() })) }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
+  getFilesStorage: vi.fn(() => ({ getContentAsBuffer: vi.fn() })),
+}));
 vi.mock('sst', () => ({
   Resource: new Proxy({}, { get: () => ({ url: 'https://queue.test', managementEndpoint: 'wss://ws.test' }) }),
 }));
@@ -51,7 +54,7 @@ import {
 } from '@bike4mind/database';
 import { KnowledgeType } from '@bike4mind/common';
 import { dispatch } from './fabFileChunk';
-import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDelivery';
+import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from '@bike4mind/server-utils/utils/sqsDelivery';
 
 const DEPLOYMENT_DEFAULT = 'text-embedding-3-small';
 const COMMITTED_SPACE = 'voyage-3';
@@ -73,7 +76,8 @@ let replSet: Awaited<ReturnType<typeof createMongoReplSet>> | undefined;
 
 beforeAll(async () => {
   replSet = await createMongoReplSet();
-  await mongoose.connect(replSet.getUri());
+  await mongoose.connect(replSet.getUri(), { autoIndex: false });
+  await settleAutoIndexBuilds(mongoose);
 });
 afterAll(async () => {
   await mongoose.disconnect();

@@ -90,6 +90,30 @@ describe('revokeUserApiKey', () => {
     expect(repo.update).not.toHaveBeenCalled();
   });
 
+  it("ends the key's realtime connections", async () => {
+    const { repo } = makeSyncedRepo();
+    const endConnections = vi.fn().mockResolvedValue({ connectionIds: ['conn-1'] });
+    const adapters = {
+      db: {
+        userApiKeys: repo as any,
+        agents: { findById: vi.fn().mockResolvedValue({ organizationId: 'org-1', userId: 'user1' }) } as any,
+        realtimeConnections: { endConnections },
+      },
+    };
+
+    await createUserApiKey(
+      'user1',
+      { name: 'CI key', scopes: [ApiKeyScope.AI_GENERATE], metadata: { createdFrom: 'dashboard' as const } },
+      adapters
+    );
+    await revokeUserApiKey('user1', { keyId: 'key-1' }, adapters);
+
+    expect(endConnections).toHaveBeenCalledWith({ apiKeyId: 'key-1' });
+    expect(repo.revokeIfNotDisabled.mock.invocationCallOrder[0]).toBeLessThan(
+      endConnections.mock.invocationCallOrder[0]
+    );
+  });
+
   it('leaves revokedReason unset when no reason is supplied', async () => {
     const { repo, getStored } = makeSyncedRepo();
     const adapters = {

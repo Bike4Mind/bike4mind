@@ -110,6 +110,7 @@ vi.mock('./HomeView', () => ({ HomeViewPanel: () => null }));
 vi.mock('./MobileSearchFilter', () => ({ MobileSearchFilter: () => null }));
 vi.mock('./UploadActionsSelect', () => ({ UploadActionsSelect: () => null }));
 vi.mock('../../common/FileStorageBar', () => ({ default: () => null }));
+vi.mock('../../common/StorageBreakdown', () => ({ default: () => null }));
 vi.mock('../../common/ShareModal', () => ({ default: () => null }));
 vi.mock('../../Knowledge/CreateKnowledgeFromUrl', () => ({ default: () => null }));
 vi.mock('../../Tag/Form', () => ({ default: () => null }));
