@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '../../utils/themes';
 import ImageContainer, { extractS3KeyFromUrl, isGeneratedImage } from './ImageContainer';
@@ -81,6 +81,33 @@ describe('ImageContainer (alt text)', () => {
   it('uses the provided alt on the inline image', () => {
     renderWith('sales chart');
     expect(screen.getByTestId('ai-response-image')).toHaveAttribute('alt', 'sales chart');
+  });
+
+  const openLightbox = () => {
+    fireEvent.click(screen.getByTestId('image-thumbnail'));
+    return within(screen.getByTestId('image-preview-modal'));
+  };
+
+  it('uses the provided alt on the lightbox image', () => {
+    renderWith('sales chart');
+    expect(openLightbox().getByTestId('ai-response-image')).toHaveAttribute('alt', 'sales chart');
+  });
+
+  it('labels navigated-to lightbox images with the generated label, not the first image alt', () => {
+    render(
+      <TestWrapper>
+        <ImageContainer
+          {...baseProps}
+          totalImages={2}
+          images={['https://example.com/image.png', 'https://example.com/other.png']}
+          src="https://example.com/image.png"
+          alt="sales chart"
+        />
+      </TestWrapper>
+    );
+    const modal = openLightbox();
+    fireEvent.click(modal.getByTestId('image-nav-next-btn'));
+    expect(modal.getByTestId('ai-response-image')).toHaveAttribute('alt', 'Generated image 2 of 2');
   });
 
   it.each([undefined, '', '   '])('falls back to the generated label when alt is %j', alt => {
