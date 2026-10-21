@@ -26,9 +26,36 @@ export const WEBHOOK_AUDIT_LOGS_TAB_PARAMS = [
   WEBHOOK_DELIVERY_ID_PARAM,
 ] as const;
 
-/** Must stay in sync with getDateRangePreset (hooks/data/webhookAuditLogs.ts). */
-export const WEBHOOK_DATE_PRESETS = ['24h', '7d', '30d', '90d'] as const;
-export type WebhookDatePreset = (typeof WEBHOOK_DATE_PRESETS)[number];
+// getDateRangePreset (hooks/data/webhookAuditLogs.ts) takes this union, so a preset it cannot
+// compute is a compile error there.
+export type WebhookDatePreset = '24h' | '7d' | '30d' | '90d';
+
+// The filters' menus, in menu order. Each Record lists every member of its union, and the URL
+// parsers below accept exactly these keys, so a menu option can never be one the URL drops.
+export const WEBHOOK_DATE_PRESET_LABELS: Readonly<Record<WebhookDatePreset, string>> = {
+  '24h': 'Last 24 hours',
+  '7d': 'Last 7 days',
+  '30d': 'Last 30 days',
+  '90d': 'Last 90 days',
+};
+
+export const WEBHOOK_STATUS_LABELS: Readonly<Record<WebhookAuditStatus, string>> = {
+  [WebhookAuditStatus.Completed]: 'Completed',
+  [WebhookAuditStatus.Failed]: 'Failed',
+  [WebhookAuditStatus.Processing]: 'Processing',
+  [WebhookAuditStatus.Received]: 'Received',
+};
+
+export const WEBHOOK_SOURCE_LABELS: Readonly<Record<WebhookSourceType, string>> = {
+  org: 'Org',
+  user: 'User',
+};
+
+const keysOf = <K extends string>(labels: Readonly<Record<K, string>>): K[] => Object.keys(labels) as K[];
+
+export const WEBHOOK_DATE_PRESETS = keysOf(WEBHOOK_DATE_PRESET_LABELS);
+export const WEBHOOK_STATUSES = keysOf(WEBHOOK_STATUS_LABELS);
+export const WEBHOOK_SOURCE_TYPES = keysOf(WEBHOOK_SOURCE_LABELS);
 
 /** The event types the filter offers, in menu order. */
 export const WEBHOOK_EVENT_OPTIONS = [
@@ -44,9 +71,6 @@ export const WEBHOOK_EVENT_OPTIONS = [
   'check_suite',
 ] as const;
 export type WebhookEventOption = (typeof WEBHOOK_EVENT_OPTIONS)[number];
-
-const WEBHOOK_STATUSES = Object.values(WebhookAuditStatus);
-const WEBHOOK_SOURCE_TYPES = ['org', 'user'] as const satisfies readonly WebhookSourceType[];
 
 // GitHub caps an owner at 39 characters and a repo name at 100.
 const MAX_REPO_LENGTH = 140;

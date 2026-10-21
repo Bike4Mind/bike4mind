@@ -37,7 +37,7 @@ export const useWebhookAuditLogsSearch = () => {
     [navigate]
   );
 
-  const updateView = useCallback(
+  const writeView = useCallback(
     (patch: Partial<WebhookAuditLogsView>) =>
       writeSearch(previous => webhookAuditLogsViewToSearch({ ...webhookAuditLogsViewFromSearch(previous), ...patch })),
     [writeSearch]
@@ -48,8 +48,8 @@ export const useWebhookAuditLogsSearch = () => {
   const writtenRepoRef = useRef(view.repository);
   const pendingRepoWriteRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
-  // Follow a repository that changed from outside while the tab stayed mounted (back/forward, a
-  // filter chip, "Clear all"): the box and the URL must not disagree.
+  // Follow a repository that changed from outside while the tab stayed mounted (back/forward):
+  // the box and the URL must not disagree.
   useEffect(() => {
     if (view.repository === writtenRepoRef.current) return;
     clearTimeout(pendingRepoWriteRef.current);
@@ -59,6 +59,20 @@ export const useWebhookAuditLogsSearch = () => {
 
   useEffect(() => () => clearTimeout(pendingRepoWriteRef.current), []);
 
+  // A repository in the patch (a chip, "Clear all") supersedes any typing still waiting to be
+  // written; the effect above cannot catch that when the URL value does not change.
+  const updateView = useCallback(
+    (patch: Partial<WebhookAuditLogsView>) => {
+      if (patch.repository !== undefined) {
+        clearTimeout(pendingRepoWriteRef.current);
+        writtenRepoRef.current = patch.repository.trim();
+        setRepoInputState(patch.repository);
+      }
+      writeView(patch);
+    },
+    [writeView]
+  );
+
   const setRepoInput = useCallback(
     (repository: string) => {
       setRepoInputState(repository);
@@ -66,10 +80,10 @@ export const useWebhookAuditLogsSearch = () => {
       pendingRepoWriteRef.current = setTimeout(() => {
         // What the URL will hold once parsed, so the echo check above matches a trimmed value.
         writtenRepoRef.current = repository.trim();
-        updateView({ repository });
+        writeView({ repository });
       }, REPO_FILTER_URL_DEBOUNCE_MS);
     },
-    [updateView]
+    [writeView]
   );
 
   const openDelivery = useCallback(

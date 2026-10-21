@@ -41,7 +41,15 @@ import {
   getDateRangePreset,
   WebhookAuditFiltersParams,
 } from '@client/app/hooks/data/webhookAuditLogs';
-import { WEBHOOK_EVENT_OPTIONS } from './webhookAuditLogsTabSearch';
+import {
+  WEBHOOK_DATE_PRESET_LABELS,
+  WEBHOOK_DATE_PRESETS,
+  WEBHOOK_EVENT_OPTIONS,
+  WEBHOOK_SOURCE_LABELS,
+  WEBHOOK_SOURCE_TYPES,
+  WEBHOOK_STATUS_LABELS,
+  WEBHOOK_STATUSES,
+} from './webhookAuditLogsTabSearch';
 import { useWebhookAuditLogsSearch } from './useWebhookAuditLogsSearch';
 import { relativeTimeFormat } from '@client/app/utils/dateUtils';
 
@@ -543,10 +551,11 @@ const WebhookAuditLogsTab: React.FC = () => {
                 onChange={(_, value) => value && updateView({ datePreset: value })}
                 data-testid="webhook-logs-date-range-select"
               >
-                <Option value="24h">Last 24 hours</Option>
-                <Option value="7d">Last 7 days</Option>
-                <Option value="30d">Last 30 days</Option>
-                <Option value="90d">Last 90 days</Option>
+                {WEBHOOK_DATE_PRESETS.map(preset => (
+                  <Option key={preset} value={preset}>
+                    {WEBHOOK_DATE_PRESET_LABELS[preset]}
+                  </Option>
+                ))}
               </Select>
             </FormControl>
 
@@ -559,8 +568,11 @@ const WebhookAuditLogsTab: React.FC = () => {
                 data-testid="webhook-logs-source-select"
               >
                 <Option value={null}>All sources</Option>
-                <Option value="org">Org</Option>
-                <Option value="user">User</Option>
+                {WEBHOOK_SOURCE_TYPES.map(sourceType => (
+                  <Option key={sourceType} value={sourceType}>
+                    {WEBHOOK_SOURCE_LABELS[sourceType]}
+                  </Option>
+                ))}
               </Select>
             </FormControl>
           </Stack>
@@ -605,10 +617,11 @@ const WebhookAuditLogsTab: React.FC = () => {
                 data-testid="webhook-logs-status-select"
               >
                 <Option value={null}>All statuses</Option>
-                <Option value={WebhookAuditStatus.Completed}>Completed</Option>
-                <Option value={WebhookAuditStatus.Failed}>Failed</Option>
-                <Option value={WebhookAuditStatus.Processing}>Processing</Option>
-                <Option value={WebhookAuditStatus.Received}>Received</Option>
+                {WEBHOOK_STATUSES.map(status => (
+                  <Option key={status} value={status}>
+                    {WEBHOOK_STATUS_LABELS[status]}
+                  </Option>
+                ))}
               </Select>
             </FormControl>
 
@@ -673,7 +686,7 @@ const WebhookAuditLogsTab: React.FC = () => {
               endDecorator={<CloseIcon fontSize="small" />}
               onClick={() => updateView({ sourceType: null })}
             >
-              Source: {sourceTypeFilter === 'org' ? 'Org' : 'User'}
+              Source: {WEBHOOK_SOURCE_LABELS[sourceTypeFilter]}
             </Chip>
           )}
           {[repoSearch, eventFilter, statusFilter, sourceTypeFilter].filter(Boolean).length > 1 && (

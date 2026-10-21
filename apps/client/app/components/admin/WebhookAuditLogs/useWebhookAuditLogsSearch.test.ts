@@ -77,6 +77,18 @@ describe('useWebhookAuditLogsSearch', () => {
     expect(fakeAdminRouter.search).not.toHaveProperty('webhookRepo');
   });
 
+  it('drops typing still waiting to be written when "Clear all" clears the repository', () => {
+    vi.useFakeTimers();
+    const { result } = setup();
+
+    act(() => result.current.setRepoInput('acme/widgets'));
+    act(() => result.current.updateView({ repository: '', event: null }));
+    act(() => vi.advanceTimersByTime(REPO_FILTER_URL_DEBOUNCE_MS));
+
+    expect(result.current.repoInput).toBe('');
+    expect(fakeAdminRouter.search).toEqual({ tab: 'webhook-audit-logs' });
+  });
+
   it('opens and closes a delivery through the URL', () => {
     const { result } = setup();
 
