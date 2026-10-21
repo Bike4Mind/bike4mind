@@ -42,6 +42,7 @@ vi.mock('@client/app/components/Credits/AccountSelector', () => ({
 
 import type { AudioGenMode } from '@client/app/stores/useAudioGenSettings';
 import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
+import { GENERATION_ACCOUNT_CANNOT_PAY_MESSAGE } from '@client/app/hooks/data/generationErrors';
 import { useGenerateAudio } from './useGenerateAudio';
 
 // A 4xx from the route arrives as an axios error carrying the JSON error body.
@@ -155,6 +156,9 @@ describe('useGenerateAudio oversized audio', () => {
  * check here would show "you are out of credits" for a malformed request.
  */
 describe('useGenerateAudio credit exhaustion', () => {
+  // With no account selected the server picks the payer, so its own message is the best one available.
+  beforeEach(() => mocks.selectedAccount.mockReturnValue(null));
+
   it('surfaces the credits message from a classified 422', async () => {
     mocks.post.mockRejectedValue(
       axiosFailure(422, {
@@ -457,5 +461,69 @@ describe('useGenerateAudio credit balance refresh', () => {
 
     expect(mocks.post.mock.calls[0][1]).toMatchObject({ organization_id: 'teamOrg' });
     expect(mocks.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['organizations', 'user'], refetchType: 'all' });
+  });
+});
+
+describe('useGenerateAudio billing account', () => {
+  const insufficient = axiosFailure(422, {
+    error: 'Insufficient credits for text-to-speech',
+    errorCode: 'insufficient_credits',
+  });
+
+  it('names the selected organization when it is out of credits', async () => {
+    mocks.selectedAccount.mockReturnValue({ id: 'org1', name: 'Acme', personal: false });
+    mocks.post.mockRejectedValue(insufficient);
+
+    await generate();
+
+    expect(mocks.toastError).toHaveBeenCalledWith('Acme does not have enough credits for this audio.');
+  });
+
+  it('names personal credits when they are the ones out', async () => {
+    mocks.selectedAccount.mockReturnValue({ id: 'u1', name: 'Me', personal: true });
+    mocks.post.mockRejectedValue(insufficient);
+
+    await generate('boom', 'sound-effects');
+
+    expect(mocks.toastError).toHaveBeenCalledWith('Your personal credits are not enough for this audio.');
+  });
+
+  it('tells the user to switch accounts on a 403 while an organization is selected', async () => {
+    mocks.selectedAccount.mockReturnValue({ id: 'org1', name: 'Acme', personal: false });
+    mocks.post.mockRejectedValue(axiosFailure(403, { error: 'Forbidden' }));
+
+    await generate();
+
+    expect(mocks.toastError).toHaveBeenCalledWith(GENERATION_ACCOUNT_CANNOT_PAY_MESSAGE);
+  });
+
+  it('tells the user to switch accounts on a 403 in sound-effects mode too', async () => {
+    mocks.selectedAccount.mockReturnValue({ id: 'org1', name: 'Acme', personal: false });
+    mocks.post.mockRejectedValue(axiosFailure(403, { error: 'Forbidden' }));
+
+    await generate('boom', 'sound-effects');
+
+    expect(mocks.toastError).toHaveBeenCalledWith(GENERATION_ACCOUNT_CANNOT_PAY_MESSAGE);
+  });
+
+  it('leaves a 403 alone when the personal account is selected', async () => {
+    mocks.selectedAccount.mockReturnValue({ id: 'u1', name: 'Me', personal: true });
+    mocks.post.mockRejectedValue(axiosFailure(403, { error: 'Forbidden' }));
+
+    await generate();
+
+    expect(mocks.toastError).toHaveBeenCalledWith('Forbidden');
+  });
+
+  it('names the account that was selected at submit, not the one selected when the request fails', async () => {
+    mocks.selectedAccount.mockReturnValue({ id: 'org1', name: 'Acme', personal: false });
+    mocks.post.mockImplementation(async () => {
+      mocks.selectedAccount.mockReturnValue({ id: 'org2', name: 'Other', personal: false });
+      throw insufficient;
+    });
+
+    await generate();
+
+    expect(mocks.toastError).toHaveBeenCalledWith('Acme does not have enough credits for this audio.');
   });
 });
