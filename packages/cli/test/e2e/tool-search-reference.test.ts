@@ -12,6 +12,7 @@ import { PassThrough, Readable } from 'stream';
 import { DeferredToolRegistry, ReActAgent, createToolSearchTool } from '@bike4mind/agents';
 import { ChatModels, ModelBackend, type IMessage, type ModelInfo } from '@bike4mind/common';
 import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-adapters';
+import type { Logger } from '@bike4mind/observability';
 import type { ApiClient } from '../../src/auth/ApiClient';
 import { ServerLlmBackend } from '../../src/llm/ServerLlmBackend';
 import { FallbackLlmBackend } from '../../src/llm/FallbackLlmBackend';
@@ -101,8 +102,7 @@ function makeAgent(
   const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   return new ReActAgent({
     userId: 'e2e-test-user',
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test logger only needs the four log methods ReActAgent calls
-    logger: logger as any,
+    logger: logger as unknown as Logger,
     llm,
     model,
     tools,

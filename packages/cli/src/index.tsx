@@ -1057,7 +1057,11 @@ function CliApp() {
         logger,
         // 'tool_search' is fixed-named; cliTools carries it when deferred schemas exist,
         // but reserve the name unconditionally so a plugin can never claim it.
-        reservedToolNames: [...loadedB4mTools, ...cliTools].map(t => t.toolSchema.name).concat('tool_search'),
+        reservedToolNames: [
+          ...[...loadedB4mTools, ...cliTools].map(t => t.toolSchema.name),
+          ...deferredToolRegistry.getDirectoryNames(),
+          'tool_search',
+        ],
       });
 
       // Feed the live plugin command names into the custom-command load gate, then
@@ -3728,7 +3732,11 @@ function CliApp() {
         descriptors: state.pluginDescriptors,
         config: updatedConfig,
         logger,
-        reservedToolNames: baseTools.map(t => t.toolSchema.name),
+        reservedToolNames: [
+          ...baseTools.map(t => t.toolSchema.name),
+          ...deferredToolRegistry.getDirectoryNames(),
+          'tool_search',
+        ],
       });
       const rebuiltRegistry = rebuilt.registry;
       newFeatureRegistry = rebuiltRegistry;
