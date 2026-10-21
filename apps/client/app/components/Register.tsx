@@ -302,19 +302,19 @@ const Register: React.FC = () => {
       // protected navigation must not reuse the "no session" answer from before login.
       resetSessionBootstrap();
 
+      const registeredUser = user as Parameters<typeof setCurrentUser>[0];
       if (result.user) {
         // Ad-conversion signal (GA4 sign_up + Reddit SignUp). Fires exactly once per
         // created account, before the auth-state swap below unmounts the component.
         // OAuth signups fire the same call from /auth/success via the isNewUser hash param.
         // Only the nested shape is a freshly created account - the flat shape is a login of
         // one that already existed, which must not count as a signup conversion.
-        const registeredUser = user as Parameters<typeof setCurrentUser>[0];
         if (registeredUser?.id) markFirstSignupSession(registeredUser.id);
         trackSignupConversion('password');
       }
 
       useAccessToken.getState().setVerifiedSession(accessToken);
-      setCurrentUser(user as Parameters<typeof setCurrentUser>[0]);
+      setCurrentUser(registeredUser);
       if (result.user) {
         logEvent({ type: FirstRunEvents.POLICIES_ACCEPTED, metadata: { path: 'registration' } });
       }
