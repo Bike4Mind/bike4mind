@@ -1342,20 +1342,26 @@ export class AnthropicBackend implements ICompletionBackend {
 
     // Apply prompt caching if enabled
     const cacheStrategy = options.cacheStrategy;
-    if (cacheStrategy?.enableCaching) {
+    // The caller flags its own mid-history breakpoint on the message ahead of the current turn and
+    // turns this anchor off, because on the FIRST call the end of the array is that volatile turn.
+    // A tool round appends the previous round's tool_use/tool_result instead, which the next round
+    // re-sends verbatim - so the end of the array is history again and is worth anchoring.
+    const roundCacheStrategy =
+      toolCallCount > 0 && cacheStrategy ? { ...cacheStrategy, cacheConversationHistory: true } : cacheStrategy;
+    if (roundCacheStrategy?.enableCaching) {
       const adapter = getCachingAdapter(ModelBackend.Anthropic);
       const cachedParams = adapter.applyCaching(
         apiParams as unknown as Record<string, unknown>,
-        cacheStrategy,
+        roundCacheStrategy,
         this.logger
       );
       Object.assign(apiParams, cachedParams);
 
       this.logger.debug('[Anthropic] Applying cache control', {
-        cacheSystemPrompt: cacheStrategy.cacheSystemPrompt,
-        cacheTools: cacheStrategy.cacheTools,
-        cacheHistory: cacheStrategy.cacheConversationHistory,
-        cacheTTL: cacheStrategy.cacheTTL,
+        cacheSystemPrompt: roundCacheStrategy.cacheSystemPrompt,
+        cacheTools: roundCacheStrategy.cacheTools,
+        cacheHistory: roundCacheStrategy.cacheConversationHistory,
+        cacheTTL: roundCacheStrategy.cacheTTL,
       });
     }
     Object.assign(apiParams, capCacheControlMarkers(apiParams as unknown as Record<string, unknown>, this.logger));

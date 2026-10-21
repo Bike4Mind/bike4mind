@@ -129,3 +129,4 @@ export * from './AdminAuditLogTypes';
 export * from './adminActionReason';
 export * from './adminAuditCatalogue';
 export * from './adminAuditQuery';
+export * from './adminUserActivity';

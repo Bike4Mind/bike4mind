@@ -37,12 +37,12 @@ declare module '@bike4mind/common' {
     impersonatedUserId?: string;
     apiKeyId?: string;
   };
-  export type AuditContext = {
+  export type StoredAuditContext = {
     ip: string;
     userAgent?: string;
     requestId: string;
     route: string;
-    source: 'api_key' | 'admin_ui';
+    source: 'admin_ui' | 'api_key' | 'script' | 'worker';
   };
   export type AuditEntry = { id: string };
   export type AdminAuditAction = 'user.role.admin_granted' | 'user.role.denied';
@@ -74,7 +74,7 @@ declare module '@bike4mind/services' {
     export type RecordAdminActionInput = {
       action: import('@bike4mind/common').AdminAuditAction;
       actor: import('@bike4mind/common').AuditActor;
-      context: import('@bike4mind/common').AuditContext;
+      context: import('@bike4mind/common').StoredAuditContext;
       target: import('@bike4mind/common').AuditTarget;
       summary: string;
       details?: Record<string, unknown>;

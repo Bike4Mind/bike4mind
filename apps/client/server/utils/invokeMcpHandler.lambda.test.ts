@@ -38,6 +38,7 @@ vi.mock('@bike4mind/server-utils/services/integrationCircuitBreaker', () => ({
 vi.mock('@server/services/mcpCircuitBreakers', () => ({
   getBreaker: mockGetBreaker,
   classifyOperation: mockClassifyOperation,
+  flushBreakerMetrics: vi.fn().mockResolvedValue(undefined),
   CircuitBreakerError,
 }));
 

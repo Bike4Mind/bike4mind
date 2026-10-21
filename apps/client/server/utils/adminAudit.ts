@@ -8,9 +8,9 @@ import {
   ForbiddenError,
   type AdminAuditAction,
   type AuditActor,
-  type AuditContext,
   type AuditEntry,
   type AuditTarget,
+  type StoredAuditContext,
 } from '@bike4mind/common';
 import { adminAuditLogRepository, adminSettingsRepository } from '@bike4mind/database';
 import { userRepository } from '@bike4mind/database/auth';
@@ -69,7 +69,7 @@ const resolveActor = async (req: AuditRequest, scope: AuditActor['scope']): Prom
   return apiKeyInfo ? { ...base, kind: 'apiKey', apiKeyId: apiKeyInfo.keyId } : base;
 };
 
-const buildContext = (req: AuditRequest): AuditContext => ({
+const buildContext = (req: AuditRequest): StoredAuditContext => ({
   ip: getClientIp(req),
   userAgent: req.headers['user-agent'],
   requestId: req.requestId,
