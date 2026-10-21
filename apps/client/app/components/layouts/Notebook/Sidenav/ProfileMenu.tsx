@@ -255,7 +255,6 @@ const ProfileMenu = () => {
   const modeToggleEnabled = theme.branding.modeToggleEnabled;
 
   const currentUser = useUser(s => s.currentUser);
-  const getAppFileUrl = useGetAppFileUrl();
   const isAdmin = useUser(s => s.isAdmin);
   const { accounts, selectedAccount, setSelectedAccount, showAccountType } = useAccounts();
 
@@ -273,6 +272,7 @@ const ProfileMenu = () => {
   const toggleReferralModal = useReferralModal(s => s.toggle);
   const openCookieSettings = useCookieSettings(s => s.open);
   const logEvent = useLogEvent();
+  const getAppFileUrl = useGetAppFileUrl();
   const { data: friendRequests } = useGetFriendRequests(currentUser?.id);
   const returnToAdmin = useReturnToAdmin();
   const hasReturnToken = useAccessToken(s => s.impersonating);
