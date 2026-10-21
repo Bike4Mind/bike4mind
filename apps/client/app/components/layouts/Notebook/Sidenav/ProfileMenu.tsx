@@ -22,6 +22,7 @@ import { openExternalLinkByKey } from '@client/app/utils/externalLinks';
 import { useCookieSettings } from '@client/app/components/CookieConsentBanner';
 import { greenAlpha } from '@client/app/utils/themes/colors';
 import { formatCreditAmount } from '@client/app/utils/formatCredits';
+import { useGetAppFileUrl } from '@client/app/utils/s3';
 import { defaultFeedbackRollupWindow } from '@client/app/utils/feedbackRollupWindow';
 import { useAccounts } from '@client/app/components/Credits/AccountSelector';
 import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
@@ -254,6 +255,7 @@ const ProfileMenu = () => {
   const modeToggleEnabled = theme.branding.modeToggleEnabled;
 
   const currentUser = useUser(s => s.currentUser);
+  const getAppFileUrl = useGetAppFileUrl();
   const isAdmin = useUser(s => s.isAdmin);
   const { accounts, selectedAccount, setSelectedAccount, showAccountType } = useAccounts();
 
@@ -826,7 +828,9 @@ const ProfileMenu = () => {
       >
         <Avatar
           size="md"
-          src={currentUser?.photoUrl ?? undefined}
+          data-testid="profile-menu-avatar"
+          // photoUrl is a storage key, not a URL: used as-is it resolves against the current route.
+          src={currentUser?.photoUrl ? getAppFileUrl({ key: currentUser.photoUrl }) : undefined}
           sx={{ '--Avatar-size': '36px', width: '36px', height: '36px', borderRadius: '8px' }}
         >
           {currentUser?.name?.charAt(0)?.toUpperCase()}

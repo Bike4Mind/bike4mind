@@ -23,6 +23,9 @@ vi.mock('@client/app/components/inbox/Badge', () => ({
 }));
 const billing = vi.hoisted(() => ({ openView: vi.fn(), creditsEnabled: false }));
 const analytics = vi.hoisted(() => ({ mutate: vi.fn() }));
+const user = vi.hoisted(() => ({
+  current: { id: 'u1', name: 'Jane' } as { id: string; name: string; photoUrl?: string },
+}));
 vi.mock('@client/app/components/subscription/BillingDeepLinkModals', () => ({
   useBillingView: () => ({ view: undefined, openView: billing.openView, closeView: vi.fn() }),
 }));
@@ -30,10 +33,13 @@ vi.mock('@client/app/contexts/InboxContext', () => ({
   useInbox: { getState: () => ({ setOpen: vi.fn() }) },
 }));
 vi.mock('@client/app/contexts/UserContext', () => ({
-  useUser: (select: (s: unknown) => unknown) => select({ currentUser: { id: 'u1', name: 'Jane' }, isAdmin: false }),
+  useUser: (select: (s: unknown) => unknown) => select({ currentUser: user.current, isAdmin: false }),
 }));
 vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: analytics.mutate }) }));
-vi.mock('@client/app/hooks/data/settings', () => ({ useGetSettingsValue: () => billing.creditsEnabled }));
+vi.mock('@client/app/hooks/data/settings', () => ({
+  useGetSettingsValue: () => billing.creditsEnabled,
+  useConfig: () => ({ data: { cdnUrl: 'https://cdn.example.test' } }),
+}));
 vi.mock('@client/app/hooks/data/user', () => ({
   useGetFriendRequests: () => ({ data: [] }),
   useReturnToAdmin: () => vi.fn(),
@@ -110,6 +116,38 @@ describe('ProfileMenu AccountCard - semantics', () => {
   it('hides the radio decoration from the accessibility tree', () => {
     renderCard({ bare: false });
     expect(screen.getAllByRole('menuitemradio')).toHaveLength(1);
+  });
+});
+
+describe('ProfileMenu - avatar', () => {
+  afterEach(() => {
+    user.current = { id: 'u1', name: 'Jane' };
+  });
+
+  // The stored photoUrl is a bare storage key; used as a src it resolved against the route
+  // (`/notebooks/profile-photos/...`) and 404'd on any page below the root.
+  it('loads the photo from the CDN rather than relative to the current route', () => {
+    user.current = { id: 'u1', name: 'Jane', photoUrl: 'profile-photos/u1/abc.png' };
+    render(
+      <TestWrapper>
+        <ProfileMenu />
+      </TestWrapper>
+    );
+
+    const img = screen.getByTestId('profile-menu-avatar').querySelector('img');
+    expect(img?.getAttribute('src')).toBe('https://cdn.example.test/profile-photos/u1/abc.png');
+  });
+
+  it('shows the initial when there is no photo', () => {
+    render(
+      <TestWrapper>
+        <ProfileMenu />
+      </TestWrapper>
+    );
+
+    const avatar = screen.getByTestId('profile-menu-avatar');
+    expect(avatar.querySelector('img')).toBeNull();
+    expect(avatar.textContent).toBe('J');
   });
 });
 
