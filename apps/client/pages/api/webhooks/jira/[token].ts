@@ -538,10 +538,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
               }
             }
 
-            const { botToken, channel } = await resolveNotificationDestination(
-              subscription.userId,
-              subscription.slackTarget.type === 'channel' ? subscription.slackTarget.channelId : undefined
-            );
+            let botToken: string;
+            let channel: string;
+            try {
+              ({ botToken, channel } = await resolveNotificationDestination(
+                subscription.userId,
+                subscription.slackTarget.type === 'channel' ? subscription.slackTarget.channelId : undefined
+              ));
+            } catch (err) {
+              // An unresolvable destination is recorded but never counts toward the auto-disable breaker.
+              await recordDelivery(
+                subscription,
+                JiraWebhookDeliveryStatus.Failed,
+                err instanceof Error ? err.message : 'Slack destination unavailable',
+                Date.now() - startTime
+              );
+              logger.warn('[JIRA-WEBHOOK] Slack destination unavailable', {
+                subscriptionId: subscription.id,
+                error: err instanceof Error ? err.message : err,
+                correlationId,
+              });
+              return { subscriptionId: subscription.id, status: JiraWebhookDeliveryStatus.Failed };
+            }
             const slackClient = new SlackClient(botToken, logger);
 
             const slackMessage = formatEventForSlack(webhookEventType, payload, atlassianSiteUrl);

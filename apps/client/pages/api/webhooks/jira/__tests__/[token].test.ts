@@ -124,7 +124,7 @@ describe('POST /api/webhooks/jira/[token] delivery', () => {
     expect(mockIncrementFailures).not.toHaveBeenCalled();
   });
 
-  it('sends nothing, records a failure and counts it once when the destination check refuses', async () => {
+  it('sends nothing and records a failure without counting it when the destination check refuses', async () => {
     mockResolveDestination.mockRejectedValue(new Error('Connect with Slack to verify your identity first'));
 
     const res = await deliver();
@@ -132,7 +132,7 @@ describe('POST /api/webhooks/jira/[token] delivery', () => {
     expect(res._getStatusCode()).toBe(200);
     await vi.waitFor(() => expect(mockRecordDelivery).toHaveBeenCalled());
     expect(mockSendMessage).not.toHaveBeenCalled();
-    expect(mockIncrementFailures).toHaveBeenCalledTimes(1);
+    expect(mockIncrementFailures).not.toHaveBeenCalled();
     expect(mockRecordDelivery).toHaveBeenCalledWith(
       expect.objectContaining({
         status: JiraWebhookDeliveryStatus.Failed,

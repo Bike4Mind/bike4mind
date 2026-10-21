@@ -229,6 +229,7 @@ const handler = baseApi()
           $unset['slackSettings.slackUserToken'] = 1;
           $unset['slackSettings.slackUserScopes'] = 1;
         }
+        for (const path of Object.keys($unset)) delete $set[path];
 
         const updatedUser = await User.findByIdAndUpdate(userId, { $set, $unset }, { new: true, runValidators: true });
 

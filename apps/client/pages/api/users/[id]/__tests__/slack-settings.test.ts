@@ -258,6 +258,14 @@ describe('Slack identity and preference boundaries', () => {
     );
   });
 
+  it('does not set and unset githubNotifications in one unlink update', async () => {
+    const { promise } = run({ slackUserId: '', githubNotifications: { enabled: false } });
+    await promise;
+    const [, update] = mockUserFindByIdAndUpdate.mock.calls[0];
+    expect(update.$set).not.toHaveProperty('slackSettings.githubNotifications');
+    expect(update.$unset).toHaveProperty('slackSettings.githubNotifications', 1);
+  });
+
   it('refuses notification destinations whose membership cannot be verified', async () => {
     mockDestination.mockRejectedValueOnce(new Error('not a member'));
     const { res, promise } = run({ githubNotifications: { enabled: true, channels: { default: 'CFOREIGN' } } });
