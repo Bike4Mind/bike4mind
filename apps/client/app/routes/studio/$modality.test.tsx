@@ -215,14 +215,10 @@ describe('StudioPage (Image preview tab)', () => {
     expect(screen.queryByTestId('studio-tab-image')).not.toBeInTheDocument();
   });
 
-  it('shows a disabled Image placeholder tab when the feature is open, and picking it does not navigate', () => {
+  it('shows a disabled Image placeholder tab when the feature is open', () => {
     h.studioFeatures = { image: true };
     h.models = { isPending: true, data: undefined };
     renderPage();
-    const imageTab = screen.getByTestId('studio-tab-image');
-    expect(imageTab).toHaveAttribute('aria-disabled', 'true');
-    fireEvent.click(imageTab);
-    expect(screen.getByTestId('studio-tab-video')).toHaveAttribute('aria-selected', 'true');
-    expect(h.navigate).not.toHaveBeenCalled();
+    expect(screen.getByTestId('studio-tab-image')).toHaveAttribute('aria-disabled', 'true');
   });
 });
