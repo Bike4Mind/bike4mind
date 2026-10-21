@@ -1,4 +1,5 @@
-import type { ITurnTiming, TurnRetryReason } from '@bike4mind/common';
+import { MAX_RECORDED_TURN_RETRIES, type ITurnTiming, type TurnRetryReason } from '@bike4mind/common';
+import { formatDuration } from './formatDuration';
 
 export const TURN_RETRY_REASON_LABELS: Record<TurnRetryReason, string> = {
   stream_idle_timeout: 'response stalled',
@@ -21,27 +22,27 @@ export function isNotableTurn(timing: ITurnTiming | undefined): timing is ITurnT
   return timing.retries.length > 0 || timing.fallbackHops > 0 || (timing.totalMs ?? 0) >= SLOW_TURN_THRESHOLD_MS;
 }
 
-export function formatDurationMs(ms: number): string {
-  const rounded = Math.round(ms);
-  if (rounded < 1000) return `${rounded}ms`;
-  // Round to the shown precision before choosing it, so 9999ms reads "10s", not "10.0s".
-  const tenths = Math.round(rounded / 100) / 10;
-  return tenths < 10 ? `${tenths.toFixed(1)}s` : `${Math.round(rounded / 1000)}s`;
-}
-
 /** Distinct reasons in first-seen order, so "stalled, stalled, busy" reads as "stalled, busy". */
 function distinctReasonLabels(timing: ITurnTiming): string[] {
   return [...new Set(timing.retries.map(retry => TURN_RETRY_REASON_LABELS[retry.reason] ?? retry.reason))];
 }
 
-/** One line for the reply footer, e.g. "Took 415s - 3 retries (response stalled)". */
+/** A full list means the recorder stopped at its cap, so the real count is that or more. */
+function formatRetryCount(timing: ITurnTiming): string {
+  const count = timing.retries.length;
+  return count >= MAX_RECORDED_TURN_RETRIES ? `${count}+` : `${count}`;
+}
+
+/** One line for the reply footer, e.g. "Took 6m 55s - 3 retries (response stalled)". */
 export function summarizeTurnTiming(timing: ITurnTiming): string {
   const parts: string[] = [];
-  if (timing.totalMs !== undefined) parts.push(`Took ${formatDurationMs(timing.totalMs)}`);
+  if (timing.totalMs !== undefined) parts.push(`Took ${formatDuration(timing.totalMs)}`);
 
   const retryCount = timing.retries.length;
   if (retryCount > 0) {
-    parts.push(`${retryCount} ${retryCount === 1 ? 'retry' : 'retries'} (${distinctReasonLabels(timing).join(', ')})`);
+    parts.push(
+      `${formatRetryCount(timing)} ${retryCount === 1 ? 'retry' : 'retries'} (${distinctReasonLabels(timing).join(', ')})`
+    );
   }
   if (timing.fallbackHops > 0) {
     parts.push(`${timing.fallbackHops} model ${timing.fallbackHops === 1 ? 'switch' : 'switches'}`);
@@ -60,7 +61,7 @@ export function turnTimingMarkdown(timing: ITurnTiming | undefined): string {
     `- **Context build**: ${timing.contextBuildMs !== undefined ? `${timing.contextBuildMs} ms` : 'N/A'}`,
     `- **Concurrency slot wait**: ${timing.semaphoreWaitMs} ms`,
     `- **Fallback hops**: ${timing.fallbackHops}`,
-    `- **Retries**: ${timing.retries.length}`,
+    `- **Retries**: ${formatRetryCount(timing)}`,
   ];
   for (const retry of timing.retries) {
     const details = [
