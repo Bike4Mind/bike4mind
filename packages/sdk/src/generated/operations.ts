@@ -129,6 +129,14 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/artifacts/{id}/versions/{version}',
   },
+  getClaudeMarketplace: {
+    method: 'GET',
+    path: '/api/v1/skills/market/claude-marketplace.json',
+  },
+  getClaudePluginZip: {
+    method: 'GET',
+    path: '/api/v1/skills/market/{id}/claude-plugin.zip',
+  },
   getCreditBalance: {
     method: 'GET',
     path: '/api/v1/credits',

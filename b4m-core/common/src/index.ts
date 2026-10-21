@@ -30,6 +30,7 @@ export * from './decisions';
 export * from './soundGeneration';
 export * from './soundPricing';
 export * from './musicGeneration';
+export * from './studioFeatureFlags';
 export * from './schemas';
 // Transport-agnostic API endpoint contracts. Pure data (no `.openapi()`), so
 // safe to import in any runtime. The OpenAPI layer (./openapi) is deliberately
@@ -104,6 +105,7 @@ export * from './utils/creditTransactionDisplay';
 export * from './utils/teamPlanSettings';
 export * from './utils/deepLinks';
 export * from './utils/skillMdSource';
+export * from './utils/claudeMarketplace';
 export * from './utils/emailList';
 export * from './utils/requireEnv';
 export * from './utils/bedrockCredentials';
