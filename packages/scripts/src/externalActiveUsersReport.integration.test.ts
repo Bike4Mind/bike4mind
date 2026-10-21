@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 import { Quest, UsageEvent, User } from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../database/src/__test__/createMongoServer';
 
-import { runExternalActivityReport } from './externalActiveUsersReport';
+import { collectActivity, runExternalActivityReport } from './externalActiveUsersReport';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -261,6 +261,31 @@ describe('runExternalActivityReport', () => {
     expect(lines[0]).toContain('UsageEvent rows by source');
     expect(lines[0]).toContain('Weekly signup cohorts');
     expect(lines[0]).not.toContain('@');
+  });
+});
+
+describe('collectActivity', () => {
+  const windowStart = new Date('2026-10-01T00:00:00Z');
+
+  it('keeps only the given users when a user-id filter is passed, and every user without one', async () => {
+    const kept = await insertUser('kept@customer.example');
+    const other = await insertUser('other@customer.example');
+    for (const id of [kept, other]) {
+      await usage(id, '2026-10-10', { source: 'chat' });
+      await usage(id, '2026-10-10', { source: 'api' });
+      await quest(id, '2026-10-11');
+      await agent(id, '2026-10-12', { apiKeyId: 'key1' });
+    }
+
+    const filtered = await collectActivity(windowStart, 100, NOW, new Set(), new Set([kept]));
+    const all = await collectActivity(windowStart, 100, NOW);
+
+    expect([...filtered.userDays.keys()]).toEqual([kept]);
+    expect([...filtered.apiUserDays.keys()]).toEqual([kept]);
+    expect([...filtered.sourceCounts.keys()]).toEqual([kept]);
+    expect(filtered.apiExecutionIds.size).toBe(1);
+    expect([...all.userDays.keys()].sort()).toEqual([kept, other].sort());
+    expect(all.apiExecutionIds.size).toBe(2);
   });
 });
 

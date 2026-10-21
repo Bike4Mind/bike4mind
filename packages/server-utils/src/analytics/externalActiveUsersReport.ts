@@ -54,13 +54,18 @@ const OBJECT_ID_RE = /^[0-9a-f]{24}$/i;
  * desktop activity (DAU) and public API activity (reported separately). Projects only the fields
  * it needs and never unions across collections (DocumentDB has no $unionWith). Every read prefers
  * a secondary: a full-window scan of the largest collections should not load the primary.
+ * `userIds`, when given, drops every other user's rows as they stream (not pushed into the query,
+ * where a large $in would not ride the time-range indexes).
  */
 export async function collectActivity(
   windowStart: Date,
   batchSize: number,
   windowEnd = new Date(),
-  apiSessionIds: ReadonlySet<string> = new Set()
+  apiSessionIds: ReadonlySet<string> = new Set(),
+  userIds?: ReadonlySet<string>
 ) {
+  const included = (userId: string | undefined): userId is string =>
+    !!userId && (userIds === undefined || userIds.has(userId));
   const userDays: UserDayMap = new Map();
   const apiUserDays: UserDayMap = new Map();
   const sourceCounts: UserSourceCounts = new Map();
@@ -73,7 +78,7 @@ export async function collectActivity(
     .lean<ActivityRow[]>()
     .cursor({ batchSize });
   for await (const event of usageEvents) {
-    if (!event.userId) continue;
+    if (!included(event.userId)) continue;
     recordActivity(isApiSource(event.source) ? apiUserDays : userDays, event.userId, event.createdAt);
     recordUsageSource(sourceCounts, event.userId, event.source);
   }
@@ -93,7 +98,7 @@ export async function collectActivity(
     .lean<AgentActivityRow[]>()
     .cursor({ batchSize });
   for await (const execution of executions) {
-    if (!execution.userId) continue;
+    if (!included(execution.userId)) continue;
     if (execution.apiKeyId) {
       apiExecutionIds.add(String(execution._id));
       recordActivity(apiUserDays, execution.userId, execution.createdAt);
@@ -116,7 +121,7 @@ export async function collectActivity(
     .cursor({ batchSize });
   for await (const quest of quests) {
     const userId = quest.promptMeta?.session?.userId;
-    if (!userId || !isOriginalQuest(quest._id, quest.timestamp)) continue;
+    if (!included(userId) || !isOriginalQuest(quest._id, quest.timestamp)) continue;
     const viaApi =
       (quest.sessionId !== undefined && apiSessionIds.has(quest.sessionId)) ||
       (quest.agentExecutionId !== undefined && apiExecutionIds.has(quest.agentExecutionId));

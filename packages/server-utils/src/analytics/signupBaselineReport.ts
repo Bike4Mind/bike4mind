@@ -111,7 +111,13 @@ export async function runSignupBaselineReport(options: SignupBaselineOptions) {
     }
   }
 
-  const { userDays, apiExecutionIds } = await collectActivity(window.since, BATCH_SIZE, window.until, apiSessions);
+  const { userDays, apiExecutionIds } = await collectActivity(
+    window.since,
+    BATCH_SIZE,
+    window.until,
+    apiSessions,
+    new Set(externalIds)
+  );
   evidence.userDays = userDays;
   for (let offset = 0; offset < externalIds.length; offset += BATCH_SIZE) {
     const userIds = externalIds.slice(offset, offset + BATCH_SIZE);
