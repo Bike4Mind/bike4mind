@@ -7,13 +7,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-const { mockFindPublishedById, mockFindFile, mockGetSettings, mockSign, rateLimitOptions } = vi.hoisted(() => ({
-  mockFindPublishedById: vi.fn(),
-  mockFindFile: vi.fn(),
-  mockGetSettings: vi.fn(),
-  mockSign: vi.fn(),
-  rateLimitOptions: [] as unknown[],
-}));
+const { mockFindPublishedById, mockFindFile, mockFindFileOptions, mockGetSettings, mockSign, rateLimitOptions } =
+  vi.hoisted(() => ({
+    mockFindPublishedById: vi.fn(),
+    mockFindFile: vi.fn(),
+    mockFindFileOptions: vi.fn(),
+    mockGetSettings: vi.fn(),
+    mockSign: vi.fn(),
+    rateLimitOptions: [] as unknown[],
+  }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
@@ -50,7 +52,14 @@ vi.mock('@server/middlewares/rateLimit', () => ({
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   releaseNoteRepository: { findPublishedById: mockFindPublishedById },
-  FabFile: { findOne: (filter: unknown) => ({ lean: () => mockFindFile(filter) }) },
+  FabFile: {
+    findOne: (filter: unknown) => ({
+      setOptions: (options: unknown) => {
+        mockFindFileOptions(options);
+        return { lean: () => mockFindFile(filter) };
+      },
+    }),
+  },
 }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: mockGetSettings }));
 vi.mock('sst', () => ({ Resource: { fabFileBucket: { name: 'files-bucket' } } }));
@@ -161,6 +170,11 @@ describe('GET /api/v1/whats-new/media/{id}/{asset}', () => {
     mockFindFile.mockResolvedValueOnce({ _id: 'f1', moderationStatus: 'clean', deletedAt: new Date() });
     expect((await errorOf()).statusCode).toBe(404);
     expect(mockSign).not.toHaveBeenCalled();
+  });
+
+  it('sees soft-deleted uploads, which the soft-delete plugin hides by default', async () => {
+    await run();
+    expect(mockFindFileOptions).toHaveBeenCalledWith({ includeDeleted: true });
   });
 
   it('signs an untracked upload under modals/, as /api/files/presigned-url does', async () => {

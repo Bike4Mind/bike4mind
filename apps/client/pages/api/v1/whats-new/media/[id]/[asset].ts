@@ -32,8 +32,9 @@ const handler = nextRouteForContract(getWhatsNewMediaContract, {
   const key = url ? ownModalMediaKey(url, Resource.fabFileBucket.name) : null;
   if (!key) throw new NotFoundError('Release note media not found');
   // The moderation gate of /api/files/presigned-url: a held, blocked or deleted upload is never signed.
-  // An untracked key still signs, as its `modals/` allowlist does.
-  const file = await FabFile.findOne({ filePath: key }).lean();
+  // An untracked key still signs, as its `modals/` allowlist does. includeDeleted: the soft-delete
+  // plugin would otherwise hide the row, so the deletedAt check below never saw it.
+  const file = await FabFile.findOne({ filePath: key }).setOptions({ includeDeleted: true }).lean();
   if (file && (file.deletedAt || !isImageServeable(file))) throw new NotFoundError('Release note media not found');
 
   const signed = await getFilesStorage().getSignedUrl(key, 'get', {
