@@ -45,6 +45,10 @@ Use **Refresh activity** to reload the activity snapshot. While activity loads o
 
 Help icons across the landing page explain client types, events, categories, AI model response times, costs, and the activity snapshot's limits. The three activity charts also have help: **Events Over Time** counts loaded events by date, **Events by Category** groups related actions, and **Top 10 Events** ranks event names by frequency. These charts count recorded events, not distinct people. Dates use your browser's time zone; today is incomplete, and dates with no loaded events are omitted from the time chart. Hover over, focus, or tap a help icon to read its explanation.
 
+The example below uses sample events to show the chart help:
+
+![Top 10 Events chart with help explaining that event frequency does not rank features by distinct users](/img/admin-dashboard-event-help.png)
+
 ## Sidebar Navigation
 
 The **Dashboard** button stays above the collapsible sidebar sections, so you can always return to the overview. On a narrow screen, open the admin menu to reach it. Each section can be independently expanded or collapsed, and your preferences are saved.
