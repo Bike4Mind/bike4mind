@@ -15,8 +15,8 @@
  * direction); keep the literals inline.
  *
  * Overlays add rows without editing this file: `b4mContributions.entitlementGrants` is validated
- * at codegen and merged over the built-in rows by `mergeContributedRows`, so every map and helper
- * below sees both.
+ * at codegen and merged over the built-in rows by `mergeContributedRows`, so the tag, implied,
+ * signup-credit and staff-domain maps below see both.
  */
 import type {
   DomainGrantRow,
@@ -343,7 +343,7 @@ const rowList = (value: unknown): Record<string, unknown>[] =>
 /**
  * `builtIn` with `contributed` merged in. A contributed row for a tag or implying key the built-in
  * rows already have adds its keys to that row; a signup-credit amount for a key that already has one
- * is ignored, so a contribution can never change what a built-in product pays. Malformed input is
+ * is ignored, so a contribution never changes a built-in key's own amount. Malformed input is
  * dropped rather than thrown on: codegen validates it, and this runs at module load.
  */
 export function mergeContributedRows(
