@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { mkdir, realpath, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import type { PhaseTimer } from '../PhaseTimer';
 import { slugify } from './branchName';
 import type { WorktreeEntry } from './git';
 import { branchExists, containerDirectory, fetchRemoteFor, git, listWorktrees, resolveBaseRef } from './git';
@@ -52,6 +53,7 @@ export interface WorkspaceRequest {
   name?: string;
   /** Told the branch as soon as it is decided, ahead of the fetch and checkout that take the time. */
   onBranch?: (branch: string) => void;
+  timer?: PhaseTimer;
 }
 
 export interface WorkspaceResolution {
@@ -200,7 +202,9 @@ export async function resolveWorkspace(
   projectDirectory: string,
   request: WorkspaceRequest
 ): Promise<WorkspaceResolution> {
+  const { timer } = request;
   const registered = await listWorktrees(projectDirectory);
+  timer?.lap('worktreeList');
   const base = (request.base ?? '').trim();
 
   let branch = (request.branch ?? '').trim();
@@ -246,13 +250,17 @@ export async function resolveWorkspace(
   await ensureWorktreeRoot(container);
 
   if (await branchExists(projectDirectory, branch)) {
+    timer?.lap('checks');
     await git(projectDirectory, ['worktree', 'add', path, branch]);
   } else {
+    timer?.lap('checks');
     const from = await baseRefFor(projectDirectory, cutFrom);
+    timer?.lap('fetch');
     // --no-track for the reason the shell helper gives: a feature branch should not track the
     // base it forked from, or a later `git push` would aim at the wrong ref.
     await git(projectDirectory, ['worktree', 'add', '--no-track', '-b', branch, path, from]);
   }
+  timer?.lap('worktreeAdd');
 
   return { workingDirectory: path, branch, outcome: 'created' };
 }

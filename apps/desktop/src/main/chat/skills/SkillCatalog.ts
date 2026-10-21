@@ -7,6 +7,7 @@ import {
   type CustomCommand,
   type RemoteSkillSource,
 } from '@bike4mind/cli/skills';
+import type { AuthLogger } from '@bike4mind/client-auth';
 import type { SkillSource, SkillSummary, SkillsState } from '@shared/skills';
 import type { ProjectTrustStore } from './ProjectTrustStore';
 
@@ -53,7 +54,8 @@ export class SkillCatalog {
 
   constructor(
     private readonly trust: ProjectTrustStore,
-    private readonly remote: RemoteSkills = () => null
+    private readonly remote: RemoteSkills = () => null,
+    private readonly logger?: Pick<AuthLogger, 'debug'>
   ) {}
 
   /**
@@ -159,6 +161,7 @@ export class SkillCatalog {
     // process.cwd() - for a packaged Electron app, wherever the user happened to launch it
     // from. The home directory is passed instead, and `setProjectTrusted` is never called for
     // it, so its project directories are not scanned and only ~/.claude/skills loads.
+    const startedAt = performance.now();
     const store = new CustomCommandStore(root ?? homedir(), { remoteSource });
     // Honestly, not to make a test pass: false for an untrusted root is the whole gate, and
     // false for "no project" is what keeps repo skills out of a Chat session.
@@ -166,6 +169,9 @@ export class SkillCatalog {
     await store.loadCommands();
 
     const commands = store.getAllCommands();
+    this.logger?.debug(
+      `SKILLS: scanned ${commands.length} commands for ${key} in ${Math.round(performance.now() - startedAt)}ms`
+    );
     this.cache.set(key, { at: Date.now(), commands });
     return commands;
   }

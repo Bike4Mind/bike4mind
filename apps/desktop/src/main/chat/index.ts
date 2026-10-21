@@ -338,7 +338,7 @@ export function registerChat(
   // The trust file is its own file beside tool-access.json, and for the same reason: both record
   // a consent the user gave once and should not be asked for again on every launch.
   const projectTrust = new ProjectTrustStore(join(userData, 'project-skill-trust.json'));
-  const skills = new SkillCatalog(projectTrust, accountSkillsProvider(auth, userData));
+  const skills = new SkillCatalog(projectTrust, accountSkillsProvider(auth, userData), logger);
   // App-wide like approval-mode.json. Claude Code's files are only ever read; the protected roots
   // are folders no allow rule may cover, since a call writing there would grant itself more.
   const home = app.getPath('home');

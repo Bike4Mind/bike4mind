@@ -105,6 +105,7 @@ import type { MediaStore } from './media/MediaStore';
 import type { VideoJobScheduler } from './media/VideoJobScheduler';
 import type { MessageQueue } from './MessageQueue';
 import { resolveDefaultModel, type ModelCatalog } from './ModelCatalog';
+import { PhaseTimer } from './PhaseTimer';
 import type { ModelMemory } from './ModelPreference';
 import { createThinkFilter, type ThinkSplit } from './thinkFilter';
 import { readableThinking } from './thinkingBlocks';
@@ -762,8 +763,10 @@ export class ChatService {
    * some other folder.
    */
   async createCodeSession(request: CreateCodeSessionRequest): Promise<CreateCodeSessionResult> {
+    const timer = new PhaseTimer();
     const catalog = await this.listModels();
     const model = (await this.pickModel(catalog.models)) ?? undefined;
+    timer.lap('model');
 
     if (!request.directory) {
       return { ok: true, session: await this.deps.store.create(model, { mode: 'code' }) };
@@ -776,6 +779,7 @@ export class ChatService {
     const base = await this.resolveWorkspaceBase(directory, (request.branch ?? '').trim(), request.workspace === true);
     if ('error' in base) return { ok: false, error: base.error };
     const branch = base.branch;
+    timer.lap('checks');
 
     const session = await this.deps.store.create(model, {
       project: {
@@ -787,6 +791,8 @@ export class ChatService {
         contextDirectories: (request.contextDirectories ?? []).map(entry => resolve(entry)),
       },
     });
+    timer.lap('create');
+    this.deps.logger.debug(`CHAT: code session ${session.id} timing ${timer.summary()}`);
 
     return { ok: true, session };
   }
@@ -989,7 +995,11 @@ export class ChatService {
    * Idempotent, and free once done: a session already in its worktree is a field comparison
    * rather than a git call, which is what keeps this off the cost of every later turn.
    */
-  private async ensureWorkspace(session: ChatSession, name: string): Promise<{ error: string } | null> {
+  private async ensureWorkspace(
+    session: ChatSession,
+    name: string,
+    timer?: PhaseTimer
+  ): Promise<{ error: string } | null> {
     const project = session.project;
     if (!project || !awaitsWorktree(project)) return null;
 
@@ -1001,6 +1011,7 @@ export class ChatService {
       const resolved = await resolveWorkspace(project.directory, {
         base,
         name,
+        timer,
         onBranch: branch => this.emit({ type: 'workspace', sessionId, running: true, base, branch }),
       });
       const workspace = { workspaceBranch: resolved.branch, workingDirectory: resolved.workingDirectory };
@@ -1480,10 +1491,14 @@ export class ChatService {
     const notes = released?.notes ?? options.notes;
     const api = this.deps.getApiClient();
     if (!api) return { ok: false, error: 'Sign in to send a message.' };
+    // First turns only: they are where a session start spends its time.
+    const timer = existing.messages.length === 0 ? new PhaseTimer() : undefined;
 
     const { session: reconciled, notice } = await this.reconcileModel(existing);
+    timer?.lap('reconcileModel');
 
     const attached = await this.resolveAttachments(sessionId, attachments);
+    timer?.lap('attachments');
     const refusal = this.refuseUnreadableImages(reconciled.model, attached);
     if (refusal) return { ok: false, error: refusal };
 
@@ -1495,7 +1510,8 @@ export class ChatService {
     // still ahead of the prompt being stored, for the reason createCodeSession resolved before
     // writing the session: a worktree that cannot be made must refuse the turn rather than
     // leave a prompt in the thread with no reply coming.
-    const workspaceFailure = await this.ensureWorkspace(existing, prompt);
+    const workspaceFailure = await this.ensureWorkspace(existing, prompt, timer);
+    timer?.lap('workspace');
     if (workspaceFailure) return { ok: false, error: workspaceFailure.error };
 
     // The skill's body becomes the turn, and `skill` records which one so the thread can show
@@ -1513,12 +1529,14 @@ export class ChatService {
         ...(invocation.args ? { args: invocation.args } : {}),
         ...(skillCommand.untrusted ? { imported: true as const } : {}),
       };
+      timer?.lap('skill');
     }
 
     // Last before the prompt is stored, so the boundary lands above it and the summary covers
     // everything the prompt follows on from. Every refusal above has already had its say: a
     // turn that will not go out must not cost a summary.
     await this.autoCompact(reconciled);
+    timer?.lap('autoCompact');
 
     // A relay carries `role: 'user'` because that is the only role out-of-band text can reach a
     // stateless completions endpoint under - the same compromise the spawned-session report
@@ -1547,6 +1565,7 @@ export class ChatService {
       !existing.titleLocked && !existing.messages.some(message => message.role === 'user' && !message.system);
 
     const session = await this.deps.store.appendMessage(sessionId, userMessage);
+    timer?.lap('append');
     if (!session) return { ok: false, error: 'That conversation no longer exists.' };
 
     // Now that the conversation's attachments are settled, anything on disk it does not
@@ -1573,6 +1592,8 @@ export class ChatService {
     // rephrase a list of files the user recognises as written.
     if (isFirstPrompt && prompt) void this.nameSession(session, api, prompt);
 
+    timer?.lap('startReply');
+    if (timer) this.deps.logger.debug(`CHAT: first turn ${sessionId} timing ${timer.summary()}`);
     return { ok: true, messageId: replyId, ...(notice ? { notice } : {}) };
   }
 
@@ -3368,6 +3389,7 @@ export class ChatService {
       };
     }
     this.spawnReservations++;
+    const timer = new PhaseTimer();
 
     try {
       // Resolved BEFORE the session is written, for the reason createCodeSession gives: a
@@ -3375,7 +3397,7 @@ export class ChatService {
       // tools then quietly run in the parent's checkout after the user asked for isolation.
       let workspace: { branch: string; base: string; workingDirectory: string } | null = null;
       if (placement.kind === 'worktree') {
-        const prepared = await this.prepareSpawnWorkspace(project, placement.branch, placement.base);
+        const prepared = await this.prepareSpawnWorkspace(project, placement.branch, placement.base, timer);
         if (!prepared.ok) return prepared;
         workspace = prepared;
       }
@@ -3410,7 +3432,9 @@ export class ChatService {
         approvalMode: parent.approvalMode === 'full' ? 'auto' : parent.approvalMode,
       });
 
+      timer.lap('create');
       const named = title?.trim() ? await this.deps.store.rename(child.id, title.trim()) : null;
+      timer.lap('rename');
 
       // A fresh worktree has no node_modules, and on this monorepo restoring them takes minutes.
       // Started before the seed so the child's very first turn already carries the "dependencies
@@ -3427,6 +3451,8 @@ export class ChatService {
         [],
         { seedHops: this.turnRelay.get(parent.id)?.hops ?? 0 }
       );
+      timer.lap('send');
+      this.deps.logger.debug(`CHAT: spawn ${child.id} timing ${timer.summary()}`);
       if (!sent.ok) {
         this.spawnWatch.delete(child.id);
         await this.deleteSession(child.id);
@@ -3456,7 +3482,8 @@ export class ChatService {
   private async prepareSpawnWorkspace(
     project: ChatProject,
     branch: string,
-    base: string
+    base: string,
+    timer?: PhaseTimer
   ): Promise<({ ok: true } & { branch: string; base: string; workingDirectory: string }) | SpawnRejected> {
     const wanted = branch.trim();
     if (!isValidBranchName(wanted)) {
@@ -3484,6 +3511,7 @@ export class ChatService {
       const taken =
         (await branchExists(project.directory, wanted)) ||
         (await listWorktrees(project.directory)).some(entry => entry.branch === wanted);
+      timer?.lap('branchCheck');
       if (taken) {
         return {
           ok: false,
@@ -3494,7 +3522,7 @@ export class ChatService {
 
       // Named exactly, not derived: the approval card showed this name to the user and the row
       // reports it back, so the branch the child lands on has to be the one they approved.
-      const resolved = await resolveWorkspace(project.directory, { branch: wanted, base });
+      const resolved = await resolveWorkspace(project.directory, { branch: wanted, base, timer });
       return { ok: true, branch: resolved.branch, base, workingDirectory: resolved.workingDirectory };
     } catch (err) {
       const detail = err instanceof Error ? err.message : 'unknown error';
