@@ -14,7 +14,14 @@ export const createSlackJobDeliveryDeps = (logger: Logger): SlackJobDeliveryDeps
       import('@server/integrations/slack/slackPackageInit'),
       import('@bike4mind/slack'),
     ]);
-    const token = decryptToken(workspace.slackBotToken);
+    let token: string | null;
+    try {
+      token = decryptToken(workspace.slackBotToken);
+    } catch (error) {
+      // decryptToken throws on a wrong or rotated key; without this the user would get no Slack message at all.
+      logger.warn('slack bot token could not be decrypted; skipping video delivery', { workspaceId, error });
+      return null;
+    }
     if (!token) return null;
     initializeSlackPackage();
     return new SlackClient(token, logger);
