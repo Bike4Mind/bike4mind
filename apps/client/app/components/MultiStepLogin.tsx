@@ -1,8 +1,8 @@
-import { markFirstSignupSession } from '@client/app/utils/firstSignupSession';
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useRouter } from '@tanstack/react-router';
 import { applyRedirect, appendRedirectTo } from '@client/app/utils/authRedirect';
 import { getLoginErrorMessage } from '@client/app/utils/loginErrorMessages';
+import { markFirstSignupSession } from '@client/app/utils/firstSignupSession';
 import { useTranslation, Trans } from 'react-i18next';
 import { toast } from 'sonner';
 import { dismissOtcCodeSentToast, toastOtcCodeSent } from './otcToast';

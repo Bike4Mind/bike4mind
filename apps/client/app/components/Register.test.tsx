@@ -1,4 +1,3 @@
-import { FIRST_SIGNUP_SESSION_KEY } from '@client/app/utils/firstSignupSession';
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, within, waitFor, act } from '@testing-library/react';
@@ -6,6 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { ExternalLinks } from '@client/app/utils/externalLinks';
+import { FIRST_SIGNUP_SESSION_KEY } from '@client/app/utils/firstSignupSession';
 
 const mockLogEvent = vi.hoisted(() => vi.fn());
 vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: mockLogEvent }) }));

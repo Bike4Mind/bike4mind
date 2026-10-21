@@ -1,7 +1,7 @@
-import { FIRST_SIGNUP_SESSION_KEY } from './firstSignupSession';
 import { del } from 'idb-keyval';
 import { dexie } from './dexie';
 import { tagCacheManager } from './tagCache';
+import { FIRST_SIGNUP_SESSION_KEY } from './firstSignupSession';
 import { premiumLocalStorageKeyPrefixes } from '../premium-generated/premiumLocalStorageKeys.generated';
 
 /**

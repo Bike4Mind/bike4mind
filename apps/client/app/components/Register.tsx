@@ -1,4 +1,3 @@
-import { markFirstSignupSession } from '@client/app/utils/firstSignupSession';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useSendOTC, useVerifyOTC } from '@client/app/hooks/data/auth';
 import { formatCountdown, useOtcRateLimit } from '@client/app/hooks/useOtcRateLimit';
@@ -39,6 +38,7 @@ import useGetLogo from '../hooks/useGetLogo';
 import { useBrandingSettings, usePublicConfig } from '../hooks/data/settings';
 import { gray, brand } from '@client/app/utils/themes/colors';
 import { trackSignupConversion } from '@client/app/utils/signupConversion';
+import { markFirstSignupSession } from '@client/app/utils/firstSignupSession';
 import { applyRedirect, appendRedirectTo } from '@client/app/utils/authRedirect';
 import { isSubmittableOtcCode, OTC_CODE_PLACEHOLDER, sanitizeOtcInput } from '@client/app/utils/otcCode';
 import { resetRefreshCoordinator } from '@client/app/utils/refreshCoordinator';

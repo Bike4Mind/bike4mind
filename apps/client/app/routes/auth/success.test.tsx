@@ -1,7 +1,7 @@
-import { FIRST_SIGNUP_SESSION_KEY } from '@client/app/utils/firstSignupSession';
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, waitFor } from '@testing-library/react';
+import { FIRST_SIGNUP_SESSION_KEY } from '@client/app/utils/firstSignupSession';
 
 // Hoisted mocks (must be available inside vi.mock factory functions)
 const {

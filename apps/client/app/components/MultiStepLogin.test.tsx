@@ -1,4 +1,3 @@
-import { FIRST_SIGNUP_SESSION_KEY } from '@client/app/utils/firstSignupSession';
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, within, waitFor, act, fireEvent } from '@testing-library/react';
@@ -8,6 +7,7 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import { CURRENT_POLICY_VERSION, USERNAME_RULES_MESSAGE } from '@bike4mind/common';
 import en from '@client/app/locales/en.json';
 import { ExternalLinks } from '@client/app/utils/externalLinks';
+import { FIRST_SIGNUP_SESSION_KEY } from '@client/app/utils/firstSignupSession';
 import { useCookieSettings } from '@client/app/components/CookieConsentBanner';
 
 const mockLogEvent = vi.hoisted(() => vi.fn());

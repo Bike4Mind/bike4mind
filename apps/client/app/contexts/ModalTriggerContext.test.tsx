@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import React from 'react';
-import { markFirstSignupSession } from '@client/app/utils/firstSignupSession';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { markFirstSignupSession } from '@client/app/utils/firstSignupSession';
 import { releaseNoteToModal } from '../components/modals/releaseNoteSlides';
 import { ModalTriggerProvider, SETTLE_DELAY, useModalTrigger } from './ModalTriggerContext';
 

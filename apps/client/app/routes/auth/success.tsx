@@ -1,4 +1,3 @@
-import { markFirstSignupSession } from '@client/app/utils/firstSignupSession';
 import { useEffect, useRef } from 'react';
 import { useNavigate, useRouter, useSearch } from '@tanstack/react-router';
 import { CircularProgress, Container, Typography, Box } from '@mui/joy';
@@ -9,6 +8,7 @@ import { resetSessionBootstrap } from '@client/app/utils/sessionBootstrap';
 import { parseAuthParams } from '@client/app/utils/authParams';
 import { applyRedirect } from '@client/app/utils/authRedirect';
 import { trackSignupConversion } from '@client/app/utils/signupConversion';
+import { markFirstSignupSession } from '@client/app/utils/firstSignupSession';
 import { usePublicConfig } from '@client/app/hooks/data/settings';
 import { useMfaChallenge } from '@client/app/hooks/useMfaChallenge';
 import MFAModal from '@client/app/components/common/MFAModal';
