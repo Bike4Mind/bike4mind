@@ -258,6 +258,39 @@ describe('Skill Market (real mongod)', () => {
     expect(live.data[0]).toMatchObject({ id: listing.id, descriptionMatches: false, autoChecked: false });
   });
 
+  it.each(['organization', 'unlisted'] as const)(
+    'holds an understated %s listing until a reviewer approves it',
+    async visibility => {
+      orgs.members.set(AUTHOR, [ORG]);
+      orgs.admins.set('org-admin', [ORG]);
+      const { listing, version } = await publish(
+        await makeSkill(AUTHOR, 'MISMATCH formatter'),
+        visibility,
+        visibility === 'organization' ? ORG : undefined
+      );
+      expect(version).toMatchObject({ riskTier: 'review', reviewStatus: 'pending' });
+      expect(version.honestSummary?.descriptionMatches).toBe(false);
+      expect(listing.currentApprovedVersionId).toBeNull();
+
+      // Neither the org feed nor the share link serves a version that is still pending.
+      if (visibility === 'organization') expect((await browse([ORG])).data).toEqual([]);
+      else
+        await expect(call(byTokenHandler, 'GET', OTHER, { token: listing.shareToken })).rejects.toMatchObject({
+          statusCode: 404,
+        });
+
+      const reviewer = visibility === 'organization' ? { id: 'org-admin' } : { id: ADMIN, isAdmin: true };
+      await decideVersion(version.id, reviewer, visibility === 'organization' ? [ORG] : [], {
+        action: 'approve',
+        ackMismatch: true,
+      });
+
+      expect((await SkillListing.findById(listing.id))!.currentApprovedVersionId).toBe(version.id);
+      if (visibility === 'organization') expect((await browse([ORG])).data.map(l => l.id)).toEqual([listing.id]);
+      else expect((await call(byTokenHandler, 'GET', OTHER, { token: listing.shareToken }))._getStatusCode()).toBe(200);
+    }
+  );
+
   it('never lets anyone approve their own Public listing', async () => {
     const { version } = await publish(await makeSkill(ADMIN, 'MISMATCH'), 'public');
     await expect(
@@ -938,6 +971,8 @@ describe('Skill Market (real mongod)', () => {
     const mine = await publish(await makeSkill(AUTHOR, 'Fetch and summarize.', webFetch), 'organization', ORG);
     const theirs = await publish(await makeSkill(OTHER, 'Fetch and summarize it.', webFetch), 'organization', ORG2);
     const pub = await publish(await makeSkill(AUTHOR, 'Fetch and summarize publicly.', webFetch), 'public');
+    // A held unlisted listing reaches the platform queue only; no org admin can decide it.
+    const unl = await publish(await makeSkill(AUTHOR, 'MISMATCH unlisted formatter'), 'unlisted');
     const idsOf = (res: { _getJSONData: () => unknown }) =>
       (res._getJSONData() as { data: Array<{ listing: { id: string } }> }).data.map(d => d.listing.id);
 
@@ -946,7 +981,7 @@ describe('Skill Market (real mongod)', () => {
       statusCode: 403,
     });
     const all = idsOf(await call(reviewQueueHandler, 'GET', ADMIN, { filter: 'pending' }, {}, true));
-    expect(all.sort()).toEqual([mine.listing.id, theirs.listing.id, pub.listing.id].sort());
+    expect(all.sort()).toEqual([mine.listing.id, theirs.listing.id, pub.listing.id, unl.listing.id].sort());
   });
 
   it('recommended: keeps other-org, unlisted and report-hidden listings out', async () => {
