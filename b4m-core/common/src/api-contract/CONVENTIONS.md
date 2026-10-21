@@ -157,7 +157,7 @@ re-deciding per endpoint:
 | A `tool_reference` (native tool search models only) or a `tool_addition` / `tool_removal` block (native tool changes models only) names a tool absent from the request's `tools`, or a `tool_reference` carries no string `tool_name` | `400` | `unknown_tool_reference` |
 | A `tool_addition` / `tool_removal` system message is sent for a model that cannot serve it on this route | `400` | `tool_changes_unsupported` |
 | A `tool_addition` / `tool_removal` message is malformed (not strictly typed `tool_reference` blocks only) or misplaced | `400` | `invalid_tool_change` |
-| The model's provider is not configured on this deployment | `503` | `provider_not_configured` |
+| The model's provider is not configured on this deployment, or the self-hosted model server that lists it (Ollama, local image) is unreachable | `503` | `provider_not_configured` |
 | Insufficient credits | `422` | `insufficient_credits` |
 | Spend cap exceeded | `422` | `spend_cap_exceeded` |
 | Per-user active API key cap reached | `400` | `api_key_user_cap` |
@@ -166,6 +166,7 @@ re-deciding per endpoint:
 | Organization per-file storage ceiling exceeded | `400` | `org_storage_limit_exceeded` |
 | Per-file size cap exceeded | `400` | `file_too_large` |
 | Rate limit exceeded | `429` | - |
+| Database unreachable while authenticating the credential | `503` | - (`Retry-After`; the credential was not judged, so retry rather than re-prompt for a key) |
 | A blocking request ran past its server-side deadline (the work is ended, not left running) | `504` | `request_timeout` |
 | Generated payload exceeds the platform ceiling, raw-bytes response | `303` | - (`Location` is a signed URL for the payload) |
 | Generated payload exceeds the platform ceiling and could not be offloaded | `413` | - |

@@ -411,6 +411,12 @@ describe('POST /api/user-api-keys - scope allowlist guard', () => {
     expect(createUserApiKey).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])('rejects release-notes:write (admin-provisioned only) with isAdmin=%s', async isAdmin => {
+    const { req, res } = post({ name: 'release', scopes: ['release-notes:write'] }, { isAdmin });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/Scope not allowed/i);
+    expect(createUserApiKey).not.toHaveBeenCalled();
+  });
+
   it('allows a valid self-service scope through (notebooks:read)', async () => {
     const { req, res } = post({ name: 'plain', scopes: ['notebooks:read'] });
     await mockRefs.postHandler!(req, res);

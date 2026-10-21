@@ -5,6 +5,7 @@ const { process } = processModule;
 import { IResearchTask, ResearchTaskStatus, KnowledgeType, ResearchTaskType } from '@bike4mind/common';
 import { NotFoundError, BadRequestError } from '@bike4mind/utils';
 import * as fabFilesService from '../fabFileService';
+import * as tagService from '../tagService';
 import { mockResearchTask } from '../__tests__/utils/testUtils';
 import { findOrUpdateExistingResearchData, createSendStatusUpdate } from './utils';
 import { getLinksFromHtml } from '../lib/cheerio';
@@ -746,8 +747,6 @@ describe('researchTaskService - process', () => {
     (fabFilesService.createFabFile as Mock).mockResolvedValue(mockFabFile);
     (adapters.scraper.fetch as Mock).mockResolvedValue({ rawHtml: mockMarkdownContent, metadata: {} });
 
-    // Import and mock tagService
-    const { tagService } = await import('..');
     (tagService.createFileTag as Mock).mockResolvedValue(mockCreatedTag);
 
     // Act
@@ -804,7 +803,6 @@ describe('researchTaskService - process', () => {
     (fabFilesService.createFabFile as Mock).mockResolvedValue(mockFabFile);
     (adapters.scraper.fetch as Mock).mockResolvedValue({ rawHtml: mockMarkdownContent, metadata: {} });
 
-    const { tagService } = await import('..');
     (tagService.createFileTag as Mock).mockResolvedValue(mockExistingTag);
 
     // Act

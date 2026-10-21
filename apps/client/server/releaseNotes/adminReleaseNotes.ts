@@ -5,15 +5,18 @@ import {
   type ReleaseNoteMutationResult,
 } from '@bike4mind/database';
 import {
+  ApiKeyScope,
   findDenied,
   parseReleaseNotesConfig,
   ReleaseNotesConfigSchema,
+  type ModalVideo,
   type ReleaseNoteItem,
   type ReleaseNotesConfig,
 } from '@bike4mind/common';
 import { getSettingsByNames } from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
 import { BadRequestError, ConflictError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { holdsApiKeyScope, type ScopedRequest } from '@server/middlewares/apiKeyScopeGate';
 
 export const RELEASE_NOTES_SETTING = 'releaseNotesConfig';
 
@@ -23,6 +26,7 @@ export interface AdminReleaseNote {
   headline: string;
   summary: string;
   items: ReleaseNoteItem[];
+  video: ModalVideo | null;
   state: ReleaseNoteAdminStatus;
   publishAt: string;
   deployedAt: string;
@@ -51,6 +55,7 @@ export const toAdminReleaseNote = (
   headline: note.headline,
   summary: note.summary,
   items: note.items.map(({ category, text, importance, sourcePrs }) => ({ category, text, importance, sourcePrs })),
+  video: note.video ?? null,
   state: note.status === 'hidden' ? 'hidden' : note.publishAt <= now ? 'published' : 'scheduled',
   publishAt: note.publishAt.toISOString(),
   deployedAt: note.deployedAt.toISOString(),
@@ -58,6 +63,13 @@ export const toAdminReleaseNote = (
   editedAt: note.editedAt ? note.editedAt.toISOString() : null,
   deniedTerm: findDeniedInNote(note, denylist) ?? null,
 });
+
+/**
+ * True for an API key that reached a release-note route through release-notes:write rather than
+ * admin:*. That scope is confined, so the key holds nothing else and gets only the job's narrow form.
+ */
+export const isReleaseNotesWriteOnlyKey = (req: ScopedRequest): boolean =>
+  !!req.apiKeyInfo && !holdsApiKeyScope(req, [ApiKeyScope.ADMIN]);
 
 export function noteOrThrow(result: ReleaseNoteMutationResult): IReleaseNoteDocument {
   if (result.kind === 'notFound') throw new NotFoundError('Release note not found');

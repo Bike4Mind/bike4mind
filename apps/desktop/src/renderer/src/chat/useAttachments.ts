@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
-import type { ChatAttachment, ChatAttachmentInput } from '@shared/chat';
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { AddAttachmentsResult, ChatAttachment, ChatAttachmentInput, ChatImageRef } from '@shared/chat';
 
 export interface AttachmentDraft {
   /** Attached to the next turn, in the order they were added. */
@@ -13,6 +13,8 @@ export interface AttachmentDraft {
   add: (inputs: ChatAttachmentInput[]) => Promise<void>;
   /** The picker path; opens an OS dialog in main. */
   pick: () => Promise<void>;
+  /** An image already in the thread, read back by main from its own store. */
+  attachImage: (image: ChatImageRef) => Promise<void>;
   remove: (attachmentId: string) => void;
   /** Called once the turn is sent - the attachments now belong to the message, not the draft. */
   clear: () => void;
@@ -31,41 +33,65 @@ export function useAttachmentDraft(sessionId: string | null): AttachmentDraft {
   const [busy, setBusy] = useState(false);
   const [rejected, setRejected] = useState<{ name: string; reason: string }[]>([]);
 
+  const scope = useMemo(() => ({ sessionId, requests: new Set<symbol>() }), [sessionId]);
+  const activeScope = useRef<typeof scope | null>(null);
+
   // A draft belongs to the conversation it was composed in; switching away abandons it rather
   // than carrying a screenshot into an unrelated thread.
-  useEffect(() => {
+  useLayoutEffect(() => {
+    activeScope.current = scope;
     setAttachments([]);
     setRejected([]);
-  }, [sessionId]);
+    setBusy(false);
+    return () => {
+      activeScope.current = null;
+    };
+  }, [scope]);
+
+  const intake = useCallback(
+    async (request: () => Promise<AddAttachmentsResult>) => {
+      // A captured paste/drop callback may run after its session has been left.
+      if (activeScope.current !== scope) return;
+      const requestId = Symbol();
+      scope.requests.add(requestId);
+      const isCurrent = () => activeScope.current === scope && scope.requests.has(requestId);
+      setBusy(true);
+      setRejected([]);
+      try {
+        const result = await request();
+        if (!isCurrent()) return;
+        if (result.attachments.length > 0) setAttachments(current => [...current, ...result.attachments]);
+        if (result.rejected.length > 0) setRejected(result.rejected);
+      } finally {
+        if (isCurrent()) {
+          scope.requests.delete(requestId);
+          setBusy(scope.requests.size > 0);
+        }
+      }
+    },
+    [scope]
+  );
 
   const add = useCallback(
     async (inputs: ChatAttachmentInput[]) => {
       if (!sessionId || inputs.length === 0) return;
-      setBusy(true);
-      setRejected([]);
-      try {
-        const result = await window.b4m.chat.addAttachments(sessionId, inputs);
-        if (result.attachments.length > 0) setAttachments(current => [...current, ...result.attachments]);
-        if (result.rejected.length > 0) setRejected(result.rejected);
-      } finally {
-        setBusy(false);
-      }
+      await intake(() => window.b4m.chat.addAttachments(sessionId, inputs));
     },
-    [sessionId]
+    [sessionId, intake]
   );
 
   const pick = useCallback(async () => {
     if (!sessionId) return;
-    setBusy(true);
-    setRejected([]);
-    try {
-      const result = await window.b4m.chat.pickAttachments(sessionId);
-      if (result.attachments.length > 0) setAttachments(current => [...current, ...result.attachments]);
-      if (result.rejected.length > 0) setRejected(result.rejected);
-    } finally {
-      setBusy(false);
-    }
-  }, [sessionId]);
+    await intake(() => window.b4m.chat.pickAttachments(sessionId));
+  }, [sessionId, intake]);
+
+  const attachImage = useCallback(
+    async (image: ChatImageRef) => {
+      if (!sessionId) return;
+      await intake(() => window.b4m.chat.attachImage(sessionId, image));
+    },
+    [sessionId, intake]
+  );
 
   const remove = useCallback(
     (attachmentId: string) => {
@@ -76,13 +102,16 @@ export function useAttachmentDraft(sessionId: string | null): AttachmentDraft {
   );
 
   const clear = useCallback(() => {
+    if (activeScope.current !== scope) return;
+    scope.requests.clear();
     setAttachments([]);
     setRejected([]);
-  }, []);
+    setBusy(false);
+  }, [scope]);
 
   const dismissRejected = useCallback(() => setRejected([]), []);
 
-  return { attachments, busy, rejected, dismissRejected, add, pick, remove, clear };
+  return { attachments, busy, rejected, dismissRejected, add, pick, attachImage, remove, clear };
 }
 
 /**

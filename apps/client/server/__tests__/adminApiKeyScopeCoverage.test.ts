@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'fs';
 import path from 'path';
-import { ADMIN_GATE } from './scopeCoverageHelpers';
+import { ADMIN_GATE, ADMIN_OR_RELEASE_NOTES_WRITE_GATE } from './scopeCoverageHelpers';
 
 /**
  * `requiredScopes` is opt-in and defaults open (baseApi with no gate calls
@@ -40,6 +40,13 @@ const NO_API_KEY_AUTH = new Set<string>([
   'security-dashboard/web-owasp-ingest.ts',
 ]);
 
+/**
+ * The admin routes that also admit a `release-notes:write` key: the release-video job reads a note
+ * by tag and sets its video. That scope is confined (CONFINED_API_KEY_SCOPES), so this list is the
+ * whole of its admin reach; config.ts and [id]/status.ts stay ADMIN-only on purpose.
+ */
+const ADMIN_OR_RELEASE_NOTES_WRITE = new Set<string>(['release-notes/[id].ts', 'release-notes/index.ts']);
+
 function routeFiles(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
     const full = path.join(dir, entry.name);
@@ -60,6 +67,7 @@ const source = (f: string) =>
     .replace(/\/\/[^\n]*/g, '')
     .replace(/'[^'\n]*'|"[^"\n]*"|`[^`]*`/g, "''");
 const isGated = (f: string) => ADMIN_GATE.test(source(f));
+const isReleaseNotesGated = (f: string) => ADMIN_OR_RELEASE_NOTES_WRITE_GATE.test(source(f));
 const declaresNoAuth = (f: string) => /\bauth:\s*false\b/.test(source(f));
 
 describe('admin routes declare the ADMIN API-key scope gate', () => {
@@ -75,12 +83,37 @@ describe('admin routes declare the ADMIN API-key scope gate', () => {
     expect(files.length).toBeGreaterThan(150);
   });
 
+  it('ADMIN_OR_RELEASE_NOTES_WRITE_GATE accepts only exactly ADMIN plus RELEASE_NOTES_WRITE', () => {
+    const gate = ADMIN_OR_RELEASE_NOTES_WRITE_GATE;
+    expect(gate.test('requiredScopes: [ApiKeyScope.ADMIN, ApiKeyScope.RELEASE_NOTES_WRITE]')).toBe(true);
+    expect(gate.test('requiredScopes: [\n    ApiKeyScope.ADMIN,\n    ApiKeyScope.RELEASE_NOTES_WRITE,\n  ]')).toBe(
+      true
+    );
+    expect(gate.test('requiredScopes: [ApiKeyScope.ADMIN]')).toBe(false);
+    expect(gate.test('requiredScopes: [ApiKeyScope.RELEASE_NOTES_WRITE]')).toBe(false);
+    expect(
+      gate.test('requiredScopes: [ApiKeyScope.ADMIN, ApiKeyScope.RELEASE_NOTES_WRITE, ApiKeyScope.READ_FILES]')
+    ).toBe(false);
+  });
+
   it.each(files.map(f => [rel(f), f]))('%s', (r, f) => {
     if (NO_API_KEY_AUTH.has(r)) return;
+    if (ADMIN_OR_RELEASE_NOTES_WRITE.has(r)) {
+      expect(
+        isReleaseNotesGated(f),
+        `admin route "${r}" must declare [ApiKeyScope.ADMIN, ApiKeyScope.RELEASE_NOTES_WRITE]`
+      ).toBe(true);
+      return;
+    }
     expect(
       isGated(f),
       `admin route "${r}" has no requiredScopes gate. Add baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).`
     ).toBe(true);
+  });
+
+  it('every ADMIN_OR_RELEASE_NOTES_WRITE entry exists', () => {
+    const present = new Set(files.map(rel));
+    expect([...ADMIN_OR_RELEASE_NOTES_WRITE].filter(r => !present.has(r))).toEqual([]);
   });
 
   it('every NO_API_KEY_AUTH entry exists and declares auth: false', () => {

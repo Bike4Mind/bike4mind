@@ -65,13 +65,18 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     value: ApiKeyScope.WRITE_FILES,
     label: 'Write Files',
     description: 'Upload and modify files',
-    endpoints: ['POST /api/v1/files', 'PATCH|DELETE /api/v1/files/:id'],
+    endpoints: [
+      'POST /api/v1/files',
+      'PATCH|DELETE /api/v1/files/:id',
+      'POST /api/files/createFabFile (datalake:write to tag into a lake)',
+    ],
   },
   {
     value: ApiKeyScope.AI_GENERATE,
     label: 'AI Generate',
     description: 'Use AI generation features',
     endpoints: [
+      'POST /api/v1/sessions',
       'POST /api/v1/image-generations',
       'POST /api/v1/image-edits',
       'POST /api/v1/video-generations',
@@ -192,6 +197,13 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     // Keep in sync with the me:read consent label in app/routes/oauth/consentScopes.ts.
     description: "Read the key owner's own name, plan tier, subscription, credit balance, and entitlements",
     endpoints: ['GET /api/v1/me', 'GET /api/v1/credits'],
+  },
+  {
+    value: ApiKeyScope.SKILLS_READ,
+    label: 'Skill Market: Claude Code feed',
+    // Confined, so it is minted from the Skill Market's "Use in Claude Code" dialog, not the New-Key modals.
+    description: "Read the Claude Code plugin marketplace of an organization's approved Skill Market listings",
+    endpoints: ['GET /api/v1/skills/market/claude-marketplace.json', 'GET /api/v1/skills/market/:id/claude-plugin.zip'],
   },
   {
     value: ApiKeyScope.MARKETING_REPORTS_READ,
@@ -385,7 +397,7 @@ export const NON_MINTABLE_API_KEY_SCOPES: ReadonlySet<ApiKeyScope> = new Set([
 
 /**
  * Scopes that are provisioned by admins only and must never appear in the user-facing
- * key creation UI. The ingest scope is excluded from USER_API_KEY_SCOPES by design.
+ * key creation UI. The ingest and automation scopes are excluded from USER_API_KEY_SCOPES by design.
  */
 export const ADMIN_ONLY_API_KEY_SCOPES: ApiKeyScopeOption[] = [
   {
@@ -399,5 +411,16 @@ export const ADMIN_ONLY_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     label: 'QA: Ingest',
     description: 'CI ingest of end-to-end test runs for the admin status page',
     endpoints: ['POST /api/qa/uploads', 'POST /api/qa/runs'],
+  },
+  {
+    value: ApiKeyScope.RELEASE_NOTES_WRITE,
+    label: 'Release Notes: Write',
+    description:
+      "Release-note automation: find a release note and set its video, and upload its What's New media. The key's user must be a platform admin",
+    endpoints: [
+      'GET /api/admin/release-notes',
+      'PATCH /api/admin/release-notes/:id (video only)',
+      'POST /api/files/createFabFile (purpose: modal-media only)',
+    ],
   },
 ];

@@ -16,19 +16,23 @@ import {
   Line,
 } from 'recharts';
 import type { PieLabelRenderProps } from 'recharts';
-import type { EventMetric } from '../types';
 import type { ChartData } from '../utils/chartDataProcessor';
 import { UsageBySourceCard } from './UsageBySourceCard';
+import { AnalyticsTermHelp } from './AnalyticsTermHelp';
 
 interface OverviewTabProps {
-  metrics: EventMetric[];
-  chartData: ChartData;
+  chartData: Pick<ChartData, 'timeSeriesData' | 'categoryBreakdown' | 'topEvents'>;
   showUsageBySource?: boolean;
+  isCompleteWindow?: boolean;
 }
 
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884D8', '#82CA9D', '#FFC658', '#FF6B6B'];
 
-export const OverviewTab: React.FC<OverviewTabProps> = ({ metrics, chartData, showUsageBySource = true }) => {
+export const OverviewTab: React.FC<OverviewTabProps> = ({
+  chartData,
+  showUsageBySource = true,
+  isCompleteWindow = false,
+}) => {
   return (
     <Box>
       <Grid container spacing={2}>
@@ -47,6 +51,14 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({ metrics, chartData, sh
             <CardContent>
               <Typography level="h4" sx={{ mb: 2 }}>
                 Events Over Time
+                <AnalyticsTermHelp
+                  term="Events Over Time"
+                  description={
+                    isCompleteWindow
+                      ? 'Number of recorded events on each UTC date across the complete seven-day window. Every date is included, with zero for days without activity. Each event counts once, even if the same person acts repeatedly. Today is still in progress.'
+                      : "Number of loaded events recorded on each date, using your browser's time zone. Each event counts once, even if the same person acts repeatedly. Dates with no loaded events are omitted. These counts reflect the loaded snapshot, not necessarily all activity in that period."
+                  }
+                />
               </Typography>
               <ResponsiveContainer width="100%" height={300}>
                 <LineChart data={chartData.timeSeriesData}>
@@ -68,6 +80,10 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({ metrics, chartData, sh
             <CardContent>
               <Typography level="h4" sx={{ mb: 2 }}>
                 Events by Category
+                <AnalyticsTermHelp
+                  term="Events by Category"
+                  description="Groups the events in this report by keywords in their names, such as Session, File or Auth. Each slice counts recorded events, not distinct users. Events whose names match none of these groups appear as Other."
+                />
               </Typography>
               <ResponsiveContainer width="100%" height={300}>
                 <PieChart>
@@ -104,6 +120,10 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({ metrics, chartData, sh
             <CardContent>
               <Typography level="h4" sx={{ mb: 2 }}>
                 Top 10 Events
+                <AnalyticsTermHelp
+                  term="Top 10 Events"
+                  description="The ten most frequently recorded event names in this report. Each occurrence counts once. A feature can record several kinds of events, and one person can generate many events, so this is not a ranking of features by number of users."
+                />
               </Typography>
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart data={chartData.topEvents.slice(0, 10)}>

@@ -1,5 +1,6 @@
 import type { ModelInfo } from '@bike4mind/common';
 import { OllamaBackend } from '@bike4mind/llm-adapters';
+import { extractErrorMessage } from '@bike4mind/utils';
 import type { CliConfig } from '../storage';
 import type { ApiClient } from '../auth/ApiClient';
 import { logger } from '../utils/Logger';
@@ -181,14 +182,28 @@ export async function buildLlmBackend(
 
   if (ollamaHost) {
     const ollamaBackend = deps.createOllamaBackend(ollamaHost);
-    const [serverModels, ollamaModels] = await Promise.all([llm.getModelInfo(), ollamaBackend.getModelInfo()]);
+    // A down Ollama must not block startup on the server models.
+    const ollamaListing = ollamaBackend.getModelInfo().then(
+      (listed): { models: ModelInfo[]; error?: string } => ({ models: listed }),
+      (error: unknown) => {
+        const message = extractErrorMessage(error);
+        logger.warn(`Error fetching model info from Ollama: ${message}`);
+        return { models: [] as ModelInfo[], error: message };
+      }
+    );
+    const [serverModels, ollama] = await Promise.all([llm.getModelInfo(), ollamaListing]);
+    const ollamaModels = ollama.models;
 
     if (serverModels.length === 0 && ollamaModels.length === 0) {
       throw new Error(
-        `No models available from server or Ollama at ${ollamaHost}.\n` + `Pull a model: ollama pull qwen3.5`
+        ollama.error !== undefined
+          ? `No models available from server, and Ollama at ${ollamaHost} is unreachable: ${ollama.error}`
+          : `No models available from server or Ollama at ${ollamaHost}.\n` + `Pull a model: ollama pull qwen3.5`
       );
     }
-    if (ollamaModels.length === 0) {
+    if (ollama.error !== undefined) {
+      startupLog.push(`\u26a0\ufe0f  Ollama at ${ollamaHost} is unreachable: ${ollama.error}`);
+    } else if (ollamaModels.length === 0) {
       startupLog.push(`⚠️  No models found in Ollama at ${ollamaHost}. Pull one with: ollama pull qwen3.5`);
     }
 

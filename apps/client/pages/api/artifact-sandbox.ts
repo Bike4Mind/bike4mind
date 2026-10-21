@@ -1,5 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { buildBundleScriptSrc } from '@server/services/publish/viewerSecurity';
+import { buildBundleScriptSrc, resolveDocOrigin } from '@server/services/publish/viewerSecurity';
 
 /**
  * GET /api/artifact-sandbox - HTML iframe target for client-rendered artifacts.
@@ -12,11 +12,8 @@ import { buildBundleScriptSrc } from '@server/services/publish/viewerSecurity';
  *   through `/api/*` forces the request through the Lambda and lets this
  *   handler set its own CSP - same approach as `/p/* -> /api/publish/serve/*`.
  *
- * The CSP here is intentionally scoped to this route. `style-src https:`
- * allows HTML artifacts to load CDN stylesheets (Tailwind, Bootstrap, etc.)
- * without widening the global app policy. `connect-src 'none'` blocks
- * outbound network calls from inside the sandbox, so artifact content
- * cannot exfiltrate. `frame-src 'none'` prevents nested iframes.
+ * Resource loads are restricted to explicit origins; connect-src and frame-src
+ * block fetches and nested iframes. This does not allow arbitrary HTTPS assets.
  *
  * Body is delivered to the sandbox via postMessage from the parent - the
  * parent sends `{ type: 'artifact-html', content }` after receiving the
@@ -40,14 +37,25 @@ const SANDBOX_CDN_SCRIPT_HOSTS =
 function buildArtifactSandboxCsp(req: NextApiRequest): string {
   const headers = req.headers ?? {};
   const blessedScriptSrc = buildBundleScriptSrc(headers.host, headers['x-forwarded-proto']);
+  const assetOrigins = [resolveDocOrigin(headers.host, headers['x-forwarded-proto'])];
+  const cdn = process.env.NEXT_PUBLIC_CDN_URL;
+  if (cdn && !cdn.startsWith('/')) {
+    try {
+      const url = new URL(cdn);
+      if (url.protocol === 'https:' && !/[\s;,'"*\\]/.test(url.origin)) assetOrigins.push(url.origin);
+    } catch {
+      console.warn('[artifact-sandbox] ignoring invalid CDN URL');
+    }
+  }
+  const assets = [...new Set(assetOrigins)].join(' ');
   return [
     "default-src 'none'",
-    "style-src 'unsafe-inline' https:",
+    `style-src 'unsafe-inline' ${assets} https://fonts.googleapis.com https://fonts.bunny.net https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://unpkg.com`,
     `script-src 'unsafe-inline' ${SANDBOX_CDN_SCRIPT_HOSTS} ${blessedScriptSrc}`.trim(),
-    'img-src data: blob: https:',
+    `img-src data: blob: ${assets}`,
     'font-src data: https://fonts.gstatic.com https://fonts.googleapis.com https://fonts.bunny.net',
     "connect-src 'none'",
-    'media-src blob: data: https:',
+    `media-src blob: data: ${assets}`,
     "object-src 'none'",
     "frame-src 'none'",
     "frame-ancestors 'self'",

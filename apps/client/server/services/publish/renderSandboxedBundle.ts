@@ -59,6 +59,7 @@ export interface RenderSandboxedBundleInput {
   urlBase: string;
   /** Document origin to resolve absolute URLs against, e.g. `https://app.example.com`. */
   origin: string;
+  scriptOrigin?: string;
   /** Artifact visibility - the default `assetMode` derives from it (public -> base). */
   visibility: PublishVisibility;
   /**
@@ -111,7 +112,7 @@ export function renderSandboxedBundle(input: RenderSandboxedBundleInput): Render
   const blessed = new Set<string>(BLESSED_SCRIPT_PATHS);
   $('script[src]').each((_i, el) => {
     const src = $(el).attr('src');
-    if (src && blessed.has(src)) $(el).attr('src', `${origin}${src}`);
+    if (src && blessed.has(src)) $(el).attr('src', `${input.scriptOrigin ?? origin}${src}`);
   });
 
   if (assetMode === 'base') {

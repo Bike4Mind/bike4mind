@@ -1,6 +1,5 @@
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import { eventBus } from './eventBus';
-import { slackEventBus } from './bus';
 import { slackQuestProcessor } from './functions';
 import { allSecrets } from './secrets';
 import { lambdaVpc } from './vpc';
@@ -8,9 +7,9 @@ import { lambdaVpc } from './vpc';
 // Web-originated completions ('completion.started') are no longer handled by a Lambda.
 // They are processed by the always-on ChatCompletion (see infra/chatCompletion.ts),
 // which the frontend reaches directly over HTTP. Slack-originated completions still route
-// through EventBridge → slackQuestProcessor below.
+// through EventBridge -> slackQuestProcessor below, matched by their own detail type.
 
-slackEventBus.subscribe('slack-completion-start', slackQuestProcessor.arn, {
+eventBus.subscribe('slack-completion-start', slackQuestProcessor.arn, {
   pattern: {
     detailType: ['slack.completion.started'],
   },

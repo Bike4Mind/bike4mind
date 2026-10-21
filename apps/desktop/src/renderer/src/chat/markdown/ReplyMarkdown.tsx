@@ -6,6 +6,8 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import rehypeSanitize from 'rehype-sanitize';
 import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
+import type { ChatImageRef } from '@shared/chat';
+import { useImageMenu } from '../ImageContextMenu';
 import { fastRenderer } from './highlightElements';
 import { codeBlockSx, markdownSx } from './markdownSx';
 import { closeOpenFence } from './streamingMarkdown';
@@ -76,6 +78,20 @@ function isInline(node: ExtraProps['node']): boolean {
   return position.start.line === position.end.line && position.start.column !== position.end.column;
 }
 
+/**
+ * An image a reply links. The sanitizer keeps only http(s) sources and the CSP then refuses to
+ * load them, so nothing here is on disk: the menu offers its Markdown and no more. Focusable
+ * only when there is a menu to open from the keyboard.
+ */
+function MarkdownImage({ src, alt, ...props }: ComponentProps<'img'>) {
+  const url = typeof src === 'string' && /^https?:/i.test(src) ? src : null;
+  const imageRef = useMemo<ChatImageRef | null>(() => (url ? { source: 'remote', url } : null), [url]);
+  const menu = useImageMenu(imageRef);
+  return (
+    <img {...props} src={src} alt={alt} tabIndex={menu ? 0 : undefined} {...menu} data-testid="chat-markdown-image" />
+  );
+}
+
 function buildComponents(mode: 'light' | 'dark'): Components {
   return {
     // The fence draws its own container, so react-markdown's <pre> would only nest a second
@@ -93,6 +109,8 @@ function buildComponents(mode: 'light' | 'dark'): Components {
       const language = /language-(\w+)/.exec(className ?? '')?.[1] ?? 'text';
       return <CodeBlock code={String(children).replace(/\n$/, '')} language={language} mode={mode} />;
     },
+
+    img: ({ node: _node, ...props }) => <MarkdownImage {...props} />,
 
     /**
      * A link leaves for the user's browser and never navigates this window.

@@ -29,6 +29,7 @@ import { withWebSocketContext, sendToConnection } from '@server/websocket/utils'
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import { cliCompletionErrorFields } from '@server/utils/errorSanitization';
 import { TooManyRequestsError } from '@bike4mind/server-utils/utils/errors';
+import { isAuthInfraFailure } from '@server/auth/apiKeyAuthFailure';
 
 const AUTH_FAILED_MESSAGE = 'Authentication failed. Provide a valid API key or JWT token.';
 
@@ -37,8 +38,10 @@ const AUTH_FAILED_MESSAGE = 'Authentication failed. Provide a valid API key or J
  * The message is built by the limiter itself, so it is passed through as-is: sanitizeErrorMessage matches
  * a lowercase "rate limit" and would turn "Rate limit exceeded" into a generic internal error.
  */
-function rateLimitOrAuthError(requestId: string, error: unknown) {
-  if (error instanceof TooManyRequestsError) {
+function authFailureFrame(requestId: string, error: unknown) {
+  // A rate limit or a failed auth check (database unreachable) is retryable: relay its message and
+  // retryAfter rather than the bad-credential message.
+  if (error instanceof TooManyRequestsError || isAuthInfraFailure(error)) {
     const retryAfter = error.additionalInfo?.retryAfter;
     return {
       action: 'cli_completion_error' as const,
@@ -102,6 +105,12 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       method: 'WS',
     });
   } catch (apiKeyError) {
+    // The key check itself failed (database unreachable): report that, not a JWT verdict.
+    if (isAuthInfraFailure(apiKeyError)) {
+      logger.error('[CLI_WS] API key check failed', { error: apiKeyError.message });
+      await sendToConnection(connectionId, endpoint, authFailureFrame(requestId, apiKeyError));
+      return { statusCode: 200 };
+    }
     // A present-but-rate-limited key reports its own limit rather than falling through to JWT.
     if (apiKeyInfo) {
       if (!(apiKeyError instanceof TooManyRequestsError)) {
@@ -110,7 +119,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
           error: apiKeyError instanceof Error ? apiKeyError.message : String(apiKeyError),
         });
       }
-      await sendToConnection(connectionId, endpoint, rateLimitOrAuthError(requestId, apiKeyError));
+      await sendToConnection(connectionId, endpoint, authFailureFrame(requestId, apiKeyError));
       return { statusCode: 200 };
     }
     try {
@@ -124,7 +133,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
           error: jwtError instanceof Error ? jwtError.message : String(jwtError),
         });
       }
-      await sendToConnection(connectionId, endpoint, rateLimitOrAuthError(requestId, jwtError));
+      await sendToConnection(connectionId, endpoint, authFailureFrame(requestId, jwtError));
       return { statusCode: 200 };
     }
   }

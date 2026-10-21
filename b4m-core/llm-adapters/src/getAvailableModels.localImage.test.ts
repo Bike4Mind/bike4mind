@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import axios from 'axios';
+import { ModelBackend } from '@bike4mind/common';
 import { getAvailableModels, setModelPriceRowsProvider } from './index';
 
 // Only LocalImageBackend does a network call for getModelInfo here; the rest of
@@ -45,5 +46,17 @@ describe('getAvailableModels local-image env gating', () => {
     const models = await getAvailableModels(null);
 
     expect(models.some(m => m.id === 'local-image/sd15')).toBe(true);
+  });
+
+  it('reports a failed local-image listing instead of rejecting', async () => {
+    process.env.B4M_SELF_HOST = 'true';
+    process.env.IMAGE_GEN_BASE_URL = 'http://imagegen:7860';
+    mockedGet.mockRejectedValue(new Error('connect ECONNREFUSED'));
+    const onFailedListings = vi.fn();
+
+    const models = await getAvailableModels(null, { onFailedListings });
+
+    expect(models.some(m => m.id.startsWith('local-image/'))).toBe(false);
+    expect(onFailedListings).toHaveBeenCalledWith([ModelBackend.LocalImage]);
   });
 });

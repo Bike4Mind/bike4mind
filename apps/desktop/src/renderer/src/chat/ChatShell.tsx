@@ -32,7 +32,8 @@ import { PrStatusBar } from './PrStatusBar';
 import { openInSessionBrowser } from './prLinks';
 import { usePrSummaries, usePullRequest } from './usePullRequest';
 import { SessionList } from './SessionList';
-import { SettingsScreen } from './SettingsPanel';
+import { isUntouchedImport, projectForGroup } from './grouping';
+import { useImportedInline } from './importedInline';
 import { TerminalPanel } from './TerminalPanel';
 import {
   isTerminalToggle,
@@ -53,6 +54,7 @@ import { newSessionInProject } from './newSessionInProject';
 import { roundsOf } from './replyRounds';
 import { contextTokens, describeActivity, latestReply, writingProse, type ComposerUsage } from './statusLine';
 import { useAccountCredits } from './useAccountCredits';
+import { ImageMenuProvider } from './ImageContextMenu';
 import { toAttachmentInputs, useAttachmentDraft } from './useAttachments';
 import { useBackgroundProcesses } from './useBackgroundProcesses';
 import { useVideoJobs, VideoJobsContext } from './useVideoJobs';
@@ -132,19 +134,16 @@ function WorkingDirectoryLine({ project }: { project: ChatProject }) {
  * What the main pane is showing. One value rather than a flag per screen, so the screens
  * cannot both be up and nothing has to remember to shut the other one.
  */
-type ChatScreen = 'conversation' | 'artifacts' | 'customize' | 'settings' | 'skill-market';
+type ChatScreen = 'conversation' | 'artifacts' | 'customize' | 'skill-market';
 
 /**
- * The sidebar's account strip, given the dot that says whether a reply is running and the way
- * to open Settings.
+ * The sidebar's account strip, given the dot that says whether a reply is running.
  *
  * A function rather than a node because the two halves are owned in different places: this
  * component knows the turn state, and the account strip knows where a glyph goes in its own
- * row. Handing the finished dot down keeps both where they belong - see TurnDot. The opener
- * rides along for the same reason: Settings is a screen in this pane, and the account menu is
- * where a user who knew the server lived under their name will still go looking for it.
+ * row. Handing the finished dot down keeps both where they belong - see TurnDot.
  */
-export type AccountStrip = (status: ReactNode, openSettings: () => void) => ReactNode;
+export type AccountStrip = (status: ReactNode) => ReactNode;
 
 export function ChatShell({ auth, account }: { auth?: AuthState | null; account?: AccountStrip }) {
   const {
@@ -183,6 +182,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   // Until this is false the shell does not know which conversation it will show, so it draws
   // none of the empty-state copy that would otherwise flash up before the real one.
   const settling = loading || restoring;
+  const [importedInline] = useImportedInline();
 
   const conversation = useConversation(activeId, apply);
   // The header follows the sidebar's copy of the title, so a rename from any row - including
@@ -218,9 +218,6 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   // What the browser pane trades width with; see BrowserPane.
   const conversationColumn = useRef<HTMLDivElement | null>(null);
 
-  // Stable, because the account strip is rebuilt on every turn of the conversation and this is
-  // the one thing in it that has no reason to change.
-  const openSettings = useCallback(() => setScreen('settings'), []);
   // The listing the market opens onto, when it was opened for one (an update badge).
   const [marketListing, setMarketListing] = useState<SkillMarketListingRef | null>(null);
   const openSkillMarket = useCallback((listing?: SkillMarketListingRef) => {
@@ -427,8 +424,12 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
     if (settling) return;
     const open = sessions.find(session => session.id === activeId);
     if (open?.mode === mode) return;
-    setActiveId(sessions.find(session => session.mode === mode)?.id ?? null);
-  }, [settling, activeId, sessions, mode]);
+    // A live Claude Code CLI session is always the newest import; landing on it would select a
+    // row hidden in the shut "Imported from Claude" section instead of the user's own work.
+    const candidate = (session: ChatSessionSummary) =>
+      session.mode === mode && (importedInline || !isUntouchedImport(session));
+    setActiveId(sessions.find(candidate)?.id ?? null);
+  }, [settling, activeId, sessions, mode, importedInline]);
 
   /**
    * Make a session, without touching what the pane is showing. The two callers differ on that:
@@ -510,7 +511,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
    */
   const onCreateInProject = useCallback(
     async (directory: string) => {
-      const sibling = sessions.find(session => session.project?.directory === directory)?.project;
+      const sibling = projectForGroup(sessions, directory);
       if (!sibling) return;
       setScreen('conversation');
       clearCodeError();
@@ -583,10 +584,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
         onDismissSectionError={dismissSectionError}
         customize={<CustomizeNavItem onOpen={() => setScreen('customize')} />}
         footer={account?.(
-          <TurnDot
-            state={turnState({ streaming: turnOpen, disabled: !activeId || creatingCode, notReady: unbound })}
-          />,
-          openSettings
+          <TurnDot state={turnState({ streaming: turnOpen, disabled: !activeId || creatingCode, notReady: unbound })} />
         )}
       />
 
@@ -600,8 +598,6 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
           onClose={() => setScreen('conversation')}
           onOpenSkillMarket={openSkillMarket}
         />
-      ) : screen === 'settings' ? (
-        <SettingsScreen auth={auth ?? null} onClose={() => setScreen('conversation')} />
       ) : (
         <Stack ref={conversationColumn} sx={{ flex: 1, minWidth: 0, ...columnStackSx }}>
           <Box sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>
@@ -688,64 +684,68 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
           ) : (
             <VideoJobsContext.Provider value={videoJobs}>
               <WebLinkContext.Provider value={openInBrowserPane}>
-                <MessageThread
-                  // Remounted per conversation, so its window and scroll start over and nothing it
-                  // set going outlives the conversation it was for. Prefixed because PrStatusBar, a
-                  // sibling, is keyed on the bare id: two siblings sharing a key leave one of them
-                  // mounted in the DOM after React drops it.
-                  key={`thread-${activeId ?? 'none'}`}
-                  messages={conversation.messages}
-                  sessionId={activeId}
-                  // What stands in for the transcript when there is no session to have one. It is the
-                  // only control on screen that starts one from here, so it is a button and not a
-                  // sentence pointing at the sidebar: the header above says what the state is, this
-                  // says what to do about it, and the composer's placeholder names the same step.
-                  noSession={
-                    <Stack spacing={1.5} alignItems="center">
-                      <Typography level="body-sm" textColor="text.tertiary" data-testid="chat-thread-no-session">
-                        {mode === 'code'
-                          ? 'Start a Code session to run a task here.'
-                          : 'Start a conversation to send your first message.'}
-                      </Typography>
-                      <Button
-                        size="sm"
-                        variant="soft"
-                        loading={creatingCode}
-                        onClick={() => void onCreate()}
-                        data-testid="chat-start-session-btn"
-                      >
-                        {mode === 'code' ? 'New Code session' : 'New conversation'}
-                      </Button>
-                    </Stack>
-                  }
-                  // turnOpen, not `streaming`: a turn this window never saw start - after a reload, or
-                  // one parked at the approval gate - is still running, and Continue must not be
-                  // offered on top of it.
-                  streaming={turnOpen}
-                  onRespond={conversation.respondToApproval}
-                  onMove={background.moveToBackground}
-                  onContinue={() => void conversation.continueReply()}
-                  status={conversation.turn && <TurnStatus turn={conversation.turn} activity={activity} />}
-                  // At the foot of the thread rather than above the composer: a background command is
-                  // something this conversation started, so it reads as the last thing that happened
-                  // in it. It scrolls with the transcript, which is the trade - the panel is reached
-                  // from the bottom of the thread, not from a bar that is always on screen.
-                  footer={
-                    <>
-                      {/* The turn line's own slot only exists once a reply does, and the worktree is
+                {/* Keyed so an open menu can never carry an image into another conversation,
+                    should a switch ever skip the `opening` gate that unmounts this today. */}
+                <ImageMenuProvider key={activeId ?? 'none'} onAttach={activeId ? draft.attachImage : undefined}>
+                  <MessageThread
+                    // Remounted per conversation, so its window and scroll start over and nothing it
+                    // set going outlives the conversation it was for. Prefixed because PrStatusBar, a
+                    // sibling, is keyed on the bare id: two siblings sharing a key leave one of them
+                    // mounted in the DOM after React drops it.
+                    key={`thread-${activeId ?? 'none'}`}
+                    messages={conversation.messages}
+                    sessionId={activeId}
+                    // What stands in for the transcript when there is no session to have one. It is the
+                    // only control on screen that starts one from here, so it is a button and not a
+                    // sentence pointing at the sidebar: the header above says what the state is, this
+                    // says what to do about it, and the composer's placeholder names the same step.
+                    noSession={
+                      <Stack spacing={1.5} alignItems="center">
+                        <Typography level="body-sm" textColor="text.tertiary" data-testid="chat-thread-no-session">
+                          {mode === 'code'
+                            ? 'Start a Code session to run a task here.'
+                            : 'Start a conversation to send your first message.'}
+                        </Typography>
+                        <Button
+                          size="sm"
+                          variant="soft"
+                          loading={creatingCode}
+                          onClick={() => void onCreate()}
+                          data-testid="chat-start-session-btn"
+                        >
+                          {mode === 'code' ? 'New Code session' : 'New conversation'}
+                        </Button>
+                      </Stack>
+                    }
+                    // turnOpen, not `streaming`: a turn this window never saw start - after a reload, or
+                    // one parked at the approval gate - is still running, and Continue must not be
+                    // offered on top of it.
+                    streaming={turnOpen}
+                    onRespond={conversation.respondToApproval}
+                    onMove={background.moveToBackground}
+                    onContinue={() => void conversation.continueReply()}
+                    status={conversation.turn && <TurnStatus turn={conversation.turn} activity={activity} />}
+                    // At the foot of the thread rather than above the composer: a background command is
+                    // something this conversation started, so it reads as the last thing that happened
+                    // in it. It scrolls with the transcript, which is the trade - the panel is reached
+                    // from the bottom of the thread, not from a bar that is always on screen.
+                    footer={
+                      <>
+                        {/* The turn line's own slot only exists once a reply does, and the worktree is
                       cut before there is one; this sits where that line will appear. */}
-                      {!conversation.turn && conversation.preparing && (
-                        <Box data-testid="chat-workspace-status">
-                          <TurnStatus
-                            turn={{ startedAt: conversation.preparing.since, tokens: null }}
-                            activity={{ kind: 'tool', label: workspacePhrase(conversation.preparing) }}
-                          />
-                        </Box>
-                      )}
-                      <BackgroundTaskChip running={background.running} onClick={() => setTasksPanelOpen(true)} />
-                    </>
-                  }
-                />
+                        {!conversation.turn && conversation.preparing && (
+                          <Box data-testid="chat-workspace-status">
+                            <TurnStatus
+                              turn={{ startedAt: conversation.preparing.since, tokens: null }}
+                              activity={{ kind: 'tool', label: workspacePhrase(conversation.preparing) }}
+                            />
+                          </Box>
+                        )}
+                        <BackgroundTaskChip running={background.running} onClick={() => setTasksPanelOpen(true)} />
+                      </>
+                    }
+                  />
+                </ImageMenuProvider>
               </WebLinkContext.Provider>
             </VideoJobsContext.Provider>
           )}

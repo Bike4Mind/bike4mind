@@ -3,6 +3,7 @@ import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { User } from '@bike4mind/database';
 import { ApiKeyScope, resolveApiCompletionSource, type ScopeForbiddenErrorSchema } from '@bike4mind/common';
 import { UnauthorizedError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
 import { logEvent } from '@server/utils/analyticsLog';
 import { UserApiKeyEvents } from '@bike4mind/common';
 import ability from '@server/auth/ability';
@@ -269,8 +270,11 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScope[], alsoRequiredScopes?: 
         throw error;
       }
 
-      req.logger?.error('API key authentication error', error);
-      throw new UnauthorizedError('Authentication failed');
+      // Every credential miss above throws Unauthorized/Forbidden, so anything else is our fault.
+      // A 401 here would tell a machine client its key is bad and stop it retrying an infra blip.
+      // warn: errorHandler logs the resulting 5xx at error, which is the one line that should alarm.
+      req.logger?.warn('API key authentication error', error);
+      throw toApiKeyAuthError(error);
     }
   };
 };

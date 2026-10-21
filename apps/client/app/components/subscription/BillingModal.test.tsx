@@ -47,6 +47,9 @@ vi.mock('@client/app/components/Credits/AccountSelector', () => ({
 }));
 vi.mock('@client/app/hooks/useEffectiveCredits', () => ({ useEffectiveCredits: () => state.credits }));
 vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: logEvent }) }));
+vi.mock('./CreditsExplanation', () => ({
+  default: () => <div data-testid="credits-explanation" />,
+}));
 vi.mock('./CreditsSection', () => ({
   CreditsSection: ({
     onClose,
@@ -242,6 +245,7 @@ describe('BillingModal', () => {
   it('leads with plans when the user has no subscription, and says they are on Free', () => {
     renderModal();
     expect(sectionOrder()).toEqual(['billing-section-plans', 'billing-section-credits']);
+    expect(screen.getByTestId('credits-explanation')).toBeInTheDocument();
     expect(screen.getByTestId('billing-current-plan')).toHaveTextContent('Free');
     expect(screen.getByTestId('billing-balance')).toHaveTextContent('5,000');
     const icon = screen.getByTestId('billing-balance-icon');

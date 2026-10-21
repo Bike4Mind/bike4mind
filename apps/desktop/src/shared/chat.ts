@@ -10,6 +10,7 @@
  */
 
 import type { GenerationJobState, ValidationViolation } from '@bike4mind/common';
+import type { ChatImportOrigin } from './claudeImport';
 import type { ChatQuestionAnswer } from './questions';
 import type { SkillSource } from './skills';
 
@@ -394,6 +395,23 @@ export interface AddAttachmentsResult {
   attachments: ChatAttachment[];
   rejected: { name: string; reason: string }[];
 }
+
+/**
+ * An image in the thread, as the image context menu names it to main.
+ *
+ * Never a filesystem path: main resolves 'media' and 'attachment' through the stores that wrote
+ * them, so a crafted ref can only reach a file the app itself saved. 'remote' is an image a
+ * reply links by URL; nothing about it is on disk, so only its Markdown can be copied.
+ */
+export type ChatImageRef =
+  | { source: 'media'; url: string; nameHint?: 'screenshot' | 'image' }
+  | { source: 'attachment'; sessionId: string; attachmentId: string; mediaType: string; name: string }
+  | { source: 'remote'; url: string };
+
+export type ChatImageAction = 'copy' | 'save' | 'copy-path' | 'copy-markdown' | 'reveal';
+
+/** `done` is false when the user cancelled a save dialog. */
+export type ChatImageActionResult = { ok: true; done: boolean } | { ok: false; error: string };
 
 /**
  * Everything the artifact card needs to draw one, whether it came out of a reply or back off
@@ -1008,6 +1026,8 @@ interface ChatSessionMeta {
   pinned?: boolean;
   /** Set when the agent spawned this session rather than the user starting it. */
   origin?: ChatSessionOrigin;
+  /** Set on a session imported from Claude; see ChatImportOrigin. */
+  importOrigin?: ChatImportOrigin;
   /**
    * Out of the way but not gone: archived sessions drop into their own collapsed section at the
    * bottom of the sidebar instead of sitting among the live ones. Reversible from the same menu,
