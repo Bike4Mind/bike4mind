@@ -1408,9 +1408,10 @@ export class ChatService {
 
     // A skill named mid-message rides as a note telling the model to run it; see inline.ts.
     // Resolved once, when the user sends: a released queue entry already carries the note, and
-    // the same relay/automatic exclusion as above applies for the same reason.
+    // the same relay/automatic exclusion as above applies for the same reason, and a spawn seed,
+    // which the model wrote.
     let turnOptions = options;
-    if (this.deps.skills && !invocation && !released) {
+    if (this.deps.skills && !invocation && !released && options.seedHops === undefined) {
       const inline = await resolveInlineSkills(prompt, this.deps.skills, existing.project?.workingDirectory ?? null);
       if ('error' in inline) return { ok: false, error: inline.error };
       if (inline.note) turnOptions = { ...options, notes: [...(options.notes ?? []), inline.note] };

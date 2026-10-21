@@ -35,7 +35,9 @@ export async function resolveInlineSkills(
   const runnable = new Set((await catalog.forModel(projectRoot)).map(command => command.name));
   const userOnly = known.find(name => !runnable.has(name));
   if (userOnly) {
-    return { error: `/${userOnly} can only be run at the start of a message. Move it to the front to run it.` };
+    return {
+      error: `/${userOnly} can only be run at the start of a message, followed by a space or nothing. To mention it without running it, wrap it in backticks.`,
+    };
   }
 
   const list = known.map(name => `/${name}`).join(', ');

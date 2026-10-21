@@ -63,9 +63,15 @@ export function highlightedTokens(
   skillNames: ReadonlySet<string>,
   isCommand: (name: string) => boolean
 ): SkillMention[] {
-  return findSkillMentions(text).filter(
+  const tokens = findSkillMentions(text).filter(
     mention => skillNames.has(mention.name) || (mention.start === 0 && isCommand(mention.name))
   );
+  const first = tokens[0];
+  // A leading invocation takes the rest of the draft as arguments, so later names do not run.
+  if (first && first.start === 0 && skillNames.has(first.name) && /^\s*$|^\s/.test(text.slice(first.end))) {
+    return [first];
+  }
+  return tokens;
 }
 
 /**
@@ -82,10 +88,10 @@ export function highlightedTokens(
  * they are both the most likely to be wanted in a Code session and the ones worth putting where
  * the user will read their label rather than a name they assume is their own.
  */
-export function matchSkills(skills: readonly SkillSummary[], query: string): SkillSummary[] {
+export function matchSkills(skills: readonly SkillSummary[], query: string, namesOnly = false): SkillSummary[] {
   const needle = query.trim().toLowerCase();
   const byName = rankAll(skills, skill => nameRank(skill.name.toLowerCase(), needle));
-  if (byName.length > 0 || !needle) return byName;
+  if (byName.length > 0 || !needle || namesOnly) return byName;
   return rankAll(skills, skill => (skill.description.toLowerCase().includes(needle) ? 0 : -1));
 }
 

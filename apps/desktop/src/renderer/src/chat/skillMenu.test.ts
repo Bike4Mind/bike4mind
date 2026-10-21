@@ -92,6 +92,12 @@ describe('highlightedTokens', () => {
     ]);
   });
 
+  it('marks only a leading skill, since later names are its arguments', () => {
+    expect(highlightedTokens('/review then /ship-it', skills, isCommand)).toEqual([
+      { name: 'review', start: 0, end: 7 },
+    ]);
+  });
+
   it('marks a command only where it would run', () => {
     expect(highlightedTokens('/clear', skills, isCommand)).toEqual([{ name: 'clear', start: 0, end: 6 }]);
     expect(highlightedTokens('then /clear', skills, isCommand)).toEqual([]);
@@ -105,6 +111,11 @@ describe('matchSkills', () => {
     skill('deploy', 'project', 'ship the review build'),
     skill('lint', 'global'),
   ];
+
+  it('skips the description fallback when namesOnly is set', () => {
+    expect(matchSkills(skills, 'ship').map(entry => entry.name)).toEqual(['deploy']);
+    expect(matchSkills(skills, 'ship', true)).toEqual([]);
+  });
 
   it('returns everything for an empty query, project skills first', () => {
     expect(matchSkills(skills, '').map(entry => entry.name)).toEqual(['deploy', 'review-pr', 'lint', 'review']);

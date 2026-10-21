@@ -299,7 +299,11 @@ export function Composer({
     () => (offerCommands && query !== null ? matchCommands(query, sessionMode) : []),
     [offerCommands, query, sessionMode]
   );
-  const matches = useMemo(() => (skills && query !== null ? matchSkills(skills.skills, query) : []), [skills, query]);
+  const wholeDraft = token?.wholeDraft;
+  const matches = useMemo(
+    () => (skills && query !== null ? matchSkills(skills.skills, query, !wholeDraft) : []),
+    [skills, query, wholeDraft]
+  );
   // One list for the keyboard: commands first, then skills, which is also the order drawn.
   const menuCount = commandMatches.length + matches.length;
   const pickerOpen = query !== null && dismissed !== text && (menuCount > 0 || !!skills);
@@ -525,6 +529,7 @@ export function Composer({
           // Only hides the hint (see shownSuggestion), never ends it: emptying the box again
           // brings the same guess back, since nothing has been sent and it still fits the reply.
           onChange={event => {
+            pendingCaret.current = null;
             setText(event.target.value);
             setCaret(event.target.selectionStart);
           }}
