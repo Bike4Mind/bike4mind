@@ -222,6 +222,7 @@ describe('StudioPage (Image preview tab)', () => {
     const imageTab = screen.getByTestId('studio-tab-image');
     expect(imageTab).toHaveAttribute('aria-disabled', 'true');
     fireEvent.click(imageTab);
+    expect(screen.getByTestId('studio-tab-video')).toHaveAttribute('aria-selected', 'true');
     expect(h.navigate).not.toHaveBeenCalled();
   });
 });
