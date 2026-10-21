@@ -124,6 +124,26 @@ describe('B4mApiClient', () => {
     expect(mockGet).toHaveBeenCalledWith('/api/premium-optihashi/quantum/solve', { timeout: 5000 });
   });
 
+  it('reads the scopes of its own active key by stored prefix, and none when it cannot be found', async () => {
+    mockGet.mockResolvedValue([
+      { keyPrefix: 'b4m_live_aaaaaaaa', status: 'active', scopes: ['notebooks:read'] },
+      { keyPrefix: 'b4m_live_bbbbbbbb', status: 'revoked', scopes: ['optihashi:read'] },
+      { keyPrefix: 'b4m_live_cccccccc', status: 'active', scopes: ['optihashi:read', 'optihashi:compute'] },
+    ]);
+    const own = (key: string) => new B4mApiClient('http://localhost:3000', undefined, key).getOwnKeyScopes();
+
+    await expect(own('b4m_live_cccccccc0123')).resolves.toEqual(['optihashi:read', 'optihashi:compute']);
+    await expect(own('b4m_live_bbbbbbbb0123')).resolves.toEqual([]);
+    await expect(own('b4m_live_zzzzzzzz0123')).resolves.toEqual([]);
+    expect(mockGet).toHaveBeenCalledWith('/api/user-api-keys', { timeout: 5000 });
+  });
+
+  it('has no key scopes to read for a login caller and makes no request', async () => {
+    mockGet.mockClear();
+    await expect(new B4mApiClient('http://localhost:3000').getOwnKeyScopes()).resolves.toBeUndefined();
+    expect(mockGet).not.toHaveBeenCalled();
+  });
+
   it('creates a notebook with only the provided fields', async () => {
     mockFetch.mockResolvedValue(jsonResponse({ id: 'n1' }));
     await client.createNotebook({ name: 'My NB' });
