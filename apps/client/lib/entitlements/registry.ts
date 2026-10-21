@@ -15,8 +15,8 @@
  * direction); keep the literals inline.
  *
  * Overlays add rows without editing this file: `b4mContributions.entitlementGrants` is validated
- * at codegen and merged over the built-in rows by `mergeContributedRows`, so the tag, implied,
- * signup-credit and staff-domain maps below see both.
+ * at codegen and added to the built-in rows by `mergeContributedRows` (new territory only), so the
+ * tag, implied, signup-credit and staff-domain maps below see both.
  */
 import type {
   DomainGrantRow,
@@ -341,59 +341,141 @@ const rowList = (value: unknown): Record<string, unknown>[] =>
     : [];
 
 /**
- * `builtIn` with `contributed` merged in. A contributed row for a tag or implying key the built-in
- * rows already have adds its keys to that row; a signup-credit amount for a key that already has one
- * is ignored, so a contribution never changes a built-in key's own amount. Malformed input is
- * dropped rather than thrown on: codegen validates it, and this runs at module load.
+ * Contributed signup credits per key may not exceed this. Matches the largest built-in amount;
+ * must stay in sync with MAX_CONTRIBUTED_SIGNUP_CREDITS in apps/client/scripts/generate-premium-glue.mjs.
+ */
+export const MAX_CONTRIBUTED_SIGNUP_CREDITS = 250_000;
+
+/**
+ * Keys and ids a contribution may never name: `base` is held by every user, and `datalake:` and
+ * `embed:` keys need a literal owner grant. Must stay in sync with the codegen check.
+ */
+export function isReservedContributionKey(key: string): boolean {
+  return key === BASE_ENTITLEMENT_KEY || key.startsWith('datalake:') || key.startsWith('embed:');
+}
+
+export interface MergeContributedRowsOptions {
+  /** Keys core grants outside `builtIn` (price and env domain rows); a contribution may not grant them. */
+  otherCoreKeys?: Iterable<string>;
+  /** Called once per contributed row or key that was dropped, with the reason. */
+  onReject?: (reason: string) => void;
+}
+
+/**
+ * `builtIn` with `contributed` added, strictly in new territory: a contributed row that names a
+ * built-in tag, implying key or priced key must repeat the built-in value (a no-op), and a
+ * contributed tag, implication, credit or staff key may not grant a key core already grants. Every
+ * other conflict, reserved key and out-of-range amount is dropped and reported through `onReject`.
+ * Codegen rejects the same shapes it can see; this runs at module load, so it never throws.
  */
 export function mergeContributedRows(
   builtIn: ExtensibleRegistryRows,
-  contributed: PremiumEntitlementGrants | undefined
+  contributed: PremiumEntitlementGrants | undefined,
+  options: MergeContributedRowsOptions = {}
 ): ExtensibleRegistryRows {
+  const reject = (reason: string) => options.onReject?.(reason);
   const source: Record<string, unknown> =
     typeof contributed === 'object' && contributed !== null ? (contributed as Record<string, unknown>) : {};
 
-  const mergeKeyed = (
-    base: readonly { id: string; keys: readonly EntitlementKey[] }[],
-    extra: { id: string; keys: EntitlementKey[] }[]
-  ) => {
-    const merged = new Map<string, EntitlementKey[]>();
-    for (const { id, keys } of [...base, ...extra]) {
-      if (!id || keys.length === 0) continue;
-      const prior = merged.get(id) ?? [];
-      merged.set(id, [...new Set([...prior, ...keys])]);
-    }
-    return [...merged];
+  const coreTags = new Map(
+    builtIn.tagGrantRows.map(row => [normalizeTag(row.tag), new Set(row.entitlements.map(normalizeTag))])
+  );
+  const coreImplied = new Map(
+    builtIn.impliedRows.map(row => [normalizeTag(row.ifHeld), new Set(row.alsoGrant.map(normalizeTag))])
+  );
+  const coreCredits = new Map(builtIn.signupCreditRows.map(row => [normalizeTag(row.key), row.credits]));
+  const coreStaff = new Set(builtIn.internalStaffEntitlements.map(normalizeTag));
+  const coreKeys = new Set<string>([
+    ...[...coreTags.values()].flatMap(keys => [...keys]),
+    ...coreImplied.keys(),
+    ...[...coreImplied.values()].flatMap(keys => [...keys]),
+    ...coreCredits.keys(),
+    ...coreStaff,
+    ...[...(options.otherCoreKeys ?? [])].map(normalizeTag),
+  ]);
+  const isSubset = (keys: readonly string[], of: ReadonlySet<string>) => keys.every(key => of.has(key));
+  const rejectsKeys = (where: string, keys: readonly string[]): boolean => {
+    const reserved = keys.filter(isReservedContributionKey);
+    const owned = keys.filter(key => coreKeys.has(key));
+    if (reserved.length > 0) reject(`${where} names reserved key(s) ${reserved.join(', ')}`);
+    else if (owned.length > 0) reject(`${where} names key(s) core already grants: ${owned.join(', ')}`);
+    return reserved.length > 0 || owned.length > 0;
   };
 
-  const tagGrantRows = mergeKeyed(
-    builtIn.tagGrantRows.map(row => ({ id: normalizeTag(row.tag), keys: row.entitlements.map(normalizeTag) })),
-    rowList(source.tagGrants).map(row => ({
-      id: typeof row.tag === 'string' ? normalizeTag(row.tag) : '',
-      keys: keyList(row.entitlements),
-    }))
-  ).map(([tag, entitlements]) => ({ tag, entitlements }));
+  const tagGrantRows: TagGrantRow[] = builtIn.tagGrantRows.map(row => ({
+    tag: normalizeTag(row.tag),
+    entitlements: row.entitlements.map(normalizeTag),
+  }));
+  const contributedTagOf = new Map<string, string>();
+  const contributedTags = new Map<string, EntitlementKey[]>();
+  for (const row of rowList(source.tagGrants)) {
+    const tag = typeof row.tag === 'string' ? normalizeTag(row.tag) : '';
+    const keys = keyList(row.entitlements);
+    if (!tag || keys.length === 0) continue;
+    const coreRow = coreTags.get(tag);
+    if (coreRow) {
+      if (!isSubset(keys, coreRow)) reject(`tag "${tag}" is a built-in tag; a contribution may not change it`);
+      continue;
+    }
+    if (isReservedContributionKey(tag) || coreKeys.has(tag)) {
+      reject(`tag "${tag}" is reserved or names a core key`);
+      continue;
+    }
+    if (rejectsKeys(`tag "${tag}"`, keys)) continue;
+    const taken = keys.filter(key => (contributedTagOf.get(key) ?? tag) !== tag);
+    if (taken.length > 0) {
+      reject(`tag "${tag}" grants key(s) another tag already grants: ${taken.join(', ')}`);
+      continue;
+    }
+    for (const key of keys) contributedTagOf.set(key, tag);
+    contributedTags.set(tag, [...new Set([...(contributedTags.get(tag) ?? []), ...keys])]);
+  }
+  for (const [tag, entitlements] of contributedTags) tagGrantRows.push({ tag, entitlements });
 
-  const impliedRows = mergeKeyed(
-    builtIn.impliedRows.map(row => ({ id: normalizeTag(row.ifHeld), keys: row.alsoGrant.map(normalizeTag) })),
-    rowList(source.impliedEntitlements).map(row => ({
-      id: typeof row.ifHeld === 'string' ? normalizeTag(row.ifHeld) : '',
-      keys: keyList(row.alsoGrant),
-    }))
-  ).map(([ifHeld, alsoGrant]) => ({ ifHeld, alsoGrant }));
+  const impliedRows: ImpliedEntitlementRow[] = builtIn.impliedRows.map(row => ({
+    ifHeld: normalizeTag(row.ifHeld),
+    alsoGrant: row.alsoGrant.map(normalizeTag),
+  }));
+  const contributedImplied = new Map<string, EntitlementKey[]>();
+  for (const row of rowList(source.impliedEntitlements)) {
+    const ifHeld = typeof row.ifHeld === 'string' ? normalizeTag(row.ifHeld) : '';
+    const keys = keyList(row.alsoGrant);
+    if (!ifHeld || keys.length === 0) continue;
+    const coreRow = coreImplied.get(ifHeld);
+    if (coreRow) {
+      if (!isSubset(keys, coreRow))
+        reject(`ifHeld "${ifHeld}" is a built-in implication; a contribution may not change it`);
+      continue;
+    }
+    if (rejectsKeys(`ifHeld "${ifHeld}"`, [ifHeld]) || rejectsKeys(`implication from "${ifHeld}"`, keys)) continue;
+    contributedImplied.set(ifHeld, [...new Set([...(contributedImplied.get(ifHeld) ?? []), ...keys])]);
+  }
+  for (const [ifHeld, alsoGrant] of contributedImplied) impliedRows.push({ ifHeld, alsoGrant });
 
-  const credits = new Map<EntitlementKey, number>();
-  for (const row of builtIn.signupCreditRows) credits.set(normalizeTag(row.key), row.credits);
+  const credits = new Map<EntitlementKey, number>(coreCredits);
   for (const row of rowList(source.signupCredits)) {
     if (typeof row.key !== 'string' || typeof row.credits !== 'number') continue;
     const key = normalizeTag(row.key);
-    if (key && !credits.has(key) && Number.isFinite(row.credits) && row.credits > 0) credits.set(key, row.credits);
+    if (!key) continue;
+    if (coreCredits.has(key)) {
+      if (coreCredits.get(key) !== row.credits)
+        reject(`signup credits for "${key}" are built-in; a contribution may not change them`);
+      continue;
+    }
+    if (!Number.isInteger(row.credits) || row.credits <= 0 || row.credits > MAX_CONTRIBUTED_SIGNUP_CREDITS) {
+      reject(`signup credits for "${key}" must be an integer from 1 to ${MAX_CONTRIBUTED_SIGNUP_CREDITS}`);
+      continue;
+    }
+    if (rejectsKeys(`signup credits for "${key}"`, [key]) || credits.has(key)) continue;
+    credits.set(key, row.credits);
   }
   const signupCreditRows = [...credits].map(([key, amount]) => ({ key, credits: amount }));
 
-  const internalStaffEntitlements = [
-    ...new Set([...builtIn.internalStaffEntitlements.map(normalizeTag), ...keyList(source.internalStaffEntitlements)]),
-  ];
+  const internalStaffEntitlements = [...coreStaff];
+  for (const key of keyList(source.internalStaffEntitlements)) {
+    if (coreStaff.has(key) || rejectsKeys(`internal staff key "${key}"`, [key])) continue;
+    internalStaffEntitlements.push(key);
+  }
 
   return { tagGrantRows, impliedRows, signupCreditRows, internalStaffEntitlements };
 }
@@ -405,14 +487,21 @@ const BUILT_IN_ROWS: ExtensibleRegistryRows = {
   internalStaffEntitlements: INTERNAL_STAFF_ENTITLEMENTS,
 };
 
-const REGISTRY_ROWS: ExtensibleRegistryRows = (() => {
-  try {
-    return mergeContributedRows(BUILT_IN_ROWS, premiumEntitlementGrants);
-  } catch {
-    // Fail closed to the built-in rows; never throw at module load.
-    return BUILT_IN_ROWS;
-  }
-})();
+/** Keys core grants through price and env domain rows, outside the rows an overlay can extend. */
+const CORE_OTHER_KEYS: readonly EntitlementKey[] = [
+  ...PRICE_ENTITLEMENT_ROWS.flatMap(row => row.entitlements),
+  ...EXTERNAL_DOMAIN_GRANT_ROWS.flatMap(row => row.entitlements),
+];
+
+const REJECTED_CONTRIBUTIONS: string[] = [];
+
+const REGISTRY_ROWS: ExtensibleRegistryRows = mergeContributedRows(BUILT_IN_ROWS, premiumEntitlementGrants, {
+  otherCoreKeys: CORE_OTHER_KEYS,
+  onReject: reason => REJECTED_CONTRIBUTIONS.push(reason),
+});
+if (REJECTED_CONTRIBUTIONS.length > 0) {
+  console.warn(`[entitlements] dropped contributed registry rows: ${REJECTED_CONTRIBUTIONS.join('; ')}`);
+}
 
 const DOMAIN_GRANT_ROWS: DomainGrantRow[] = [
   ...EXTERNAL_DOMAIN_GRANT_ROWS,
@@ -685,6 +774,8 @@ export function allKnownEntitlementKeys(
   for (const grantedKeys of implications.values()) {
     for (const key of grantedKeys) keys.add(key);
   }
+  // Listed even when no staff domain is configured, so partner rules accept them.
+  for (const key of REGISTRY_ROWS.internalStaffEntitlements) keys.add(key);
   return [...keys];
 }
 
@@ -715,4 +806,6 @@ export const __registryRows = {
   impliedRows: REGISTRY_ROWS.impliedRows,
   builtInRows: BUILT_IN_ROWS,
   contributedRows: premiumEntitlementGrants,
+  rejectedContributions: REJECTED_CONTRIBUTIONS as readonly string[],
+  otherCoreKeys: CORE_OTHER_KEYS,
 };

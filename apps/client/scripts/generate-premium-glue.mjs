@@ -803,10 +803,14 @@ function generateToolDisplayLabels(packages) {
 
 // --- Generate entitlement grants ---
 
-// Entitlement registry rows (b4mContributions.entitlementGrants), merged over the built-in rows in
+// Entitlement registry rows (b4mContributions.entitlementGrants), added to the built-in rows in
 // lib/entitlements/registry.ts. Pure data like the labels above. Keys must already be normalized,
-// since the registry matches on the lowercase form.
+// since the registry matches on the lowercase form. The built-in rows are TypeScript this script
+// cannot load, so a collision with them is dropped by mergeContributedRows instead of failing here.
 const GRANT_KEY_RE = /^[a-z0-9][a-z0-9:_-]*$/;
+// Must stay in sync with isReservedContributionKey and MAX_CONTRIBUTED_SIGNUP_CREDITS in the registry.
+const isReservedGrantKey = key => key === 'base' || key.startsWith('datalake:') || key.startsWith('embed:');
+const MAX_CONTRIBUTED_SIGNUP_CREDITS = 250_000;
 const ENTITLEMENT_GRANT_FIELDS = ['tagGrants', 'impliedEntitlements', 'signupCredits', 'internalStaffEntitlements'];
 
 function generateEntitlementGrants(packages) {
@@ -820,6 +824,7 @@ function generateEntitlementGrants(packages) {
     if (typeof value !== 'string' || !GRANT_KEY_RE.test(value)) {
       fail(pkg, `${where} ${JSON.stringify(value)} must be lowercase and match ${GRANT_KEY_RE}`);
     }
+    if (isReservedGrantKey(value)) fail(pkg, `${where} ${JSON.stringify(value)} is reserved`);
     return value;
   };
   const readKeyList = (pkg, where, value) => {
@@ -846,6 +851,7 @@ function generateEntitlementGrants(packages) {
   };
 
   const tagGrants = new Map();
+  const tagOfKey = new Map();
   const implied = new Map();
   const signupCredits = new Map();
   const internalStaff = new Set();
@@ -861,6 +867,16 @@ function generateEntitlementGrants(packages) {
         const tag = readKey(pkg, 'tagGrants tag', row.tag);
         const keys = readKeyList(pkg, `tagGrants entitlements for "${tag}"`, row.entitlements).sort();
         claim(tagGrants, 'tagGrants', tag, keys, pkg);
+        for (const key of keys) {
+          const other = tagOfKey.get(key);
+          if (other && other.tag !== tag) {
+            throw new Error(
+              `[codegen] entitlementGrants.tagGrants grants "${key}" from tag "${other.tag}" (package "${other.from}") ` +
+                `and tag "${tag}" (package "${pkg.name}"); a key has one granting tag.`
+            );
+          }
+          tagOfKey.set(key, { tag, from: pkg.name });
+        }
       }
     }
     if (declared.impliedEntitlements !== undefined) {
@@ -873,8 +889,12 @@ function generateEntitlementGrants(packages) {
     if (declared.signupCredits !== undefined) {
       for (const row of readRows(pkg, 'signupCredits', declared.signupCredits)) {
         const key = readKey(pkg, 'signupCredits key', row.key);
-        if (typeof row.credits !== 'number' || !Number.isFinite(row.credits) || row.credits <= 0) {
-          fail(pkg, `signupCredits for "${key}" must be a positive finite number, got ${JSON.stringify(row.credits)}`);
+        if (!Number.isInteger(row.credits) || row.credits <= 0 || row.credits > MAX_CONTRIBUTED_SIGNUP_CREDITS) {
+          fail(
+            pkg,
+            `signupCredits for "${key}" must be an integer from 1 to ${MAX_CONTRIBUTED_SIGNUP_CREDITS}, ` +
+              `got ${JSON.stringify(row.credits)}`
+          );
         }
         claim(signupCredits, 'signupCredits', key, row.credits, pkg);
       }

@@ -312,10 +312,12 @@ export type PremiumWorkspaceGrantDisplays = Readonly<Record<string, readonly Pre
 export type PremiumToolDisplayLabels = Readonly<Record<string, string>>;
 
 /**
- * Entitlement registry rows an overlay adds (`b4mContributions.entitlementGrants`), merged over the
- * built-in rows in lib/entitlements/registry.ts. Literal data like the labels above, so the client
- * bundle never imports overlay code. Keys and tags arrive normalized (lowercase). Two overlays giving
- * one tag, implying key or signup-credit key different values fail the build.
+ * Entitlement registry rows an overlay adds (`b4mContributions.entitlementGrants`) to the built-in
+ * rows in lib/entitlements/registry.ts, in new territory only: a row that changes a built-in tag,
+ * implication or credit amount, or grants a key core already grants, is dropped. Literal data like
+ * the labels above, so the client bundle never imports overlay code. Keys and tags arrive normalized
+ * (lowercase); `base`, `datalake:` and `embed:` keys are reserved. Two overlays giving one id
+ * different values, or one key two granting tags, fail the build.
  */
 export interface PremiumEntitlementGrants {
   readonly tagGrants?: readonly { readonly tag: string; readonly entitlements: readonly string[] }[];

@@ -148,6 +148,15 @@ describe('premium entitlement grants', () => {
     );
   });
 
+  it('fails when two tags grant one key, naming both', () => {
+    writeOverlay('alpha', {
+      entitlementGrants: { tagGrants: [{ tag: 'example-one', entitlements: ['example:pro'] }] },
+    });
+    writeOverlay('beta', { entitlementGrants: { tagGrants: [{ tag: 'example-two', entitlements: ['example:pro'] }] } });
+
+    expectRejected(/grants "example:pro" from tag "example-one" .* and tag "example-two"/);
+  });
+
   it.each([
     ['a non-object declaration', ['example:pro']],
     ['an unknown field', { priceGrants: [] }],
@@ -163,6 +172,17 @@ describe('premium entitlement grants', () => {
     ['negative signup credits', { signupCredits: [{ key: 'example:pro', credits: -5 }] }],
     ['non-numeric signup credits', { signupCredits: [{ key: 'example:pro', credits: '100' }] }],
     ['NaN signup credits (null once serialized)', { signupCredits: [{ key: 'example:pro', credits: NaN }] }],
+    ['fractional signup credits', { signupCredits: [{ key: 'example:pro', credits: 1.5 }] }],
+    ['oversized signup credits', { signupCredits: [{ key: 'example:pro', credits: 250_001 }] }],
+    [
+      'an implication from the reserved base key',
+      { impliedEntitlements: [{ ifHeld: 'base', alsoGrant: ['example:a'] }] },
+    ],
+    ['a reserved base tag', { tagGrants: [{ tag: 'base', entitlements: ['example:pro'] }] }],
+    ['a datalake grant', { tagGrants: [{ tag: 'example-pro', entitlements: ['datalake:some-lake'] }] }],
+    ['an embed grant', { impliedEntitlements: [{ ifHeld: 'example:pro', alsoGrant: ['embed:whitelabel'] }] }],
+    ['a reserved staff key', { internalStaffEntitlements: ['embed:whitelabel'] }],
+    ['a reserved signup-credit key', { signupCredits: [{ key: 'datalake:some-lake', credits: 10 }] }],
   ])('rejects %s', (_case, entitlementGrants) => {
     writeOverlay('bad', { entitlementGrants });
 
