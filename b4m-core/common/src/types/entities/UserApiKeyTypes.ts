@@ -137,11 +137,17 @@ export enum ApiKeyScope {
    * so it must reach nothing else. Minted from the Skill Market's "Use in Claude Code" dialog.
    */
   SKILLS_READ = 'skills:read',
+  /**
+   * Release-note automation: find a release note and set its video, and upload the What's New
+   * media for it. Admin-provisioned and confined so the job needs no `admin:*`
+   * key: it reaches only the routes that name it, and those still require a platform-admin owner.
+   */
+  RELEASE_NOTES_WRITE = 'release-notes:write',
 }
 
 /**
  * Scopes bound to a single dedicated flow: bridge pairing, the embed widget,
- * Overwatch ingest, QA run ingest. A key carrying ANY of these is *confined* and
+ * Overwatch ingest, QA run ingest, release-note automation. A key carrying ANY of these is *confined* and
  * both ends of the system say the same thing about it in the same words:
  *  - at mint (createUserApiKey): a confined scope must be the key's only scope, so
  *    a confined key is never persisted alongside reach it would then lose;
@@ -156,6 +162,7 @@ export const CONFINED_API_KEY_SCOPES: readonly ApiKeyScope[] = [
   ApiKeyScope.OVERWATCH_INGEST_WRITE,
   ApiKeyScope.QA_INGEST,
   ApiKeyScope.SKILLS_READ,
+  ApiKeyScope.RELEASE_NOTES_WRITE,
 ];
 
 export enum ApiKeyStatus {
