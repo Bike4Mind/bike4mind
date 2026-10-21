@@ -317,7 +317,7 @@ describe('skills mid-sentence', () => {
 
   it('draws a highlight behind known skills only', () => {
     mount({ skills, onRunCommand: () => {} });
-    type('/ship-it after /review, not /nope or /clear');
+    type('first /ship-it after /review, not /nope or /clear');
     expect(marks()).toEqual(['ship-it', 'review']);
 
     type('just prose');
