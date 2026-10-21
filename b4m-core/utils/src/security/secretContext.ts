@@ -7,7 +7,7 @@
  * `isContextBound` reports whether a stored value is in the context-bound format; unbound
  * (pre-migration) values still decrypt without one.
  */
-const ciphertextVersionPrefix = 'v2:';
+import { ciphertextVersionPrefix } from './secretEncryption';
 
 const context = (...parts: string[]): string => JSON.stringify(parts);
 

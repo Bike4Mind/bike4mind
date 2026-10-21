@@ -24,6 +24,9 @@ const IV_LENGTH = 16; // 128 bits
 const AUTH_TAG_LENGTH = 16; // 128 bits
 const KEY_LENGTH = 32; // 256 bits
 
+/** Marks a ciphertext whose AES-GCM associated data binds it to its owner, record and field. */
+export const ciphertextVersionPrefix = 'v2:';
+
 /**
  * Encrypts a plaintext secret using AES-256-GCM.
  *
@@ -50,7 +53,7 @@ export function encryptSecret(plaintext: string, key: string, context?: string):
   const authTag = cipher.getAuthTag();
 
   // Format: iv:authTag:encrypted (all hex-encoded)
-  return `${context === undefined ? '' : 'v2:'}${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted}`;
+  return `${context === undefined ? '' : ciphertextVersionPrefix}${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted}`;
 }
 
 /**
@@ -70,9 +73,9 @@ export function decryptSecret(encrypted: string, key: string, context?: string):
     throw new Error(`Encryption key must be ${KEY_LENGTH * 2} hex characters (${KEY_LENGTH} bytes)`);
   }
 
-  const bound = encrypted.startsWith('v2:');
+  const bound = encrypted.startsWith(ciphertextVersionPrefix);
   if (bound && context === undefined) throw new Error('Encrypted secret requires its owning context');
-  const parts = (bound ? encrypted.slice(3) : encrypted).split(':');
+  const parts = (bound ? encrypted.slice(ciphertextVersionPrefix.length) : encrypted).split(':');
   if (parts.length !== 3) {
     throw new Error('Invalid encrypted format. Expected iv:authTag:ciphertext');
   }
@@ -109,7 +112,7 @@ export function isEncrypted(value: string): boolean {
   }
 
   // Check if value matches encrypted format: iv(32 hex):authTag(32 hex):data(hex)
-  const pattern = /^(?:v2:)?[a-f0-9]{32}:[a-f0-9]{32}:[a-f0-9]+$/i;
+  const pattern = new RegExp(`^(?:${ciphertextVersionPrefix})?[a-f0-9]{32}:[a-f0-9]{32}:[a-f0-9]+$`, 'i');
   return pattern.test(value);
 }
 
