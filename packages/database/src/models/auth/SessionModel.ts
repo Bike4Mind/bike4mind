@@ -532,6 +532,15 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     );
     return result.modifiedCount > 0;
   }
+  async pullKnowledgeIdsForUsers(userIds: string[], fabFileIds: string[]) {
+    if (userIds.length === 0 || fabFileIds.length === 0) return 0;
+    // `deletedAt: null` puts this on the (deletedAt, userId, lastUpdated) index and skips deleted notebooks.
+    const result = await this.sessionModel.updateMany(
+      { deletedAt: null, userId: { $in: userIds }, knowledgeIds: { $in: fabFileIds } },
+      { $pull: { knowledgeIds: { $in: fabFileIds } } }
+    );
+    return result.modifiedCount;
+  }
   /** Ids come from `project.sessionIds`, declared `[{ type: String }]` - see usableObjectIds. */
   async findAllByIds(ids: string[], options?: { includeDeleted?: boolean }) {
     const query = this.sessionModel.find({ _id: { $in: usableObjectIds(ids, 'SessionModel.findAllByIds') } });

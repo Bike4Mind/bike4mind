@@ -21,6 +21,7 @@ const h = vi.hoisted(() => ({
   userForRefund: vi.fn(),
   pullSystemFilesForUsers: vi.fn(),
   pullFileReferences: vi.fn(),
+  logEvent: vi.fn(),
   baseApiOptions: undefined as unknown,
 }));
 
@@ -41,7 +42,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@server/utils/analyticsLog', () => ({ logEvent: h.logEvent }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ delete: h.storageDelete, upload: vi.fn(), getSignedUrl: vi.fn() }),
   getGeneratedImageStorage: () => ({ delete: vi.fn() }),
@@ -163,6 +164,25 @@ describe('bulk-delete - data-lake stats', () => {
     expect(h.pullSystemFilesForUsers).toHaveBeenCalledWith(holders, fileIds);
     expect(h.pullFileReferences).toHaveBeenCalledTimes(1);
     expect(h.pullFileReferences).toHaveBeenCalledWith(fileIds, { userIds: holders });
+  });
+
+  it('never unlinks the references of a file whose delete rolled back - that file is still live', async () => {
+    const rolledBack = '507f1f77bcf86cd799439011';
+    const committed = '507f1f77bcf86cd799439012';
+    const files = new Map([
+      [rolledBack, { ...memberFile(rolledBack), users: [{ userId: 'recipient-1' }] }],
+      [committed, memberFile(committed)],
+    ]);
+    h.findById.mockImplementation(async (id: string) => files.get(id) ?? null);
+    h.findByIdAndUserId.mockImplementation(async (id: string) => files.get(id) ?? null);
+    h.logEvent.mockRejectedValueOnce(new Error('log failed'));
+    const { res } = makeRes();
+
+    await run([...files.keys()], res);
+
+    expect(h.pullSystemFilesForUsers).toHaveBeenCalledTimes(1);
+    expect(h.pullSystemFilesForUsers).toHaveBeenCalledWith([OWNER], [committed]);
+    expect(h.pullFileReferences).toHaveBeenCalledWith([committed], { userIds: [OWNER] });
   });
 
   it('does not recompute for a batch that only unshares', async () => {

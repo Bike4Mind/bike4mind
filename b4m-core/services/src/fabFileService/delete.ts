@@ -5,7 +5,6 @@ import {
   IFabFileChunkRepository,
   IFabFileDocument,
   IFabFileRepository,
-  IProjectRepository,
   ISessionRepository,
   IUserRepository,
   LakeMembershipChangeOrigin,
@@ -18,11 +17,7 @@ import { registryMembershipScope } from '../dataLakeService/lakeMembershipScope'
 import type { ManageActor } from '../dataLakeService/manageRule';
 import { registryCandidateLakes } from '../dataLakeService/registryCandidateLakes';
 import { deleteStoredObjects, type GeneratedCopyStore, type ObjectStorage } from './deleteStoredObjects';
-import {
-  cleanUpDeletedFileReferences,
-  referenceHolderIds,
-  type DeletedFileReferences,
-} from './cleanUpDeletedFileReferences';
+import { referenceHolderIds, type DeletedFileReferences } from './cleanUpDeletedFileReferences';
 import {
   recordLakeMembershipChange,
   type LakeMembershipAuditAdapters,
@@ -39,6 +34,12 @@ export type DeleteFabFileAction = 'deleted' | 'unshared' | 'not_found' | 'denied
 export interface DeleteFabFileResult {
   action: DeleteFabFileAction;
   fabFile: IFabFileDocument | null;
+  /**
+   * The system-file/project references this delete or unshare leaves behind, set for 'deleted' and
+   * 'unshared'. deleteFabFile does not write them: the caller passes them to
+   * cleanUpDeletedFileReferences once its transaction has committed (see that helper for why).
+   */
+  references?: DeletedFileReferences;
 }
 
 export type PublicDeleteFabFileAction = Exclude<DeleteFabFileAction, 'denied'>;
@@ -60,11 +61,8 @@ export interface DeleteFabFileAdapter extends LakeMembershipAuditAdapters {
       'findByIdAndUserId' | 'findById' | 'findAllInIds' | 'update' | 'deleteManyInIds'
     >;
     fabFileChunks: Pick<IFabFileChunkRepository, 'deleteManyByFabFileId' | 'distinctRetrievalIndexModelsByFabFileIds'>;
-    users: Pick<IUserRepository, 'findById' | 'update' | 'pullSystemFiles' | 'pullSystemFilesForUsers'>;
+    users: Pick<IUserRepository, 'findById' | 'update'>;
     sessions: Pick<ISessionRepository, 'findAllWithKnowledgeId' | 'update'>;
-    // Optional so a caller with no project repo still compiles; absent -> project references are
-    // left for the per-turn prune (scrubStaleProjectFiles) to drop when the project is next used.
-    projects?: Pick<IProjectRepository, 'pullFileReferences'>;
     // Optional, matching every other membership-write door: absent -> the removed-event recording
     // below is skipped entirely rather than failing to compile (see LakeMembershipAuditAdapters).
     dataLakes?: Pick<IDataLakeRepository, 'find' | 'findByDatalakeTag'>;
@@ -93,11 +91,6 @@ export interface DeleteFabFileAdapter extends LakeMembershipAuditAdapters {
    * the resulting `removed` rows to the key, not the human it acts for - see `ManageActor.auditPrincipal`.
    */
   auditPrincipal?: ManageActor['auditPrincipal'];
-  /**
-   * A batch caller (bulk delete) takes the system-file/project unlink for this file instead of it
-   * running here, unions it across the batch and runs it once via cleanUpDeletedFileReferences.
-   */
-  deferReferenceCleanup?: (references: DeletedFileReferences) => void;
 }
 
 export const deleteFabFile = async (
@@ -189,19 +182,6 @@ export const deleteFabFile = async (
       await db.sessions.update({ id: notebook.id, knowledgeIds: updatedKnowledgeIds });
     }
 
-    // The file is gone for everyone: unlink it from its owner's and direct-share recipients' system
-    // files and projects. Group- or lake-held references are left to the turn-time scrub.
-    try {
-      const references = { fileIds: [ownedFile.id], userIds: referenceHolderIds(ownedFile) };
-      if (adapter.deferReferenceCleanup) adapter.deferReferenceCleanup(references);
-      else await cleanUpDeletedFileReferences(references, db);
-    } catch (err) {
-      Logger.globalInstance.warn('[deleteFabFile] failed to unlink system-file/project references', {
-        fileId: ownedFile.id,
-        err,
-      });
-    }
-
     await deleteStoredObjects([ownedFile], { files: storage, generated: generatedCopies });
 
     // sizeToDeduct is the bytes this row was charged (see chargedBytes), so 0 for a never-charged row
@@ -209,7 +189,15 @@ export const deleteFabFile = async (
       await onDeleteComplete(ownedFile, sizeToDeduct);
     }
 
-    return { action: 'deleted', fabFile: ownedFile };
+    // The file is gone for everyone: its owner's and direct-share recipients' system files and
+    // projects are unlinked by the caller after commit. Group- or lake-held references are left to
+    // the turn-time scrub.
+    const holders = referenceHolderIds(ownedFile);
+    return {
+      action: 'deleted',
+      fabFile: ownedFile,
+      references: { fileIds: [ownedFile.id], systemFileUserIds: holders, projectUserIds: holders },
+    };
   }
 
   // 2. User doesn't own the file - check if it's shared to them. A self-unshare (below), a denied
@@ -247,15 +235,9 @@ export const deleteFabFile = async (
     }
   }
   // Projects are shared, so their references stay; only this user's own system files let go.
-  await unlinkFileReferences(sharedFile.id, () => db.users.pullSystemFiles(userId, [sharedFile.id]));
-
-  return { action: 'unshared', fabFile: sharedFile };
-};
-
-const unlinkFileReferences = async (fileId: string, unlink: () => Promise<unknown>) => {
-  try {
-    await unlink();
-  } catch (err) {
-    Logger.globalInstance.warn('[deleteFabFile] failed to unlink system-file/project references', { fileId, err });
-  }
+  return {
+    action: 'unshared',
+    fabFile: sharedFile,
+    references: { fileIds: [sharedFile.id], systemFileUserIds: [userId], projectUserIds: [] },
+  };
 };

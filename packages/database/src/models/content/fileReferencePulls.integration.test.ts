@@ -145,8 +145,8 @@ describe('ProjectRepository.pullFileReferences', () => {
     const filter = updateMany.mock.calls[0]?.[0];
     updateMany.mockRestore();
     expect(filter).toBeDefined();
-    // The raw collection, not Project.find: the soft-delete plugin would add `deletedAt` to a model
-    // query and mask a filter that only an explicit `deletedAt: null` makes index-eligible.
+    // Explains the captured filter exactly as sent, before any soft-delete-plugin hook: through
+    // Project.find the plugin would add `deletedAt` and mask a filter that scans without it.
     const explained = (await Project.collection.find(filter!).explain('queryPlanner')) as unknown as {
       queryPlanner: { winningPlan: unknown };
     };

@@ -46,14 +46,11 @@ describe('deleteFabFile', () => {
       users: {
         findById: Mock;
         update: Mock;
-        pullSystemFiles: Mock;
-        pullSystemFilesForUsers: Mock;
       };
       sessions: {
         findAllWithKnowledgeId: Mock;
         update: Mock;
       };
-      projects?: { pullFileReferences: Mock };
       dataLakes?: { find: Mock; findByDatalakeTag: Mock };
       lakeMembershipChangeEvents?: { record: Mock };
     };
@@ -86,14 +83,11 @@ describe('deleteFabFile', () => {
         users: {
           findById: vi.fn().mockResolvedValue({ id: mockUserId }),
           update: vi.fn(),
-          pullSystemFiles: vi.fn(),
-          pullSystemFilesForUsers: vi.fn(),
         },
         sessions: {
           findAllWithKnowledgeId: vi.fn().mockResolvedValue([]),
           update: vi.fn(),
         },
-        projects: { pullFileReferences: vi.fn() },
       },
       storage: {
         delete: vi.fn().mockResolvedValue(undefined),
@@ -356,47 +350,20 @@ describe('deleteFabFile', () => {
       });
     });
 
-    it("unlinks the file from the owner's and direct-share recipients' system files and projects only", async () => {
+    it("returns the owner's and direct-share recipients' system-file and project references to unlink", async () => {
       mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue({
         ...mockFabFile,
         users: [{ userId: 'recipient-1', permissions: ['read'] }],
       });
 
-      await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
+      const result = await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
 
       const holders = [mockUserId, 'recipient-1'];
-      expect(mockAdapter.db.users.pullSystemFilesForUsers).toHaveBeenCalledWith(holders, [mockFileId]);
-      expect(mockAdapter.db.projects?.pullFileReferences).toHaveBeenCalledWith([mockFileId], { userIds: holders });
-    });
-
-    it('hands the unlink to a batch caller instead of running it', async () => {
-      mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(mockFabFile);
-      const deferred = vi.fn();
-
-      await deleteFabFile(mockUserId, { id: mockFileId }, { ...mockAdapter, deferReferenceCleanup: deferred });
-
-      expect(deferred).toHaveBeenCalledWith({ fileIds: [mockFileId], userIds: [mockUserId] });
-      expect(mockAdapter.db.users.pullSystemFilesForUsers).not.toHaveBeenCalled();
-      expect(mockAdapter.db.projects?.pullFileReferences).not.toHaveBeenCalled();
-    });
-
-    it('still reports the delete when unlinking system-file or project references fails', async () => {
-      mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(mockFabFile);
-      mockAdapter.db.projects?.pullFileReferences.mockRejectedValueOnce(new Error('write failed'));
-
-      const result = await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
-
-      expect(result.action).toBe('deleted');
-    });
-
-    it('deletes without a project repository, leaving project references to the per-turn prune', async () => {
-      mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(mockFabFile);
-      delete mockAdapter.db.projects;
-
-      const result = await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
-
-      expect(result.action).toBe('deleted');
-      expect(mockAdapter.db.users.pullSystemFilesForUsers).toHaveBeenCalledWith([mockUserId], [mockFileId]);
+      expect(result.references).toEqual({
+        fileIds: [mockFileId],
+        systemFileUserIds: holders,
+        projectUserIds: holders,
+      });
     });
   });
 
@@ -480,15 +447,22 @@ describe('deleteFabFile', () => {
       });
     });
 
-    it("removes the file from only the unsharing user's system files, and leaves projects alone", async () => {
+    it("returns only the unsharing user's system-file reference to unlink, and no project ones", async () => {
       mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(null);
       mockAdapter.db.fabFiles.findById.mockResolvedValue(createMockSharedFile());
 
-      await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
+      const result = await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
 
-      expect(mockAdapter.db.users.pullSystemFiles).toHaveBeenCalledWith(mockUserId, [mockFileId]);
-      expect(mockAdapter.db.users.pullSystemFilesForUsers).not.toHaveBeenCalled();
-      expect(mockAdapter.db.projects?.pullFileReferences).not.toHaveBeenCalled();
+      expect(result.references).toEqual({ fileIds: [mockFileId], systemFileUserIds: [mockUserId], projectUserIds: [] });
+    });
+
+    it('returns no references when there is nothing to unlink', async () => {
+      mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(null);
+      mockAdapter.db.fabFiles.findById.mockResolvedValue(null);
+
+      const result = await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
+
+      expect(result.references).toBeUndefined();
     });
   });
 

@@ -759,6 +759,8 @@ async function materializeAttachmentsForRun(args: {
   modelInfo?: ModelInfo;
   apiKeyTable: ApiKeyTable;
   logger: Logger;
+  /** Told which pinned ids the stale-reference scrub detached, so the caller can trim its copy. */
+  onKnowledgeIdsScrubbed?: (removed: string[]) => void;
 }) {
   const { execution, sessionKnowledgeIds, scope, lakeAccess, modelInfo, apiKeyTable, logger } = args;
 
@@ -865,12 +867,13 @@ async function materializeAttachmentsForRun(args: {
     // every later run - the chat path does the same, through the same helper and the same two
     // gates. `materialized.delivery.droppedIds` is deliberately NOT the input: it also names live
     // files this run simply could not inline, and detaching those would destroy notebook contents.
-    await sessionService.scrubMissingKnowledgeIds(
+    const scrubbed = await sessionService.scrubMissingKnowledgeIds(
       sessionKnowledgeIds,
       materialized.notices,
       { db: { fabFiles: fabFileRepository, sessions: sessionRepository }, logger },
       execution.sessionId
     );
+    if (scrubbed.length > 0) args.onKnowledgeIdsScrubbed?.(scrubbed);
 
     return materialized;
   } catch (err) {
@@ -2654,6 +2657,11 @@ async function processExecution(
           ? await materializeAttachmentsForRun({
               execution,
               sessionKnowledgeIds: session.knowledgeIds ?? [],
+              // Keeps the first-iteration preamble below from listing a file just detached.
+              onKnowledgeIdsScrubbed: removed => {
+                const dropped = new Set(removed);
+                session.knowledgeIds = (session.knowledgeIds ?? []).filter(id => !dropped.has(id));
+              },
               scope: fabFileReadScope,
               lakeAccess: await attachmentLakeAccess(),
               modelInfo,

@@ -70,28 +70,64 @@ describe('scrubStaleSystemFiles', () => {
   });
 });
 
+const OWNER = '507f1f77bcf86cd7994390dd';
+const COLLABORATOR = '507f1f77bcf86cd7994390ee';
+
 describe('scrubStaleProjectFiles', () => {
-  it('removes project files and system prompts whose file is gone or soft-deleted, in that project', async () => {
+  const project = (over: { fileIds?: string[]; systemPrompts?: { fileId: string }[] } = {}) => ({
+    id: PROJECT,
+    userId: OWNER,
+    fileIds: [GONE, LIVE],
+    systemPrompts: [{ fileId: DELETED }],
+    ...over,
+  });
+
+  it("removes gone and soft-deleted files from fileIds and systemPrompts on the owner's turn", async () => {
     const projects = { pullFileReferences: vi.fn(async () => undefined) };
     const removed = await scrubStaleProjectFiles(
-      { id: PROJECT, fileIds: [GONE, LIVE], systemPrompts: [{ fileId: DELETED }] },
+      project(),
       [unresolved(GONE), unresolved(DELETED)],
-      { db: { fabFiles: fabFiles(), projects }, logger }
+      { db: { fabFiles: fabFiles(), projects }, logger },
+      OWNER
     );
 
     expect(removed).toEqual([GONE, DELETED]);
     expect(projects.pullFileReferences).toHaveBeenCalledWith([GONE, DELETED], { projectId: PROJECT });
   });
 
+  it("removes only gone files on a collaborator's turn, keeping a soft-deleted one a restore can revive", async () => {
+    const projects = { pullFileReferences: vi.fn(async () => undefined) };
+    const removed = await scrubStaleProjectFiles(
+      project(),
+      [unresolved(GONE), unresolved(DELETED)],
+      { db: { fabFiles: fabFiles(), projects }, logger },
+      COLLABORATOR
+    );
+
+    expect(removed).toEqual([GONE]);
+    expect(projects.pullFileReferences).toHaveBeenCalledWith([GONE], { projectId: PROJECT });
+  });
+
+  it("writes nothing on a collaborator's turn when the only stale file is soft-deleted", async () => {
+    const projects = { pullFileReferences: vi.fn(async () => undefined) };
+    const removed = await scrubStaleProjectFiles(
+      project({ fileIds: [], systemPrompts: [{ fileId: DELETED }] }),
+      [unresolved(DELETED)],
+      { db: { fabFiles: fabFiles(), projects }, logger },
+      COLLABORATOR
+    );
+
+    expect(removed).toEqual([]);
+    expect(projects.pullFileReferences).not.toHaveBeenCalled();
+  });
+
   it('keeps a project file that is live but unreadable by the collaborator whose turn this is', async () => {
     const projects = { pullFileReferences: vi.fn(async () => undefined) };
     const removed = await scrubStaleProjectFiles(
-      { id: PROJECT, fileIds: [LIVE], systemPrompts: [] },
+      project({ fileIds: [LIVE], systemPrompts: [] }),
       [unresolved(LIVE)],
-      {
-        db: { fabFiles: fabFiles(), projects },
-        logger,
-      }
+      { db: { fabFiles: fabFiles(), projects }, logger },
+      COLLABORATOR
     );
 
     expect(removed).toEqual([]);
@@ -101,10 +137,12 @@ describe('scrubStaleProjectFiles', () => {
   it('ignores unresolved ids the project does not reference', async () => {
     // Project turns also resolve the project's notebooks' knowledge; those belong to the sessions.
     const projects = { pullFileReferences: vi.fn(async () => undefined) };
-    const removed = await scrubStaleProjectFiles({ id: PROJECT, fileIds: [LIVE] }, [unresolved(GONE)], {
-      db: { fabFiles: fabFiles(), projects },
-      logger,
-    });
+    const removed = await scrubStaleProjectFiles(
+      project({ fileIds: [LIVE], systemPrompts: [] }),
+      [unresolved(GONE)],
+      { db: { fabFiles: fabFiles(), projects }, logger },
+      OWNER
+    );
 
     expect(removed).toEqual([]);
     expect(projects.pullFileReferences).not.toHaveBeenCalled();

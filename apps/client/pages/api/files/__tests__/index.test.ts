@@ -24,7 +24,7 @@ const mockRefs = vi.hoisted(() => ({
   baseApiOptions: undefined as unknown,
   deleteUser: undefined as undefined | { currentStorageSize: number; save: () => Promise<void> },
   incrementCurrentStorage: undefined as unknown as ReturnType<typeof vi.fn>,
-  pullKnowledgeIds: undefined as unknown as ReturnType<typeof vi.fn>,
+  pullKnowledgeIdsForUsers: undefined as unknown as ReturnType<typeof vi.fn>,
   pullSystemFilesForUsers: undefined as unknown as ReturnType<typeof vi.fn>,
   pullFileReferences: undefined as unknown as ReturnType<typeof vi.fn>,
 }));
@@ -47,8 +47,8 @@ vi.mock('@server/middlewares/baseApi', () => {
 const fabFileDocs = vi.hoisted(
   () =>
     [
-      { filePath: 'a/one.png', userId: 'user-1', users: [{ userId: 'recipient-1' }] },
-      { filePath: 'b/two.mp3', userId: 'user-1', sourceMetadata: { generatedCopyKey: 'two.mp3' } },
+      { _id: 'file-0', filePath: 'a/one.png', userId: 'user-1', users: [{ userId: 'recipient-1' }] },
+      { _id: 'file-1', filePath: 'b/two.mp3', userId: 'user-1', sourceMetadata: { generatedCopyKey: 'two.mp3' } },
     ] as Array<Record<string, unknown>>
 );
 
@@ -104,7 +104,9 @@ vi.mock('@bike4mind/database', () => {
       __repo: 'users',
       pullSystemFilesForUsers: (...args: unknown[]) => mockRefs.pullSystemFilesForUsers(...args),
     },
-    sessionRepository: { pullKnowledgeIds: (...args: unknown[]) => mockRefs.pullKnowledgeIds(...args) },
+    sessionRepository: {
+      pullKnowledgeIdsForUsers: (...args: unknown[]) => mockRefs.pullKnowledgeIdsForUsers(...args),
+    },
     organizationRepository: {
       incrementCurrentStorage: (...args: unknown[]) => mockRefs.incrementCurrentStorage(...args),
     },
@@ -270,7 +272,7 @@ describe('DELETE /api/files', () => {
     mockRefs.updateManyArgs = undefined;
     mockRefs.updateManyOptions = undefined;
     mockRefs.incrementCurrentStorage = vi.fn().mockResolvedValue(undefined);
-    mockRefs.pullKnowledgeIds = vi.fn().mockResolvedValue(0);
+    mockRefs.pullKnowledgeIdsForUsers = vi.fn().mockResolvedValue(0);
     mockRefs.pullSystemFilesForUsers = vi.fn().mockResolvedValue(undefined);
     mockRefs.pullFileReferences = vi.fn().mockResolvedValue(undefined);
   });
@@ -393,7 +395,7 @@ describe('DELETE /api/files', () => {
 
     const deletedIds = fabFileDocs.map((_doc, i) => `file-${i}`);
     const holders = ['user-1', 'recipient-1'];
-    expect(mockRefs.pullKnowledgeIds).toHaveBeenCalledWith(deletedIds);
+    expect(mockRefs.pullKnowledgeIdsForUsers).toHaveBeenCalledWith(holders, deletedIds);
     expect(mockRefs.pullSystemFilesForUsers).toHaveBeenCalledWith(holders, deletedIds);
     expect(mockRefs.pullFileReferences).toHaveBeenCalledWith(deletedIds, { userIds: holders });
   });

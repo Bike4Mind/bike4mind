@@ -45,20 +45,22 @@ export interface ScrubStaleProjectFilesAdapters {
 }
 
 /**
- * Scoped to the one project the turn read. A project is shared, so which collaborator's turn noticed
- * the file does not matter - gate 2 already established the row is gone or deleted for everyone.
+ * Scoped to the one project the turn read. A project is shared, so the width depends on who is
+ * asking: an id with no row at all is dropped on any collaborator's turn (nothing can bring it
+ * back), but a soft-deleted one - which a restore can revive - only on the project owner's.
  */
 export const scrubStaleProjectFiles = async (
-  project: { id: string; fileIds?: string[]; systemPrompts?: { fileId: string }[] },
+  project: { id: string; userId: string; fileIds?: string[]; systemPrompts?: { fileId: string }[] },
   notices: FabFileNotice[],
-  adapters: ScrubStaleProjectFilesAdapters
+  adapters: ScrubStaleProjectFilesAdapters,
+  requesterId: string
 ): Promise<string[]> => {
   const logger = adapters.logger ?? Logger.globalInstance;
   try {
     const referenced = [...(project.fileIds ?? []), ...(project.systemPrompts ?? []).map(prompt => prompt.fileId)];
     if (referenced.length === 0) return [];
     const { gone, softDeleted } = await classifyUnresolvedFileIds(referenced, notices, adapters.db.fabFiles);
-    const stale = [...gone, ...softDeleted];
+    const stale = [...gone, ...(requesterId === project.userId ? softDeleted : [])];
     if (stale.length === 0) return [];
     await adapters.db.projects.pullFileReferences(stale, { projectId: project.id });
     logger.info('sessionService.scrubStaleProjectFiles: removed project files whose file no longer exists', {

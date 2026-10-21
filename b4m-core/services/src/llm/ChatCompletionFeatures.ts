@@ -1557,10 +1557,15 @@ export class ProjectFeature implements ChatCompletionFeature {
       modelInfo
     );
 
-    const scrubbed = await scrubStaleProjectFiles(this.project, projectFabMessages.fileNotices, {
-      db: { fabFiles: this.chatCompletion.db.fabfiles, projects: this.chatCompletion.db.projects },
-      logger: this.logger,
-    });
+    const scrubbed = await scrubStaleProjectFiles(
+      this.project,
+      projectFabMessages.fileNotices,
+      {
+        db: { fabFiles: this.chatCompletion.db.fabfiles, projects: this.chatCompletion.db.projects },
+        logger: this.logger,
+      },
+      this.chatCompletion.user.id
+    );
     if (scrubbed.length > 0) {
       const removed = new Set(scrubbed);
       this.project.fileIds = this.project.fileIds.filter(id => !removed.has(id));

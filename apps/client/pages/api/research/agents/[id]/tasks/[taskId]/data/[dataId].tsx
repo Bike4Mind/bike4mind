@@ -60,9 +60,6 @@ const handler = baseApi({ auth: true }).delete(
               // doc, which would wipe the select:false MFA secrets. See UserModel's MFA update guard.
               await userRepository.incrementCurrentStorage(userId, count);
             },
-            pullSystemFiles: (userId: string, fileIds: string[]) => userRepository.pullSystemFiles(userId, fileIds),
-            pullSystemFilesForUsers: (userIds: string[], fileIds: string[]) =>
-              userRepository.pullSystemFilesForUsers(userIds, fileIds),
           },
           organizations: {
             incrementCurrentStorage: async (organizationId: string, count: number) => {

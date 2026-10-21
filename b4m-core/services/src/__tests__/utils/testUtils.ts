@@ -214,6 +214,7 @@ export const createMockSessionRepository = (): MockedObject<ISessionRepository> 
     findAllWithKnowledgeId: vi.fn(),
     pullKnowledgeIds: vi.fn(),
     pullKnowledgeIdsFromSession: vi.fn(),
+    pullKnowledgeIdsForUsers: vi.fn(),
     searchByUserId: vi.fn(),
     listByUserId: vi.fn(),
     findRecentlyUpdatedByUserId: vi.fn(),

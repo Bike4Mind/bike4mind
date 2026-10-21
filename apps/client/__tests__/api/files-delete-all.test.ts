@@ -4,7 +4,7 @@ const captured = vi.hoisted(() => ({ handlers: {} as Record<string, any> }));
 const cleanup = vi.hoisted(() => ({
   referenceHolderIds: vi.fn(),
   cleanUpDeletedFileReferences: vi.fn(),
-  pullKnowledgeIds: vi.fn(),
+  pullKnowledgeIdsForUsers: vi.fn(),
   pullSystemFilesForUsers: vi.fn(),
   pullFileReferences: vi.fn(),
 }));
@@ -15,7 +15,7 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   fabFileRepository: {},
   projectRepository: { pullFileReferences: cleanup.pullFileReferences },
-  sessionRepository: { pullKnowledgeIds: cleanup.pullKnowledgeIds },
+  sessionRepository: { pullKnowledgeIdsForUsers: cleanup.pullKnowledgeIdsForUsers },
   userRepository: { pullSystemFilesForUsers: cleanup.pullSystemFilesForUsers },
   withTransaction: vi.fn(async (fn: (s: unknown) => Promise<unknown>) => fn('txn')),
 }));
@@ -72,8 +72,15 @@ let ownedFiles: Record<string, unknown>[] = [];
 // Applies the projection the route passes to `.select()`, so dropping a field from that projection is
 // caught here rather than only by the projection-string assertion below. Dotted paths are kept nested.
 const project = (doc: Record<string, unknown>, projection: string): Record<string, unknown> => {
-  const out: Record<string, unknown> = {};
+  // Mongoose returns `_id` whatever the projection says.
+  const out: Record<string, unknown> = doc._id === undefined ? {} : { _id: doc._id };
   for (const path of projection.split(' ').filter(Boolean)) {
+    // An array path (`users.userId`) keeps each element's projected field, as Mongo does.
+    const [head, ...rest] = path.split('.');
+    if (Array.isArray(doc[head]) && rest.length > 0) {
+      out[head] = (doc[head] as Record<string, unknown>[]).map(item => project(item, rest.join('.')));
+      continue;
+    }
     const value = path
       .split('.')
       .reduce<unknown>((v, k) => (v == null ? undefined : (v as Record<string, unknown>)[k]), doc);
@@ -113,10 +120,15 @@ const makeRes = () => {
 
 describe('DELETE /api/files scoping', () => {
   beforeEach(() => {
+    cleanup.pullKnowledgeIdsForUsers.mockReset().mockResolvedValue(0);
+    cleanup.pullSystemFilesForUsers.mockReset().mockResolvedValue(undefined);
+    cleanup.pullFileReferences.mockReset().mockResolvedValue(undefined);
+    cleanup.referenceHolderIds.mockClear();
+    cleanup.cleanUpDeletedFileReferences.mockClear();
     storageDelete.mockReset().mockResolvedValue(undefined);
     generatedDelete.mockReset().mockResolvedValue(undefined);
     selectProjections.length = 0;
-    ownedFiles = [{ filePath: 'owned/mine.txt' }];
+    ownedFiles = [{ _id: 'mine', userId: CALLER, filePath: 'owned/mine.txt' }];
     vi.mocked(FabFile.deleteMany)
       .mockReset()
       .mockResolvedValue({ deletedCount: 1 } as never);
@@ -204,10 +216,32 @@ describe('DELETE /api/files scoping', () => {
     expect(JSON.stringify(deleteFilter)).toContain(CALLER);
   });
 
-  it('unlinks system files and projects for the deleted files after the delete', async () => {
+  it('unlinks the deleted files from the owner and direct-share recipients, from the in-transaction read', async () => {
+    ownedFiles = [{ _id: 'mine', userId: CALLER, users: [{ userId: 'recipient-1' }], filePath: 'owned/mine.txt' }];
+
     await run();
 
-    expect(cleanup.pullKnowledgeIds).toHaveBeenCalledWith(['mine']);
+    const holders = [CALLER, 'recipient-1'];
+    expect(cleanup.pullKnowledgeIdsForUsers).toHaveBeenCalledWith(holders, ['mine']);
+    expect(cleanup.pullSystemFilesForUsers).toHaveBeenCalledWith(holders, ['mine']);
+    expect(cleanup.pullFileReferences).toHaveBeenCalledWith(['mine'], { userIds: holders });
+  });
+
+  it('unlinks nothing when the delete transaction rolls back', async () => {
+    vi.mocked(FabFile.deleteMany).mockRejectedValueOnce(new Error('write conflict'));
+
+    await expect(run()).rejects.toThrow('write conflict');
+
+    expect(cleanup.pullKnowledgeIdsForUsers).not.toHaveBeenCalled();
+    expect(cleanup.pullSystemFilesForUsers).not.toHaveBeenCalled();
+    expect(cleanup.pullFileReferences).not.toHaveBeenCalled();
+  });
+
+  it('keeps unlinking system files and projects when the session unlink fails', async () => {
+    cleanup.pullKnowledgeIdsForUsers.mockRejectedValueOnce(new Error('write failed'));
+
+    await run();
+
     expect(cleanup.pullSystemFilesForUsers).toHaveBeenCalledWith([CALLER], ['mine']);
     expect(cleanup.pullFileReferences).toHaveBeenCalledWith(['mine'], { userIds: [CALLER] });
   });

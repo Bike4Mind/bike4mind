@@ -51,8 +51,8 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
 
     // Per owner: a batch can span personal files and files owned by an org.
     const refunds: Array<{ owner: StorageOwner; bytes: number }> = [];
-    const cleanupFileIds = new Set<string>();
-    const cleanupUserIds = new Set<string>();
+    // Only from deletes whose transaction COMMITTED - see the merge after withTransaction below.
+    const committedReferences: fabFilesService.DeletedFileReferences[] = [];
     // Collected across the whole batch and recomputed once at the end, so deleting N files out of
     // one lake costs one aggregation rather than N identical ones.
     const deletedFileTagNames: (string | undefined)[] = [];
@@ -80,7 +80,9 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
           }
         }
 
-        await withTransaction(async session => {
+        // Returned out of the callback, so only an attempt that COMMITTED yields references: a
+        // rolled-back or retried attempt's must never be pruned - the file is still live.
+        const attemptReferences = await withTransaction(async session => {
           const result = await fabFilesService.deleteFabFile(
             userId,
             { id: fileId },
@@ -89,7 +91,6 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
                 fabFiles: fabFileRepository,
                 users: userRepository,
                 sessions: sessionRepository,
-                projects: projectRepository,
                 fabFileChunks: fabFileChunkRepository,
                 dataLakes: dataLakeRepository,
                 ...lakeMembershipAuditDb,
@@ -102,10 +103,6 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
               searchIndex: selfHostOpenSearchEnabled() ? FabFileChunkSearchIndex : undefined,
               logger: req.logger,
               auditPrincipal: lakeConfigAuditPrincipal(req.user, req.apiKeyInfo),
-              deferReferenceCleanup: references => {
-                references.fileIds.forEach(id => cleanupFileIds.add(id));
-                references.userIds.forEach(id => cleanupUserIds.add(id));
-              },
             }
           );
 
@@ -131,7 +128,9 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
           } else if (fabFilesService.toPublicDeleteAction(result.action) === 'not_found') {
             results.notFound.push(fileId);
           }
+          return result.references;
         });
+        if (attemptReferences) committedReferences.push(attemptReferences);
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
         req.logger.error('Error deleting file in bulk operation:', {
@@ -141,13 +140,12 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
       }
     }
 
-    // One system-file/project unlink for the whole batch, over the union of every deleted file's
-    // owner and direct-share recipients (see deleteFabFile's deferReferenceCleanup).
-    // Best-effort like the helper itself: the files are already deleted, so nothing here may
-    // change the response.
+    // One system-file/project unlink for the whole batch, after every transaction has resolved and
+    // outside all of them (see cleanUpDeletedFileReferences). Best-effort: the files are already
+    // deleted, so nothing here may change the response.
     try {
       await fabFilesService.cleanUpDeletedFileReferences(
-        { fileIds: [...cleanupFileIds], userIds: [...cleanupUserIds] },
+        fabFilesService.mergeDeletedFileReferences(committedReferences),
         { users: userRepository, projects: projectRepository },
         req.logger
       );

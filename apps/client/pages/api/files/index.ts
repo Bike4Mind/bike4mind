@@ -84,17 +84,18 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
 
       // Published files are snapshots that outlive the file, so take them down first: a retry after
       // a failed delete still finds the files and finishes the job.
-      const ownedFiles = await FabFile.find(ownedFilter).select('_id userId users.userId').lean();
-      const fabFileIds = ownedFiles.map(f => String(f._id));
+      const fabFileIds = (await FabFile.find(ownedFilter).select('_id').lean()).map(f => String(f._id));
       await unpublishUserArtifactsBySource(userId, { kind: 'fabfile', fabFileIds }, { logger: req.logger });
 
-      await withTransaction(async session => {
+      // The files this transaction actually deleted, returned out of it so a rolled-back attempt
+      // never drives the reference cleanup below.
+      const deleted = await withTransaction(async session => {
         try {
           // sessionId feeds deleteStoredObjects' fork guard: without it the file's own notebook reads as another's.
           const files = await FabFile.find(ownedFilter)
             .select(
               'filePath versions moderationStatus blockReason sourceMetadata.generatedCopyKey sourceMetadata.sessionId ' +
-                'organizationId fileSize storageChargedAt status createdAt'
+                'organizationId fileSize storageChargedAt status createdAt userId users.userId'
             )
             .session(session);
           const user = await User.findById(userId).session(session);
@@ -151,6 +152,7 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
             },
             { session, ability: req.ability }
           );
+          return files.map(file => ({ id: String(file._id), userId: file.userId, users: file.users }));
         } catch (error) {
           req.logger.error('Transaction error in DELETE /api/files:', {
             error,
@@ -161,22 +163,23 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
       });
 
       // Every one of these files is gone for everyone now, so drop the references that would
-      // otherwise keep re-attaching them - the same unlink a single delete does (deleteFabFile).
-      // After the commit and best-effort: the files are deleted either way. System files and
-      // projects are cleaned for the owner and direct-share recipients only; group- or lake-held
-      // references are left to the turn-time scrub.
-      if (fabFileIds.length > 0) {
+      // otherwise keep re-attaching them - the same unlink a single delete leaves to its caller
+      // (deleteFabFile). After the commit, outside its session, and best-effort: the files are
+      // deleted either way. Only the owner's and direct-share recipients' own sessions, system files
+      // and projects are cleaned; group- or lake-held references are left to the turn-time scrub.
+      if (deleted.length > 0) {
         try {
-          await sessionRepository.pullKnowledgeIds(fabFileIds);
-        } catch (error) {
-          req.logger.warn('DELETE /api/files: failed to unlink references to deleted files', { error, userId });
-        }
-        try {
-          const userIds = Array.from(
-            new Set([userId, ...ownedFiles.flatMap(file => fabFilesService.referenceHolderIds(file))])
+          const deletedIds = deleted.map(file => file.id);
+          const holders = Array.from(
+            new Set([userId, ...deleted.flatMap(file => fabFilesService.referenceHolderIds(file))])
           );
+          try {
+            await sessionRepository.pullKnowledgeIdsForUsers(holders, deletedIds);
+          } catch (error) {
+            req.logger.warn('DELETE /api/files: failed to unlink sessions from deleted files', { error, userId });
+          }
           await fabFilesService.cleanUpDeletedFileReferences(
-            { fileIds: fabFileIds, userIds },
+            { fileIds: deletedIds, systemFileUserIds: holders, projectUserIds: holders },
             { users: userRepository, projects: projectRepository },
             req.logger
           );
