@@ -72,7 +72,13 @@ export function isTransientTransactionError(error: unknown): boolean {
   return transientCodes.includes(mongoError.code ?? -1);
 }
 
-const CONNECTION_LOST_ERROR_NAMES = ['MongoNetworkError', 'MongoNetworkTimeoutError', 'MongoServerSelectionError'];
+// MongoPoolClearedError subclasses MongoNetworkError but carries its own name, so it is listed too.
+const CONNECTION_LOST_ERROR_NAMES = [
+  'MongoNetworkError',
+  'MongoNetworkTimeoutError',
+  'MongoPoolClearedError',
+  'MongoServerSelectionError',
+];
 
 /**
  * True when the operation failed because the client had no usable server, not because the server

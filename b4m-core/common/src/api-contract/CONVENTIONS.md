@@ -162,6 +162,7 @@ re-deciding per endpoint:
 | Organization per-file storage ceiling exceeded | `400` | `org_storage_limit_exceeded` |
 | Per-file size cap exceeded | `400` | `file_too_large` |
 | Rate limit exceeded | `429` | - |
+| Database unreachable while authenticating the credential | `503` | - (`Retry-After`; the credential was not judged, so retry rather than re-prompt for a key) |
 | A blocking request ran past its server-side deadline (the work is ended, not left running) | `504` | `request_timeout` |
 | Generated payload exceeds the platform ceiling, raw-bytes response | `303` | - (`Location` is a signed URL for the payload) |
 | Generated payload exceeds the platform ceiling and could not be offloaded | `413` | - |
