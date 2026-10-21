@@ -158,7 +158,7 @@ describe('VideoGenerationService.process (partial quest writes)', () => {
     vi.mocked(getAvailableModels).mockResolvedValue([{ id: VideoModels.SORA_2 } as unknown as ModelInfo]);
   });
 
-  it('reads the credit gate off the process cache so an admin toggle applies on the next run', async () => {
+  it('passes skipCache for the credit gate so an admin toggle applies on the next run', async () => {
     generateSpy.mockResolvedValue(['https://example.invalid/video.mp4']);
     vi.mocked(getSettingsMap).mockClear();
 

@@ -998,8 +998,8 @@ describe('ImageGenerationService.process (size normalization)', () => {
     const validateUserCredits = vi
       .spyOn(service as any, 'validateUserCredits')
       .mockResolvedValue({ requiredCredits: 0, usdCost: 0 });
-    // Twice: process() reads the settings map once for the credit gate and once for moderation.
-    vi.mocked(getSettingsMap).mockResolvedValueOnce({ enforceCredits: 'true' }).mockResolvedValueOnce({});
+    // One fresh map per request carries both the credit gate and moderation.
+    vi.mocked(getSettingsMap).mockResolvedValueOnce({ enforceCredits: 'true' });
 
     await service.process({
       body: {
@@ -1019,16 +1019,13 @@ describe('ImageGenerationService.process (size normalization)', () => {
     };
   };
 
-  it('reads both gates off the process cache so an admin toggle applies on the next image', async () => {
+  it('passes skipCache once per image so an admin toggle applies on the next image', async () => {
     vi.mocked(getSettingsMap).mockClear();
 
     await generateWith(ImageModels.GPT_IMAGE_2, ModelBackend.OpenAI);
 
-    // One read for the credit gate, one for moderation - both fresh.
-    expect(vi.mocked(getSettingsMap).mock.calls.map(([, options]) => options)).toEqual([
-      { skipCache: true },
-      { skipCache: true },
-    ]);
+    // One fresh map per request, shared by the credit gate and moderation.
+    expect(vi.mocked(getSettingsMap).mock.calls.map(([, options]) => options)).toEqual([{ skipCache: true }]);
   });
 
   it.each([
@@ -1190,8 +1187,8 @@ describe('ImageGenerationService quest partial writes', () => {
       service as unknown as { validateUserCredits: () => Promise<unknown> },
       'validateUserCredits'
     ).mockResolvedValue({ requiredCredits: 7, usdCost: 0 });
-    // process() reads the settings map once for the credit gate and once for moderation.
-    vi.mocked(getSettingsMap).mockResolvedValueOnce({ enforceCredits: 'true' }).mockResolvedValueOnce({});
+    // One fresh map per request carries both the credit gate and moderation.
+    vi.mocked(getSettingsMap).mockResolvedValueOnce({ enforceCredits: 'true' });
   };
 
   // Drops any queued enforceCredits value that process() did not consume, so it cannot leak.

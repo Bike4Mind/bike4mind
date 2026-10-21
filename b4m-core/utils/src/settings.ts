@@ -131,7 +131,8 @@ export async function getSettingsMap(
   // Bypasses the per-process cache, which only invalidates locally: an admin write made in
   // another process is otherwise invisible here until this process recycles. Reserve it for a
   // billing/security flag that must reflect that write on the next request/turn; it costs one
-  // indexed read per call, so never call it per chunk or loop iteration.
+  // read per call - `findBySettingNames` (indexed) when `names` is given, a full `findAll`
+  // otherwise - so never call it per chunk or loop iteration.
   if (options?.skipCache) {
     const settings = options?.names
       ? await db.adminSettings.findBySettingNames(options.names)

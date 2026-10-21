@@ -227,7 +227,7 @@ describe('/api/otc/verify — enumeration resistance', () => {
     expect(body.password).toBeUndefined();
   });
 
-  it('reads enforceMFA off the process cache so a security flip applies on the next login', async () => {
+  it('passes skipCache for enforceMFA so a security flip applies on the next login', async () => {
     mockJwtVerify.mockReturnValue(validToken());
     mockVerifyPendingOTC.mockResolvedValue(true);
     mockFindByEmail.mockResolvedValue({

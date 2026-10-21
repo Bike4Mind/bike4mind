@@ -114,7 +114,7 @@ describe('executeCompletion - admin settings are read fresh', () => {
     expect(mockSubtractCredits).not.toHaveBeenCalled();
   });
 
-  it('reads only enforceCredits, in one query, off the cache', async () => {
+  it('passes skipCache for enforceCredits only, in one query', async () => {
     const adminSettings = buildSettingsStore('true');
     const { db } = buildDb(adminSettings);
 

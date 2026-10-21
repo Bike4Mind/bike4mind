@@ -197,18 +197,18 @@ describe('ImageEditService.process model dispatch', () => {
     vi.mocked(getAvailableModels).mockResolvedValue([]);
   });
 
-  it('reads every settings map off the process cache so an admin toggle applies on the next edit', async () => {
+  it('passes skipCache once per edit so an admin toggle applies on the next edit', async () => {
     vi.mocked(getSettingsMap).mockClear();
 
     try {
       await run(ImageModels.GPT_IMAGE_2);
     } catch {
-      // The beforeEach edit spy rejects to stop after dispatch; the reads happened before that.
+      // The beforeEach edit spy rejects to stop after dispatch; the read happened before that.
     }
 
     const calls = vi.mocked(getSettingsMap).mock.calls;
-    expect(calls.length).toBeGreaterThan(0);
-    expect(calls.every(([, options]) => options?.skipCache === true)).toBe(true);
+    expect(calls.length).toBe(1);
+    expect(calls[0][1]).toEqual({ skipCache: true });
   });
 
   it('sends the selected BFL model to BFL instead of a hardcoded one', async () => {

@@ -445,7 +445,8 @@ export class ImageEditService {
     ]);
     if (!user) throw new NotFoundError('User not found');
 
-    // skipCache: enforceCredits gates money, and this host may outlive the admin's write to it.
+    // skipCache: enforceCredits gates money (and ModerationEnabled below gates content safety),
+    // and this host may outlive the admin's write to either.
     const settings = await getSettingsMap(this.db, { skipCache: true });
     const adminSettingsEnforceCredits = getSettingsValue('enforceCredits', settings);
 
@@ -575,9 +576,6 @@ export class ImageEditService {
         quest: parseQuestToStreamPayload(quest),
         statusMessage: 'Preparing to paint...',
       });
-
-      // skipCache: content safety must follow an admin toggle on the next request, not a TTL.
-      const settings = await getSettingsMap(this.db, { skipCache: true });
 
       if (getSettingsValue('ModerationEnabled', settings)) {
         await clientMessageSender.sendToClient(userId, wsEndpoint, {

@@ -153,7 +153,7 @@ beforeEach(() => {
 });
 
 describe('POST /api/ai/music', () => {
-  it('reads enforceCredits off the process cache so an admin flip applies on the next request', async () => {
+  it('passes skipCache for enforceCredits so an admin flip applies on the next request', async () => {
     getSettingsValue.mockReturnValue(true);
     estimateMusicCredits.mockReturnValue({ requiredCredits: 150, usdCost: 0.075, billedSeconds: 30 });
 
