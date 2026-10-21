@@ -230,13 +230,6 @@ export function markHistoryCacheAnchor(messages: IMessage[], lastHistoryMessage:
 }
 
 /**
- * Sources billed on every normal turn, and therefore inventoried even when a gate excluded them:
- * buildAlwaysOnFloorDetails emits a row for each regardless (wasIncluded false,
- * exclusionReason 'disabled'), so anything else itemizing the stack has to do the same or the two
- * lists cannot be joined. Their rows come from that helper rather than from toPromptDetails, which
- * only sees sources that contributed a message.
- */
-/**
  * Sources we author ourselves (origin `hardcoded`/`admin`) whose text still varies by caller, so
  * they can never sit in the shareable prefix. `origin` answers who wrote the text, not who shares
  * it, which is why this is listed separately rather than inferred.
@@ -248,6 +241,13 @@ export const PER_CALLER_AUTHORED_SOURCES: PromptSourceId[] = [
   'recentImages',
 ];
 
+/**
+ * Sources billed on every normal turn, and therefore inventoried even when a gate excluded them:
+ * buildAlwaysOnFloorDetails emits a row for each regardless (wasIncluded false,
+ * exclusionReason 'disabled'), so anything else itemizing the stack has to do the same or the two
+ * lists cannot be joined. Their rows come from that helper rather than from toPromptDetails, which
+ * only sees sources that contributed a message.
+ */
 export const ALWAYS_ON_FLOOR_SOURCES: PromptSourceId[] = ['artifactEmission', 'helpCenter'];
 
 export interface TaggedSystemMessage {
