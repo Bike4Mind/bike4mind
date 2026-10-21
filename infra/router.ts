@@ -4,6 +4,7 @@
 // scope — it would be undefined at that point.
 import { wafWebAcl } from './waf';
 import { allowsUsercontentRequest } from '../packages/server-utils/src/utils/usercontentRequest';
+import { minifyRouterFunction } from './routerFunctionCode';
 
 // const isPermanentStage = ['production', 'dev'].includes($app.stage);
 
@@ -188,6 +189,13 @@ const devCorsInjection = `
   event.response.headers["access-control-allow-methods"] = { value: "GET, HEAD, OPTIONS, POST, PUT" };
   event.response.headers["access-control-allow-headers"] = { value: "*" };
 `;
+
+// SST leaves parts of its generated routing function unminified. With the boundary gates,
+// that exceeds CloudFront's 10 KB limit. Transform only this Router's generated request code.
+$transform(aws.cloudfront.Function, (args, _opts, name) => {
+  if (name !== 'RouterCloudfrontFunctionRequest') return;
+  args.code = $output(args.code).apply(minifyRouterFunction);
+});
 
 const routerInstance = shouldUseSharedRouter
   ? sst.aws.Router.get('Router', process.env.DEV_ROUTER_DISTRIBUTION_ID!)
