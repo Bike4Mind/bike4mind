@@ -16,6 +16,8 @@ const { mocks } = vi.hoisted(() => {
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
+  organizationRepository: {},
+  creditTransactionRepository: {},
   userRepository: { findById: (...a: unknown[]) => mocks.findById(...a) },
   organizationRepository: { findById: (...a: unknown[]) => mocks.orgFindById(...a) },
 }));

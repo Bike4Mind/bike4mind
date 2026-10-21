@@ -1,5 +1,12 @@
 import { usdToCredits } from '@bike4mind/utils';
-import { assertPreflightCredits, InsufficientCreditsPreflightError } from '@server/utils/creditPreflight';
+import type { ILogger } from '@bike4mind/observability';
+import type { IUserDocument } from '@bike4mind/common';
+import {
+  assertPreflightCredits,
+  holdPreflightCredits,
+  InsufficientCreditsPreflightError,
+  type PreflightCreditHold,
+} from '@server/utils/creditPreflight';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 // File size is used as a proxy for duration since the actual duration is not
@@ -38,6 +45,26 @@ export function estimateTranscriptionCost(contentLength: number, usdPerMinute: n
 export async function assertTranscriptionCredits(userId: string, estimatedCredits: number): Promise<void> {
   try {
     await assertPreflightCredits({ userId, estimatedCredits, featureLabel: 'transcription' });
+  } catch (error) {
+    if (error instanceof InsufficientCreditsPreflightError) throw new BadRequestError(error.message);
+    throw error;
+  }
+}
+
+// The holding twin of assertTranscriptionCredits, run right before the provider call. Transcription
+// has no organization pool, so the reservation bills the user.
+export async function holdTranscriptionCredits(
+  user: IUserDocument,
+  estimatedCredits: number,
+  logger: ILogger
+): Promise<PreflightCreditHold> {
+  try {
+    return await holdPreflightCredits({
+      req: { user, logger },
+      requiredCredits: estimatedCredits,
+      featureLabel: 'transcription',
+      billingOrganizationId: null,
+    });
   } catch (error) {
     if (error instanceof InsufficientCreditsPreflightError) throw new BadRequestError(error.message);
     throw error;

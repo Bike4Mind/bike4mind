@@ -206,3 +206,11 @@ describe('synthesizeTts', () => {
     );
   });
 });
+
+it('never attempts an alternate excluded from the held candidate snapshot', async () => {
+  const fault = new TtsProviderNotConfiguredError('primary key missing');
+  mocks.resolveTtsProvider.mockRejectedValueOnce(fault);
+  await expect(run({ candidates: ['openai'] })).rejects.toBe(fault);
+  expect(mocks.resolveTtsProvider).toHaveBeenCalledTimes(1);
+  expect(mocks.aiVoiceService).not.toHaveBeenCalled();
+});
