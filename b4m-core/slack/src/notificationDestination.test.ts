@@ -64,12 +64,18 @@ describe('notification destination authorization', () => {
 
   it('refuses a channel when membership is absent', async () => {
     members.mockResolvedValue({ ok: true, members: ['UOTHER'] });
-    await expect(resolveNotificationDestination('owner', 'C123')).rejects.toThrow(/member/);
+    await expect(resolveNotificationDestination('owner', 'C456')).rejects.toThrow(/member/);
   });
 
   it('fails closed when Slack cannot verify membership', async () => {
     members.mockRejectedValue(new Error('missing_scope'));
-    await expect(resolveNotificationDestination('owner', 'C123')).rejects.toThrow('missing_scope');
+    await expect(resolveNotificationDestination('owner', 'C789')).rejects.toThrow('missing_scope');
+  });
+
+  it('reuses a positive membership result instead of paging the member list again', async () => {
+    expect((await resolveNotificationDestination('owner', 'C777')).channel).toBe('C777');
+    expect((await resolveNotificationDestination('owner', 'C777')).channel).toBe('C777');
+    expect(members).toHaveBeenCalledTimes(1);
   });
 
   it('cannot repoint a DM to another member', async () => {
