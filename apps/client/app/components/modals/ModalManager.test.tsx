@@ -89,8 +89,7 @@ describe('ModalManager whats-new auto-trigger', () => {
     expect(mocks.triggerModalByTag).toHaveBeenCalledTimes(1);
   });
 
-  it('does not auto-trigger for a brand-new account', () => {
-    mocks.createdAt = new Date();
+  it('does not auto-trigger during a first signup session', () => {
     markFirstSignupSession('user-1');
     render(<ModalManager />);
     expect(mocks.triggerModalByTag).not.toHaveBeenCalled();
@@ -120,7 +119,6 @@ describe('ModalManager new-account suppression', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-10-20T04:00:00Z'));
-    mocks.createdAt = new Date();
     mocks.modals.data = [announcement(), announcement(true)];
     mocks.modals.isPending = false;
     mocks.modals.slidesPending = false;

@@ -89,9 +89,8 @@ describe('ModalTriggerContext whats-new trigger source', () => {
     expect(sliderAuto()).toBe('false');
   });
 
-  it('suppresses visibility auto-triggers throughout a new-account visit', async () => {
+  it('suppresses visibility auto-triggers throughout a first signup session', async () => {
     vi.useFakeTimers();
-    mocks.createdAt = new Date();
     markFirstSignupSession('user-1');
     renderProvider();
     localStorage.setItem('tab_last_hidden_at', String(Date.now()));
