@@ -1,11 +1,13 @@
 import { z } from 'zod';
+import { ApiKeyScope } from '@bike4mind/common';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { mapApiError, type B4mApiClient } from './b4mApiClient.js';
 import { errorResult, toResult } from './tools.js';
 import { logger } from '../utils/Logger.js';
 
-/** Both scopes the route requires; named in a 403 so callers know what to grant. */
-const SOLVER_SCOPES = 'optihashi:read and optihashi:compute';
+/** Both scopes the tools need; named in a 403 so callers know what to grant. */
+const REQUIRED_SCOPES = [ApiKeyScope.OPTIHASHI_READ, ApiKeyScope.OPTIHASHI_COMPUTE];
+const SOLVER_SCOPES = REQUIRED_SCOPES.join(' and ');
 
 /**
  * The route's GET answer, trusted only as far as the tool schemas need. Everything beyond these
@@ -68,7 +70,14 @@ function solveInputShape(catalog: SolverCatalog) {
 export async function registerSolverTools(server: McpServer, client: B4mApiClient): Promise<void> {
   let catalog: SolverCatalog;
   try {
-    catalog = catalogSchema.parse(await client.getSolverCatalog());
+    // Concurrent so the pair shares one startup budget. The route itself accepts either scope, so the
+    // key's own scopes are checked here: an API key holding only one is never offered the tools.
+    const [rawCatalog, scopes] = await Promise.all([client.getSolverCatalog(), client.getOwnKeyScopes()]);
+    if (scopes && !REQUIRED_SCOPES.every(scope => scopes.includes(scope))) {
+      logger.debug(`mcp: solver tools not offered: key lacks ${SOLVER_SCOPES}`);
+      return;
+    }
+    catalog = catalogSchema.parse(rawCatalog);
   } catch (err) {
     logger.debug(`mcp: solver tools not offered: ${mapApiError(err, client.baseURL, SOLVER_SCOPES)}`);
     return;
