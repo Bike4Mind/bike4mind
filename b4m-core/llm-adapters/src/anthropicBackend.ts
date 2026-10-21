@@ -24,6 +24,8 @@ import {
   type ToolSearchServerTool,
   type TurnUsage,
 } from '@bike4mind/common';
+import { federatedAnthropicCredentials } from './anthropicFederation';
+import { selectedWifTokenSource } from './wifTokenSource';
 import { executeToolsBatch, shouldEndTurnAfterTools } from './executeToolsBatch';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import {
@@ -123,7 +125,8 @@ const TEMPERATURE_ONLY_MODELS = [
  * Key-table value meaning "authenticate through Anthropic workload identity federation": the
  * client is built with no key, so the SDK resolves ANTHROPIC_FEDERATION_RULE_ID,
  * ANTHROPIC_ORGANIZATION_ID and ANTHROPIC_IDENTITY_TOKEN_FILE from the environment. An
- * ANTHROPIC_API_KEY left in the environment still wins, so CI must not set both.
+ * ANTHROPIC_API_KEY left in the environment still wins, so CI must not set both. With
+ * PROVIDER_WIF_TOKEN_SOURCE=aws-sts the credentials come from federatedAnthropicCredentials instead.
  */
 export const ANTHROPIC_FEDERATED_KEY = 'federated';
 
@@ -254,8 +257,12 @@ export class AnthropicBackend implements ICompletionBackend {
       }
       throw new TypeError('terminated');
     };
+    const federated = apiKey === ANTHROPIC_FEDERATED_KEY;
     this._api = new Anthropic({
-      apiKey: apiKey === ANTHROPIC_FEDERATED_KEY ? undefined : apiKey,
+      // null, not undefined, so an ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN in the env cannot win.
+      ...(federated && selectedWifTokenSource() === 'aws-sts'
+        ? { apiKey: null, authToken: null, credentials: federatedAnthropicCredentials() }
+        : { apiKey: federated ? undefined : apiKey }),
       maxRetries: 5,
       fetch: retryFetch,
     });

@@ -579,6 +579,7 @@ export * from './dispatchResolver';
 export * from './endUserId';
 export * from './mergeCatalog';
 export * from './routeTwinNames';
+export * from './wifTokenSource';
 
 // Implementations:
 export * from './anthropicBackend';
