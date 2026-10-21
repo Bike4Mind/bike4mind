@@ -412,10 +412,9 @@ describe('researchDataService - remove', () => {
 
     await remove(mockUserId, params, adapters);
 
-    expect(cleanUpDeletedFileReferences).toHaveBeenCalledWith(
-      references,
-      { users: adapters.db.users, projects: undefined },
-      undefined
-    );
+    expect(cleanUpDeletedFileReferences).toHaveBeenCalledWith(references, {
+      users: adapters.db.users,
+      projects: undefined,
+    });
   });
 });

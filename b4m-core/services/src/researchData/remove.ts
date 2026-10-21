@@ -58,10 +58,11 @@ export const remove = async (
     await adjustOwnerStorage(adapters.db, storageOwnerOf(result.fabFile), -chargedBytes(result.fabFile));
   }
   if (result.references) {
-    await cleanUpDeletedFileReferences(
-      result.references,
-      { users: adapters.db.users, projects: adapters.db.projects },
-      adapters.logger
-    );
+    // No logger: this adapter's logger is the narrower LakeConfigAuditLogger, and the unlink only
+    // logs its own failures.
+    await cleanUpDeletedFileReferences(result.references, {
+      users: adapters.db.users,
+      projects: adapters.db.projects,
+    });
   }
 };
