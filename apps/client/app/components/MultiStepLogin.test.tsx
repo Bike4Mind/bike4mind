@@ -569,9 +569,10 @@ describe('MultiStepLogin - passwordless email step copy', () => {
     // the key proves the email step still renders auth.signInOrCreate; the value is checked below.
     expect(screen.getByText('auth.signInOrCreate')).toBeInTheDocument();
 
-    // The copy behind that key names the emailed code and claims no password.
+    // The copy behind that key names the emailed code and says no password is needed.
     expect(en.auth.signInOrCreate).toMatch(/one-time code/i);
-    expect(en.auth.signInOrCreate).not.toMatch(/password|forgot/i);
+    expect(en.auth.signInOrCreate).toMatch(/no password required/i);
+    expect(en.auth.signInOrCreate).not.toMatch(/forgot/i);
 
     // The email step exposes no password field and no forgot-password link.
     expect(document.querySelector('input[type="password"]')).toBeNull();
@@ -593,13 +594,6 @@ describe('MultiStepLogin - email step guidance and code-request errors', () => {
     }) as unknown as typeof fetch;
   });
 
-  it('tells returning users sign-in is passwordless and a code is emailed', () => {
-    renderLogin();
-
-    expect(screen.getByTestId('login-passwordless-hint')).toHaveTextContent('auth.passwordlessHint');
-    expect(screen.getByTestId('login-no-password-hint')).toHaveTextContent('auth.noPasswordNeeded');
-  });
-
   it('ties an invalid-email error to the input and announces it', async () => {
     const user = userEvent.setup();
     renderLogin();
@@ -613,6 +607,20 @@ describe('MultiStepLogin - email step guidance and code-request errors', () => {
     expect(alert).toHaveTextContent('auth.fieldErrors.invalidEmail');
     expect(input).toHaveAttribute('aria-invalid', 'true');
     expect(input.getAttribute('aria-describedby')).toContain(alert.id);
+  });
+
+  it('clears the email error once the user types again', async () => {
+    const user = userEvent.setup();
+    renderLogin();
+
+    const input = textboxIn('login-email-input');
+    await user.type(input, 'not-an-email');
+    fireEvent.submit(input.closest('form')!);
+    await screen.findByTestId('login-email-error');
+
+    await user.type(input, 'x');
+    expect(screen.queryByTestId('login-email-error')).not.toBeInTheDocument();
+    expect(input).toHaveAttribute('aria-invalid', 'false');
   });
 
   it('shows an alert and a Continue countdown when the code request is rate limited', async () => {

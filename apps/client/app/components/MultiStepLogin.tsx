@@ -541,7 +541,8 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
           {currentStep === 'email' && (
             <Typography
               className="login-subtitle"
-              sx={{ color: 'text.tertiary', fontSize: '14px', mt: '4px', textAlign: 'center' }}
+              // Same 420px as the email form below, so the copy wraps to the form's width.
+              sx={{ color: 'text.tertiary', fontSize: '14px', mt: '4px', textAlign: 'center', maxWidth: '420px' }}
             >
               {t('auth.signInOrCreate')}
             </Typography>
@@ -695,7 +696,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                   required
                   id="email"
                   error={!!emailError}
-                  sx={{ width: '100%', maxWidth: '700px', margin: '0 auto 16px' }}
+                  sx={{ width: '100%', maxWidth: '700px', margin: '0 auto 4px' }}
                 >
                   <FormLabel sx={visuallyHidden}>Email</FormLabel>
                   <Input
@@ -726,15 +727,30 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                     autoFocus
                     disabled={isCheckingStrategy || isSendingOTC}
                     slotProps={{ input: { 'aria-invalid': !!emailError } }}
-                    sx={{ ...inputStyles, '--Input-minHeight': '40px' }}
+                    sx={{
+                      ...inputStyles,
+                      '--Input-minHeight': '40px',
+                      // globals.css paints every focused input's border primary with !important; keep the
+                      // error's red while the user is still in the field.
+                      ...(emailError && {
+                        '&&:focus-within': {
+                          borderColor: theme => `${theme.vars.palette.danger.outlinedBorder} !important`,
+                        },
+                      }),
+                    }}
                   />
-                  {emailError ? (
-                    <FormHelperText role="alert" data-testid="login-email-error" sx={{ color: 'danger.plainColor' }}>
-                      {emailError}
-                    </FormHelperText>
-                  ) : (
-                    <FormHelperText data-testid="login-passwordless-hint">{t('auth.passwordlessHint')}</FormHelperText>
-                  )}
+                  {/* A fixed slot so the error opens under the field without pushing the button down. */}
+                  <Box sx={{ minHeight: '26px' }}>
+                    {emailError && (
+                      <FormHelperText
+                        role="alert"
+                        data-testid="login-email-error"
+                        sx={{ mt: '2px', color: 'danger.plainColor' }}
+                      >
+                        {emailError}
+                      </FormHelperText>
+                    )}
+                  </Box>
                 </FormControl>
                 <Button
                   className="continue-button"
@@ -762,13 +778,6 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                   capped={rateLimit.capped}
                   testId="login-rate-limit-alert"
                 />
-                <Typography
-                  data-testid="login-no-password-hint"
-                  level="body-xs"
-                  sx={{ mt: 1.5, textAlign: 'center', color: 'text.tertiary' }}
-                >
-                  {t('auth.noPasswordNeeded')}
-                </Typography>
 
                 {enableRegister && (
                   <Box
