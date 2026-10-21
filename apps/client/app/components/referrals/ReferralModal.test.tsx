@@ -5,7 +5,11 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { getThemeConfig } from '@client/app/utils/themes';
 
-const { submitReferral, refreshUser } = vi.hoisted(() => ({ submitReferral: vi.fn(), refreshUser: vi.fn() }));
+const { submitReferral, submitUserInvitation, refreshUser } = vi.hoisted(() => ({
+  submitReferral: vi.fn(),
+  submitUserInvitation: vi.fn(),
+  refreshUser: vi.fn(),
+}));
 vi.mock('@client/app/contexts/UserContext', async () => {
   const { create } = await import('zustand');
   return {
@@ -21,7 +25,7 @@ vi.mock('@client/app/utils/regInviteAPICalls', () => ({
   createRegInvites: vi.fn(),
   deleteRegInvites: vi.fn(),
   getRegInvitesFromServer: vi.fn(),
-  submitUserInvitation: vi.fn(),
+  submitUserInvitation,
   updateRegInvites: vi.fn(),
 }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
@@ -29,15 +33,15 @@ vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 import { useUser } from '@client/app/contexts/UserContext';
 import { toast } from 'sonner';
-import { ReferralModal, useReferralModal } from './ReferralModal';
+import { ReferralInviteType, ReferralModal, useReferralModal } from './ReferralModal';
 const theme = extendTheme({ ...getThemeConfig() });
 
-const renderModal = () => {
+const renderModal = (inviteType?: ReferralInviteType) => {
   const queryClient = new QueryClient();
   render(
     <QueryClientProvider client={queryClient}>
       <CssVarsProvider theme={theme}>
-        <ReferralModal />
+        <ReferralModal inviteType={inviteType} />
       </CssVarsProvider>
     </QueryClientProvider>
   );
@@ -86,6 +90,22 @@ it('adopts the refreshed quota after a send instead of decrementing it locally',
     refresh.resolve();
   });
   act(() => useReferralModal.getState().open());
+  await waitFor(() => expect(screen.getByTestId('referral-quota-count')).toHaveTextContent('0'));
+  expect(screen.getByTestId('referral-submit-button')).toBeDisabled();
+  queryClient.clear();
+});
+
+it('decrements the local quota in userInvitation mode without going below zero', async () => {
+  submitUserInvitation.mockResolvedValue({ message: 'invited' });
+  useUser.setState({ currentUser: { id: 'sender', name: 'Sender', numReferralsAvailable: 1 } });
+  useReferralModal.setState({ isOpen: true });
+  const queryClient = renderModal(ReferralInviteType.userInvitation);
+  await waitFor(() => expect(screen.getByTestId('referral-quota-count')).toHaveTextContent('1'));
+  fireEvent.change(screen.getByTestId('referral-email-input'), { target: { value: 'a@example.com, b@example.com' } });
+  fireEvent.click(screen.getByTestId('referral-submit-button'));
+  await waitFor(() => expect(useReferralModal.getState().isOpen).toBe(false));
+  act(() => useReferralModal.getState().open());
+  // Two invites against one slot clamps at zero rather than showing a negative count.
   await waitFor(() => expect(screen.getByTestId('referral-quota-count')).toHaveTextContent('0'));
   expect(screen.getByTestId('referral-submit-button')).toBeDisabled();
   queryClient.clear();

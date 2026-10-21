@@ -225,6 +225,14 @@ describe('/api/reg-invites/refer - quota reservation', () => {
     expect(res._getJSONData()).toMatchObject({ sent: [], failed: ['friend@example.com'] });
   });
 
+  it('refunds a failure to mint the invite', async () => {
+    vi.mocked(createRegInvite).mockRejectedValueOnce(new Error('mint failed'));
+    const { req, res } = makeReqRes({ id: 'user-1', emailVerified: true });
+    await invokeHandler(req, res);
+    expect(mockSettleReferrals).toHaveBeenCalledWith('user-1', 1, []);
+    expect(res._getJSONData()).toMatchObject({ sent: [], failed: ['friend@example.com'] });
+  });
+
   it('retains quota and reports an async email failure as failed instead of erroring', async () => {
     vi.mocked(getSettingsValue).mockImplementation(key => key === 'EnableReferralToEmail');
     mockEmailPublish.mockRejectedValueOnce(new Error('publish failed'));
