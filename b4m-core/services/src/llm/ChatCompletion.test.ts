@@ -10502,6 +10502,25 @@ describe('ChatCompletionProcess', () => {
       expect(turnTiming.totalMs).toBeLessThan(tenMinutesMs);
     });
 
+    it('drops the partial turnTiming from the DB when a feature takes over the turn', async () => {
+      setupStreamIdleTimeoutMocks();
+      const complete = vi.fn();
+      mockedGetLlmByModel.mockReturnValue({
+        complete,
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      service.features.set('takeover', {
+        beforeDataGathering: async () => ({ shouldContinue: false }),
+      } as any);
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await runWithFakeTimers(service.process({ body, logger: mockLogger }));
+
+      expect(complete).not.toHaveBeenCalled();
+      expect(mockDb.quests.update).toHaveBeenCalledWith({ id: mockQuest.id }, { unset: ['turnTiming'] });
+    });
+
     it('records a model fallback as a hop plus a zero-delay retry on the failed model', async () => {
       setupStreamIdleTimeoutMocks();
       mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };

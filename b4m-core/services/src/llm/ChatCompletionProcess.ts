@@ -2672,8 +2672,12 @@ export class ChatCompletionProcess {
         logger.log(`✅ Feature '${takeoverFeature.name}' has taken over processing`);
         // The feature finishes the turn outside this flow, so this partial record (no total, only
         // the queue wait) would render as "still running" on a reply it never tracked. Drop it
-        // rather than have the Answer diagnosis claim coverage the turn did not get.
+        // rather than have the Answer diagnosis claim coverage the turn did not get. The setup save
+        // already persisted it, and a `$set` of `undefined` is dropped, so unset it in the DB too.
         quest.turnTiming = undefined;
+        void this.db.quests
+          .update({ id: quest.id }, { unset: ['turnTiming'] })
+          .catch(error => logger.warn('Failed to drop turnTiming after feature takeover:', error));
         this.sendStatusUpdate(quest, null, { immediate: true });
         return;
       }
