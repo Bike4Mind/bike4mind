@@ -146,6 +146,14 @@ describe('PublishDialog', () => {
     expect(screen.getByTestId('market-publish-submit-btn')).toBeDisabled();
   });
 
+  it('discloses the reviewer hold for every visibility, not only Public', () => {
+    renderDialog();
+    expect(
+      screen.getByText(/At every visibility, the scan can reject a submission or hold it for a reviewer/)
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Held for a reviewer if the scan flags anything/)).toBeNull();
+  });
+
   describe('tag suggestions', () => {
     beforeEach(() =>
       h.publish.mockResolvedValue({
