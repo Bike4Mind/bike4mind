@@ -241,4 +241,19 @@ describe('recallLakeMemory membership filter', () => {
 
     expect(recalled.map(r => r.fact)).toEqual(['fact partial']);
   });
+
+  it('requires the resolver at the call site', () => {
+    // @ts-expect-error resolveMemberSources is required: a caller that omits it would recall
+    // beliefs sourced from documents that have left the lake.
+    const forgotten = () =>
+      recallLakeMemory({
+        userId: 'u1',
+        query: 'q',
+        lakes: [{ datalakeTag: 'datalake:acme', ownerUserId: 'creator-1' }],
+        resolveReachableSources: async ids => new Set(ids),
+        k: 4,
+      });
+
+    expect(typeof forgotten).toBe('function');
+  });
 });
