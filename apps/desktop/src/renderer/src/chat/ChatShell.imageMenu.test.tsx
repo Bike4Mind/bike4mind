@@ -67,6 +67,8 @@ const SESSION: ChatSession = {
   ],
 } as ChatSession;
 
+const OTHER: ChatSession = { ...SESSION, id: 'open-2', title: 'Other thread', messages: [] };
+
 const DRAFTED: ChatAttachment = {
   id: 'a1',
   kind: 'image',
@@ -97,6 +99,7 @@ let root: Root | null = null;
 let host: HTMLElement | null = null;
 
 beforeEach(() => {
+  window.localStorage.clear();
   imageAction.mockClear();
   attachImage.mockClear();
   Element.prototype.scrollIntoView = () => undefined;
@@ -114,8 +117,8 @@ beforeEach(() => {
   (window as unknown as { b4m: unknown }).b4m = new Proxy(
     {
       chat: quietBridge({
-        listSessions: async () => [ACTIVE],
-        getSession: async () => SESSION,
+        listSessions: async () => [ACTIVE, { ...ACTIVE, id: OTHER.id, title: OTHER.title }],
+        getSession: async (sessionId: string) => (sessionId === OTHER.id ? OTHER : SESSION),
         getQueuedMessages: async () => [],
         getSessionStatuses: async () => [],
         listModels: async () => ({ models: [] }),
@@ -191,5 +194,24 @@ describe('the image menu in a conversation', () => {
     if (!tile) throw new Error('the draft tile did not render');
     await rightClick(tile);
     expect(el('image-context-menu')).toBeNull();
+  });
+
+  it('closes the image menu when another conversation is selected', async () => {
+    await openAssistantSession();
+    const image = el('chat-media-view-btn');
+    if (!image) throw new Error('the thread image did not render');
+    await rightClick(image);
+    expect(el('image-menu-attach-btn')).not.toBeNull();
+
+    const other = Array.from(document.querySelectorAll<HTMLElement>('[data-testid="chat-session-item"]')).find(item =>
+      item.textContent?.includes(OTHER.title)
+    );
+    if (!other) throw new Error('the other conversation did not render');
+    await act(async () => other.click());
+
+    expect(el('chat-session-title')?.textContent).toBe(OTHER.title);
+    expect(el('image-context-menu')).toBeNull();
+    expect(el('image-menu-attach-btn')).toBeNull();
+    expect(attachImage).not.toHaveBeenCalled();
   });
 });

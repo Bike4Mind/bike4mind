@@ -269,4 +269,20 @@ describe('markdownImage', () => {
   it('escapes angle brackets in a bare destination', () => {
     expect(markdownImage('/tmp/a<b>.png')).toBe('![](/tmp/a\\<b\\>.png)');
   });
+
+  it.each([
+    ['/tmp/a<b> (1).png', '![](</tmp/a\\<b\\> (1).png>)'],
+    ['/tmp/a\\(1).png', '![](</tmp/a\\\\(1).png>)'],
+    ['C:\\Users\\me\\My Pictures\\image.png', '![](<C:\\\\Users\\\\me\\\\My Pictures\\\\image.png>)'],
+  ])('escapes special characters inside the bracketed destination %s', (destination, expected) => {
+    expect(markdownImage(destination)).toBe(expected);
+  });
+
+  it.each([
+    ['/tmp/a\nb.png', '![](</tmp/a%0Ab.png>)'],
+    ['/tmp/a\rb.png', '![](</tmp/a%0Db.png>)'],
+    ['/tmp/a\r\nb.png', '![](</tmp/a%0D%0Ab.png>)'],
+  ])('encodes line endings in the destination %s', (destination, expected) => {
+    expect(markdownImage(destination)).toBe(expected);
+  });
 });

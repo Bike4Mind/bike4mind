@@ -99,8 +99,12 @@ function stemOf(name: string): string {
  * the closing paren and leave the link unclosed.
  */
 export function markdownImage(destination: string): string {
-  if (/[\s()]/.test(destination)) return `![](<${destination}>)`;
-  return `![](${destination.replace(/[\\<>]/g, char => `\\${char}`)})`;
+  const escaped = destination
+    .replaceAll('\r', '%0D')
+    .replaceAll('\n', '%0A')
+    .replace(/[\\<>]/g, char => `\\${char}`);
+  if (/[\s()]/.test(destination)) return `![](<${escaped}>)`;
+  return `![](${escaped})`;
 }
 
 /**

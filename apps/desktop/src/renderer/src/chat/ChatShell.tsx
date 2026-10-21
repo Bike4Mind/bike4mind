@@ -689,7 +689,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
           ) : (
             <VideoJobsContext.Provider value={videoJobs}>
               <WebLinkContext.Provider value={openInBrowserPane}>
-                <ImageMenuProvider onAttach={activeId ? draft.attachImage : undefined}>
+                <ImageMenuProvider key={activeId ?? 'none'} onAttach={activeId ? draft.attachImage : undefined}>
                   <MessageThread
                     // Remounted per conversation, so its window and scroll start over and nothing it
                     // set going outlives the conversation it was for. Prefixed because PrStatusBar, a
