@@ -156,15 +156,21 @@ const handler = baseApi()
 
         if (slackSettings.slackUserId) {
           const linkedUser = await User.findById(userId).select('slackSettings');
-          if (
-            !linkedUser?.slackSettings?.slackTeamId ||
-            linkedUser.slackSettings.slackUserId !== slackSettings.slackUserId
-          ) {
+          // Only the OAuth callback may write a Slack identity, so a submitted id that differs
+          // from the stored one is a manual claim and is refused.
+          if (linkedUser?.slackSettings?.slackUserId !== slackSettings.slackUserId) {
             return res.status(400).json({ error: 'Use Connect with Slack to verify your Slack identity' });
           }
         }
 
-        for (const channelId of Object.values(slackSettings.githubNotifications?.channels ?? {})) {
+        // A disabled preference is not delivered anywhere, and re-verifying stale channels would
+        // block the user from turning it off. Only channels that will actually be used are checked.
+        const githubChannels =
+          slackSettings.githubNotifications?.enabled === false
+            ? []
+            : Object.values(slackSettings.githubNotifications?.channels ?? {});
+
+        for (const channelId of githubChannels) {
           if (channelId) {
             try {
               await resolveNotificationDestination(userId!, channelId);
@@ -192,27 +198,37 @@ const handler = baseApi()
           }
         }
 
-        const updatedUser = await User.findByIdAndUpdate(
-          userId,
-          {
-            $set: Object.fromEntries(
-              Object.entries(slackSettings)
-                .filter(([key]) => key !== 'slackUserId')
-                .map(([key, value]) => [`slackSettings.${key}`, value])
-            ),
-            ...(slackSettings.slackUserId === ''
-              ? {
-                  $unset: {
-                    'slackSettings.slackUserId': 1,
-                    'slackSettings.slackTeamId': 1,
-                    'slackSettings.slackUserToken': 1,
-                    'slackSettings.slackUserScopes': 1,
-                  },
-                }
-              : {}),
-          },
-          { new: true, runValidators: true }
-        );
+        // Preference keys a PATCH may clear. A key missing from the body is removed, so clearing a
+        // field in the profile UI clears it here too. The OAuth identity fields are excluded: they
+        // are written by the callback and removed only by an explicit unlink below.
+        const $set: Record<string, unknown> = {};
+        const $unset: Record<string, 1> = {};
+        const providedKeys = new Set<string>();
+        for (const [key, value] of Object.entries(slackSettings)) {
+          if (value === undefined) continue;
+          providedKeys.add(key);
+          if (key !== 'slackUserId') $set[`slackSettings.${key}`] = value;
+        }
+        for (const key of [
+          'defaultNotebookId',
+          'autoCreateNotebook',
+          'notebookNamePrefix',
+          'defaultProjectId',
+          'agentNotebookRouting',
+          'keywordRouting',
+          'customAgentId',
+          'githubNotifications',
+        ]) {
+          if (!providedKeys.has(key)) $unset[`slackSettings.${key}`] = 1;
+        }
+        if (slackSettings.slackUserId === '') {
+          $unset['slackSettings.slackUserId'] = 1;
+          $unset['slackSettings.slackTeamId'] = 1;
+          $unset['slackSettings.slackUserToken'] = 1;
+          $unset['slackSettings.slackUserScopes'] = 1;
+        }
+
+        const updatedUser = await User.findByIdAndUpdate(userId, { $set, $unset }, { new: true, runValidators: true });
 
         if (!updatedUser) {
           return res.status(404).json({ error: 'User not found' });

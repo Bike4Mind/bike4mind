@@ -71,6 +71,7 @@ const run = (body: Record<string, unknown>, userId = OWN) => {
 };
 
 beforeEach(() => {
+  vi.clearAllMocks();
   mockSessionFindOne.mockReset();
   mockProjectFindOne.mockReset();
   mockUserFindOne.mockReset().mockResolvedValue(null);
@@ -162,13 +163,52 @@ describe('Slack identity and preference boundaries', () => {
     expect(mockUserFindByIdAndUpdate).not.toHaveBeenCalled();
   });
 
+  it('accepts the identity the OAuth callback stored', async () => {
+    mockUserFindById.mockReturnValue({ slackSettings: { slackUserId: 'U1', slackTeamId: 'T1' } });
+    const { res, promise } = run({ slackUserId: 'U1' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUserFindByIdAndUpdate).toHaveBeenCalled();
+  });
+
+  it('lets a legacy link save preferences for its own unchanged identity', async () => {
+    // Rows written before workspace verification have a Slack id but no team.
+    mockUserFindById.mockReturnValue({ slackSettings: { slackUserId: 'U1' } });
+    const { res, promise } = run({ slackUserId: 'U1', autoCreateNotebook: false });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUserFindByIdAndUpdate).toHaveBeenCalled();
+  });
+
   it('preserves OAuth identity when updating preferences', async () => {
     const { res, promise } = run({ autoCreateNotebook: false });
     await promise;
     expect(res._getStatusCode()).toBe(200);
     expect(mockUserFindByIdAndUpdate).toHaveBeenCalledWith(
       OWN,
-      { $set: { 'slackSettings.autoCreateNotebook': false } },
+      {
+        $set: { 'slackSettings.autoCreateNotebook': false },
+        $unset: {
+          'slackSettings.defaultNotebookId': 1,
+          'slackSettings.notebookNamePrefix': 1,
+          'slackSettings.defaultProjectId': 1,
+          'slackSettings.agentNotebookRouting': 1,
+          'slackSettings.keywordRouting': 1,
+          'slackSettings.customAgentId': 1,
+          'slackSettings.githubNotifications': 1,
+        },
+      },
+      { new: true, runValidators: true }
+    );
+  });
+
+  it('clears a keyword routing list the caller no longer sends', async () => {
+    const { res, promise } = run({ agentNotebookRouting: {} });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUserFindByIdAndUpdate).toHaveBeenCalledWith(
+      OWN,
+      expect.objectContaining({ $unset: expect.objectContaining({ 'slackSettings.keywordRouting': 1 }) }),
       { new: true, runValidators: true }
     );
   });
@@ -181,6 +221,14 @@ describe('Slack identity and preference boundaries', () => {
       {
         $set: {},
         $unset: {
+          'slackSettings.defaultNotebookId': 1,
+          'slackSettings.autoCreateNotebook': 1,
+          'slackSettings.notebookNamePrefix': 1,
+          'slackSettings.defaultProjectId': 1,
+          'slackSettings.agentNotebookRouting': 1,
+          'slackSettings.keywordRouting': 1,
+          'slackSettings.customAgentId': 1,
+          'slackSettings.githubNotifications': 1,
           'slackSettings.slackUserId': 1,
           'slackSettings.slackTeamId': 1,
           'slackSettings.slackUserToken': 1,
@@ -198,5 +246,15 @@ describe('Slack identity and preference boundaries', () => {
     expect(res._getStatusCode()).toBe(400);
     expect(mockDestination).toHaveBeenCalledWith(OWN, 'CFOREIGN');
     expect(mockUserFindByIdAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('disables notifications without re-verifying a saved channel', async () => {
+    const { res, promise } = run({
+      githubNotifications: { enabled: false, channels: { default: 'CFOREIGN' } },
+    });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockDestination).not.toHaveBeenCalled();
+    expect(mockUserFindByIdAndUpdate).toHaveBeenCalled();
   });
 });
