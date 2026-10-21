@@ -89,6 +89,13 @@ describe('connectDB connection lifecycle', () => {
     expect(connect.mock.calls[0][1].maxIdleTimeMS).toBe(Number(idleTime));
   });
 
+  it.each(['0', '15000'])('applies the idle-time environment override to a long-running process %s', async idleTime => {
+    vi.stubEnv('MONGODB_MAX_IDLE_TIME_MS', idleTime);
+    const { connectDB } = await import('./mongo');
+    await connectDB(atlasUrl);
+    expect(connect.mock.calls[0][1]).toMatchObject({ maxIdleTimeMS: Number(idleTime), minPoolSize: 1 });
+  });
+
   it('merges caller pool overrides last', async () => {
     vi.stubEnv('AWS_LAMBDA_FUNCTION_NAME', 'test-function');
     const { connectDB } = await import('./mongo');
@@ -161,6 +168,29 @@ describe('connectDB connection lifecycle', () => {
     const { connectDB } = await import('./mongo');
     await expect(connectDB(atlasUrl)).rejects.toBe(error);
     expect(ping).toHaveBeenCalledTimes(1);
+  });
+
+  it('propagates a non-network error from the retry ping', async () => {
+    vi.stubEnv('AWS_LAMBDA_FUNCTION_NAME', 'test-function');
+    connection.readyState = 1;
+    const error = new Error('Unauthorized');
+    ping.mockRejectedValueOnce(networkError()).mockRejectedValue(error);
+    const { connectDB } = await import('./mongo');
+    await expect(connectDB(atlasUrl)).rejects.toBe(error);
+    expect(ping).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not retry a server-selection timeout', async () => {
+    vi.stubEnv('AWS_LAMBDA_FUNCTION_NAME', 'test-function');
+    connection.readyState = 1;
+    const error = Object.assign(new Error('Server selection timed out after 30000 ms'), {
+      name: 'MongoServerSelectionError',
+    });
+    ping.mockRejectedValue(error);
+    const { connectDB } = await import('./mongo');
+    await expect(connectDB(atlasUrl)).rejects.toBe(error);
+    expect(ping).toHaveBeenCalledTimes(1);
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 
   it('allows another connection attempt after a cold-start failure', async () => {

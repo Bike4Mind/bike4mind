@@ -93,6 +93,19 @@ export function isConnectionLostError(error: unknown): boolean {
   return name === 'MongooseError' && typeof message === 'string' && message.includes('buffering timed out');
 }
 
+// A failed socket is already invalidated by the driver, so an immediate re-ping lands on a fresh
+// one. A server-selection timeout has already waited serverSelectionTimeoutMS, so retrying it only
+// doubles the failure latency.
+const PING_RETRY_ERROR_NAMES = CONNECTION_LOST_ERROR_NAMES.filter(name => name !== 'MongoServerSelectionError');
+
+const isRetryablePingError = (error: unknown): boolean => {
+  if (!error || typeof error !== 'object') return false;
+  const { name } = error as { name?: unknown };
+  return typeof name === 'string' && PING_RETRY_ERROR_NAMES.includes(name);
+};
+
+const pingServer = () => mongoose.connection.getClient().db().command({ ping: 1 });
+
 /**
  * Makes the driver re-check its servers now instead of at the next heartbeat: a pending server
  * selection requests an immediate monitor check, and mongoose releases buffered commands as soon as
@@ -100,7 +113,7 @@ export function isConnectionLostError(error: unknown): boolean {
  */
 const reselectServer = async (logger?: Logger): Promise<void> => {
   try {
-    await mongoose.connection.getClient().db().command({ ping: 1 });
+    await pingServer();
   } catch (error) {
     logger?.warn('Database ping failed while recovering the connection', {
       error: error instanceof Error ? error.message : String(error),
@@ -109,28 +122,28 @@ const reselectServer = async (logger?: Logger): Promise<void> => {
 };
 
 const SERVERLESS_IDLE_TIME_MS = 30_000;
-let lastConnectionUse = 0;
+let lastConnectionCheck = 0;
 let connectionAttempt: Promise<boolean> | undefined;
 
 const isServerlessRuntime = () => Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.VERCEL);
 
 const checkWarmConnection = async (logger: Logger): Promise<void> => {
   try {
-    await mongoose.connection.getClient().db().command({ ping: 1 });
+    await pingServer();
   } catch (error) {
-    if (!isConnectionLostError(error)) throw error;
+    if (!isRetryablePingError(error)) throw error;
     // The driver invalidates failed network connections. Re-select without closing other requests' sockets.
     logger.warn('Database ping failed after inactivity, retrying on a healthy connection', {
       error: error instanceof Error ? error.message : String(error),
     });
-    await mongoose.connection.getClient().db().command({ ping: 1 });
+    await pingServer();
   }
 };
 
 const ensureConnection = async (url: string, logger?: Logger, overrides?: ConnectOptions): Promise<boolean> => {
   logger ??= Logger.withMetadata({});
   if (mongoose.connection.readyState === 1) {
-    if (isServerlessRuntime() && Date.now() - lastConnectionUse >= SERVERLESS_IDLE_TIME_MS) {
+    if (isServerlessRuntime() && Date.now() - lastConnectionCheck >= SERVERLESS_IDLE_TIME_MS) {
       await checkWarmConnection(logger);
     }
     return true;
@@ -225,7 +238,7 @@ export const connectDB = async (url: string, logger?: Logger, overrides?: Connec
   connectionAttempt = ensureConnection(url, logger, overrides);
   try {
     const connected = await connectionAttempt;
-    lastConnectionUse = Date.now();
+    lastConnectionCheck = Date.now();
     return connected;
   } finally {
     connectionAttempt = undefined;
