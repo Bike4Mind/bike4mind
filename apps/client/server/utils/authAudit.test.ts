@@ -70,6 +70,50 @@ describe('logAuthAudit', () => {
     }
   });
 
+  // A frozen Lambda loses a metric emit still in flight, so the audit must not resolve before it settles.
+  it('does not resolve a session_reuse_revoked audit until its metric emit settles', async () => {
+    let release: () => void = () => {};
+    recordSessionReuseRevoked.mockReturnValue(
+      new Promise<void>(resolve => {
+        release = resolve;
+      })
+    );
+    let settled = false;
+    const pending = logAuthAudit(req, { userId: 'user-1', event: 'session_reuse_revoked', metadata: {} }).then(() => {
+      settled = true;
+    });
+
+    await vi.waitFor(() => expect(recordSessionReuseRevoked).toHaveBeenCalledOnce());
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(settled).toBe(false);
+
+    release();
+    await pending;
+    expect(settled).toBe(true);
+  });
+
+  // Same reason: a recovery count feeds an alarm and must be flushed before the handler returns.
+  it('does not resolve a session_recovered audit until its metric emit settles', async () => {
+    let release: () => void = () => {};
+    recordSessionRecovered.mockReturnValue(
+      new Promise<void>(resolve => {
+        release = resolve;
+      })
+    );
+    let settled = false;
+    const pending = logAuthAudit(req, { userId: 'user-1', event: 'session_recovered', metadata: {} }).then(() => {
+      settled = true;
+    });
+
+    await vi.waitFor(() => expect(recordSessionRecovered).toHaveBeenCalledOnce());
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(settled).toBe(false);
+
+    release();
+    await pending;
+    expect(settled).toBe(true);
+  });
+
   it('leaves other events untouched and unlogged', async () => {
     getClientIp.mockReturnValue('203.0.113.7');
     await logAuthAudit(req, { userId: 'user-1', event: 'session_recovered', metadata: { issuedIp: '203.0.113.7' } });

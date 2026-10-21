@@ -41,9 +41,10 @@ const handler = baseApi().delete(
           error: error instanceof Error ? error.message : String(error),
           modalId: id,
         });
-        emitModalGenerationMetrics([
+        // Awaited for the same reason as the S3 sync above.
+        await emitModalGenerationMetrics([
           { name: 'S3SyncFailure', value: 1, dimensions: { operation: 'delete', modalId: id } },
-        ]).catch(() => {});
+        ]);
       }
     }
 

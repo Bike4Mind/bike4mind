@@ -102,9 +102,7 @@ const isReplayable = (session: IAuthSessionDocument, hash: string, now: Date): b
  * reasons mean the secret WAS current or previous at first read and a true rotation overtook it.
  */
 export type ReuseRevokeReason =
-  | 'unrecognized_secret'
-  | 'chain_advanced_during_rotation'
-  | 'chain_advanced_during_recovery';
+  'unrecognized_secret' | 'chain_advanced_during_rotation' | 'chain_advanced_during_recovery';
 
 /**
  * Triage fields for a `session_reuse_revoked` event, from the row as this call first read it. Most
@@ -116,9 +114,7 @@ const describeReuse = (session: IAuthSessionDocument, reason: ReuseRevokeReason,
   reason,
   msSinceLastUse: now.getTime() - new Date(session.lastUsedAt).getTime(),
   /** Negative while the replay window is still open; null when no previous secret is held. */
-  msSinceReplayWindowClosed: session.graceExpiresAt
-    ? now.getTime() - new Date(session.graceExpiresAt).getTime()
-    : null,
+  msSinceReplayWindowClosed: session.graceExpiresAt ? now.getTime() - new Date(session.graceExpiresAt).getTime() : null,
   sessionAgeMs: now.getTime() - new Date(session.createdAt).getTime(),
   recoveries: session.recoveries ?? 0,
   createdVia: session.createdVia,
@@ -215,8 +211,8 @@ export const rotateSession = async (
 
   // Swallows both failure shapes: a synchronous throw, and a rejected promise from an async
   // adapter (which type-checks against a `=> void` signature and would otherwise escape a bare
-  // try/catch as an unhandled rejection). Callers that are about to throw await this so the row is
-  // flushed; everyone else drops the promise.
+  // try/catch as an unhandled rejection). Every caller awaits it before the request settles: the
+  // sink also emits CloudWatch metrics, and a frozen Lambda loses a write still in flight.
   const emit = (type: RotateSessionAuditEvent['type'], extraMetadata?: Record<string, unknown>): Promise<void> => {
     try {
       return Promise.resolve(
@@ -302,9 +298,12 @@ export const rotateSession = async (
       maxRecoveries,
     });
     if (updated) {
-      void emit('session_recovered');
+      // Overlapped with finish so the audit adds no latency unless it is the slower of the two.
+      const recorded = emit('session_recovered');
       logger?.log('Recovered session', sid, 'from a lost rotation response');
-      return finish(nextSecret);
+      const result = await finish(nextSecret);
+      await recorded;
+      return result;
     }
 
     // The CAS did not apply. Re-read to tell the three outcomes apart. Deliberately NOT recursing
