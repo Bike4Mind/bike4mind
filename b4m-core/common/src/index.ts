@@ -30,6 +30,7 @@ export * from './decisions';
 export * from './soundGeneration';
 export * from './soundPricing';
 export * from './musicGeneration';
+export * from './studioFeatureFlags';
 export * from './schemas';
 // Transport-agnostic API endpoint contracts. Pure data (no `.openapi()`), so
 // safe to import in any runtime. The OpenAPI layer (./openapi) is deliberately

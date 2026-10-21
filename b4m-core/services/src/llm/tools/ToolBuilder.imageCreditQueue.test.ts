@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CREDITS_PER_USD_COST, type ModelInfo } from '@bike4mind/common';
 import { ToolBuilder, type ToolBuilderConfig } from './ToolBuilder';
-import { validateUserCredits } from './base/utils';
+import { validateImageCredits } from './base/utils';
 import { estimateImageCredits } from '../../imageCost';
 import { settleToolCallCredits } from '../settleToolCredits';
 
@@ -19,10 +19,17 @@ vi.mock('@bike4mind/common', async importOriginal => {
 // per delivered call, guard conditions) without an image-pricing fixture.
 vi.mock('./base/utils', async importOriginal => {
   const actual = await importOriginal<typeof import('./base/utils')>();
-  return { ...actual, validateUserCredits: vi.fn() };
+  return { ...actual, validateImageCredits: vi.fn() };
 });
 vi.mock('../../imageCost', () => ({ estimateImageCredits: vi.fn() }));
-const mockValidateUserCredits = vi.mocked(validateUserCredits);
+const buildSharedToolsCalls = vi.hoisted(() => [] as Array<Record<string, unknown>>);
+vi.mock('../sharedToolBuilder', () => ({
+  buildSharedTools: vi.fn((_deps: unknown, _callbacks: unknown, options: Record<string, unknown>) => {
+    buildSharedToolsCalls.push(options);
+    return [];
+  }),
+}));
+const mockValidateImageCredits = vi.mocked(validateImageCredits);
 const mockEstimateImageCredits = vi.mocked(estimateImageCredits);
 
 const makeBuilder = ({
@@ -57,23 +64,63 @@ const usdFor = (credits: number) => credits / CREDITS_PER_USD_COST;
 
 beforeEach(() => {
   settlementDraw.mockReturnValue(0.5);
-  mockValidateUserCredits.mockReset().mockResolvedValue({ requiredCredits: 400, usdCost: usdFor(400) });
+  mockValidateImageCredits.mockReset().mockReturnValue({ requiredCredits: 400, usdCost: usdFor(400) });
   mockEstimateImageCredits.mockReset().mockReturnValue({ requiredCredits: 400, usdCost: usdFor(400) } as never);
 });
 
 describe('ToolBuilder.gateImageCredits', () => {
+  it('passes the credits already committed this turn, gated or settled, to the affordability check', async () => {
+    const { builder } = makeBuilder();
+
+    await builder.gateImageCredits('image_generation', COST_INPUT, true, null, MODELS);
+    await builder.gateImageCredits('image_generation', COST_INPUT, true, null, MODELS);
+    builder.settleImageCredits(
+      'image_generation',
+      asQuest(quest()),
+      { ...COST_INPUT, paths: ['a.png'] } as never,
+      true,
+      null,
+      MODELS
+    );
+    await builder.gateImageCredits('edit_image', COST_INPUT, true, null, MODELS);
+
+    // In flight: 0, then 400. After one settles, its gate entry is replaced by the 400 charge.
+    expect(mockValidateImageCredits.mock.calls.map(call => call[6])).toEqual([0, 400, 800]);
+  });
+
+  it('drops the estimate of a call that fails before settling, so a retry is not refused', async () => {
+    const { builder } = makeBuilder();
+    type Tracked = { toolFn: (val: unknown) => Promise<unknown> };
+    const [tool] = (builder as unknown as { trackGatedCalls(tools: unknown[]): Tracked[] }).trackGatedCalls([
+      {
+        toolSchema: { name: 'image_generation' },
+        toolFn: async () => {
+          await builder.gateImageCredits('image_generation', COST_INPUT, true, null, MODELS);
+          throw new Error('content policy');
+        },
+      },
+    ]);
+
+    await expect(tool.toolFn({})).rejects.toThrow('content policy');
+    await builder.gateImageCredits('image_generation', COST_INPUT, true, null, MODELS);
+
+    expect(mockValidateImageCredits.mock.calls.map(call => call[6])).toEqual([0, 0]);
+  });
+
   it('checks affordability without reserving anything', async () => {
     const { builder, toolCreditsMap, record } = makeBuilder();
 
     await builder.gateImageCredits('image_generation', COST_INPUT, true, null, MODELS);
 
-    expect(mockValidateUserCredits).toHaveBeenCalledTimes(1);
+    expect(mockValidateImageCredits).toHaveBeenCalledTimes(1);
     expect(toolCreditsMap.size).toBe(0);
     expect(record).not.toHaveBeenCalled();
   });
 
   it('propagates insufficient credits so the provider is never called', async () => {
-    mockValidateUserCredits.mockRejectedValueOnce(new Error('insufficient_credits'));
+    mockValidateImageCredits.mockImplementationOnce(() => {
+      throw new Error('insufficient_credits');
+    });
     const { builder } = makeBuilder();
 
     await expect(builder.gateImageCredits('edit_image', COST_INPUT, true, null, MODELS)).rejects.toThrow(
@@ -91,7 +138,7 @@ describe('ToolBuilder.gateImageCredits', () => {
 
     await builder.gateImageCredits('image_generation', data, enforce, null, MODELS);
 
-    expect(mockValidateUserCredits).not.toHaveBeenCalled();
+    expect(mockValidateImageCredits).not.toHaveBeenCalled();
   });
 });
 
@@ -182,5 +229,35 @@ describe('a failed image call followed by a successful retry', () => {
     );
     const billed = settled.reduce((sum, call) => sum + (call.creditsUsed ?? 0), 0);
     expect(billed).toBe(400);
+  });
+});
+
+describe('ToolBuilder.buildTools child tools', () => {
+  it('wraps the tools handed to in-process subagents, so a failed child call drops its estimate', () => {
+    const { builder } = makeBuilder();
+    type Tracked = { toolFn: (val: unknown) => Promise<unknown> };
+    buildSharedToolsCalls.length = 0;
+
+    builder.buildTools({ quest: asQuest(quest()) as never, saveQuest: async () => null, llm: {} as never, config: {} });
+
+    const wrapChildTools = buildSharedToolsCalls.at(-1)?.wrapChildTools as (tools: unknown[]) => Tracked[];
+    expect(wrapChildTools).toBeTypeOf('function');
+
+    const [tool] = wrapChildTools([
+      {
+        toolSchema: { name: 'image_generation' },
+        toolFn: async () => {
+          await builder.gateImageCredits('image_generation', COST_INPUT, true, null, MODELS);
+          throw new Error('content policy');
+        },
+      },
+    ]);
+
+    return expect(tool.toolFn({}))
+      .rejects.toThrow('content policy')
+      .then(() => {
+        const committed = (builder as unknown as { committedToolCredits(): number }).committedToolCredits();
+        expect(committed).toBe(0);
+      });
   });
 });

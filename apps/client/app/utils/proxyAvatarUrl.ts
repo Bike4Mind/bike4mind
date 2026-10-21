@@ -9,5 +9,10 @@
  */
 export function proxyAvatarUrl(url: string | undefined, size = 96): string | undefined {
   if (!url) return undefined;
-  return `/_next/image?url=${encodeURIComponent(url)}&w=${size}&q=75`;
+  // Legacy GitHub avatar URLs redirect; the image optimizer deliberately rejects redirects.
+  const directUrl = url.replace(
+    /^https:\/\/github\.com\/([a-z\d-]+)\.png(?=[?#]|$)/i,
+    'https://avatars.githubusercontent.com/$1'
+  );
+  return `/_next/image?url=${encodeURIComponent(directUrl)}&w=${size}&q=75`;
 }
