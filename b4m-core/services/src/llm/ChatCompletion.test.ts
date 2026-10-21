@@ -680,6 +680,19 @@ describe('ChatCompletionProcess', () => {
     });
   });
 
+  describe('an unrecognised timezone', () => {
+    it('falls back to server time instead of failing the turn', async () => {
+      mockSession.userId = 'user1';
+
+      await service.process({ body: { ...wireMinimalTurn(), timezone: 'Etc/Unknown' }, logger: mockLogger });
+
+      expect(mockDb.quests.update.mock.calls.at(-1)?.[0]).not.toMatchObject({ type: 'error' });
+      expect((service as any).logger.warn).toHaveBeenCalledWith(
+        'Ignoring unrecognised timezone "Etc/Unknown"; using server time'
+      );
+    });
+  });
+
   describe('a deprecated-model redirect', () => {
     const successor = {
       id: ChatModels.GPT4_1,

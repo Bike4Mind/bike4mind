@@ -368,6 +368,16 @@ export const KNOWLEDGE_SEARCH_TOOL_NAME = 'search_knowledge_base';
 const PER_TOOL_SCHEMA_RESERVE_TOKENS = 120; // rough serialized {name,description,input_schema} per enabled tool
 
 /** Coerce an admin-setting value to a fraction in (0, 1], falling back when invalid. */
+// Same check as `isValidTimeZone` in apps/client/pages/api/users/counterLogs.ts.
+export function isValidTimeZone(timeZone: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function clampFraction(raw: unknown, fallback: number): number {
   const parsed = typeof raw === 'number' ? raw : parseFloat(String(raw));
   return Number.isFinite(parsed) && parsed > 0 && parsed <= 1 ? parsed : fallback;
@@ -1693,8 +1703,14 @@ export class ChatCompletionProcess {
       imageConfig,
       audioConfig,
       deepResearchConfig,
-      timezone: userTimezone,
+      timezone: requestedTimezone,
     } = parsedBody;
+    // Callers send this unchecked (the browser can report `Etc/Unknown`), and `Intl` throws on a
+    // zone it rejects, so fall back to server time instead of failing the turn.
+    const userTimezone = requestedTimezone && isValidTimeZone(requestedTimezone) ? requestedTimezone : undefined;
+    if (requestedTimezone && !userTimezone) {
+      this.logger.warn(`Ignoring unrecognised timezone "${requestedTimezone}"; using server time`);
+    }
 
     // Companion pairing now runs once in `resolveEnabledTools` (see process()), after the
     // per-session union and attached-knowledge offer, so session-forced and auto-offered
