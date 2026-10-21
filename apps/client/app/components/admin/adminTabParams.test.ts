@@ -91,8 +91,8 @@ describe('Users tab params', () => {
 describe('Feedback tab params', () => {
   const feedbackSearch = {
     tab: 'feedback',
-    status: 'New,Closed',
-    subject: 'turn',
+    feedbackStatus: 'New,Closed',
+    feedbackSubject: 'turn',
     feedbackOrg: ['Acme'],
     asc: true,
     feedbackPage: 2,
@@ -103,16 +103,16 @@ describe('Feedback tab params', () => {
   it('coerces each param in validateSearch and drops invalid ones', () => {
     expect(
       parseAdminSearch({
-        status: 'Closed,New',
-        subject: 'nope',
+        feedbackStatus: 'Closed,New',
+        feedbackSubject: 'nope',
         feedbackOrg: 'Acme',
         asc: 'false',
         feedbackPage: '2',
         feedbackLimit: 7,
       })
     ).toMatchObject({
-      status: 'New,Closed',
-      subject: undefined,
+      feedbackStatus: 'New,Closed',
+      feedbackSubject: undefined,
       feedbackOrg: ['Acme'],
       asc: undefined,
       feedbackPage: 2,

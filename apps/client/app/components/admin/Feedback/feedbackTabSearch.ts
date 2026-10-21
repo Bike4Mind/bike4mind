@@ -12,12 +12,12 @@ import { FEEDBACK_PAGE_SIZE_OPTIONS } from './constants';
  * The Feedback tab's `/admin` search params and their coercion. Pure and React-free: adminTabParams.ts
  * (and through it router.tsx's eager import) reads it. The free-text search box is deliberately
  * absent - it often holds a username or an email, and these URLs get shared and copied into login
- * redirects. Page, limit and org carry a `feedback` prefix because the Users tab already owns the
- * bare names, and the registry gives every param exactly one owner.
+ * redirects. Every param carries a `feedback` prefix because the Users tab already owns the bare
+ * names, and the registry gives every param exactly one owner.
  */
 
-export const FEEDBACK_STATUS_PARAM = 'status';
-export const FEEDBACK_SUBJECT_PARAM = 'subject';
+export const FEEDBACK_STATUS_PARAM = 'feedbackStatus';
+export const FEEDBACK_SUBJECT_PARAM = 'feedbackSubject';
 export const FEEDBACK_ORG_PARAM = 'feedbackOrg';
 export const FEEDBACK_ASC_PARAM = 'asc';
 export const FEEDBACK_PAGE_PARAM = 'feedbackPage';
@@ -38,7 +38,7 @@ export const FEEDBACK_TAB_PARAMS = [...FEEDBACK_VIEW_PARAMS, FEEDBACK_ID_PARAM] 
 /** Checkbox order in the filter bar, and the order statuses are written to the URL in. */
 const FEEDBACK_STATUS_ORDER = [FeedbackStatus.New, FeedbackStatus.InProgress, FeedbackStatus.Closed] as const;
 
-// `status` is the checked statuses joined with commas (`New,Closed`). No box checked is a real
+// `feedbackStatus` is the checked statuses joined with commas (`New,Closed`). No box checked is a real
 // state distinct from the default (it matches nothing; useFeedbackOperations skips the list query),
 // so it gets its own token.
 const STATUS_SEPARATOR = ',';
@@ -85,7 +85,7 @@ export const DEFAULT_FEEDBACK_VIEW: FeedbackView = {
 const isFeedbackStatus = (value: string): value is FeedbackStatus =>
   FEEDBACK_STATUS_ORDER.some(status => status === value);
 
-/** The checked statuses a `status` value names, or undefined when it is malformed (one bad token voids it). */
+/** The checked statuses a `feedbackStatus` value names, or undefined when it is malformed (one bad token voids it). */
 const decodeStatuses = (value: unknown): FeedbackStatus[] | undefined => {
   if (value === NO_STATUS_TOKEN) return [];
   if (typeof value !== 'string' || value === '') return undefined;

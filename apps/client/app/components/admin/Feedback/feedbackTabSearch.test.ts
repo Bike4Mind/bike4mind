@@ -18,7 +18,7 @@ const withoutUndefined = (search: Record<string, unknown>) =>
   Object.fromEntries(Object.entries(search).filter(([, value]) => value !== undefined));
 
 describe('the status param', () => {
-  const parseStatus = FEEDBACK_SEARCH_PARSERS.status;
+  const parseStatus = FEEDBACK_SEARCH_PARSERS.feedbackStatus;
 
   it('accepts comma-joined statuses and canonicalizes their order', () => {
     expect(parseStatus('Closed,New')).toBe('New,Closed');
@@ -59,8 +59,8 @@ describe('feedbackViewFromSearch', () => {
   it('reads every view param, tolerating quoted numbers and booleans from a hand-typed link', () => {
     expect(
       feedbackViewFromSearch({
-        status: 'none',
-        subject: 'turn',
+        feedbackStatus: 'none',
+        feedbackSubject: 'turn',
         feedbackOrg: 'Acme',
         asc: 'true',
         feedbackPage: '3',
@@ -79,8 +79,8 @@ describe('feedbackViewFromSearch', () => {
   it('falls back to the default for each invalid param', () => {
     expect(
       feedbackViewFromSearch({
-        status: 'Open',
-        subject: 'everything',
+        feedbackStatus: 'Open',
+        feedbackSubject: 'everything',
         feedbackOrg: [],
         asc: 'yes',
         feedbackPage: 0,
@@ -109,8 +109,8 @@ describe('feedbackViewToSearch', () => {
     const search = feedbackViewToSearch(view);
 
     expect(withoutUndefined(search)).toEqual({
-      status: 'New,Closed',
-      subject: 'product',
+      feedbackStatus: 'New,Closed',
+      feedbackSubject: 'product',
       feedbackOrg: ['Acme', 'Globex'],
       asc: true,
       feedbackPage: 2,
@@ -121,7 +121,7 @@ describe('feedbackViewToSearch', () => {
 
   it('sets every default param to undefined so a write removes it from the URL', () => {
     expect(Object.keys(feedbackViewToSearch(DEFAULT_FEEDBACK_VIEW)).sort()).toEqual(
-      ['asc', 'feedbackLimit', 'feedbackOrg', 'feedbackPage', 'status', 'subject'].sort()
+      ['asc', 'feedbackLimit', 'feedbackOrg', 'feedbackPage', 'feedbackStatus', 'feedbackSubject'].sort()
     );
   });
 });

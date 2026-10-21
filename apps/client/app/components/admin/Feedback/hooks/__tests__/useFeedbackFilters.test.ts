@@ -207,16 +207,21 @@ describe('useFeedbackFilters', () => {
   });
 
   it('leaves a page loaded from the URL alone on mount', () => {
-    act(() => fakeAdminRouter.reset({ tab: 'feedback', feedbackPage: 4, status: 'Closed' }));
+    act(() => fakeAdminRouter.reset({ tab: 'feedback', feedbackPage: 4, feedbackStatus: 'Closed' }));
     setup();
 
     expect(fakeAdminRouter.navigate).not.toHaveBeenCalled();
-    expect(fakeAdminRouter.search).toMatchObject({ feedbackPage: 4, status: 'Closed' });
+    expect(fakeAdminRouter.search).toMatchObject({ feedbackPage: 4, feedbackStatus: 'Closed' });
   });
 
   it('reads the filters from the URL and writes them back to it', () => {
     act(() =>
-      fakeAdminRouter.reset({ tab: 'feedback', status: 'InProgress,Closed', subject: 'help', feedbackOrg: ['Acme'] })
+      fakeAdminRouter.reset({
+        tab: 'feedback',
+        feedbackStatus: 'InProgress,Closed',
+        feedbackSubject: 'help',
+        feedbackOrg: ['Acme'],
+      })
     );
     const { result } = setup();
 
@@ -232,7 +237,7 @@ describe('useFeedbackFilters', () => {
 
     expect(fakeAdminRouter.search).toEqual({
       tab: 'feedback',
-      status: 'InProgress,Closed',
+      feedbackStatus: 'InProgress,Closed',
       feedbackOrg: ['Acme'],
       asc: true,
     });
