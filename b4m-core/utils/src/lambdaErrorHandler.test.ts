@@ -150,6 +150,7 @@ describe('registerLambdaErrorHandlers', () => {
     { code: 'ENOTFOUND' },
     { name: 'MongoNetworkError' },
     { name: 'MongoNetworkTimeoutError' },
+    { name: 'MongoPoolClearedError' },
   ])('classifies structured network errors %j on both process handlers', async properties => {
     const logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() };
     registerLambdaErrorHandlers(logger as never);
