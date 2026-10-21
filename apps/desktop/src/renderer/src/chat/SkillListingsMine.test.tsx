@@ -2,9 +2,17 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { SkillMyListing } from '@shared/skillMarket';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { SkillActionResult, SkillMyListing } from '@shared/skillMarket';
 import { SkillListingsMine } from './SkillListingsMine';
+
+const upload = vi.hoisted(() => ({ onSaved: undefined as (() => void) | undefined }));
+vi.mock('./SkillUploadDialog', () => ({
+  useSkillUpload: (onSaved?: () => void) => {
+    upload.onSaved = onSaved;
+    return { start: vi.fn(), error: null, dialog: <div data-testid="upload-result" /> };
+  },
+}));
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -34,7 +42,7 @@ const row = (overrides: Partial<SkillMyListing> = {}): SkillMyListing => ({
 let listings: SkillMyListing[] = [];
 const market = {
   mine: vi.fn(async () => ({ listings })),
-  withdraw: vi.fn(async () => {
+  withdraw: vi.fn<(id: string) => Promise<SkillActionResult>>(async () => {
     listings = listings.map(listing => (listing.id === 'l1' ? { ...listing, status: 'withdrawn' } : listing));
     return { ok: true as const };
   }),
@@ -45,14 +53,14 @@ const market = {
 (window as unknown as { b4m: unknown }).b4m = { skillMarket: market };
 
 let root: Root;
-const render = async () => {
+const render = async (onChanged?: () => void) => {
   const container = document.createElement('div');
   document.body.append(container);
   root = createRoot(container);
   await act(async () =>
     root.render(
       <CssVarsProvider>
-        <SkillListingsMine />
+        <SkillListingsMine onChanged={onChanged} />
       </CssVarsProvider>
     )
   );
@@ -61,6 +69,10 @@ const $ = (id: string, scope: ParentNode = document) => scope.querySelector<HTML
 const rows = () => [...document.querySelectorAll<HTMLElement>('[data-testid="skill-listing-row"]')];
 
 describe('SkillListingsMine', () => {
+  beforeEach(() => {
+    for (const mock of Object.values(market)) mock.mockClear();
+  });
+
   afterEach(() => {
     act(() => root.unmount());
     document.body.replaceChildren();
@@ -102,7 +114,8 @@ describe('SkillListingsMine', () => {
 
   it('withdraws only after the in-app confirm, then shows the row withdrawn without actions', async () => {
     listings = [row()];
-    await render();
+    const onChanged = vi.fn();
+    await render(onChanged);
     await act(async () => $('skill-listing-withdraw-btn')?.click());
     expect($('skill-listing-withdraw-confirm')?.textContent).toContain(
       'Withdraw /tester-guide from the market? People who imported it keep their copies.'
@@ -111,10 +124,33 @@ describe('SkillListingsMine', () => {
 
     await act(async () => $('skill-listing-withdraw-confirm-btn')?.click());
     expect(market.withdraw).toHaveBeenCalledWith('l1');
+    expect(onChanged).toHaveBeenCalledTimes(1);
     const [withdrawn] = rows();
     expect($('skill-listing-status', withdrawn)?.textContent).toBe('Withdrawn');
     expect($('skill-listing-withdraw-btn', withdrawn)).toBeNull();
     expect($('skill-listing-new-version-btn', withdrawn)).toBeNull();
+  });
+
+  it('does not announce a failed withdrawal as a market change', async () => {
+    listings = [row()];
+    market.withdraw.mockResolvedValueOnce({ ok: false, error: 'Withdrawal failed.' });
+    const onChanged = vi.fn();
+    await render(onChanged);
+    await act(async () => $('skill-listing-withdraw-btn')?.click());
+    await act(async () => $('skill-listing-withdraw-confirm-btn')?.click());
+    expect($('skill-listing-message')?.textContent).toBe('Withdrawal failed.');
+    expect(onChanged).not.toHaveBeenCalled();
+  });
+
+  it('announces a local-file version write while preserving the upload result', async () => {
+    listings = [row()];
+    const onChanged = vi.fn();
+    await render(onChanged);
+    const resultDialog = $('upload-result');
+    await act(async () => upload.onSaved?.());
+    expect(onChanged).toHaveBeenCalledTimes(1);
+    expect(market.mine).toHaveBeenCalledTimes(2);
+    expect($('upload-result')).toBe(resultDialog);
   });
 
   it('shows the sign-in prompt when signed out', async () => {

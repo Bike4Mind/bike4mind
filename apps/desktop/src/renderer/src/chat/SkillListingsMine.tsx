@@ -127,7 +127,7 @@ function ListingRow({
 }
 
 /** The user's market listings: status, versions, and the author's actions on each. */
-export function SkillListingsMine() {
+export function SkillListingsMine({ onChanged }: { onChanged?: () => void } = {}) {
   const [listings, setListings] = useState<SkillMyListing[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -140,7 +140,10 @@ export function SkillListingsMine() {
     setError(result.error ?? null);
     setListings(result.listings);
   }, []);
-  const upload = useSkillUpload(() => void load());
+  const upload = useSkillUpload(() => {
+    void load();
+    onChanged?.();
+  });
 
   useEffect(() => {
     void load();
@@ -150,6 +153,7 @@ export function SkillListingsMine() {
     setWithdrawing(null);
     const result = await window.b4m.skillMarket.withdraw(listing.id);
     setMessage(result.ok ? `Withdrew /${listing.name}.` : result.error);
+    if (result.ok) onChanged?.();
     await load();
   };
 

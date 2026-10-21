@@ -102,9 +102,14 @@ export function SkillMarketPanel({
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<SkillMarketListingRef | null>(initial ?? null);
   const [tab, setTab] = useState<'browse' | 'mine'>('browse');
-  // Bumped after an upload saves, so every market list reflects the change.
+  // Header uploads reload My listings; its own actions preserve the open result dialog.
   const [mineKey, setMineKey] = useState(0);
-  const upload = useSkillUpload(() => setMineKey(key => key + 1));
+  const [marketRevision, setMarketRevision] = useState(0);
+  const marketChanged = () => setMarketRevision(revision => revision + 1);
+  const upload = useSkillUpload(() => {
+    setMineKey(key => key + 1);
+    marketChanged();
+  });
 
   // Only the latest request lands, so a slow page for old filters cannot overwrite the new ones.
   const latest = useRef(0);
@@ -122,7 +127,7 @@ export function SkillMarketPanel({
 
   useEffect(() => {
     void load(filters, 1);
-  }, [filters, load, mineKey]);
+  }, [filters, load, marketRevision]);
 
   useEffect(() => {
     let live = true;
@@ -132,7 +137,7 @@ export function SkillMarketPanel({
     return () => {
       live = false;
     };
-  }, [mineKey]);
+  }, [marketRevision]);
 
   const set = <K extends keyof SkillMarketFilters>(key: K, value: SkillMarketFilters[K]) =>
     setFilters(previous => ({ ...previous, [key]: value }));
@@ -192,9 +197,9 @@ export function SkillMarketPanel({
           )}
           {upload.dialog}
           {tab === 'mine' ? (
-            <SkillListingsMine key={mineKey} />
+            <SkillListingsMine key={mineKey} onChanged={marketChanged} />
           ) : selected ? (
-            <SkillListingDetail listingRef={selected} onBack={() => setSelected(null)} />
+            <SkillListingDetail key={marketRevision} listingRef={selected} onBack={() => setSelected(null)} />
           ) : (
             <Stack spacing={2}>
               <form

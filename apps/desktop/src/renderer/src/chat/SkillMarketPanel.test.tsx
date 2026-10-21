@@ -17,7 +17,7 @@ const upload = vi.hoisted(() => ({ onSaved: undefined as (() => void) | undefine
 vi.mock('./SkillUploadDialog', () => ({
   useSkillUpload: (onSaved?: () => void) => {
     upload.onSaved = onSaved;
-    return { start: vi.fn(), error: null, dialog: null };
+    return { start: vi.fn(), error: null, dialog: <div data-testid="upload-result" /> };
   },
 }));
 
@@ -130,6 +130,39 @@ describe('SkillMarketPanel', () => {
     expect(recommended).toHaveBeenCalledTimes(2);
     expect(host?.textContent).toContain('/published-skill');
     expect(byTestId('skill-market-recommended')?.textContent).toContain('/new-recommendation');
+  });
+
+  it('refreshes the open listing when a header upload changes it', async () => {
+    await mount({ id: 'l1' });
+    const updated = detail();
+    if (!updated.version) throw new Error('Expected a listing version');
+    listing.mockResolvedValueOnce({
+      detail: {
+        ...updated,
+        version: { ...updated.version, snapshot: { ...updated.version.snapshot, body: 'Updated.' } },
+      },
+    });
+
+    await act(async () => upload.onSaved?.());
+
+    expect(listing).toHaveBeenCalledTimes(2);
+    expect(byTestId('skill-listing-body')?.textContent).toBe('Updated.');
+  });
+
+  it('refreshes the market after a My listings upload without replacing its result dialog', async () => {
+    const mine = vi.fn(async () => ({ listings: [] }));
+    Object.assign(window.b4m.skillMarket, { mine });
+    await mount();
+    await click('skill-market-mine-tab');
+    const resultDialog = byTestId('skill-market-mine')?.querySelector('[data-testid="upload-result"]');
+    expect(resultDialog).toBeTruthy();
+
+    await act(async () => upload.onSaved?.());
+
+    expect(mine).toHaveBeenCalledTimes(2);
+    expect(browse).toHaveBeenCalledTimes(2);
+    expect(recommended).toHaveBeenCalledTimes(2);
+    expect(byTestId('skill-market-mine')?.querySelector('[data-testid="upload-result"]')).toBe(resultDialog);
   });
 
   it('ignores an older recommendations response after an upload refresh', async () => {
