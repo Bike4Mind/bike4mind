@@ -66,6 +66,8 @@ overrides:
   "deepmerge-ts@<8.0.0": "^8.0.1"
   "undici@>=7.0.0 <8.0.0": "^7.29.0"
   "smol-toml@<1.9.0": "^1.9.0"
+  "follow-redirects@<1.16.1": "^1.16.1"
+  "markdown-it@<14.3.3": "^14.3.3"
 
 ignoredBuiltDependencies:
   - "aws-sdk"

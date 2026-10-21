@@ -30,6 +30,12 @@ vi.mock('@bike4mind/database', () => ({
   authSessionRepository: {},
   trustedDeviceRepository: { revokeAllForUser: (...a: any[]) => mockRevokeAllForUser(...a) },
   passkeyCredentialRepository: { removeAllForUser: (...a: any[]) => mockRemovePasskeys(...a) },
+  withTransaction: (fn: () => unknown) => fn(),
+}));
+// parseAdminActionReason and isSameUserId stay real; the audit write needs a database, so it is stubbed.
+vi.mock('@server/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),
+  recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
 }));
 
 const mockDisableMFA = vi.fn();
@@ -139,7 +145,10 @@ describe('/api/auth/mfa/force-reset', () => {
   });
 
   it("revokes the target user's trusts so a stolen cookie cannot outlive the reset", async () => {
-    const { req, res } = makeReqRes({ id: 'admin-1', isAdmin: true }, { userId: 'target-1' });
+    const { req, res } = makeReqRes(
+      { id: 'admin-1', isAdmin: true },
+      { userId: 'target-1', reason: 'Lost authenticator' }
+    );
 
     await forceResetHandler(req as any, res as any);
 
@@ -154,7 +163,10 @@ describe('/api/auth/mfa/force-reset', () => {
   });
 
   it('revokes nothing for a non-admin caller', async () => {
-    const { req, res } = makeReqRes({ id: 'user-9', isAdmin: false }, { userId: 'target-1' });
+    const { req, res } = makeReqRes(
+      { id: 'user-9', isAdmin: false },
+      { userId: 'target-1', reason: 'Lost authenticator' }
+    );
 
     await forceResetHandler(req as any, res as any);
 
@@ -164,7 +176,10 @@ describe('/api/auth/mfa/force-reset', () => {
   });
 
   it("removes the target user's passkeys so none can satisfy MFA after the reset", async () => {
-    const { req, res } = makeReqRes({ id: 'admin-1', isAdmin: true }, { userId: 'target-1' });
+    const { req, res } = makeReqRes(
+      { id: 'admin-1', isAdmin: true },
+      { userId: 'target-1', reason: 'Lost authenticator' }
+    );
 
     await forceResetHandler(req as any, res as any);
 

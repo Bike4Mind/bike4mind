@@ -92,6 +92,7 @@ import {
   sessionNamesALake,
   type ResolvedLakeAccessSet,
 } from '../dataLakeService/narrowLakeAccessToSession';
+import type { DecideToolFn } from './tools/base/types';
 import { nonNegativeIntOr, positiveIntOr } from '../dataLakeService/resolveSearchBudgets';
 import { resolveScopedSettingEntries, scopeForCaller } from '../settings/resolveScopedSetting';
 import {
@@ -181,8 +182,9 @@ interface DatabaseAdapters {
   // `pullKnowledgeIds` backs the stale-attachment detach in scrubMissingKnowledgeIds - a $pull, so
   // it cannot clobber a file attached concurrently the way rewriting the array through `update` would.
   // incrementImageCount is optional: only the image tools use it, via ToolContext (recordGeneratedImages).
+  // addAutoAddedTools is optional: a host without it just loses the session-sticky tool set.
   sessions: Pick<ISessionRepository, 'findById' | 'findAllByIds' | 'update' | 'attachAgent' | 'pullKnowledgeIds'> &
-    Partial<Pick<ISessionRepository, 'incrementImageCount'>>;
+    Partial<Pick<ISessionRepository, 'incrementImageCount' | 'addAutoAddedTools'>>;
   users: Pick<
     IUserRepository,
     'findById' | 'update' | 'incrementCredits' | 'recordModerationHit' | 'setModerationStatus'
@@ -489,6 +491,11 @@ export interface IChatCompletionServiceOptions {
    * reply and must not advance the reply-diff baseline.
    */
   onToolPreamble?: (preamble: string, toolName: string) => void;
+  /**
+   * The `decide` tool's execution seam, forwarded into every ToolBuilder this service builds.
+   * The app tier supplies it from the shared decision runner; absent, the tool refuses.
+   */
+  decide?: DecideToolFn;
   /** Optional callback to invoke the quest processor Lambda function. */
   invokeLambda?: (params: z.infer<typeof QuestStartBodySchema>) => Promise<void>;
   user: IUserDocument;

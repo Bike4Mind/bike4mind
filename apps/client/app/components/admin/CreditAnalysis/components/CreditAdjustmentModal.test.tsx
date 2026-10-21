@@ -54,7 +54,7 @@ describe('CreditAdjustmentModal — reason threading + audit trail', () => {
     expect(onCreditAdjustment).toHaveBeenCalledWith('user-1', 100, 'Compensation for outage');
   });
 
-  it('passes an undefined reason (not an empty string) when the note is blank on removal', async () => {
+  it('blocks add and remove until the reason is at least 5 characters', () => {
     const onCreditAdjustment = vi.fn().mockResolvedValue(undefined);
     render(
       <TestWrapper>
@@ -67,10 +67,38 @@ describe('CreditAdjustmentModal — reason threading + audit trail', () => {
       </TestWrapper>
     );
 
+    const addButton = screen.getByTestId('credit-adjust-add-btn');
+    const removeButton = screen.getByTestId('credit-adjust-remove-btn');
+    expect(addButton).toBeDisabled();
+    expect(removeButton).toBeDisabled();
+
+    fireEvent.change(screen.getByTestId('credit-adjust-reason-input'), { target: { value: 'hey' } });
+    expect(addButton).toBeDisabled();
+
+    fireEvent.change(screen.getByTestId('credit-adjust-reason-input'), { target: { value: '  Goodwill credit ' } });
+    expect(addButton).toBeEnabled();
+    expect(removeButton).toBeEnabled();
+    expect(onCreditAdjustment).not.toHaveBeenCalled();
+  });
+
+  it('sends the trimmed reason on removal', async () => {
+    const onCreditAdjustment = vi.fn().mockResolvedValue(undefined);
+    render(
+      <TestWrapper>
+        <CreditAdjustmentModal
+          open
+          onClose={() => {}}
+          selectedUser={selectedUser}
+          onCreditAdjustment={onCreditAdjustment}
+        />
+      </TestWrapper>
+    );
+
+    fireEvent.change(screen.getByTestId('credit-adjust-reason-input'), { target: { value: '  Refund reversal ' } });
     fireEvent.click(screen.getByRole('button', { name: /Remove Credits/i }));
 
     await waitFor(() => expect(onCreditAdjustment).toHaveBeenCalledTimes(1));
-    expect(onCreditAdjustment).toHaveBeenCalledWith('user-1', -100, undefined);
+    expect(onCreditAdjustment).toHaveBeenCalledWith('user-1', -100, 'Refund reversal');
   });
 
   it('renders the audit trail of recent adjustments', async () => {

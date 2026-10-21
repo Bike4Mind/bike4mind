@@ -269,6 +269,11 @@ const api: DesktopApi = {
     grantAccess: () => ipcRenderer.invoke(IPC_CHANNELS.toolsGrantAccess),
     revokeAccess: (root: string) => ipcRenderer.invoke(IPC_CHANNELS.toolsRevokeAccess, root),
   },
+  permissions: {
+    getState: () => ipcRenderer.invoke(IPC_CHANNELS.permissionsGetState),
+    setRules: (scope, lists) => ipcRenderer.invoke(IPC_CHANNELS.permissionsSetRules, scope, lists),
+    setSharing: (share: boolean) => ipcRenderer.invoke(IPC_CHANNELS.permissionsSetSharing, share),
+  },
   pullRequests: {
     watch: (sessionId: string | null) => ipcRenderer.invoke(IPC_CHANNELS.prWatch, sessionId),
     bind: (sessionId: string, url: string) => ipcRenderer.invoke(IPC_CHANNELS.prBind, sessionId, url),

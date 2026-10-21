@@ -433,6 +433,8 @@ export const web = new sst.aws.Nextjs(
     ],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
+      B4M_DEPLOYED_REVISION: process.env.B4M_DEPLOYED_REVISION || '',
+      B4M_BUILD_FINGERPRINT: process.env.B4M_BUILD_FINGERPRINT || '',
       ...TEST_GENERATION_PROVIDER_ENVIRONMENT,
       ...TEST_DECISION_PROVIDER_ENVIRONMENT,
       NEXT_PUBLIC_SERVER_DOMAIN: process.env.SERVER_DOMAIN || '',

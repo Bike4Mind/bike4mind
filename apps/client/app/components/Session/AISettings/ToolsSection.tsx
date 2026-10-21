@@ -33,6 +33,7 @@ import {
   Close as CloseIcon,
   PlaylistAddCheck as OnlyPickedToolsIcon,
   SaveAlt as SaveToDataLakeIcon,
+  Balance as DecideIcon,
 } from '@mui/icons-material';
 import { Box, Grid, Input, Tooltip, Typography, IconButton } from '@mui/joy';
 import type { BoxProps } from '@mui/joy';
@@ -89,6 +90,7 @@ export const MISSING_KEY_TOOLTIPS: Partial<Record<B4MLLMTools, string>> = {
     'Requires an OpenAI or ElevenLabs API key, in Profile > API Keys (add, then activate) or Admin > API Keys.',
   search_knowledge_base:
     'Requires an embeddings API key (VoyageAI or OpenAI) in Profile > API Keys (add, then activate) or Admin > API Keys, or a self-hosted local Ollama embedder (OLLAMA_BASE_URL).',
+  decide: 'Requires an OpenAI or TypeSafe API key in Profile > API Keys (add, then activate) or Admin > API Keys.',
 };
 
 type McpServerOption = Pick<IMcpServerResponse, 'id' | 'enabled' | 'tools'> & { name: string };
@@ -845,6 +847,25 @@ const ToolsSection = ({
               </ToolContainer>
             </Grid>
           )}
+          {/* Decisions */}
+          <Grid xs={12} className="tool-item tool-item-decide">
+            <ToolContainer sx={toolContainerSx} toolId="decide">
+              <Box
+                className="tool-content"
+                sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
+              >
+                <DecideIcon
+                  sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
+                />
+                <ToolLabel name={getToolDisplayName('decide')} description={getToolDescription('decide')} />
+              </Box>
+              <SquareSlideToggle
+                data-testid="tool-toggle-decide"
+                onChange={() => handleToggleTool('decide')}
+                checked={displayTools.includes('decide')}
+              />
+            </ToolContainer>
+          </Grid>
           {/* Financial Data (FMP) */}
           {isFmpFinancialDataEnabled && (
             <Grid xs={12} className="tool-item tool-item-fmp-financial-data">

@@ -520,6 +520,9 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         rank: 2,
         trainingCutoff: '2025-07-01',
         releaseDate: '2025-09-30',
+        // Bedrock reports it LEGACY; the static redirect in resolveDeprecatedModel.ts already serves it as 4.6,
+        // so hide it from the picker even before discovery has written the lifecycle.
+        deprecationDate: '2026-10-08',
         description:
           "Anthropic's most intelligent model hosted in AWS Bedrock. Delivers exceptional performance across coding, analysis, and complex reasoning tasks with improved speed and efficiency. Ideal for production workloads requiring both power and reliability.",
       },

@@ -41,8 +41,14 @@ vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn() }));
 
 const mockStampSourceTag = vi.fn().mockResolvedValue(undefined);
+const mockRecordSignupAcquisition = vi.fn().mockResolvedValue({ isSynthetic: false });
+const mockEmitSignupFunnelEvents = vi.fn().mockResolvedValue(undefined);
 vi.mock('@server/utils/auth/oauthSourceTag', () => ({
   stampOAuthSourceTag: (...a: unknown[]) => mockStampSourceTag(...a),
+}));
+vi.mock('@server/analytics/funnel', () => ({
+  recordSignupAcquisition: (...a: unknown[]) => mockRecordSignupAcquisition(...a),
+  emitSignupFunnelEvents: (...a: unknown[]) => mockEmitSignupFunnelEvents(...a),
 }));
 
 import '../callback';
@@ -66,9 +72,19 @@ describe('/api/auth/saml/callback - OAuth client source tag', () => {
   });
 
   it('stamps a new account with the client_id from the authorize redirectTo', async () => {
-    mockSamlUser.mockReturnValue({ id: 'u-new', isBanned: false, isNewUser: true });
+    mockSamlUser.mockReturnValue({
+      id: 'u-new',
+      isBanned: false,
+      isNewUser: true,
+      emailVerified: true,
+      signupCreditsGranted: 0,
+    });
     await runCallback(new URLSearchParams({ idp: 'idp-1', redirectTo: AUTHORIZE_REDIRECT }).toString());
     expect(mockStampSourceTag).toHaveBeenCalledWith('u-new', 'b4m_sat_0123abcd');
+    expect(mockEmitSignupFunnelEvents).toHaveBeenCalledTimes(1);
+    expect(mockEmitSignupFunnelEvents).toHaveBeenCalledWith(
+      expect.objectContaining({ method: 'saml', emailVerified: true, creditsGranted: 0 })
+    );
   });
 
   it('never stamps a returning user, even when redirectTo names a client', async () => {

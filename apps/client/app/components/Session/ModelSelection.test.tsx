@@ -588,7 +588,7 @@ describe('ModelSelection duplicate and unavailable rows', () => {
       await waitFor(() => expect(screen.queryByTestId(`model-card-${aliasId}`)).not.toBeInTheDocument());
       const favorites = screen.getByTestId('favorites-section');
       expect(within(favorites).getByTestId(`model-card-${pinnedId}`)).toBeInTheDocument();
-      expect(screen.queryByText(/No models found/)).not.toBeInTheDocument();
+      expect(screen.queryByTestId('model-selection-no-results')).not.toBeInTheDocument();
     });
   });
 

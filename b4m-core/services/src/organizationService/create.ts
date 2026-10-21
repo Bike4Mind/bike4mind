@@ -8,7 +8,6 @@ const createSchema = z.object({
   seats: z.number().prefault(1),
   stripeCustomerId: z.string().nullable(),
   billingOwnerId: z.string().optional(), // Optional billing owner (defaults to user if not provided)
-  managerId: z.string().optional(), // Optional team manager
 });
 
 type CreateParameters = z.infer<typeof createSchema>;
@@ -27,11 +26,6 @@ export const create = async (user: IUserDocument, params: CreateParameters, adap
   // Determine the billing owner (userId)
   const billingOwnerId = validatedParams.billingOwnerId ?? user.id;
 
-  // Validate that managerId is not the same as the billing owner
-  if (validatedParams.managerId && validatedParams.managerId === billingOwnerId) {
-    throw new Error('Manager cannot be the same as the billing owner');
-  }
-
   // Resolve the billing owner up front so the seeded `userDetails` row (and the active-org
   // pointer below) both describe the OWNER, not the acting caller: on an on-behalf create
   // (`POST /api/organizations` with an explicit `billingOwnerId`) the admin issuing the call
@@ -49,7 +43,6 @@ export const create = async (user: IUserDocument, params: CreateParameters, adap
      * Set Default Values
      */
     userId: billingOwnerId, // Use billingOwnerId if provided, otherwise default to user
-    managerId: validatedParams.managerId ?? null, // Set managerId if provided
     // Org-groups (#1172): a new org starts with no group types and no appointed admins (fail-closed).
     allowedGroupTypes: [],
     adminUserIds: [],

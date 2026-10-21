@@ -89,6 +89,8 @@ export interface ToolBuilderDeps {
    * path). See ToolContext.onToolLlmUsage.
    */
   onToolLlmUsage?: ToolContext['onToolLlmUsage'];
+  /** The `decide` tool's execution seam, forwarded to the tool context (see ToolContext.decide). */
+  decide?: ToolContext['decide'];
   storage: BaseStorage;
   imageGenerateStorage: BaseStorage;
   imageProcessorLambdaName?: string;
@@ -419,6 +421,7 @@ export function buildSharedTools(
       apiKeyId,
       questId: callbacks.questId,
       numberCitables: callbacks.numberCitables,
+      decide: deps.decide,
       getAbortSignal,
     },
     storage,
@@ -452,6 +455,9 @@ export function buildSharedTools(
     ...toolAvailability,
     video_generation: isVideoToolConfig(config.video_generation),
     music_generation: isMusicToolConfig(config.music_generation),
+    // `decide` runs on its host's injected seam; a host that omits it must not offer a tool whose
+    // every call would throw. Derived here, not in the deps literals, so no call site can forget.
+    decide: toolAvailability?.decide !== false && deps.decide !== undefined,
   };
 
   // Filter to enabled tools only

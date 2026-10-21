@@ -12,6 +12,7 @@ import {
   parsePermissionPolicy,
   evaluatePermissionPolicy,
   resolveHeadlessPermissionDecision,
+  buildPermissionRequestEvent,
 } from './headlessProtocol.js';
 
 describe('headless protocol envelope', () => {
@@ -264,5 +265,50 @@ describe('resolveHeadlessPermissionDecision directory-grant fail-closed (criteri
         permissionPolicy: allowAll,
       }).action
     ).toBe('allow-once');
+  });
+});
+
+describe('resolveHeadlessPermissionDecision sandbox-escalation fail-closed', () => {
+  const base = {
+    dangerouslySkipPermissions: false,
+    isDirectoryGrant: false,
+    isSandboxEscalation: true,
+    toolName: 'bash_execute',
+    riskLevel: 'low' as const,
+  };
+
+  it('denies even when the policy allows the tool', () => {
+    const policy = parsePermissionPolicy('{"allow":["bash_execute"],"defaultAction":"deny"}');
+    const decision = resolveHeadlessPermissionDecision({ ...base, permissionPolicy: policy });
+    expect(decision.action).toBe('deny');
+    expect(decision.reason).toMatch(/outside the sandbox/);
+  });
+
+  it('denies even when maxAutoAllowRisk is high', () => {
+    const policy = parsePermissionPolicy('{"maxAutoAllowRisk":"high","defaultAction":"deny"}');
+    expect(resolveHeadlessPermissionDecision({ ...base, permissionPolicy: policy }).action).toBe('deny');
+  });
+
+  it('denies with no policy at all', () => {
+    expect(resolveHeadlessPermissionDecision({ ...base, permissionPolicy: null }).action).toBe('deny');
+  });
+
+  it('is allowed under --dangerously-skip-permissions', () => {
+    expect(
+      resolveHeadlessPermissionDecision({ ...base, dangerouslySkipPermissions: true, permissionPolicy: null }).action
+    ).toBe('allow-once');
+  });
+});
+
+describe('buildPermissionRequestEvent', () => {
+  it('carries the prompt kind, defaulting to tool', () => {
+    const risk = { level: 'low', reasons: [] };
+    expect(buildPermissionRequestEvent('bash_execute', risk)).toEqual({
+      type: 'permission_request',
+      toolName: 'bash_execute',
+      risk,
+      kind: 'tool',
+    });
+    expect(buildPermissionRequestEvent('bash_execute', risk, 'sandbox-escalation').kind).toBe('sandbox-escalation');
   });
 });

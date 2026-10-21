@@ -35,7 +35,7 @@ const scopesOf = () => (handler as unknown as { _config?: { requiredScopes?: str
 const NOW = new Date('2026-10-19T00:00:00.000Z');
 const DAY_MS = 24 * 60 * 60 * 1000;
 const COUNTS = {
-  creditGrants: { count: 2, topGranters: [] },
+  creditGrants: { count: 2, grantedCredits: 0, deductedCredits: 0, topGranters: [] },
   permissionChanges: 1,
   impersonations: 0,
   deletions: 0,

@@ -68,6 +68,14 @@ export class SkillsPage extends BasePage {
     await expect(this.page.getByTestId('new-skill-page')).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
   }
 
+  /** Navigate directly to a skill's detail page by id. */
+  async gotoDetail(id: string) {
+    await this.page.goto(`/skills/${id}`);
+    await this.page.waitForLoadState('domcontentloaded');
+    await this.dismissModals();
+    await expect(this.page.getByTestId('skill-detail-page')).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
+  }
+
   /** Fill only the provided fields. `clear` first for the edit flow's prefilled inputs. */
   async fillForm(values: Partial<SkillFormValues>, opts: { clear?: boolean } = {}) {
     if (values.name !== undefined) await this.setInput('skill-name-input', values.name, opts.clear);
@@ -208,6 +216,28 @@ export class SkillsPage extends BasePage {
     const input = this.switchInput('skill-share-global-write');
     if (checked) await expect(input).toBeChecked();
     else await expect(input).not.toBeChecked();
+  }
+
+  /** Non-admin view of a non-global skill: no global switches, the Skill Market hint instead. */
+  async expectGlobalTogglesHidden() {
+    await expect(this.page.getByTestId('skill-share-market-hint')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    // `toBeHidden` also passes on zero matches, so pin the switches' presence first.
+    await expect(this.page.getByTestId('skill-share-global-read')).toHaveCount(1);
+    await expect(this.page.getByTestId('skill-share-global-write')).toHaveCount(1);
+    await expect(this.page.getByTestId('skill-share-global-read')).toBeHidden();
+    await expect(this.page.getByTestId('skill-share-global-write')).toBeHidden();
+  }
+
+  async expectGlobalReadEnabled(enabled: boolean) {
+    const input = this.switchInput('skill-share-global-read');
+    if (enabled) await expect(input).toBeEnabled();
+    else await expect(input).toBeDisabled();
+  }
+
+  async expectGlobalWriteEnabled(enabled: boolean) {
+    const input = this.switchInput('skill-share-global-write');
+    if (enabled) await expect(input).toBeEnabled();
+    else await expect(input).toBeDisabled();
   }
 
   /** Save the share dialog; asserts the PUT .../share fires and the dialog closes. */

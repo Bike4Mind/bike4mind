@@ -18,13 +18,13 @@ const cut = (source: string, start: string, end: string) => {
 };
 
 describe('githubLakeReconcile cron', () => {
-  const cron = cut(CRON, "const githubLakeReconcileCron = new sst.aws.Cron('githubLakeReconcile'", '\n});');
+  const cron = cut(CRON, 'const githubLakeReconcileCron = runsScheduledJobs', '\n  : undefined;');
 
   it('runs the workers reconcile handler every 15 minutes in the VPC', () => {
     expect(cron).toMatch(/schedule:\s*'rate\(15 minutes\)'/);
     expect(cron).toMatch(/handler:\s*'apps\/workers\/src\/cron\/githubLakeReconcile\.handler'/);
     expect(cron).toMatch(/vpc:\s*lambdaVpc/);
-    expect(cron).toMatch(/enabled:\s*\['production',\s*'dev'\]\.includes\(\$app\.stage\)/);
+    expect(cron).toMatch(/=\s*runsScheduledJobs\s*\?\s*new sst\.aws\.Cron\(/);
   });
 
   it('links the ingest queue it enqueues onto, alongside the secrets', () => {
