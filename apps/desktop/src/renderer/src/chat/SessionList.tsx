@@ -36,7 +36,7 @@ import {
 } from '@shared/chat';
 import type { PrSummary } from '@shared/pullRequest';
 import { sectionOf, type SidebarSection, type SidebarSectionsState } from '@shared/sidebarSections';
-import { capRows, setGroupLimit, useGroupLimit } from './groupCap';
+import { capRows, raisedRows, setGroupLimit, useGroupLimit } from './groupCap';
 import { groupSessions, orderedSessions, type CustomGroup, type ProjectGroup } from './grouping';
 import {
   ArrowLeftIcon,
@@ -654,22 +654,19 @@ function CappedSessionRows({
   row: (session: ChatSessionSummary) => ReactNode;
 }) {
   const limit = useGroupLimit(groupKey);
-  // Append-only and idempotent, so a repeat render (React may discard and re-run one) is harmless.
-  const raised = useRef(new Set<string>());
   const capped = useMemo(() => {
     if (uncapped) return null;
+    // Append-only and idempotent, so a repeat render (React may discard and re-run one) is harmless.
+    const raised = raisedRows(groupKey);
     const rows = capRows(
       sessions,
       limit,
       session =>
-        raised.current.has(session.id) ||
-        session.id === activeId ||
-        isLive(statuses.get(session.id)) ||
-        session.id === revealId
+        raised.has(session.id) || session.id === activeId || isLive(statuses.get(session.id)) || session.id === revealId
     );
-    for (const session of rows.visible.slice(limit)) raised.current.add(session.id);
+    for (const session of rows.visible.slice(limit)) raised.add(session.id);
     return rows;
-  }, [sessions, uncapped, limit, activeId, revealId, statuses]);
+  }, [groupKey, sessions, uncapped, limit, activeId, revealId, statuses]);
 
   return (
     <>

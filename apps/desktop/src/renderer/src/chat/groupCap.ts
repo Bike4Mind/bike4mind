@@ -43,9 +43,10 @@ export function capRows(
   return { visible, hidden: sessions.length - visible.length, nextLimit };
 }
 
-// Per group key, for this run only: a sidebar collapse, a mode switch or a remount keeps it,
+// Per group key, for this run only: a sidebar collapse, a mode switch or a remount keeps them,
 // a relaunch starts every group at the cap again.
 const limits = new Map<string, number>();
+const raised = new Map<string, Set<string>>();
 const listeners = new Set<() => void>();
 
 function subscribe(listener: () => void): () => void {
@@ -61,6 +62,13 @@ export function setGroupLimit(key: string, limit: number): void {
   if (limit <= GROUP_ROW_CAP) limits.delete(key);
   else limits.set(key, limit);
   for (const listener of listeners) listener();
+}
+
+/** Ids of the rows a group has drawn past its cap, which keep drawing after they stop being kept. */
+export function raisedRows(key: string): Set<string> {
+  let ids = raised.get(key);
+  if (!ids) raised.set(key, (ids = new Set()));
+  return ids;
 }
 
 export function useGroupLimit(key: string): number {

@@ -252,23 +252,25 @@ describe('SessionList project cap', () => {
 
   it('keeps the count across a sidebar collapse, a mode switch and a remount', () => {
     const sessions = projectSessions(80);
-    render({ sessions });
+    render({ sessions, activeId: 's79' });
+    render({ sessions, activeId: 's0' });
     click(showMore());
-    expect(groupTitles()).toHaveLength(30);
+    expect(groupTitles()).toHaveLength(31);
 
     render({ sessions, collapsed: true });
     expect(query('project-group')).toBeNull();
     render({ sessions });
-    expect(groupTitles()).toHaveLength(30);
+    expect(groupTitles()).toHaveLength(31);
+    expect(groupTitles()).toContain('Task 79');
 
     render({ sessions, mode: 'chat' });
     render({ sessions });
-    expect(groupTitles()).toHaveLength(30);
+    expect(groupTitles()).toHaveLength(31);
 
     act(() => root?.unmount());
     root = createRoot(host as HTMLElement);
     render({ sessions });
-    expect(groupTitles()).toHaveLength(30);
+    expect(groupTitles()).toHaveLength(31);
   });
 
   it('keeps the newest on top when a session arrives', () => {
