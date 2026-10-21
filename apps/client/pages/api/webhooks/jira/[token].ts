@@ -59,6 +59,9 @@ import {
 } from '@server/integrations/jira/webhookUtils';
 import { WebhookProcessingResult, extractIssueInfo, matchesFilters } from '@server/integrations/jira/types';
 
+/** Consecutive failed deliveries after which a subscription is auto-disabled. */
+const JIRA_AUTO_DISABLE_FAILURE_THRESHOLD = 10;
+
 /**
  * Sanitize a webhook payload for storage by stripping sensitive/verbose fields.
  * Retains only the structural data needed for debugging failed deliveries.
@@ -518,6 +521,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         subscriptions.map(async subscription => {
           const startTime = Date.now();
           let failureCounted = false;
+          let sent = false;
 
           try {
             // Check issue filters (only for issue/comment events)
@@ -543,6 +547,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
             const slackMessage = formatEventForSlack(webhookEventType, payload, atlassianSiteUrl);
 
             const slackResult = await sendToSlack(slackClient, channel, slackMessage);
+            sent = slackResult.success;
             const processingDurationMs = Date.now() - startTime;
 
             if (slackResult.success) {
@@ -554,7 +559,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
               // Increment failure counter
               const { wasAutoDisabled } = await jiraWebhookSubscriptionRepository.incrementConsecutiveFailuresAtomic(
                 subscription.id,
-                10, // threshold
+                JIRA_AUTO_DISABLE_FAILURE_THRESHOLD,
                 slackResult.error || 'Unknown error'
               );
 
@@ -576,19 +581,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
               return { subscriptionId: subscription.id, status: JiraWebhookDeliveryStatus.Failed };
             }
           } catch (err) {
-            if (!failureCounted) {
+            // A message that already went out must not count against the auto-disable threshold
+            // just because bookkeeping after the send failed.
+            if (!sent && !failureCounted) {
               await jiraWebhookSubscriptionRepository.incrementConsecutiveFailuresAtomic(
                 subscription.id,
-                10,
+                JIRA_AUTO_DISABLE_FAILURE_THRESHOLD,
                 err instanceof Error ? err.message : 'Slack delivery failed'
               );
             }
-            await recordDelivery(
-              subscription,
-              JiraWebhookDeliveryStatus.Failed,
-              err instanceof Error ? err.message : 'Slack delivery failed',
-              Date.now() - startTime
-            );
+            if (!sent) {
+              await recordDelivery(
+                subscription,
+                JiraWebhookDeliveryStatus.Failed,
+                err instanceof Error ? err.message : 'Slack delivery failed',
+                Date.now() - startTime
+              );
+            }
             logger.error('[JIRA-WEBHOOK] Error processing subscription', {
               subscriptionId: subscription.id,
               error: err,
