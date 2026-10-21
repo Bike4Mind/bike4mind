@@ -201,11 +201,14 @@ import {
   buildTaggedContextMessages,
   filterByPromptMode,
   filterFeaturesByPromptMode,
+  isPerTurnContext,
+  markHistoryCacheAnchor,
   markShareablePrefixBoundary,
   PROMPT_MODE_SOURCES,
   PROMPT_SOURCE_METADATA,
   resolveForcedRetrieval,
   SYSTEM_PROMPT_PRIORITY,
+  relocatePerTurnContext,
   resolveSkipAutoOffers,
   lakeContentTokens,
   toPromptDetails,
@@ -3761,6 +3764,17 @@ export class ChatCompletionProcess {
       // to translate it (Anthropic-family does, the others ignore it per the field's contract),
       // and the cacheStrategy built later in this method still governs the other breakpoints.
       markShareablePrefixBoundary(admittedContextMessages);
+      // The per-turn sources that ride in the current user turn instead of system (see
+      // PER_TURN_CONTEXT_SOURCES). Not under a promptMode: those callers asked for a request
+      // they can compare against the bare model, and moving their own system messages would alter it.
+      // `extraContext` moves only where the producer flagged it: the same channel carries the real
+      // system prompt of voice, Slack and programmatic launches.
+      const perTurnExtraContext = new Set<IMessage>(extraContextMessages.filter(m => m.perTurn === true) as IMessage[]);
+      const perTurnContextMessages = new Set<IMessage>(
+        promptMode
+          ? []
+          : admittedContextMessages.filter(t => isPerTurnContext(t, perTurnExtraContext)).map(t => t.message)
+      );
       const contextAndSystemMessages: IMessage[] = admittedContextMessages.map(t => t.message);
       // Carries each message's source across into the builder, which sees only an IMessage[] and so
       // could otherwise decide what to drop on array position alone. Keyed by reference, which survives
@@ -3800,6 +3814,9 @@ export class ChatCompletionProcess {
         buildOptions
       );
       let messages = firstBuild.messages;
+      // Where the cache breakpoint belongs: the last message the next turn will reproduce as history.
+      // Reassigned by the overflow-recovery rebuild below, which sheds turns and rebuilds `messages`.
+      let lastHistoryMessage = previousMessages.at(-1);
       const messageTruncationInfo = firstBuild.messageTruncation;
       // Unlike messageTruncationInfo, this DOES get refreshed by the overflow-recovery rebuild below -
       // that rebuild produces fresh message identities, so pinning to the first build would report
@@ -3959,6 +3976,7 @@ export class ChatCompletionProcess {
             const trimmed = dropOldestHistoryTurn(recoveryHistory);
             if (!trimmed) break; // only the most-recent turn left: system/tools/prompt itself is oversized
             recoveryHistory = trimmed;
+            lastHistoryMessage = recoveryHistory.at(-1);
             // messageTruncationInfo is deliberately not refreshed here - it stays pinned to the first build.
             // Reserve toolSchemaTokens up front: this loop recomputes inputTokens as effectiveTotalTokens
             // + toolSchemaTokens at the bottom of every iteration, so budgeting this rebuild on the raw
@@ -4164,7 +4182,8 @@ export class ChatCompletionProcess {
             admittedContextMessages,
             deliveredMessages,
             undefined,
-            injectedBlocks
+            injectedBlocks,
+            perTurnContextMessages
           );
         } catch (promptTextError) {
           logger.warn(`📊 Failed to itemize the effective system prompt:`, promptTextError);
@@ -4651,6 +4670,21 @@ export class ChatCompletionProcess {
       // Start the cancellation watcher
       startCancellationWatcher();
 
+      // The request body. Per-turn context moves from the system prompt into the front of the current
+      // user message here, last: budgeting, delivery telemetry and overflow recovery above all work
+      // on the system-role form, and `messages` stays that form for everything persisted from it.
+      // The history breakpoint is flagged on the message itself, before relocation, so both the
+      // adapter's same-role merge and the tool rounds below see the same object.
+      const anchoredMessages = markHistoryCacheAnchor(messages, lastHistoryMessage);
+      const turnContext = relocatePerTurnContext(
+        anchoredMessages,
+        perTurnContextMessages,
+        currentUserPromptMessages[0]
+      );
+      let outboundMessages = turnContext.messages;
+      // The adapter's own end-of-array anchor would only add a breakpoint on the volatile current turn.
+      const historyAnchorMarked = anchoredMessages !== messages;
+
       // Check if Research Mode is enabled and handle parallel processing
       if (isResearchMode) {
         logger.info(
@@ -4662,7 +4696,7 @@ export class ChatCompletionProcess {
         // Handle Research Mode parallel processing
         const researchResults = await researchModeService.processResearchMode(
           researchMode,
-          messages,
+          outboundMessages,
           options as ICompletionOptions,
           async (configId: string, streamedTexts: (string | null | undefined)[], completionInfo?: unknown) => {
             // Handle streaming for each configuration
@@ -4870,21 +4904,23 @@ export class ChatCompletionProcess {
             });
 
             // Determine cache strategy (enable for multi-turn conversations with 2+ messages)
-            const messageCount = messages.length;
+            const messageCount = outboundMessages.length;
             const hasTools = !!options.tools?.length;
 
             // Count message types for debugging
             const messageBreakdown = {
-              system: messages.filter(m => m.role === 'system').length,
-              user: messages.filter(m => m.role === 'user').length,
-              assistant: messages.filter(m => m.role === 'assistant').length,
+              system: outboundMessages.filter(m => m.role === 'system').length,
+              user: outboundMessages.filter(m => m.role === 'user').length,
+              assistant: outboundMessages.filter(m => m.role === 'assistant').length,
             };
 
             const cacheStrategy: ICacheStrategy = {
               enableCaching: messageCount >= 2, // Enable caching for multi-turn conversations
               cacheSystemPrompt: true, // Always cache system prompts
               cacheTools: hasTools, // Cache tools if present
-              cacheConversationHistory: messageCount >= 2, // Cache history for multi-turn
+              // A flagged history message already closes the cached prefix; asking the adapter for
+              // its own end-of-array anchor would cache the current turn as well.
+              cacheConversationHistory: !historyAnchorMarked && messageCount >= 2, // Cache history for multi-turn
               cacheTTL: '5m', // Use 5-minute TTL for active conversations
               conversationId: quest.id, // Use quest ID for xAI cache affinity
             };
@@ -4919,7 +4955,7 @@ export class ChatCompletionProcess {
             if (
               process.env.E2E_ENDPOINTS_ENABLED === 'true' &&
               (currentModel.backend === ModelBackend.Bedrock || currentModel.backend === ModelBackend.Anthropic) &&
-              JSON.stringify(messages).includes(FORCE_FALLBACK_TEST_MARKER)
+              JSON.stringify(outboundMessages).includes(FORCE_FALLBACK_TEST_MARKER)
             ) {
               const forced = new Error(
                 `ServiceUnavailableException: simulated ${currentModel.backend} outage for fallback testing (preview only)`
@@ -4930,7 +4966,7 @@ export class ChatCompletionProcess {
 
             await currentLlm.complete(
               currentModel.id,
-              messages,
+              outboundMessages,
               {
                 ...options,
                 // The preference is set from a selector shown only for OpenAI-style reasoning models, so
@@ -5189,6 +5225,7 @@ export class ChatCompletionProcess {
                 `🔧 [Tool Pairing Recovery] Detected tool pairing error, stripping tool blocks from history and retrying`
               );
               messages = stripAllToolBlocks(messages, logger);
+              outboundMessages = stripAllToolBlocks(outboundMessages, logger);
 
               resetStreamStateForRetry();
 
