@@ -527,9 +527,15 @@ groups with per-group actions (new session, search, settings) and a leading stat
   main's stream events, not the open conversation, so a session replying in the background shows
   as running.
 
-Two of its entries have no counterpart here. **Artifacts** is dropped: desktop conversations are
-local and produce none. **Customize** maps onto the folder grants this app already had, which
-moved out of the account panel into the collapsible **More**.
+**Artifacts** opens a searchable grid of the artifacts created by this app across your machines.
+Thumbnails load as cards approach the viewport; select a card to view it or share its live link.
+Use Back or Escape to return to the grid. **Refresh** reloads the list and thumbnail bodies after
+an edit in the web app. Search, filters and counts cover the newest 100 artifacts at most.
+
+The library requires a signed-in account and network access. If the list or an opened artifact
+cannot load, its error offers **Try again**; sign in again if your session has expired.
+**Customize** maps onto the folder grants this app already had, which moved out of the account
+panel into the collapsible **More**.
 
 ## Authentication
 

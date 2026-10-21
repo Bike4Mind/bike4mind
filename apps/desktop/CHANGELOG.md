@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+- Show artifact thumbnails in a searchable grid with a full-panel detail view, and reload cached bodies on Refresh.
+
 - Add account-scoped Claude Code sync and claude.ai export import, with continued sessions protected from later imports and removal.
 - Move Settings to a dedicated page with General, Permissions and Import sections.
 - Add persistent permission rules and optional sharing of Claude Code rules, with deny and ask precedence.
