@@ -69,8 +69,9 @@ const SCOPE_VALUES = new Set<string>(Object.values(ApiKeyScope));
 
 // Exported gate lists a route can pass to baseApi or assertApiKeyScope, by export name. A route
 // gated through a list from a module not imported here fails its claim, so add the module.
+const SCOPE_MODULES = [agentScopes, dataLakeScopes, fileScopes, projectScopes];
 const GATE_LISTS = new Map<string, readonly ApiKeyScope[]>(
-  Object.entries({ ...agentScopes, ...dataLakeScopes, ...fileScopes, ...projectScopes }).filter(
+  SCOPE_MODULES.flatMap(m => Object.entries(m)).filter(
     (entry): entry is [string, ApiKeyScope[]] =>
       Array.isArray(entry[1]) && entry[1].length > 0 && entry[1].every(v => SCOPE_VALUES.has(v))
   )
@@ -309,6 +310,11 @@ describe('apiKeyScopes endpoint claims', () => {
     const source = 'const api = baseApi({});\napi.get(handler);';
     expect(servesVerb(source, 'GET')).toBe(true);
     expect(servesVerb(source, 'POST')).toBe(false);
+  });
+
+  it('finds no export name shared by two scope modules, which would shadow one gate list', () => {
+    const names = SCOPE_MODULES.flatMap(m => Object.keys(m));
+    expect(names.filter((name, i) => names.indexOf(name) !== i)).toEqual([]);
   });
 
   it('parses every endpoint entry, or it is prose that names no /api/ path', () => {
