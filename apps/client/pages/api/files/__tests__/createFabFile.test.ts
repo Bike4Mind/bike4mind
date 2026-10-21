@@ -525,11 +525,18 @@ describe('POST /api/files/createFabFile - release-notes:write key', () => {
 
   it.each([
     ['without a purpose', body(), { user: { id: 'u1', isAdmin: true } }],
-    ['with another purpose', mp4({ purpose: 'other' }), { user: { id: 'u1', isAdmin: true } }],
     ['for a non-admin user', mp4(), { user: { id: 'u1', isAdmin: false } }],
   ])('refuses any other file %s with a 403', async (_case, payload, overrides) => {
     const { res } = makeRes();
     await expect(run(payload, res, { ...releaseKey, ...overrides })).rejects.toMatchObject({ statusCode: 403 });
+    expect(h.fabFileCreate).not.toHaveBeenCalled();
+  });
+
+  it('refuses another purpose at validation, before any upload', async () => {
+    const { res } = makeRes();
+    await expect(
+      run(mp4({ purpose: 'other' }), res, { ...releaseKey, user: { id: 'u1', isAdmin: true } })
+    ).rejects.toMatchObject({ name: 'ZodError' });
     expect(h.fabFileCreate).not.toHaveBeenCalled();
   });
 
