@@ -184,6 +184,8 @@ import UnsetStoredDefaultForcedRetrievalFloor from './20260921235999_unset-store
 import EnsureArtifactOwnedKeysetIndex from './20260921235993_ensure-artifact-owned-keyset-index';
 import EnsureSkillListingIndexes from './20260921235960_ensure-skill-listing-indexes';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
+import BackfillSkillListingClaudePluginName from './20260921235963_backfill-skilllisting-claude-plugin-name';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import EnsureConnectionIndexes from './20260921235988_ensure-connection-indexes';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import MoveQuestAnsweredByToRedirectedFrom from './20260921235987_move-quest-answeredby-to-redirectedfrom';
@@ -352,6 +354,7 @@ const coreMigrations: MigrationFile[] = [
   UnsetStoredDefaultForcedRetrievalFloor,
   EnsureArtifactOwnedKeysetIndex,
   EnsureSkillListingIndexes,
+  BackfillSkillListingClaudePluginName,
   EnsureConnectionIndexes,
   MoveQuestAnsweredByToRedirectedFrom,
   EnsureMcpConnectionIndexes,
