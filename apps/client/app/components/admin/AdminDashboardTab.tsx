@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import dayjs from 'dayjs';
 import { Link } from '@tanstack/react-router';
 import { Alert, Box, Button, Card, Grid, LinearProgress, Stack, Typography } from '@mui/joy';
@@ -8,6 +8,7 @@ import { AdminTab } from './adminSidebarConfig';
 import { UsageBySourceCard } from './EventMetrics/components/UsageBySourceCard';
 import { OverviewTab } from './EventMetrics/components/OverviewTab';
 import { useEventMetrics } from './EventMetrics/hooks/useEventMetrics';
+import type { EventMetric } from './EventMetrics/types';
 import { processChartData } from './EventMetrics/utils/chartDataProcessor';
 
 const DASHBOARD_SHORTCUTS = [
@@ -39,17 +40,22 @@ type AdminDashboardTabProps = {
   onNavigate: (tab: AdminTab) => void;
 };
 
+const NO_METRICS: EventMetric[] = [];
+
 const getActivityWindow = () => ({
   dateFrom: dayjs().startOf('day').subtract(6, 'day').toISOString(),
   dateTo: dayjs().endOf('day').toISOString(),
 });
 
 export default function AdminDashboardTab({ onNavigate }: AdminDashboardTabProps) {
-  const additionalDashboards = premiumRoutes.flatMap(route =>
-    route.adminDashboard ? [{ path: route.path, ...route.adminDashboard }] : []
+  const additionalDashboards = useMemo(
+    () => premiumRoutes.flatMap(route => (route.adminDashboard ? [{ path: route.path, ...route.adminDashboard }] : [])),
+    []
   );
   const [filters, setFilters] = useState(getActivityWindow);
-  const { data: metrics = [], isLoading, isFetching, isError, forceRefresh } = useEventMetrics(filters);
+  const { data: metrics = NO_METRICS, isLoading, isFetching, isError, forceRefresh } = useEventMetrics(filters);
+
+  const chartData = useMemo(() => processChartData(metrics), [metrics]);
 
   const refreshActivity = () => {
     const nextWindow = getActivityWindow();
@@ -172,7 +178,7 @@ export default function AdminDashboardTab({ onNavigate }: AdminDashboardTabProps
           </Typography>
         )}
         {!isLoading && metrics.length > 0 && (
-          <OverviewTab metrics={metrics} chartData={processChartData(metrics)} showUsageBySource={false} />
+          <OverviewTab metrics={metrics} chartData={chartData} showUsageBySource={false} />
         )}
       </Stack>
     </Stack>
