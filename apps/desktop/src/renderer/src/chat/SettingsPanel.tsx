@@ -29,7 +29,7 @@ import {
   SlidersIcon,
   SparkIcon,
 } from './icons';
-import { contentColumnSx, thinScrollbarSx } from './layout';
+import { columnStackSx, contentColumnSx, thinScrollbarSx } from './layout';
 import { PermissionsSettings, permissionsSummary, usePermissions } from './PermissionsSettings';
 import { promptSuggestionsSummary, usePromptSuggestionModel, usePromptSuggestions } from './promptSuggestions';
 import { SuggestionModelPicker } from './SuggestionModelPicker';
@@ -267,24 +267,25 @@ export function SettingsScreen({
 
   return (
     <Stack sx={{ height: '100vh', bgcolor: 'background.body' }} data-testid="settings-panel">
-      <Stack
-        direction="row"
-        alignItems="center"
-        spacing={1}
-        sx={{ px: 1.5, py: 1.25, borderBottom: '1px solid', borderColor: 'divider' }}
-      >
-        <IconButton
-          size="sm"
-          variant="plain"
-          color="neutral"
-          aria-label="Back"
-          onClick={onClose}
-          data-testid="settings-close-btn"
-        >
-          <ArrowLeftIcon />
-        </IconButton>
-        <Typography level="title-md">Settings</Typography>
-      </Stack>
+      {/* Same header as ProfileScreen's, gutter included, so the two pages reached from the
+          account menu put the back button and title in the same place. */}
+      <Box sx={{ borderBottom: '1px solid', borderColor: 'divider', ...columnStackSx }}>
+        <Stack direction="row" alignItems="center" spacing={1} sx={{ ...contentColumnSx, py: 1.25 }}>
+          <IconButton
+            size="sm"
+            variant="plain"
+            color="neutral"
+            aria-label="Back to conversations"
+            onClick={onClose}
+            data-testid="settings-close-btn"
+          >
+            <ArrowLeftIcon />
+          </IconButton>
+          <Typography level="title-sm" sx={{ flex: 1 }}>
+            Settings
+          </Typography>
+        </Stack>
+      </Box>
 
       <Stack direction="row" sx={{ flex: 1, minHeight: 0 }}>
         <List
