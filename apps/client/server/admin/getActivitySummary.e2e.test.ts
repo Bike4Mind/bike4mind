@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import mongoose, { type PipelineStage } from 'mongoose';
-import { createMongoServer } from '../../../../packages/database/src/__test__/createMongoServer';
+import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { getActivitySummary } from './getActivitySummary';
+
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 const { aggregate } = vi.hoisted(() => ({ aggregate: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({ CounterLog: { aggregate } }));
