@@ -32,6 +32,8 @@ export type ToolDescriptor = {
   openWorld?: boolean;
   /** Argument holding a shell command, run through the command-risk gate. */
   commandArg?: string;
+  /** Run the `commandArg` command inside the OS sandbox. Honored for core tools only (toolPolicy.ts). */
+  sandbox?: 'command';
   /** Argument holding the file path the tool writes: checkpointed before the write, reported after it. */
   writePathArg?: string;
 };

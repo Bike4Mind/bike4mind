@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { describePythonImportError, detectPythonPackages } from '../pythonPackages';
+import { describePythonImportError, detectPythonImports, detectPythonPackages } from '../pythonPackages';
 
 describe('detectPythonPackages', () => {
   it('detects scipy from a dotted from-import', () => {
@@ -16,6 +16,21 @@ describe('detectPythonPackages', () => {
 
   it('ignores unsupported and commented-out imports', () => {
     expect(detectPythonPackages('import highspy\n# import pandas\nimport os, sys')).toEqual([]);
+  });
+});
+
+describe('detectPythonImports', () => {
+  it('lists every top-level module, supported or not, deduplicated in first-seen order', () => {
+    const code = 'import torch.nn as nn, os\nfrom transformers import AutoModel\nimport numpy\nfrom torch import optim';
+    expect(detectPythonImports(code)).toEqual(['torch', 'os', 'numpy', 'transformers']);
+  });
+
+  it('drops tokens that are not module names', () => {
+    expect(detectPythonImports('import numpy as np, \\\n    pandas\nimport *')).toEqual(['numpy']);
+  });
+
+  it('ignores relative and commented-out imports', () => {
+    expect(detectPythonImports('from . import utils\nfrom .models import Net\n# import torch')).toEqual([]);
   });
 });
 

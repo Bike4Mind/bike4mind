@@ -3,7 +3,7 @@ import type { IFabFileVersion } from '@bike4mind/common';
 
 const { getFilesStorage, deleteMock } = vi.hoisted(() => ({ getFilesStorage: vi.fn(), deleteMock: vi.fn() }));
 
-vi.mock('@server/utils/storage', () => ({ getFilesStorage }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage }));
 vi.mock('@bike4mind/database', () => ({ adminSettingsRepository: {} }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
 

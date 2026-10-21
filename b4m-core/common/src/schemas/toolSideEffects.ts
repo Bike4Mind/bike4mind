@@ -59,6 +59,10 @@ const CORE_TOOL_SIDE_EFFECTS: Record<B4MLLMTools, ToolSideEffects> = {
   bob_panel_read: 'none',
   // Expands a stored instruction template into text for the next turn; writes nothing.
   skill: 'none',
+  // Classifies text the caller already holds: no stored write, no outbound action on anyone's
+  // behalf. Its spend is capped by the same up-front credit reservation the route uses, which is
+  // why auto-allowing it is the same call deep_research makes.
+  decide: 'none',
 
   // Emit an <artifact> block or a UI suggestion and nothing else.
   recharts: 'local',

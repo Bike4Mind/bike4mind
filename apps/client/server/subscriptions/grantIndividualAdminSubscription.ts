@@ -4,7 +4,7 @@ import { CreditHolderType, dayjs } from '@bike4mind/common';
 import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
 import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
 import { subscriptionRepository } from '@server/models/Subscription';
-import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
+import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 import { randomUUID } from 'crypto';
 
 export type GrantIndividualAdminSubscriptionResult =

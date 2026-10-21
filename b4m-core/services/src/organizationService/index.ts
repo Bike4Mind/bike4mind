@@ -3,8 +3,6 @@ import type { SearchParameters } from './search';
 import { get } from './get';
 import { addMember } from './addMember';
 import { applyPartnerRuleMembership } from './applyPartnerRuleMembership';
-import { assignManager } from './assignManager';
-import { removeManager } from './removeManager';
 import getUsers from './getUsers';
 import { create } from './create';
 import { update } from './update';
@@ -46,8 +44,6 @@ export {
   setMemberCreditDefault,
   setMemberCreditOverride,
   applyPartnerRuleMembership,
-  assignManager,
-  removeManager,
   getUsers,
   create,
   update,

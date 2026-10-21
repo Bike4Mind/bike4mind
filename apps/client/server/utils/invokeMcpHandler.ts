@@ -6,9 +6,9 @@ import { getBreaker, classifyOperation, CircuitBreakerError } from '@server/serv
 import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
 import type { IntegrationAuditIntegrationName } from '@bike4mind/database';
 import { INTEGRATION_AUDIT_INTEGRATION_NAMES } from '@bike4mind/database';
-import { recordCircuitBreakerRejection } from '@server/utils/cloudwatch';
+import { recordCircuitBreakerRejection } from '@bike4mind/server-utils/utils/cloudwatch';
 import { persistRateLimitEvents, throttleIfNearRateLimit } from '@server/utils/mcpRateLimitSnapshots';
-import { resolveMcpTenantKey, UNATTRIBUTED_MCP_TENANT } from '@server/utils/mcpTenantKey';
+import { resolveMcpTenantKey, UNATTRIBUTED_MCP_TENANT } from '@bike4mind/server-utils/utils/mcpTenantKey';
 import { randomUUID } from 'crypto';
 import { Resource } from 'sst';
 

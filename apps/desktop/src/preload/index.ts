@@ -89,6 +89,7 @@ const api: DesktopApi = {
   },
   chat: {
     listModels: (force?: boolean) => ipcRenderer.invoke(IPC_CHANNELS.chatListModels, force ?? false),
+    listSuggestionModels: () => ipcRenderer.invoke(IPC_CHANNELS.chatListSuggestionModels),
     setSessionModel: (sessionId: string, model: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionModel, sessionId, model),
     setSessionReasoningEffort: (sessionId: string, effort: ReasoningEffortSetting) =>
@@ -122,7 +123,8 @@ const api: DesktopApi = {
     clearContext: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatClearContext, sessionId),
     compactContext: (sessionId: string, focus?: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatCompactContext, sessionId, focus),
-    suggestNextPrompt: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatSuggestNextPrompt, sessionId),
+    suggestNextPrompt: (sessionId: string, model?: string | null) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatSuggestNextPrompt, sessionId, model ?? null),
     getQueuedMessages: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatGetQueued, sessionId),
     cancelQueuedMessage: (sessionId: string, queuedId: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatCancelQueued, sessionId, queuedId),
@@ -193,6 +195,14 @@ const api: DesktopApi = {
     setProjectSkillsTrusted: (sessionId, trusted) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetProjectSkillsTrusted, sessionId, trusted),
   },
+  skillMarket: {
+    browse: (filters, page) => ipcRenderer.invoke(IPC_CHANNELS.skillMarketBrowse, filters, page),
+    recommended: () => ipcRenderer.invoke(IPC_CHANNELS.skillMarketRecommended),
+    listing: ref => ipcRenderer.invoke(IPC_CHANNELS.skillMarketListing, ref),
+    importListing: request => ipcRenderer.invoke(IPC_CHANNELS.skillMarketImport, request),
+    imports: () => ipcRenderer.invoke(IPC_CHANNELS.skillMarketImports),
+    openOnWeb: target => ipcRenderer.invoke(IPC_CHANNELS.skillMarketOpenOnWeb, target),
+  },
   browser: {
     setPane: (request: BrowserPaneRequest) => ipcRenderer.invoke(IPC_CHANNELS.browserSetPane, request),
     freezeFrame: (request: BrowserFreezeFrameRequest) => ipcRenderer.invoke(IPC_CHANNELS.browserFreezeFrame, request),
@@ -258,6 +268,11 @@ const api: DesktopApi = {
     getAccess: () => ipcRenderer.invoke(IPC_CHANNELS.toolsGetAccess),
     grantAccess: () => ipcRenderer.invoke(IPC_CHANNELS.toolsGrantAccess),
     revokeAccess: (root: string) => ipcRenderer.invoke(IPC_CHANNELS.toolsRevokeAccess, root),
+  },
+  permissions: {
+    getState: () => ipcRenderer.invoke(IPC_CHANNELS.permissionsGetState),
+    setRules: (scope, lists) => ipcRenderer.invoke(IPC_CHANNELS.permissionsSetRules, scope, lists),
+    setSharing: (share: boolean) => ipcRenderer.invoke(IPC_CHANNELS.permissionsSetSharing, share),
   },
   pullRequests: {
     watch: (sessionId: string | null) => ipcRenderer.invoke(IPC_CHANNELS.prWatch, sessionId),

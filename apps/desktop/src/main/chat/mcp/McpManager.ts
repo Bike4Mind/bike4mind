@@ -391,7 +391,10 @@ export class McpManager {
         remoteName: tool.name,
         definition: {
           schema,
-          approval: (input): ApprovalPrompt => approvalFor(record, tool.name, input),
+          approval: (input): ApprovalPrompt => ({
+            ...approvalFor(record, tool.name, input),
+            mcp: { server: slug, tool: tool.name },
+          }),
           run: (input, context) => this.invoke(record, client, tool.name, input, context),
         },
       });

@@ -59,6 +59,21 @@ describe('redactAuditPayload', () => {
       before: '[REDACTED]',
       after: '[REDACTED]',
     });
+    expect(redactChange({ field: 'cfg.token', before: 'a', after: 'b' })).toEqual({
+      field: 'cfg.token',
+      before: '[REDACTED]',
+      after: '[REDACTED]',
+    });
+    expect(redactChange({ field: 'githubToken.owner', before: 'a', after: 'b' })).toEqual({
+      field: 'githubToken.owner',
+      before: '[REDACTED]',
+      after: '[REDACTED]',
+    });
+    expect(redactChange({ field: 'cfg.name', before: 'a', after: 'b' })).toEqual({
+      field: 'cfg.name',
+      before: 'a',
+      after: 'b',
+    });
     expect(redactChange({ field: 'maxTokens', before: 1, after: 2 })).toEqual({
       field: 'maxTokens',
       before: 1,

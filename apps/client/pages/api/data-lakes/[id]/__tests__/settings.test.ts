@@ -65,7 +65,9 @@ const makeRes = () => {
 beforeEach(() => {
   vi.clearAllMocks();
   h.toAccessContext.mockResolvedValue({ userId: 'admin-1', isAdmin: true });
-  h.updateFallbackLakeSettings.mockResolvedValue(LAKE);
+  // The `_id`/`__v` ride along so the `toHaveBeenCalledWith(LAKE)` assertions below pin the
+  // response boundary: without it the service's own keys would reach the client.
+  h.updateFallbackLakeSettings.mockResolvedValue({ ...LAKE, _id: 'oid', __v: 1 });
 });
 
 describe('PUT /api/data-lakes/:id/settings', () => {

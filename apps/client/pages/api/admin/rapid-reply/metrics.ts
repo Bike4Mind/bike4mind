@@ -3,7 +3,7 @@ import { rapidReplyMappingRepository } from '@bike4mind/database/ai';
 import { rapidReplyPromptRepository } from '@bike4mind/database/ai';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 interface MetricsFilters {
   startDate?: string;

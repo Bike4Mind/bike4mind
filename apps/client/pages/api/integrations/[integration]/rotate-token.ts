@@ -21,8 +21,8 @@ import {
 } from '@bike4mind/slack';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
-import { Config } from '@server/utils/config';
-import { recordTokenRotationInitiated, recordTokenRotationFailed } from '@server/utils/cloudwatch';
+import { Config } from '@bike4mind/server-utils/utils/config';
+import { recordTokenRotationInitiated, recordTokenRotationFailed } from '@bike4mind/server-utils/utils/cloudwatch';
 import { issueStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
 import type { Response } from 'express';
 

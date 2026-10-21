@@ -32,9 +32,9 @@ import {
   type ApiKeyInfo,
 } from '@server/cli/auth';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { sendToConnection } from '@server/websocket/utils';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { cliCompletionErrorFields, sanitizeErrorMessage } from '@server/utils/errorSanitization';
 import { emitProcessingFailed } from '../processingFailedMetric';
 import { Resource } from 'sst';
@@ -194,6 +194,7 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
         let finalCacheReadTokens = 0;
         let finalCacheWriteTokens = 0;
         let finalTurnUsage: TurnUsage[] | undefined;
+        let finalCreditsUsed: number | undefined;
         let hasToolCalls = false;
 
         try {
@@ -232,6 +233,7 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
               if (info?.cacheReadInputTokens) finalCacheReadTokens = info.cacheReadInputTokens;
               if (info?.cacheCreationInputTokens) finalCacheWriteTokens = info.cacheCreationInputTokens;
               if (info?.turnUsage?.length) finalTurnUsage = info.turnUsage;
+              if (typeof info?.creditsUsed === 'number') finalCreditsUsed = info.creditsUsed;
               if (info?.toolsUsed && info.toolsUsed.length > 0) hasToolCalls = true;
 
               const chunk = buildCompletionStreamEvent(text, info);
@@ -264,6 +266,7 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
             finalCacheReadTokens,
             finalCacheWriteTokens,
             finalTurnUsage,
+            finalCreditsUsed,
             hasToolCalls,
             db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
             logger,

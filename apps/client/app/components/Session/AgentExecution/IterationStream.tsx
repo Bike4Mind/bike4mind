@@ -27,6 +27,7 @@ import {
 import IterationStep from './IterationStep';
 import AbortButton from './AbortButton';
 import PermissionCard from './PermissionCard';
+import ConfidenceGateCard from './ConfidenceGateCard';
 import CreditCounter from './CreditCounter';
 import SubagentStepNest from './SubagentStepNest';
 import { copyForRunningTool, THINKING_COPY } from './loadingCopy';
@@ -251,7 +252,7 @@ const IterationStream: FC<IterationStreamProps> = ({
           rendering a bare "Starting..." chip alone reads as visual noise.
           We still surface the header during active runs (status pill + abort
           button) so the user has feedback and a way to bail out. */}
-      {(isActive || visibleIterationCount > 0 || execution.pendingPermission) && (
+      {(isActive || visibleIterationCount > 0 || execution.pendingPermission || execution.pendingGate) && (
         <Stack direction="row" alignItems="center" spacing={1} sx={{ flexWrap: 'wrap', mt: 0.5 }}>
           {execution.isAborting ? (
             // Aborting: credits on the left, red "Aborting…" text. No spinner
@@ -427,10 +428,22 @@ const IterationStream: FC<IterationStreamProps> = ({
           Aborted at iteration {lastIteration + 1}.
         </Typography>
       ) : null}
-      {execution.status === 'failed' && execution.failureReason ? (
-        <Typography level="body-sm" sx={{ color: 'danger.softColor' }}>
-          Failed: {execution.failureReason}
-          {execution.errorMessage ? ` — ${execution.errorMessage}` : null}
+      {execution.status === 'failed' && (execution.failureReason || execution.errorMessage) ? (
+        <Typography
+          level="body-sm"
+          sx={{ color: 'danger.softColor' }}
+          data-testid={`iteration-stream-${executionId}-failure`}
+        >
+          {execution.failureReason === 'tool_denied' ? (
+            (execution.errorMessage ?? 'Execution stopped: a tool call was denied.')
+          ) : !execution.failureReason ? (
+            execution.errorMessage
+          ) : (
+            <>
+              Failed: {execution.failureReason}
+              {execution.errorMessage ? ` \u2014 ${execution.errorMessage}` : null}
+            </>
+          )}
         </Typography>
       ) : null}
       {execution.status === 'completed' && execution.answer && !hideFinalAnswer ? (
@@ -455,6 +468,7 @@ const IterationStream: FC<IterationStreamProps> = ({
           latest activity the user is reading instead of detached up top. The
           card self-gates (renders null unless pendingPermission is set). */}
       <PermissionCard executionId={executionId} />
+      <ConfidenceGateCard executionId={executionId} />
     </Box>
   );
 };

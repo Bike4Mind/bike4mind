@@ -25,7 +25,7 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 vi.mock('@bike4mind/services', () => ({ userService: { accountBlockReasons: mocks.accountBlockReasons } }));
-vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://host/%STAGE%' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://host/%STAGE%' } }));
 vi.mock('@bike4mind/server-utils/websocket/closeConnection', () => ({ closeConnection: vi.fn() }));
 vi.mock('sst', () => ({
   Resource: { App: { stage: 'test' }, websocket: { managementEndpoint: 'https://ws.example.com/test' } },

@@ -3,7 +3,7 @@ import { encryptSecret, generateEncryptionKey } from '@bike4mind/server-utils/se
 
 // Mock config before importing tokenEncryption
 const mockConfig: Record<string, string | undefined> = {};
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: new Proxy({}, { get: (_, key: string) => mockConfig[key] }),
 }));
 

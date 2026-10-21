@@ -2,7 +2,7 @@ import { Context } from 'aws-lambda';
 import { Logger } from '@bike4mind/observability';
 import { randomUUID } from 'crypto';
 import { connectDB, Quest } from '@bike4mind/database';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
 
 const cleanupLogger = new Logger({ metadata: { service: 'telemetryCleanup' } });

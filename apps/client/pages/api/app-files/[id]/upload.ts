@@ -3,9 +3,9 @@ import { AppFile } from '@bike4mind/database/content';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { MAX_FILE_SIZE_DEFAULT_MB } from '@server/utils/maxFileSizeDefault';
-import { getAppFilesStorage } from '@server/utils/storage';
-import { isValidObjectId } from '@server/utils/objectId';
+import { MAX_FILE_SIZE_DEFAULT_MB } from '@bike4mind/server-utils/utils/maxFileSizeDefault';
+import { getAppFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import type { Request, Response } from 'express';
 
 /**
@@ -48,6 +48,7 @@ const handler = baseApi({ maxBodySize: BODY_CEILING_BYTES }).put(
       return res.status(400).json({ error: 'File has no storage path' });
     }
     const filePath = appFile.path;
+    const declaredBytes = appFile.size;
 
     const maxBytes =
       getSettingsValue(
@@ -65,6 +66,11 @@ const handler = baseApi({ maxBodySize: BODY_CEILING_BYTES }).put(
     for await (const chunk of req) {
       const buf = chunk as Buffer;
       received += buf.length;
+      // Same refusal (and status) as a hosted PUT to the presign, which is bound to the declared size.
+      if (received > declaredBytes) {
+        req.destroy();
+        return res.status(403).json({ error: 'Upload must be exactly the declared size', declaredBytes });
+      }
       if (received > maxBytes) {
         req.destroy();
         return res.status(413).json({ error: 'File size exceeds maximum file size', maxBytes });
@@ -72,6 +78,9 @@ const handler = baseApi({ maxBodySize: BODY_CEILING_BYTES }).put(
       chunks.push(buf);
     }
     const body = Buffer.concat(chunks);
+    if (body.length !== declaredBytes) {
+      return res.status(403).json({ error: 'Upload must be exactly the declared size', declaredBytes });
+    }
 
     // Write to the AppFile's own storage key (from the DB, never client-supplied) so the caller
     // can't target an arbitrary key and the webhook fires on the expected object.

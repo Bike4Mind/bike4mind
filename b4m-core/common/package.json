@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/common",
-  "version": "16.2.0",
+  "version": "18.0.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -37,6 +37,16 @@
       "require": {
         "types": "./dist/jira/api.d.cts",
         "default": "./dist/jira/api.cjs"
+      }
+    },
+    "./utils/skillMd": {
+      "import": {
+        "types": "./dist/utils/skillMd.d.mts",
+        "default": "./dist/utils/skillMd.mjs"
+      },
+      "require": {
+        "types": "./dist/utils/skillMd.d.cts",
+        "default": "./dist/utils/skillMd.cjs"
       }
     },
     "./types/entities/RapidReplyTypes": {
@@ -87,6 +97,7 @@
     "@bike4mind/hearth": "workspace:*",
     "axios": "1.20.0",
     "dayjs": "^1.11.23",
+    "yaml": "^2.9.1",
     "zod": "^4.6.6"
   }
 }

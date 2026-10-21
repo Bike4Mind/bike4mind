@@ -17,7 +17,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { orgGitHubConnectionRepository } from '@bike4mind/database';
 import { encryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
 import { verifyOrgOwner } from '@server/utils/orgAccess';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { BadRequestError, InternalServerError, NotFoundError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { rateLimit } from '@server/middlewares/rateLimit';

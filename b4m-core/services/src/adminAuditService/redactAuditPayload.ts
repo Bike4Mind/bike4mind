@@ -44,4 +44,6 @@ export const REDACTED_PLACEHOLDER = REDACTED;
 
 // A change row names its field in a value, so key-based redaction alone would miss it.
 export const redactChange = (change: AuditChange): AuditChange =>
-  isSecretKey(change.field) ? { field: change.field, before: REDACTED, after: REDACTED } : redactAuditPayload(change);
+  change.field.split('.').some(isSecretKey)
+    ? { field: change.field, before: REDACTED, after: REDACTED }
+    : redactAuditPayload(change);

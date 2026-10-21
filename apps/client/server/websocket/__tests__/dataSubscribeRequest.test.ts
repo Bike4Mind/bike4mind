@@ -93,7 +93,7 @@ vi.mock('@server/websocket/subscriptionScopes', () => ({
   inviteSubscriptionScope: vi.fn(),
 }));
 
-vi.mock('@server/utils/errors', () => ({
+vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   ForbiddenError: class ForbiddenError extends Error {},
   NotFoundError: class NotFoundError extends Error {},
   UnauthorizedError: class UnauthorizedError extends Error {},
@@ -136,7 +136,7 @@ vi.mock('sst', () => ({
 import { func } from '../dataSubscribeRequest';
 import { Project, User } from '@bike4mind/database';
 import { inviteSubscriptionScope } from '@server/websocket/subscriptionScopes';
-import { ForbiddenError, UnauthorizedError } from '@server/utils/errors';
+import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 
 const baseEvent = (accessToken = 'token-123') => ({
   requestContext: { connectionId: 'conn-1' },

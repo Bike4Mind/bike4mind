@@ -11,8 +11,8 @@ import { connectDB } from '@bike4mind/database';
 import { ApiKeyScope, MethodNotAllowedError } from '@bike4mind/common';
 import { Request, Response } from 'express';
 import nc from 'next-connect';
-import { Config, isDevelopment } from '@server/utils/config';
-import { createMethodGuard } from '@server/utils/allowedMethods';
+import { Config, isDevelopment } from '@bike4mind/server-utils/utils/config';
+import { createMethodGuard } from '@bike4mind/server-utils/utils/allowedMethods';
 
 // Gears: hook the shared tool pipeline once per lambda (fire-and-forget observer).
 registerToolGearObserver();

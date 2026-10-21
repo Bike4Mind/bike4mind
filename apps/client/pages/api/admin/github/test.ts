@@ -12,7 +12,7 @@
 
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { NotFoundError, ensureAdmin } from '@server/utils/errors';
+import { NotFoundError, ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 import { Logger } from '@bike4mind/observability';
 import { GitHubService } from '@server/services/githubService';
 import { rateLimit } from '@server/middlewares/rateLimit';

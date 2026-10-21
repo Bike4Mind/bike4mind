@@ -2,7 +2,7 @@ import { IUserDocument } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { User, inboxRepository } from '@bike4mind/database';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { sendToClient } from '@server/websocket/utils';
 import { logEvent } from '@server/utils/analyticsLog';
 import { InboxEvents } from '@bike4mind/common';

@@ -49,7 +49,7 @@ interface Cached {
 export class SkillCatalog {
   private readonly cache = new Map<string, Cached>();
   private readonly inFlight = new Map<string, Promise<CustomCommand[]>>();
-  private trustRevision = 0;
+  private changes = 0;
 
   constructor(
     private readonly trust: ProjectTrustStore,
@@ -57,16 +57,17 @@ export class SkillCatalog {
   ) {}
 
   /**
-   * Moves on a trust decision (`setTrusted`) or a change of signed-in account, and nothing else.
+   * Moves on a trust decision (`setTrusted`), a Skill Market import (`invalidateAccount`) or a
+   * change of signed-in account, and nothing else.
    *
    * The skills a model is SHOWN are snapshotted per session, because the system prompt sits in
    * the provider's cached prefix and must not move between rounds (see SkillsPromptCache). That
    * snapshot would otherwise outlive the one change to this catalog a user makes mid-session and
-   * expects to see: trusting the project they are working in. This is what the snapshot keys on,
-   * so a trust decision or an account switch reaches the next turn and a skill edit does not.
+   * expects to see: trusting the project they are working in, or importing a skill. This is what
+   * the snapshot keys on, so those reach the next turn and a skill edit does not.
    */
   get revision(): string {
-    return `${this.trustRevision}:${this.remote()?.key ?? 'none'}`;
+    return `${this.changes}:${this.remote()?.key ?? 'none'}`;
   }
 
   /**
@@ -118,7 +119,17 @@ export class SkillCatalog {
     if (trusted) await this.trust.trust(root);
     else await this.trust.revoke(root);
     this.cache.clear();
-    this.trustRevision++;
+    this.changes++;
+  }
+
+  /**
+   * The account's skills just changed from this app (a Skill Market import or update), so the next
+   * read refetches them inside RemoteSkillSource's TTL instead of waiting it out.
+   */
+  invalidateAccount(): void {
+    this.remote()?.source.invalidate();
+    this.cache.clear();
+    this.changes++;
   }
 
   private load(root: string | null, trusted: boolean): Promise<CustomCommand[]> {
@@ -167,6 +178,7 @@ function toSummary(command: CustomCommand): SkillSummary {
     description: command.description,
     ...(command.argumentHint ? { argumentHint: command.argumentHint } : {}),
     source: skillSource(command),
+    ...(command.untrusted ? { imported: true } : {}),
     filePath: command.filePath,
   };
 }

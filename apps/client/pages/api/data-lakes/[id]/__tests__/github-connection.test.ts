@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ZodError } from 'zod';
-import { ConflictError, InternalServerError, NotFoundError } from '@server/utils/errors';
+import { ConflictError, InternalServerError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 
 // Unit test of the per-lake GitHub connection status/install/disconnect route. Repo + auth gate +
 // the githubLakeConnection lib (which has its own dedicated unit tests) are mocked.

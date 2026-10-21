@@ -2,7 +2,7 @@ import { randomUUID } from 'crypto';
 import type { Context, SQSEvent, SQSRecordAttributes } from 'aws-lambda';
 import type { Message } from '@aws-sdk/client-sqs';
 import { Logger } from '@bike4mind/observability';
-import { deleteFromQueue, receiveFromQueue } from '@server/utils/sqs';
+import { deleteFromQueue, receiveFromQueue } from '@bike4mind/server-utils/utils/sqs';
 
 /**
  * Self-host background worker.

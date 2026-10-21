@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { SETTING_TABS, settingsMap, type SettingKey } from '@bike4mind/common';
@@ -31,9 +31,37 @@ vi.mock('./AdminStringListSettingField', () => ({
   ),
 }));
 
+type SearchRecord = Record<string, unknown>;
+const router = vi.hoisted(() => ({ search: {} as Record<string, unknown>, navigate: vi.fn() }));
+vi.mock('@tanstack/react-router', () => ({
+  useSearch: () => router.search,
+  useNavigate: () => router.navigate,
+}));
+
 import AdminSettingsTab from './AdminSettingsTab';
+import { SEARCH_TERM_URL_DEBOUNCE_MS } from './useAdminSettingsSearchParams';
+
+/** The search the component's most recent navigate would produce from `previous`. */
+const lastWrittenSearch = (previous: SearchRecord) => {
+  const call = router.navigate.mock.calls.at(-1)?.[0] as {
+    to: string;
+    replace: boolean;
+    search: (previous: SearchRecord) => SearchRecord;
+  };
+  expect(call.to).toBe('/admin');
+  expect(call.replace).toBe(true);
+  return call.search(previous);
+};
 
 const appTheme = extendTheme({ ...getThemeConfig() });
+
+const settingsView = () => (
+  <CssVarsProvider theme={appTheme}>
+    <AdminSettingsTab />
+  </CssVarsProvider>
+);
+
+const renderSettings = () => render(settingsView());
 
 const findTab = (category: string) =>
   Object.values(SETTING_TABS).find(tab => (tab.categories as readonly string[]).includes(category));
@@ -41,14 +69,16 @@ const findTab = (category: string) =>
 const aiTab = findTab(settingsMap.videoGeneration.category);
 const securityTab = findTab(settingsMap.ImageModerationReviewerEmails.category);
 
+// The section comes from the URL, so seed it rather than click a tab: the mocked navigate does not
+// write the search back.
 const renderTab = (tab: typeof aiTab) => {
+  expect(tab).toBeDefined();
+  router.search = { tab: 'admin-settings', section: tab!.id };
   render(
     <CssVarsProvider theme={appTheme}>
       <AdminSettingsTab />
     </CssVarsProvider>
   );
-  expect(tab).toBeDefined();
-  fireEvent.click(screen.getAllByRole('tab', { name: new RegExp(tab!.name, 'i') })[0]);
 };
 
 const renderAiTab = () => renderTab(aiTab);
@@ -56,6 +86,111 @@ const renderSecurityTab = () => renderTab(securityTab);
 
 beforeEach(() => {
   serverSettings = [];
+  router.search = {};
+  router.navigate.mockReset();
+});
+
+describe('AdminSettingsTab URL state', () => {
+  const sections = Object.values(SETTING_TABS);
+  const [firstSection, secondSection] = sections;
+  const isSelected = (id: string) =>
+    screen.getByTestId(`admin-settings-section-tab-${id}`).getAttribute('aria-selected') === 'true';
+
+  it('opens the section named by ?section=', () => {
+    router.search = { tab: 'admin-settings', section: secondSection.id };
+    renderSettings();
+    expect(isSelected(secondSection.id)).toBe(true);
+    expect(isSelected(firstSection.id)).toBe(false);
+  });
+
+  it('falls back to the first section for an unknown ?section=', () => {
+    router.search = { tab: 'admin-settings', section: 'constructor' };
+    renderSettings();
+    expect(isSelected(firstSection.id)).toBe(true);
+  });
+
+  it('writes the section id to the URL, keeping the other params', () => {
+    renderSettings();
+    fireEvent.click(screen.getByTestId(`admin-settings-section-tab-${secondSection.id}`));
+    expect(lastWrittenSearch({ tab: 'admin-settings', q: 'slack' })).toEqual({
+      tab: 'admin-settings',
+      q: 'slack',
+      section: secondSection.id,
+    });
+  });
+
+  it('seeds the search box from ?q= and writes edits back once typing pauses, removing q once cleared', () => {
+    vi.useFakeTimers();
+    try {
+      router.search = { tab: 'admin-settings', q: 'slack' };
+      renderSettings();
+      const input = screen.getByTestId('admin-settings-search-input') as HTMLInputElement;
+      expect(input.value).toBe('slack');
+
+      fireEvent.change(input, { target: { value: 'slack b' } });
+      fireEvent.change(input, { target: { value: 'slack bot' } });
+      expect(input.value).toBe('slack bot');
+      expect(router.navigate).not.toHaveBeenCalled();
+      act(() => vi.advanceTimersByTime(SEARCH_TERM_URL_DEBOUNCE_MS));
+      expect(router.navigate).toHaveBeenCalledTimes(1);
+      expect(lastWrittenSearch({ tab: 'admin-settings', q: 'slack' })).toEqual({
+        tab: 'admin-settings',
+        q: 'slack bot',
+      });
+
+      fireEvent.change(input, { target: { value: '' } });
+      act(() => vi.advanceTimersByTime(SEARCH_TERM_URL_DEBOUNCE_MS));
+      expect(lastWrittenSearch({ tab: 'admin-settings', q: 'slack bot' })).toEqual({
+        tab: 'admin-settings',
+        q: undefined,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('drops a pending search write when the tab unmounts', () => {
+    vi.useFakeTimers();
+    try {
+      const { unmount } = renderSettings();
+      fireEvent.change(screen.getByTestId('admin-settings-search-input'), { target: { value: 'slack' } });
+      unmount();
+      act(() => vi.advanceTimersByTime(SEARCH_TERM_URL_DEBOUNCE_MS));
+      expect(router.navigate).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('drops a pending search write when ?q= changes from outside first', () => {
+    vi.useFakeTimers();
+    try {
+      router.search = { tab: 'admin-settings', q: 'slack' };
+      const { rerender } = renderSettings();
+      const input = screen.getByTestId('admin-settings-search-input') as HTMLInputElement;
+      fireEvent.change(input, { target: { value: 'slack bot' } });
+
+      router.search = { tab: 'admin-settings', q: 'billing' };
+      rerender(settingsView());
+      act(() => vi.advanceTimersByTime(SEARCH_TERM_URL_DEBOUNCE_MS));
+      expect(input.value).toBe('billing');
+      expect(router.navigate).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('re-seeds the search box when ?q= changes from outside while mounted', () => {
+    router.search = { tab: 'admin-settings', q: 'slack' };
+    const { rerender } = renderSettings();
+    const input = screen.getByTestId('admin-settings-search-input') as HTMLInputElement;
+    expect(input.value).toBe('slack');
+
+    // e.g. back/forward landing on the same tab with no q.
+    router.search = { tab: 'admin-settings' };
+    rerender(settingsView());
+    expect(input.value).toBe('');
+  });
 });
 
 describe('AdminSettingsTab generation models setting', () => {

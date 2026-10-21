@@ -34,7 +34,7 @@ vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@server/services/publish/purgeUserPublishedArtifacts', () => ({
   unpublishUserArtifactsBySource: vi.fn().mockResolvedValue({ artifacts: [] }),
 }));
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ delete: storageDelete }),
 }));
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -57,7 +57,9 @@ let ownedFiles: Record<string, unknown>[] = [];
 const project = (doc: Record<string, unknown>, projection: string): Record<string, unknown> => {
   const out: Record<string, unknown> = {};
   for (const path of projection.split(' ').filter(Boolean)) {
-    const value = path.split('.').reduce<unknown>((v, k) => (v == null ? undefined : (v as Record<string, unknown>)[k]), doc);
+    const value = path
+      .split('.')
+      .reduce<unknown>((v, k) => (v == null ? undefined : (v as Record<string, unknown>)[k]), doc);
     if (value === undefined) continue;
     const keys = path.split('.');
     let node = out;

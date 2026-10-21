@@ -19,7 +19,7 @@ import {
 // schema module so we don't drag the executor's Mongo/AWS deps into the test.
 import { StartExecutionSchema } from './agentExecutor.schemas';
 import { classifyToolPermission } from './agentExecutorUtils/toolPermissions';
-import { HEADLESS_CONNECTION_ID } from '@server/utils/headlessConnection';
+import { HEADLESS_CONNECTION_ID } from '@bike4mind/server-utils/utils/headlessConnection';
 import { applySessionToolPolicy } from './agentExecutor.sessionToolPolicy';
 
 const ADMIN_DEFAULTS: OrchestrationDefaults = {

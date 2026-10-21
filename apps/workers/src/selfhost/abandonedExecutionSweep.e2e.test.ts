@@ -8,9 +8,9 @@ import { SelfHostWorker } from './selfHostWorker';
 import { registerAbandonedExecutionSweep } from './abandonedExecutionSweep';
 
 vi.mock('sst', () => ({ Resource: { App: { stage: 'selfhost' } } }));
-vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'unused' } }));
-vi.mock('@server/utils/sqs', () => ({ receiveFromQueue: vi.fn(), deleteFromQueue: vi.fn() }));
-vi.mock('@server/utils/cloudwatch', () => ({ emitMetric: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'unused' } }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ receiveFromQueue: vi.fn(), deleteFromQueue: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetric: vi.fn() }));
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 const HOUR = 60 * 60_000;

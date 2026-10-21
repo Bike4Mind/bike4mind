@@ -1,6 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { useEffect } from 'react';
 import { renderHook, act } from '@testing-library/react';
-import { useEffectiveCredits } from '../useEffectiveCredits';
+import { POST_STREAM_HOLD_MAX_MS, useEffectiveCredits } from '../useEffectiveCredits';
+import { useCreditSyncSignal } from '../useCreditSyncSignal';
 import { useStreamingState } from '../useStreamingState';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 
@@ -14,6 +16,7 @@ describe('useEffectiveCredits', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useStreamingState.setState({ sessions: new Map() });
+    useCreditSyncSignal.setState({ syncCount: 0 });
     useSelectedAccount.setState({ selectedAccount: null });
     mockUseUser.mockReturnValue({ currentUser: { id: 'user-1', currentCredits: 1500 } });
   });
@@ -111,6 +114,223 @@ describe('useEffectiveCredits', () => {
     mockUseUser.mockReturnValue({ currentUser: { id: 'user-1', currentCredits: 1350 } });
     rerender();
     expect(result.current).toBe(1350);
+  });
+
+  describe('after the turn ends, before the settled balance arrives', () => {
+    const endTurnWithHoldDippedBalance = () => {
+      const view = renderHook(() => useEffectiveCredits());
+      act(() => useStreamingState.getState().startStreaming('session-1'));
+      mockUseUser.mockReturnValue({ currentUser: { id: 'user-1', currentCredits: 227 } });
+      view.rerender();
+      act(() => useStreamingState.getState().completeStreaming('session-1'));
+      return view;
+    };
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('keeps the pre-turn balance instead of showing the hold-dipped one', () => {
+      const { result } = endTurnWithHoldDippedBalance();
+      expect(result.current).toBe(1500);
+    });
+
+    it.each(['completeStreaming', 'cancelStreaming'] as const)(
+      'hides a reservation arriving after %s and releases when it recovers',
+      finishTurn => {
+        const committed: number[] = [];
+        const { result, rerender } = renderHook(() => {
+          const credits = useEffectiveCredits();
+          useEffect(() => {
+            committed.push(credits);
+          });
+          return credits;
+        });
+        act(() => useStreamingState.getState().startStreaming('session-1'));
+        act(() => useStreamingState.getState()[finishTurn]('session-1'));
+        mockUseUser.mockReturnValue({ currentUser: { id: 'user-1', currentCredits: 227 } });
+        rerender();
+        expect(result.current).toBe(1500);
+
+        mockUseUser.mockReturnValue({ currentUser: { id: 'user-1', currentCredits: 1421 } });
+        rerender();
+        expect(result.current).toBe(1421);
+        expect([...new Set(committed)]).toEqual([1500, 1421]);
+      }
+    );
+
+    it('goes straight from the pre-turn balance to the settled one with no hold-based value ever committed', () => {
+      const committed: number[] = [];
+      const { rerender } = renderHook(() => {
+        const credits = useEffectiveCredits();
+        useEffect(() => {
+          committed.push(credits);
+        });
+        return credits;
+      });
+      act(() => useStreamingState.getState().startStreaming('session-1'));
+      mockUseUser.mockReturnValue({ currentUser: { id: 'user-1', currentCredits: 227 } });
+      rerender();
+      act(() => useStreamingState.getState().completeStreaming('session-1'));
+      mockUseUser.mockReturnValue({ currentUser: { id: 'user-1', currentCredits: 1421 } });
+      rerender();
+
+      expect(committed).not.toContain(227);
+      expect([...new Set(committed)]).toEqual([1500, 1421]);
+    });
+
+    it('still holds the pre-turn balance when the settled balance arrived before streaming ended, until the sync confirms', () => {
+      const { result, rerender } = renderHook(() => useEffectiveCredits());
+      act(() => useStreamingState.getState().startStreaming('session-1'));
+      mockUseUser.mockReturnValue({ currentUser: { id: 'user-1', currentCredits: 1421 } });
+      rerender();
+      act(() => useStreamingState.getState().completeStreaming('session-1'));
+      expect(result.current).toBe(1500);
+
+      act(() => useCreditSyncSignal.getState().markSynced());
+      expect(result.current).toBe(1421);
+    });
+
+    it('keeps the hold per hook instance: a chip mounted mid-hold shows the live balance', () => {
+      const first = endTurnWithHoldDippedBalance();
+      expect(first.result.current).toBe(1500);
+
+      const mountedMidHold = renderHook(() => useEffectiveCredits());
+      expect(mountedMidHold.result.current).toBe(227);
+
+      act(() => useCreditSyncSignal.getState().markSynced());
+      expect(first.result.current).toBe(227);
+    });
+
+    it('releases to the live balance when the post-turn balance sync completes with no change', () => {
+      const { result } = endTurnWithHoldDippedBalance();
+      expect(result.current).toBe(1500);
+
+      act(() => useCreditSyncSignal.getState().markSynced());
+      expect(result.current).toBe(227);
+    });
+
+    it('releases to the live balance after the backstop even if no sync ever lands', () => {
+      vi.useFakeTimers();
+      const { result } = endTurnWithHoldDippedBalance();
+      expect(result.current).toBe(1500);
+
+      act(() => {
+        vi.advanceTimersByTime(POST_STREAM_HOLD_MAX_MS);
+      });
+      expect(result.current).toBe(227);
+    });
+
+    it('keeps holding the first turn pre-turn balance when a new turn starts before the settled balance lands', () => {
+      vi.useFakeTimers();
+      const { result, rerender } = endTurnWithHoldDippedBalance();
+
+      act(() => useStreamingState.getState().startStreaming('session-2'));
+      expect(result.current).toBe(1500);
+
+      mockUseUser.mockReturnValue({ currentUser: { id: 'user-1', currentCredits: 100 } });
+      rerender();
+      expect(result.current).toBe(1500);
+
+      // The first turn's backstop must not fire into the second turn's stream.
+      act(() => {
+        vi.advanceTimersByTime(POST_STREAM_HOLD_MAX_MS);
+      });
+      expect(result.current).toBe(1500);
+    });
+  });
+
+  describe('account switching and team balances', () => {
+    const personal = { id: 'user-1', name: 'Me (Personal)', personal: true, credits: 1500 };
+    const team = { id: 'org-1', name: 'Team', personal: false, credits: 9000 };
+    const selectAccount = (account: typeof personal | typeof team) => {
+      act(() => useSelectedAccount.setState({ selectedAccount: account }));
+    };
+
+    it('shows the new account live balance, not the held value, when switching accounts mid-stream', () => {
+      useSelectedAccount.setState({ selectedAccount: personal });
+      const { result } = renderHook(() => useEffectiveCredits());
+      act(() => useStreamingState.getState().startStreaming('session-1'));
+      expect(result.current).toBe(1500);
+
+      selectAccount(team);
+      expect(result.current).toBe(9000);
+    });
+
+    it('never shows the previous account frozen value after a mid-stream switch once the stream ends', () => {
+      useSelectedAccount.setState({ selectedAccount: personal });
+      const committed: number[] = [];
+      renderHook(() => {
+        const credits = useEffectiveCredits();
+        useEffect(() => {
+          committed.push(credits);
+        });
+        return credits;
+      });
+      act(() => useStreamingState.getState().startStreaming('session-1'));
+      selectAccount(team);
+      act(() => useStreamingState.getState().completeStreaming('session-1'));
+      act(() => useSelectedAccount.setState({ selectedAccount: { ...team, credits: 8800 } }));
+      act(() => useCreditSyncSignal.getState().markSynced());
+
+      const switchedAt = committed.indexOf(9000);
+      expect(switchedAt).toBeGreaterThan(-1);
+      expect(committed.slice(switchedAt)).not.toContain(1500);
+      expect(committed[committed.length - 1]).toBe(8800);
+    });
+
+    it('holds the new account balance for the rest of the turn after a mid-stream switch', () => {
+      useSelectedAccount.setState({ selectedAccount: personal });
+      const { result } = renderHook(() => useEffectiveCredits());
+      act(() => useStreamingState.getState().startStreaming('session-1'));
+      selectAccount(team);
+      act(() => useSelectedAccount.setState({ selectedAccount: { ...team, credits: 400 } }));
+      expect(result.current).toBe(9000);
+
+      act(() => useStreamingState.getState().completeStreaming('session-1'));
+      expect(result.current).toBe(9000);
+
+      act(() => useSelectedAccount.setState({ selectedAccount: { ...team, credits: 8700 } }));
+      expect(result.current).toBe(8700);
+    });
+
+    it('shows the new account live balance when switching accounts during the post-turn hold', () => {
+      useSelectedAccount.setState({ selectedAccount: personal });
+      const { result } = renderHook(() => useEffectiveCredits());
+      act(() => useStreamingState.getState().startStreaming('session-1'));
+      act(() => useStreamingState.getState().completeStreaming('session-1'));
+      expect(result.current).toBe(1500);
+
+      selectAccount(team);
+      expect(result.current).toBe(9000);
+    });
+
+    it('shows the new account balance when it equals the live balance captured at stream end', () => {
+      useSelectedAccount.setState({ selectedAccount: personal });
+      const { result, rerender } = renderHook(() => useEffectiveCredits());
+      act(() => useStreamingState.getState().startStreaming('session-1'));
+      mockUseUser.mockReturnValue({ currentUser: { id: 'user-1', currentCredits: 227 } });
+      rerender();
+      act(() => useStreamingState.getState().completeStreaming('session-1'));
+      expect(result.current).toBe(1500);
+
+      selectAccount({ ...team, credits: 227 });
+      expect(result.current).toBe(227);
+    });
+
+    it('releases a team hold when the team balance changes in the organization cache', () => {
+      useSelectedAccount.setState({ selectedAccount: team });
+      const { result } = renderHook(() => useEffectiveCredits());
+      act(() => useStreamingState.getState().startStreaming('session-1'));
+      act(() => useSelectedAccount.setState({ selectedAccount: { ...team, credits: 400 } }));
+      expect(result.current).toBe(9000);
+
+      act(() => useStreamingState.getState().completeStreaming('session-1'));
+      expect(result.current).toBe(9000);
+
+      act(() => useSelectedAccount.setState({ selectedAccount: { ...team, credits: 8700 } }));
+      expect(result.current).toBe(8700);
+    });
   });
 
   it('reflects a genuine balance change once idle (freeze does not permanently pin the value)', () => {

@@ -9,7 +9,7 @@ const { runGenerationJobSweep, connectDB, enqueueGenerationJob } = vi.hoisted(()
 vi.mock('@bike4mind/services/generationJobs', () => ({ runGenerationJobSweep }));
 vi.mock('@bike4mind/database', () => ({ connectDB, generationJobRepository: { tag: 'repo' } }));
 vi.mock('@server/generationJobs/wiring', () => ({ enqueueGenerationJob }));
-vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://host/%STAGE%' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://host/%STAGE%' } }));
 vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
 
 import { runGenerationJobSweepCron } from './generationJobSweep';

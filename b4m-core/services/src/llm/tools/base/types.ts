@@ -1,6 +1,7 @@
 import { BaseStorage } from '@bike4mind/utils';
 import type { RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import { type ICompletionBackend, type ICompletionOptionTools } from '@bike4mind/llm-adapters';
+import type { DecisionToolRequest } from '../implementation/decide/request';
 import type { Logger } from '@bike4mind/observability';
 import { GetEffectiveApiKeyAdapters } from '../../../apiKeyService';
 import type { GeneratedImageCounter } from '../../recordGeneratedImages';
@@ -29,6 +30,7 @@ import {
   ModelInfo,
   type AuthOrigin,
   type CitableSource,
+  type DecisionResponse,
 } from '@bike4mind/common';
 
 /**
@@ -71,6 +73,23 @@ export type ToolLlmUsage = {
   cacheWriteTokens: number;
   costUsd: number;
 };
+
+export type { DecisionToolRequest } from '../implementation/decide/request';
+
+/**
+ * The host's execution seam for `decide`. Returns the same envelope the public route serializes,
+ * so a tool answer and an API answer cannot drift.
+ */
+export type DecideToolFn = (params: {
+  userId: string;
+  user: IUserDocument;
+  logger: Logger;
+  authOrigin: AuthOrigin;
+  /** Trusted turn principal and active billing account, never model-authored arguments. */
+  apiKeyId?: string;
+  organizationId?: string;
+  request: DecisionToolRequest;
+}) => Promise<DecisionResponse>;
 
 export interface ToolContext {
   /** The only principal signal a tool call carries - identical whether this turn is a live chat
@@ -130,7 +149,9 @@ export interface ToolContext {
       // method semanticDataLakeSearch's residency gate depends on with no type error.
       | 'annResidentFabFileIds'
     >;
-    users?: Pick<IUserRepository, 'findById'>;
+    // incrementCurrentStorage: save_content_to_data_lake's lake join moves the file's billed bytes
+    // (reassignStorageOwner). Optional so a read-only host still type-checks; that tool refuses without it.
+    users?: Pick<IUserRepository, 'findById'> & Partial<Pick<IUserRepository, 'incrementCurrentStorage'>>;
     projects?: IProjectRepository;
     // 'find' is forwarded straight to createFabFile (persistGeneratedFileAsFabFile), for its
     // fallback tagger's prefix-overlap check.
@@ -155,7 +176,14 @@ export interface ToolContext {
       Partial<
         Pick<
           IDataLakeRepository,
-          'findAccessible' | 'findBySlug' | 'findBySlugAmongIds' | 'create' | 'setStats' | 'activateIfDraft'
+          | 'findAccessible'
+          | 'findBySlug'
+          | 'findBySlugAmongIds'
+          | 'create'
+          | 'setStats'
+          | 'activateIfDraft'
+          // The owner transfer a save's lake join triggers (reassignStorageOwner).
+          | 'findByDatalakeTags'
         >
       >;
     /**
@@ -184,7 +212,9 @@ export interface ToolContext {
      * data-lake retrieval resolver needs internally (`findMembershipOrgIds`, #1674). Required -
      * an absent resolver would silently drop every org lake from retrieval.
      */
-    organizations: Pick<IOrganizationRepository, 'findById' | 'findMembershipOrgIds' | 'findIdsWithAdminRights'>;
+    organizations: Pick<IOrganizationRepository, 'findById' | 'findMembershipOrgIds' | 'findIdsWithAdminRights'> &
+      // Same reason as `users.incrementCurrentStorage` above.
+      Partial<Pick<IOrganizationRepository, 'incrementCurrentStorage'>>;
     /**
      * Access-grant lookup shared by two independent optional features:
      * - the retrieval resolver's grant arm, so a lake the caller reaches only by an
@@ -395,6 +425,13 @@ export interface ToolContext {
    * write. Keep implementations pure arithmetic (see agentExecutor's addToolUsage).
    */
   onToolLlmUsage?: (usage: ToolLlmUsage) => void;
+  /**
+   * Runs one typed decision through the host's shared runner, so a `decide` call bills, retries
+   * and normalizes exactly as POST /api/v1/decisions does. Injected because that runner's credit
+   * hold lives in the app tier, which b4m-core cannot import. Absent (a lean harness, or a
+   * deployment with no decision provider) means the tool refuses rather than answering un-billed.
+   */
+  decide?: DecideToolFn;
   imageProcessorLambdaName?: string; // Lambda function name for image processing (edit_image, image_generation)
   /**
    * List of allowed directories for file operations.

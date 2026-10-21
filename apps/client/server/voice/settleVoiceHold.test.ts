@@ -81,7 +81,7 @@ describe('settleVoiceHold', () => {
   it('keeps what realtime responses already drew from the hold, even with no open time', async () => {
     claimVoiceHold.mockResolvedValue({ billedCredits: 250 });
 
-    const result = await settleVoiceHold(HOLD, STARTED, 'sweep');
+    const result = await settleVoiceHold(HOLD, STARTED, 'sweep', STARTED);
 
     expect(result).toEqual({ settled: true, connected: true, chargedCredits: 250, refundedCredits: 350 });
   });
@@ -90,9 +90,32 @@ describe('settleVoiceHold', () => {
     claimVoiceHold.mockResolvedValue({ billedCredits: 0 });
     const openFor = REALTIME_VOICE_HOLD_SECONDS / 2;
 
-    const result = await settleVoiceHold(HOLD, at(openFor), 'sweep');
+    const result = await settleVoiceHold(HOLD, at(openFor), 'sweep', at(openFor));
 
     expect(result).toMatchObject({ chargedCredits: realtimeCreditsFloor(600, openFor), refundedCredits: 300 });
+  });
+
+  it('bills a silent realtime hold up to the settlement, not up to its last client frame', async () => {
+    claimVoiceHold.mockResolvedValue({ billedCredits: 0 });
+    // The client stopped sending frames a minute in; the sweep runs past the hold's window.
+    const silent = { ...HOLD, voiceConnectedAt: at(5), voiceLastActivityAt: at(60) };
+
+    const result = await settleVoiceHold(silent, at(60), 'sweep', at(REALTIME_VOICE_HOLD_SECONDS + 600));
+
+    expect(result).toMatchObject({ chargedCredits: 600, refundedCredits: 0 });
+    expect(incrementCredits).not.toHaveBeenCalled();
+  });
+
+  it('refunds and records the settlement to the user who paid the hold', async () => {
+    claimVoiceHold.mockResolvedValue({ billedCredits: null, payerId: 'payer' });
+
+    await settleVoiceHold({ ...HOLD, voiceConnectedAt: at(0) }, at(60), 'end');
+
+    expect(incrementCredits).toHaveBeenCalledWith('payer', 480);
+    expect(createTransaction).toHaveBeenCalledWith(
+      'realtime_voice_usage',
+      expect.objectContaining({ ownerId: 'payer', credits: -120 })
+    );
   });
 
   it('refunds nothing on a realtime hold whose responses billed past it', async () => {
@@ -155,7 +178,7 @@ describe('settleVoiceHold', () => {
     claimVoiceHold.mockResolvedValue({ billedCredits: 0 });
     const openFor = REALTIME_VOICE_HOLD_SECONDS / 2;
 
-    await settleVoiceHold(HOLD, at(openFor), 'sweep');
+    await settleVoiceHold(HOLD, at(openFor), 'sweep', at(openFor));
     expect(createTransaction).toHaveBeenCalledWith(
       'realtime_voice_usage',
       expect.objectContaining({ credits: -realtimeCreditsFloor(600, openFor) })
@@ -163,7 +186,7 @@ describe('settleVoiceHold', () => {
 
     createTransaction.mockClear();
     claimVoiceHold.mockResolvedValue({ billedCredits: 250 });
-    await settleVoiceHold(HOLD, STARTED, 'sweep');
+    await settleVoiceHold(HOLD, STARTED, 'sweep', STARTED);
     expect(createTransaction).not.toHaveBeenCalled();
   });
 
@@ -205,6 +228,7 @@ describe('reserveVoiceHold', () => {
       voiceReservedCredits: 600,
       voiceSessionStartedAt: STARTED,
       realtime: true,
+      payerId: 'u1',
     });
     expect(incrementCredits).toHaveBeenCalledWith('u1', -600);
     expect(openVoiceHold.mock.invocationCallOrder[0]).toBeLessThan(incrementCredits.mock.invocationCallOrder[0]);

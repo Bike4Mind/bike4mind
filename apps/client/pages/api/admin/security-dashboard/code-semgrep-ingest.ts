@@ -12,7 +12,7 @@ import {
   computeDeterministicStatus,
 } from '@bike4mind/server-utils/security/securityDashboardScoring';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
-import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
+import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { Logger } from '@bike4mind/observability';
 
 const logger = new Logger({ metadata: { service: 'code-semgrep-ingest' } });

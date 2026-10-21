@@ -2,10 +2,10 @@ import { Request, Response } from 'express';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { ForbiddenError, BadRequestError } from '@server/utils/errors';
+import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { securityScanScheduleRepository, SecurityScanType } from '@bike4mind/database';
 import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
-import { calculateNextRunTime } from '@server/utils/scheduleCalculator';
+import { calculateNextRunTime } from '@bike4mind/server-utils/utils/scheduleCalculator';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { z } from 'zod';
 

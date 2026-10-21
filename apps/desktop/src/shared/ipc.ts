@@ -47,6 +47,17 @@ import type { ShareDirectoryResult } from './directoryRequest';
 import type { PrActionResult, PrBarState, PrOption, PrSummaryEvent } from './pullRequest';
 import type { SidebarSectionsState } from './sidebarSections';
 import type { SkillsState } from './skills';
+import type { PermissionMutationResult, PermissionRuleLists, PermissionScope, PermissionsState } from './permissions';
+import type {
+  SkillMarketDetailResult,
+  SkillMarketFilters,
+  SkillMarketImportRequest,
+  SkillMarketImportResult,
+  SkillMarketImportsResult,
+  SkillMarketListingRef,
+  SkillMarketPage,
+  SkillMarketWebTarget,
+} from './skillMarket';
 import type {
   TerminalAttachment,
   TerminalCreateRequest,
@@ -89,6 +100,7 @@ export const IPC_CHANNELS = {
   /** main -> renderer push of the integration's state; never carries the key. */
   fleetStateChanged: 'fleet:state-changed',
   chatListModels: 'chat:list-models',
+  chatListSuggestionModels: 'chat:list-suggestion-models',
   chatSetSessionModel: 'chat:set-session-model',
   chatSetSessionReasoningEffort: 'chat:set-session-reasoning-effort',
   chatSetSessionPinned: 'chat:set-session-pinned',
@@ -168,6 +180,13 @@ export const IPC_CHANNELS = {
    * nothing the MODEL can reach may widen this - the same rule as toolsGrantAccess.
    */
   chatSetProjectSkillsTrusted: 'chat:set-project-skills-trusted',
+  skillMarketBrowse: 'skills:market-browse',
+  skillMarketRecommended: 'skills:market-recommended',
+  skillMarketListing: 'skills:market-listing',
+  /** Only from the Import / Update buttons: it writes a skill to the user's account. */
+  skillMarketImport: 'skills:market-import',
+  skillMarketImports: 'skills:market-imports',
+  skillMarketOpenOnWeb: 'skills:market-open-on-web',
   mcpGetServers: 'mcp:get-servers',
   mcpAddServer: 'mcp:add-server',
   mcpUpdateServer: 'mcp:update-server',
@@ -179,6 +198,13 @@ export const IPC_CHANNELS = {
   toolsGetAccess: 'tools:get-access',
   toolsGrantAccess: 'tools:grant-access',
   toolsRevokeAccess: 'tools:revoke-access',
+  /**
+   * Standing permission rules. Renderer -> main only, from Settings: like toolsGrantAccess,
+   * nothing the MODEL can reach may write a rule.
+   */
+  permissionsGetState: 'permissions:get-state',
+  permissionsSetRules: 'permissions:set-rules',
+  permissionsSetSharing: 'permissions:set-sharing',
   updateGetState: 'update:get-state',
   updateCheck: 'update:check',
   updateDownload: 'update:download',
@@ -483,6 +509,8 @@ export interface DesktopApi {
      * the main-process cache, which is what a "try again" affordance needs.
      */
     listModels(force?: boolean): Promise<ChatModelCatalog>;
+    /** The models Settings may pin the next-prompt hint to: small hosted ones, then local ones. */
+    listSuggestionModels(): Promise<ChatModelCatalog>;
     /** Pin a conversation to a model. Null when the session is gone. */
     setSessionModel(sessionId: string, model: string): Promise<ChatSessionSummary | null>;
     /** How hard this conversation's model should think. Null when the session is gone. */
@@ -558,8 +586,9 @@ export interface DesktopApi {
      * whether to call is the renderer's decision (see promptSuggestions.ts).
      *
      * The result is a DRAFT for the input box. Nothing on this channel can send a message.
+     * `model` is the Settings pick; null or omitted is automatic.
      */
-    suggestNextPrompt(sessionId: string): Promise<string | null>;
+    suggestNextPrompt(sessionId: string, model?: string | null): Promise<string | null>;
     /**
      * Messages typed ahead for this conversation, waiting for the live turn to finish. Read on
      * open for the same reason as getSessionStatuses: the pushes below carry only CHANGES, and
@@ -694,6 +723,26 @@ export interface DesktopApi {
     setProjectSkillsTrusted(sessionId: string, trusted: boolean): Promise<SkillsState>;
   };
   /**
+   * The Skill Market, read through main (SkillMarket.ts). Nothing here rejects: a signed-out or
+   * failed call comes back as `error` (or `ok: false`) on the result, which the panel renders.
+   */
+  skillMarket: {
+    /** One page of listings, 1-based, with the web's filters. */
+    browse(filters: SkillMarketFilters, page: number): Promise<SkillMarketPage>;
+    recommended(): Promise<SkillMarketPage>;
+    /** A listing's detail, with an update offer when the user's imported copy is behind. */
+    listing(ref: SkillMarketListingRef): Promise<SkillMarketDetailResult>;
+    /**
+     * Import a listing, or update an imported copy in place. On success the next skills read
+     * (picker, Customize, a turn) sees it without waiting for the account-skill cache.
+     */
+    importListing(request: SkillMarketImportRequest): Promise<SkillMarketImportResult>;
+    /** The account's market imports, and which have a newer approved version. */
+    imports(): Promise<SkillMarketImportsResult>;
+    /** Open a market page on the web. False when there was nothing valid to open. */
+    openOnWeb(target: SkillMarketWebTarget): Promise<boolean>;
+  };
+  /**
    * The agent's browser, as something the user can watch.
    *
    * The page takes the user's own clicks and keystrokes directly, and the agent drives it
@@ -773,6 +822,12 @@ export interface DesktopApi {
     /** Opens the OS folder picker. Resolves unchanged if the user cancels. */
     grantAccess(): Promise<ToolAccessState>;
     revokeAccess(root: string): Promise<ToolAccessState>;
+  };
+  permissions: {
+    getState(): Promise<PermissionsState>;
+    /** Replaces one scope's lists. Refused, with the reason, when any rule does not parse. */
+    setRules(scope: PermissionScope, lists: PermissionRuleLists): Promise<PermissionMutationResult>;
+    setSharing(share: boolean): Promise<PermissionsState>;
   };
   pullRequests: {
     /**

@@ -48,7 +48,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 
 vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe: vi.fn() }));
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ upload: vi.fn(), getSignedUrl: h.signUrl, getMetadata: vi.fn() }),
 }));
 
@@ -63,6 +63,7 @@ vi.mock('@bike4mind/database', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/database')>()),
   changeStorageSize: vi.fn(),
   dataLakeRepository: {
+    findByDatalakeTags: vi.fn().mockResolvedValue([]),
     findByDatalakeTag: h.findByDatalakeTag,
     find: h.find,
     setStats: h.setStats,

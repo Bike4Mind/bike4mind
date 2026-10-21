@@ -684,6 +684,13 @@ export interface ISession {
    */
   disabledTools?: string[];
   /**
+   * Server-owned: tools the completion path added on its own because a turn's message called for them
+   * (blog, data-lake save, skill). Only ever grows, so the tool list a session sends stays the same
+   * from turn to turn: any change to it invalidates the provider's whole prompt cache. Never written
+   * from a client.
+   */
+  autoAddedTools?: string[];
+  /**
    * When true, suppress the user's personal integrations for this session - their
    * MCP servers and agent delegation are not layered onto the session's toolset, so
    * it runs only its curated, server-owned tools. Generic capability - lets a product
@@ -878,13 +885,12 @@ export interface ISession {
    * Set to 0 when a realtime hold opens and removed when it closes; absent for other holds.
    */
   voiceBilledCredits?: number;
-}
 
-/** The per-call state a claimed voice hold carries, restored with it if its settlement fails. */
-export interface VoiceHoldMarkers {
-  voiceConnectedAt?: Date | null;
-  voiceLastActivityAt?: Date | null;
-  voiceBilledCredits?: number | null;
+  /**
+   * Who paid the open voice hold's reserve, set when it opens and cleared when it settles. Every
+   * refund and debit against the hold goes to this user, never to whoever sends the closing frame.
+   */
+  voiceHoldUserId?: string | null;
 }
 
 ///////////
@@ -1101,6 +1107,15 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
   attachAgent: (sessionId: string, agentId: string) => Promise<ISessionDocument>;
 
   /**
+   * Record tools the completion path auto-added, atomically and add-only ($addToSet), so concurrent
+   * turns cannot drop one another's entries.
+   *
+   * @param sessionId - The session ID
+   * @param toolNames - Tool names to add to `autoAddedTools`
+   */
+  addAutoAddedTools: (sessionId: string, toolNames: string[]) => Promise<void>;
+
+  /**
    * Detach an agent from a session
    *
    * @param sessionId - The session ID
@@ -1225,7 +1240,7 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
     sessionId: string,
     startedAt: Date,
     options?: { realtimeOnly?: boolean }
-  ) => Promise<{ billedCredits: number | null } | null>;
+  ) => Promise<{ billedCredits: number | null; payerId: string | null } | null>;
 
   /**
    * Write a fresh call's hold, only while the session still holds `priorStartedAt` (the hold read
@@ -1235,18 +1250,6 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
   openVoiceHold: (
     sessionId: string,
     priorStartedAt: Date | null,
-    hold: { voiceReservedCredits: number | null; voiceSessionStartedAt: Date; realtime: boolean }
-  ) => Promise<boolean>;
-
-  /**
-   * Put back a hold claimed by `claimVoiceHold` whose refund then failed, with its per-call
-   * `markers`, so it can be settled again. Resolves false (and writes nothing) when the session
-   * already holds a newer call.
-   */
-  restoreVoiceHold: (
-    sessionId: string,
-    voiceReservedCredits: number,
-    startedAt: Date,
-    markers?: VoiceHoldMarkers
+    hold: { voiceReservedCredits: number | null; voiceSessionStartedAt: Date; realtime: boolean; payerId: string }
   ) => Promise<boolean>;
 }

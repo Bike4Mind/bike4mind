@@ -453,6 +453,24 @@ describe('registerViaOTC', () => {
     });
   });
 
+  it('grants the default credits for an admitted no-invite signup while open registration is off', async () => {
+    mockAdapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) => {
+      if (name === 'allowOpenRegistration') return { settingValue: false };
+      if (name === 'defaultFreeCredits') return { settingValue: '100' };
+      return null;
+    });
+
+    const result = await registerViaOTC(otcParams, { ...mockAdapters, skipInviteCheck: true });
+
+    expect(mockAddCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ ownerId: 'newUserId', credits: 100, transactionId: 'verify-grant:newUserId' }),
+      expect.anything()
+    );
+    expect(result).toMatchObject({ emailVerified: true, currentCredits: 100 });
+    expect(result.tags).not.toContain(PENDING_FREE_CREDITS_TAG);
+    expect(mockAdapters.db.registrationInvites.findByCode).not.toHaveBeenCalled();
+  });
+
   it('keeps the pending tag (still verifies) when the credit grant throws', async () => {
     mockAddCredits.mockRejectedValueOnce(new Error('credit service down'));
     const result = await registerViaOTC(otcParams, mockAdapters);

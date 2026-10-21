@@ -5,8 +5,8 @@ import { FabFile, StorageDriftRecord, User, fabFileRepository, userRepository } 
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 
 vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
-vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'unused' } }));
-vi.mock('@server/utils/cloudwatch', () => ({ emitMetrics: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'unused' } }));
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetrics: vi.fn() }));
 const { postMessageToSlack } = vi.hoisted(() => ({ postMessageToSlack: vi.fn() }));
 vi.mock('@server/integrations/slack/slack', () => ({ postMessageToSlack }));
 

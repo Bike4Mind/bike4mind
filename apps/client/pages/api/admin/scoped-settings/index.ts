@@ -4,7 +4,7 @@ import { ApiKeyScope, CreditHolderType, SettingKeySchema, SettingScopeLevel, set
 import { scopedSettingsRepository } from '@bike4mind/database/infra';
 import { scopedSettingsService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ensureAdmin, parseOrBadRequest } from '@server/utils/errors';
+import { BadRequestError, ensureAdmin, parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
 import { refuseFloorAboveMeasured } from '@server/utils/refuseFloorAboveMeasured';
 
 /**

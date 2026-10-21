@@ -23,8 +23,8 @@ import {
   InternalServerError,
   NotFoundError,
   TooManyRequestsError,
-} from '@server/utils/errors';
-import { sendToQueue } from '@server/utils/sqs';
+} from '@bike4mind/server-utils/utils/errors';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { Request } from 'express';
 import { Resource } from 'sst';
 import { z } from 'zod';

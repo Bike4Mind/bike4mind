@@ -36,7 +36,7 @@ vi.mock('@bike4mind/common', () => ({
   },
 }));
 
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: {
     MAIL_HOST: 'smtp.example.com',
     MAIL_PORT: '465',

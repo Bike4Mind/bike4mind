@@ -7,6 +7,7 @@ import type {
   ChildExecution,
   IterationStep,
   ParentExecution,
+  PendingGate,
   PendingPermission,
 } from '@client/app/stores/useAgentExecutionStore';
 
@@ -29,6 +30,7 @@ vi.mock('@client/app/stores/useAgentExecutionStore', () => {
     selector({
       executions: mocks.execution ? { [mocks.execution.executionId]: mocks.execution } : {},
       setPendingPermission: vi.fn(),
+      setPendingGate: vi.fn(),
     });
   // AbortButton (mounted via IterationStream) imports `isActiveStatus` from
   // this module; provide the same predicate the real store exports so the
@@ -50,6 +52,7 @@ vi.mock('@client/app/hooks/useAgentExecution', () => ({
   useAgentExecutionDispatch: () => ({
     abortExecution: vi.fn(),
     respondToPermission: vi.fn(),
+    respondToGate: vi.fn(),
   }),
 }));
 
@@ -171,6 +174,78 @@ describe('IterationStream — render', () => {
 
     expect(screen.getByTestId(`iteration-stream-${EXECUTION_ID}`)).toBeInTheDocument();
     expect(screen.queryByTestId(`permission-card-${EXECUTION_ID}`)).not.toBeInTheDocument();
+  });
+
+  const GATE: PendingGate = {
+    iteration: 2,
+    confidence: 0.42,
+    reason: 'Iteration confidence 42% below threshold 60%',
+    requestedAt: Date.now(),
+  };
+
+  it('mounts the ConfidenceGateCard when execution.pendingGate is set', () => {
+    mocks.execution = makeExecution({ status: 'paused', pendingGate: GATE });
+    render(
+      <TestWrapper>
+        <IterationStream executionId={EXECUTION_ID} />
+      </TestWrapper>
+    );
+
+    expect(screen.getByTestId(`iteration-stream-${EXECUTION_ID}`)).toBeInTheDocument();
+    expect(screen.getByTestId(`confidence-gate-card-${EXECUTION_ID}`)).toBeInTheDocument();
+    expect(screen.getByText(GATE.reason)).toBeInTheDocument();
+    // The header carries the paused chip, so a gate pause with no rendered
+    // iterations is not a bare card with no status.
+    expect(screen.getByText('Paused')).toBeInTheDocument();
+  });
+
+  it('does not mount the ConfidenceGateCard when pendingGate is undefined', () => {
+    mocks.execution = makeExecution({ status: 'running' });
+    render(
+      <TestWrapper>
+        <IterationStream executionId={EXECUTION_ID} />
+      </TestWrapper>
+    );
+
+    expect(screen.queryByTestId(`confidence-gate-card-${EXECUTION_ID}`)).not.toBeInTheDocument();
+  });
+
+  describe('failure line', () => {
+    const renderFailed = (overrides: Partial<ParentExecution>) => {
+      mocks.execution = makeExecution({ status: 'failed', ...overrides });
+      render(
+        <TestWrapper>
+          <IterationStream executionId={EXECUTION_ID} />
+        </TestWrapper>
+      );
+      return screen.getByTestId(`iteration-stream-${EXECUTION_ID}-failure`);
+    };
+
+    it('shows the denial text for tool_denied instead of "Failed: tool_denied"', () => {
+      const line = renderFailed({
+        failureReason: 'tool_denied',
+        errorMessage: 'Execution stopped: you denied "web_search".',
+      });
+      expect(line).toHaveTextContent('Execution stopped: you denied "web_search".');
+      expect(line).not.toHaveTextContent(/Failed:/);
+    });
+
+    it('falls back to a generic denial line when tool_denied has no message', () => {
+      const line = renderFailed({ failureReason: 'tool_denied' });
+      expect(line).toHaveTextContent('Execution stopped: a tool call was denied.');
+      expect(line).not.toHaveTextContent(/Failed:/);
+    });
+
+    it('keeps "Failed: <reason> - <message>" for other reasons', () => {
+      const line = renderFailed({ failureReason: 'error', errorMessage: 'boom' });
+      expect(line).toHaveTextContent('Failed: error \u2014 boom');
+    });
+
+    it('shows just the message when a replayed failure carries no reason', () => {
+      const line = renderFailed({ errorMessage: 'Agent execution failed' });
+      expect(line).toHaveTextContent('Agent execution failed');
+      expect(line).not.toHaveTextContent(/Failed:/);
+    });
   });
 });
 

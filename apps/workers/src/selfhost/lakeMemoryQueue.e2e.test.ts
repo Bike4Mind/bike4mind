@@ -30,7 +30,11 @@ vi.mock('@bike4mind/services/llm', () => ({
     evaluate = evaluate;
   },
 }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: send, receiveFromQueue: receive, deleteFromQueue: remove }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({
+  sendToQueue: send,
+  receiveFromQueue: receive,
+  deleteFromQueue: remove,
+}));
 vi.mock('sst', () => ({ Resource: { lakeMemoryQueue: { url: 'http://sqs/lake-memory' } } }));
 vi.mock('@server/queueHandlers/utils', () => ({
   dispatchWithLogger:

@@ -1,4 +1,4 @@
-import { CreditHolderType, isZodError } from '@bike4mind/common';
+import { CREDITS_PER_USD_COST, CreditHolderType, isZodError } from '@bike4mind/common';
 import { createMocks } from 'node-mocks-http';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -15,6 +15,7 @@ const {
   recordUsage,
   saveGeneratedAssetToFiles,
   pendingHolds,
+  settlementDraw,
 } = vi.hoisted(() => ({
   getEffectiveApiKey: vi.fn(),
   deductCredits: vi.fn(),
@@ -28,7 +29,17 @@ const {
   recordUsage: vi.fn(),
   saveGeneratedAssetToFiles: vi.fn(),
   pendingHolds: new Map<string, { settledCredits?: number }>(),
+  settlementDraw: vi.fn(),
 }));
+
+// The real stochastic rounding, with its draw pinned so the settled amount is assertable.
+vi.mock('@bike4mind/common', async importActual => {
+  const actual = await importActual<typeof import('@bike4mind/common')>();
+  return {
+    ...actual,
+    usdToCreditsStochastic: (usd: number) => actual.usdToCreditsStochastic(usd, () => settlementDraw()),
+  };
+});
 
 // Contract-adapter mock: stands in for the nextRouteForContract prelude, running
 // the contract's own request schema into `req.validated` (so body validation stays
@@ -64,7 +75,7 @@ vi.mock('@server/middlewares/defineNextRoute', () => ({
   },
 }));
 
-vi.mock('@server/utils/errors', () => ({
+vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   BadRequestError: class BadRequestError extends Error {
     statusCode = 400;
   },
@@ -141,7 +152,7 @@ vi.mock('@server/utils/saveGeneratedAssetToFiles', () => ({
 
 const { upload, getSignedUrl } = vi.hoisted(() => ({ upload: vi.fn(), getSignedUrl: vi.fn() }));
 // Only the oversized-audio offload touches storage; the delivery module itself is real.
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ upload, getSignedUrl }),
 }));
 
@@ -178,7 +189,9 @@ beforeEach(() => {
     orgIncrement,
     recordUsage,
     saveGeneratedAssetToFiles,
+    settlementDraw,
   ].forEach(m => m.mockReset());
+  settlementDraw.mockReturnValue(0.5);
   recordUsage.mockResolvedValue(undefined);
   // Default: persistence is a no-op that reports "not saved", so tests not
   // exercising the save path see no persisted-file headers.
@@ -242,6 +255,57 @@ describe('POST /api/ai/music', () => {
         units: 30,
         status: 'ok',
       })
+    );
+  });
+
+  it.each([
+    [0.25, 151, [['u1', -151]]],
+    [
+      0.75,
+      150,
+      [
+        ['u1', -151],
+        ['u1', 1],
+      ],
+    ],
+  ])(
+    'settles a cost of N + 0.5 credits as N or N+1 and refunds the round-up difference (draw %s -> %s)',
+    async (draw, charged, balanceMoves) => {
+      getSettingsValue.mockReturnValue(true);
+      settlementDraw.mockReturnValue(draw);
+      estimateMusicCredits.mockReturnValue({
+        requiredCredits: 151,
+        usdCost: 150.5 / CREDITS_PER_USD_COST,
+        billedSeconds: 30,
+      });
+
+      const { res, promise } = run({ prompt: 'lofi beat', lengthMs: 30000 });
+      await promise;
+
+      expect(res._getStatusCode()).toBe(200);
+      // Held on the round-up, then only the drawn amount is kept.
+      expect(userIncrement.mock.calls).toEqual(balanceMoves);
+      expect(deductCredits.mock.calls[0][0]).toMatchObject({ credits: charged });
+      expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ creditsCharged: charged }));
+    }
+  );
+
+  it('settles a tiny cost at 0: whole hold refunded, no ledger row, usage event still recorded', async () => {
+    getSettingsValue.mockReturnValue(true);
+    settlementDraw.mockReturnValue(0.5);
+    estimateMusicCredits.mockReturnValue({ requiredCredits: 1, usdCost: 0.00001, billedSeconds: 30 });
+
+    const { res, promise } = run({ prompt: 'lofi beat', lengthMs: 30000 });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(userIncrement.mock.calls).toEqual([
+      ['u1', -1],
+      ['u1', 1],
+    ]);
+    expect(deductCredits).not.toHaveBeenCalled();
+    expect(recordUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ feature: 'music_generation', status: 'ok', creditsCharged: 0, costUsd: 0.00001 })
     );
   });
 

@@ -10,7 +10,7 @@ import {
 // Only the app-layer edges are mocked (crypto is unreachable from packages/database and unused by
 // this seam anyway); the repository, model and unique index are REAL, which is the point: a mocked
 // repository could not show that a re-enable resolves a row the enabled-only finder cannot see.
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { GOOGLE_CLIENT_ID: 'test-client-id', GOOGLE_CLIENT_SECRET: 'test-client-secret' },
 }));
 vi.mock('@server/security/tokenEncryption', () => ({

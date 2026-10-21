@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { WORKSPACE_SURFACES } from '../../../b4m-core/common/src/surfaces';
 
 /**
  * Guard for the workspace session-settings contribution: ids are declared as data so the generator
@@ -59,6 +60,9 @@ beforeEach(() => {
 
 const EMPTY = 'premiumWorkspaceSessionSettings: WorkspaceSessionSettingsTable = {};';
 
+/** Non-null ids in the registry; the generator mirrors this set as `REGISTERED_WORKSPACE_IDS`. */
+const REGISTERED = WORKSPACE_SURFACES.map(surface => surface.id).filter((id): id is string => id !== null);
+
 function expectFailure(stderrFragment: string) {
   const result = runCodegen();
   expect(result.status).not.toBe(0);
@@ -79,20 +83,116 @@ describe('premium workspace session settings', () => {
   });
 
   it('imports each contributed module under its workspace id', () => {
-    writeOverlay('alpha', {
-      workspaceSessionSettingsExport: { 'example-workspace': '@bike4mind/premium-alpha/session-settings' },
-    });
-    writeOverlay('beta', { workspaceSessionSettingsExport: { other_space: '@bike4mind/premium-beta/settings' } });
+    writeOverlay('alpha', { workspaceSessionSettingsExport: { opti: '@bike4mind/premium-alpha/session-settings' } });
 
     const out = generate();
 
     expect(out).toContain(
       "import { workspaceSessionSettings as settings0 } from '@bike4mind/premium-alpha/session-settings';"
     );
-    expect(out).toContain("import { workspaceSessionSettings as settings1 } from '@bike4mind/premium-beta/settings';");
-    expect(out).toContain('"example-workspace": settings0,');
-    expect(out).toContain('"other_space": settings1,');
+    expect(out).toContain('"opti": settings0,');
     expect(out).toContain('= defineWorkspaceSessionSettingsTable({');
+  });
+
+  it('accepts every workspace id registered in WORKSPACE_SURFACES', () => {
+    expect(REGISTERED.length).toBeGreaterThan(0);
+    writeOverlay('registered', {
+      workspaceSessionSettingsExport: Object.fromEntries(
+        REGISTERED.map(id => [id, `@bike4mind/premium-registered/${id}`])
+      ),
+    });
+
+    const out = generate();
+
+    REGISTERED.forEach((id, i) => {
+      expect(out).toContain(`"${id}": settings${i},`);
+    });
+  });
+
+  it('rejects a workspace id that is not a registered surface', () => {
+    writeOverlay('unknown', {
+      workspaceSessionSettingsExport: { 'not-a-surface': '@bike4mind/premium-unknown/settings' },
+    });
+
+    const result = runCodegen();
+
+    expect(result.status, result.stdout).not.toBe(0);
+    expect(result.stderr).toContain('"not-a-surface" is not a registered workspace surface id');
+    expect(result.stderr).toContain(`(${REGISTERED.join(', ')})`);
+  });
+
+  it('accepts a guarded surface registered by its contributing package', () => {
+    writeOverlay('guarded', {
+      workspaceSurfaceIds: ['private-example'],
+      workspaceSessionSettingsExport: { 'private-example': '@bike4mind/premium-guarded/settings' },
+    });
+
+    expect(generate()).toContain('"private-example": settings0,');
+  });
+
+  it('emits public and guarded settings together', () => {
+    writeOverlay('mixed', {
+      workspaceSurfaceIds: ['private-example'],
+      workspaceSessionSettingsExport: {
+        opti: '@bike4mind/premium-mixed/open-settings',
+        'private-example': '@bike4mind/premium-mixed/private-settings',
+      },
+    });
+
+    const out = generate();
+
+    expect(out).toContain('"opti": settings0,');
+    expect(out).toContain('"private-example": settings1,');
+    expect(out).toContain(
+      "import { workspaceSessionSettings as settings1 } from '@bike4mind/premium-mixed/private-settings';"
+    );
+  });
+
+  it('rejects duplicate settings even when both packages register the surface', () => {
+    for (const name of ['alpha', 'beta']) {
+      writeOverlay(name, {
+        workspaceSurfaceIds: ['private-example'],
+        workspaceSessionSettingsExport: { 'private-example': `@bike4mind/premium-${name}/settings` },
+      });
+    }
+
+    expectFailure('duplicate workspaceSessionSettingsExport workspace id "private-example"');
+  });
+
+  it('rejects a typo even when the package registers a guarded surface', () => {
+    writeOverlay('guarded', {
+      workspaceSurfaceIds: ['private-example'],
+      workspaceSessionSettingsExport: { 'private-exampl': '@bike4mind/premium-guarded/settings' },
+    });
+
+    expectFailure('"private-exampl" is not a registered workspace surface id');
+  });
+
+  it("does not borrow another package's guarded surface registration", () => {
+    writeOverlay('owner', { workspaceSurfaceIds: ['private-example'] });
+    writeOverlay('other', {
+      workspaceSessionSettingsExport: { 'private-example': '@bike4mind/premium-other/settings' },
+    });
+
+    expectFailure('"private-example" is not a registered workspace surface id');
+  });
+
+  it.each([
+    null,
+    false,
+    'private-example',
+    {},
+    [null],
+    ['Example'],
+    ['has space'],
+    [''],
+    ['__proto__'],
+    ['constructor'],
+    ['prototype'],
+  ])('rejects malformed surface registration %j even without settings', workspaceSurfaceIds => {
+    writeOverlay('malformed', { workspaceSurfaceIds });
+
+    expectFailure('invalid workspaceSurfaceIds');
   });
 
   it.each([[null], [false], [[]], ['@bike4mind/premium-malformed/settings']])(
@@ -116,16 +216,16 @@ describe('premium workspace session settings', () => {
   );
 
   it('rejects the same workspace id from two packages', () => {
-    writeOverlay('alpha', { workspaceSessionSettingsExport: { 'example-workspace': '@bike4mind/premium-alpha/a' } });
-    writeOverlay('beta', { workspaceSessionSettingsExport: { 'example-workspace': '@bike4mind/premium-beta/b' } });
+    writeOverlay('alpha', { workspaceSessionSettingsExport: { opti: '@bike4mind/premium-alpha/a' } });
+    writeOverlay('beta', { workspaceSessionSettingsExport: { opti: '@bike4mind/premium-beta/b' } });
 
-    expectFailure('duplicate workspaceSessionSettingsExport workspace id "example-workspace"');
+    expectFailure('duplicate workspaceSessionSettingsExport workspace id "opti"');
   });
 
   it.each(['../escape/settings', './local', "x'; process.exit(0); //", '', 42])(
     'rejects the module specifier %s',
     specifier => {
-      writeOverlay('badSpec', { workspaceSessionSettingsExport: { 'example-workspace': specifier } });
+      writeOverlay('badSpec', { workspaceSessionSettingsExport: { opti: specifier } });
 
       expectFailure('invalid workspaceSessionSettingsExport from package');
     }

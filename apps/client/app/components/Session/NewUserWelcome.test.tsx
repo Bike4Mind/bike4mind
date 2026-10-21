@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import type { AnswerCostReference } from '@client/app/utils/creditEstimate';
+import type { ModelAnswerCost } from '@client/app/utils/creditEstimate';
 
 const { state, sendPrompt, setChatInputValue } = vi.hoisted(() => ({
   state: {
@@ -11,12 +11,10 @@ const { state, sendPrompt, setChatInputValue } = vi.hoisted(() => ({
     isSuccess: true,
     isFetching: false,
     balance: 9982,
+    liveBalance: null as number | null,
     enforceCredits: true,
     hasComposer: true,
-    answerCostReference: {
-      premium: { modelName: 'Claude Sonnet 5.5', creditsPerAnswer: 54 },
-      budget: { modelName: 'GPT-5.4 Mini', creditsPerAnswer: 15 },
-    } as AnswerCostReference | null,
+    answerCost: { modelName: 'Claude Sonnet 5.5', creditsPerAnswer: 54 } as ModelAnswerCost | null,
   },
   sendPrompt: vi.fn(() => Promise.resolve(true)),
   setChatInputValue: vi.fn(),
@@ -35,9 +33,12 @@ vi.mock('@client/app/hooks/data/sessions', () => ({
 vi.mock('@client/app/hooks/data/settings', () => ({
   useGetSettingsValue: (key: string) => (key === 'enforceCredits' ? state.enforceCredits : undefined),
 }));
-vi.mock('@client/app/hooks/useEffectiveCredits', () => ({ useEffectiveCredits: () => state.balance }));
-vi.mock('@client/app/hooks/useAnswerCostReference', () => ({
-  useAnswerCostReference: () => state.answerCostReference,
+vi.mock('@client/app/hooks/useEffectiveCredits', () => ({
+  useEffectiveCredits: (options?: { live?: boolean }) =>
+    options?.live ? (state.liveBalance ?? state.balance) : state.balance,
+}));
+vi.mock('@client/app/hooks/useSelectedModelAnswerCost', () => ({
+  useSelectedModelAnswerCost: () => state.answerCost,
 }));
 vi.mock('@client/app/hooks/useChatActions', () => ({
   default: (selector: (s: { sendPrompt: unknown }) => unknown) =>
@@ -65,12 +66,10 @@ describe('NewUserWelcome', () => {
     state.isSuccess = true;
     state.isFetching = false;
     state.balance = 9982;
+    state.liveBalance = null;
     state.enforceCredits = true;
     state.hasComposer = true;
-    state.answerCostReference = {
-      premium: { modelName: 'Claude Sonnet 5.5', creditsPerAnswer: 54 },
-      budget: { modelName: 'GPT-5.4 Mini', creditsPerAnswer: 15 },
-    };
+    state.answerCost = { modelName: 'Claude Sonnet 5.5', creditsPerAnswer: 54 };
     sendPrompt.mockClear();
     setChatInputValue.mockClear();
     localStorage.clear();
@@ -83,18 +82,94 @@ describe('NewUserWelcome', () => {
     expect(screen.getAllByTestId(/^new-user-welcome-prompt-/)).toHaveLength(3);
   });
 
-  it('estimates how many answers the starting credits cover across models, labelled as an estimate', () => {
+  it('invites a prompt, or typing below, while there are credits to send with', () => {
+    renderWelcome();
+    expect(screen.getByText(/or type your own below/i)).toBeInTheDocument();
+  });
+
+  it('drops "type your own below" and the starters at 0 credits, when the composer is replaced', () => {
+    state.balance = 0;
+    renderWelcome();
+    expect(screen.getByTestId('new-user-welcome')).toBeInTheDocument();
+    expect(screen.queryByText(/type your own below/i)).not.toBeInTheDocument();
+    expect(screen.queryAllByTestId(/^new-user-welcome-prompt-/)).toHaveLength(0);
+  });
+
+  it('explains the empty card at 0 credits with no pending grant instead of showing only a title', () => {
+    state.balance = 0;
+    renderWelcome();
+    expect(screen.getByTestId('new-user-welcome-out-of-credits').textContent).toBe("You're out of credits.");
+    expect(screen.queryByTestId('new-user-welcome-credits')).not.toBeInTheDocument();
+    expect(screen.getByTestId('new-user-welcome-privacy-link')).toBeInTheDocument();
+  });
+
+  it('hides starters when the live balance is exhausted while the displayed balance is frozen', () => {
+    state.liveBalance = 0;
+    renderWelcome();
+    expect(screen.queryByText(/type your own below/i)).not.toBeInTheDocument();
+    expect(screen.queryAllByTestId(/^new-user-welcome-prompt-/)).toHaveLength(0);
+  });
+
+  it('restores starters when live credits recover while the displayed balance is frozen at zero', () => {
+    state.balance = 0;
+    state.liveBalance = 1000;
+    renderWelcome();
+    expect(screen.getByText(/type your own below/i)).toBeInTheDocument();
+    expect(screen.getAllByTestId(/^new-user-welcome-prompt-/)).toHaveLength(3);
+  });
+
+  it('does not show the out-of-credits line while there is credit to start with', () => {
+    renderWelcome();
+    expect(screen.queryByTestId('new-user-welcome-out-of-credits')).not.toBeInTheDocument();
+  });
+
+  it('keeps the starters at 0 credits when credits are not enforced', () => {
+    state.balance = 0;
+    state.enforceCredits = false;
+    renderWelcome();
+    expect(screen.getAllByTestId(/^new-user-welcome-prompt-/)).toHaveLength(3);
+  });
+
+  it('estimates how many answers the starting credits cover on the selected model, labelled as an estimate', () => {
     renderWelcome();
     expect(screen.getByTestId('new-user-welcome-answers-estimate')).toHaveTextContent(
-      /^Estimate: about 180 to 660 answers, depending on the model \(Claude Sonnet 5\.5 to GPT-5\.4 Mini\)/
+      /^Estimate: about 180 answers on Claude Sonnet 5\.5\./
     );
   });
 
-  it('shows no estimate when no reference model is priced', () => {
-    state.answerCostReference = null;
+  it('shows no estimate when the selected model is not priced', () => {
+    state.answerCost = null;
     renderWelcome();
     expect(screen.getByTestId('new-user-welcome-credits')).toBeInTheDocument();
     expect(screen.queryByTestId('new-user-welcome-answers-estimate')).not.toBeInTheDocument();
+  });
+
+  it('updates, hides and restores the estimate as the selected model changes', () => {
+    const { rerender } = renderWelcome();
+    const refresh = () =>
+      rerender(
+        <CssVarsProvider theme={appTheme}>
+          <NewUserWelcome />
+        </CssVarsProvider>
+      );
+
+    state.answerCost = { modelName: 'Mini', creditsPerAnswer: 15 };
+    refresh();
+    expect(screen.getByTestId('new-user-welcome-answers-estimate')).toHaveTextContent(
+      /^Estimate: about 660 answers on Mini\./
+    );
+
+    state.answerCost = null;
+    refresh();
+    expect(screen.queryByTestId('new-user-welcome-answers-estimate')).not.toBeInTheDocument();
+    expect(screen.getByTestId('new-user-welcome-credits')).toBeInTheDocument();
+    expect(screen.getAllByTestId(/^new-user-welcome-prompt-/)).toHaveLength(3);
+
+    state.answerCost = { modelName: 'Claude Sonnet 5.5', creditsPerAnswer: 54 };
+    refresh();
+    expect(screen.getByTestId('new-user-welcome-answers-estimate')).toHaveTextContent(
+      /^Estimate: about 180 answers on Claude Sonnet 5\.5\./
+    );
   });
 
   it('does not interrupt a returning user who already has notebooks', () => {

@@ -9,7 +9,7 @@ import {
 } from '@bike4mind/database';
 import { sharingService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { Request, Response } from 'express';
 
 const revokeBodySchema = z.object({

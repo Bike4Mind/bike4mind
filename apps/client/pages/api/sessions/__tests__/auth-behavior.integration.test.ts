@@ -82,7 +82,7 @@ import sharedHandler from '../shared';
 import countHandler from '../count';
 import recentProactiveHandler from '../recent-proactive-messages';
 import semanticSearchHandler from '../semantic-search';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 
 type ApiHandler = (req: unknown, res: unknown) => Promise<void> | void;
 

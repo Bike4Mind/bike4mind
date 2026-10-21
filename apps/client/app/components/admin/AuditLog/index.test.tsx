@@ -43,7 +43,12 @@ vi.mock('@client/app/hooks/data/adminAuditLog', () => ({
       : {
           windowDays: 30,
           since: SINCE,
-          creditGrants: { count: 3, topGranters: [{ userId: 'u1', name: 'Alice', count: 2 }] },
+          creditGrants: {
+            count: 3,
+            grantedCredits: 12500,
+            deductedCredits: 300,
+            topGranters: [{ userId: 'u1', name: 'Alice', count: 2 }],
+          },
           permissionChanges: 1,
           impersonations: 0,
           deletions: 2,
@@ -108,6 +113,13 @@ describe('AuditLogPage', () => {
     render(<AuditLogPage />, { wrapper: TestWrapper });
     fireEvent.click(screen.getByTestId('audit-summary-tile-credits'));
     expect(mocks.setFilters).toHaveBeenCalledWith({ category: 'credits', from: SINCE });
+  });
+
+  it('credit tile shows the granted total, grant count, deductions and top granters', () => {
+    render(<AuditLogPage />, { wrapper: TestWrapper });
+    const tile = screen.getByTestId('audit-summary-tile-credits');
+    expect(tile.textContent).toContain('+12,500 credits');
+    expect(tile.textContent).toContain('3 grants, -300 deducted: Alice (2)');
   });
 
   it('export shows the truncation notice when truncated', async () => {

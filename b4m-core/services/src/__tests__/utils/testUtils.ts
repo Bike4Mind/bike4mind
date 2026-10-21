@@ -111,6 +111,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   updateTagsByUserId: vi.fn(),
   dedupeTagByUserId: vi.fn(),
   pullTagsByFabFileId: vi.fn(),
+  setOwnerOrganizationIfUnchanged: vi.fn(),
   pushTagsByFabFileId: vi.fn(),
   pushTagReturningPriorState: vi.fn().mockResolvedValue(null),
   bulkUpdateTags: vi.fn(),
@@ -218,6 +219,8 @@ export const createMockSessionRepository = (): MockedObject<ISessionRepository> 
     findAllByIds: vi.fn(),
     findSessionIdsByUserId: vi.fn(),
     attachAgent: vi.fn(),
+    // Returns a promise so the caller's `.catch(...)` on the auto-add write works in every test.
+    addAutoAddedTools: vi.fn().mockResolvedValue(undefined),
     detachAgent: vi.fn(),
     getAttachedAgents: vi.fn(),
     addArtifact: vi.fn(),
@@ -231,7 +234,6 @@ export const createMockSessionRepository = (): MockedObject<ISessionRepository> 
     findStaleVoiceHolds: vi.fn(),
     claimVoiceHold: vi.fn(),
     openVoiceHold: vi.fn(),
-    restoreVoiceHold: vi.fn(),
     recordVoiceActivity: vi.fn(),
   });
 

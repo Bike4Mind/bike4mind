@@ -14,7 +14,7 @@ vi.mock('@bike4mind/database', () => ({
   INTEGRATION_HEALTH_THRESHOLDS: { LATENCY_WARNING_MS: 2_000, LATENCY_CRITICAL_MS: 5_000 },
 }));
 
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   emitMetrics: vi.fn().mockResolvedValue(undefined),
 }));
 

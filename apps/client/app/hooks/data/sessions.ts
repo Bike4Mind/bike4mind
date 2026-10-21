@@ -45,7 +45,7 @@ import { useJobStatus } from '@client/app/hooks/useJobStatus';
 import useSessionLayout from '@client/app/hooks/useSessionLayout';
 import { isOptimisticId } from '@client/app/utils/llm';
 import { formatSessionTitle } from '@client/app/utils/sessionTitle';
-import { visibleReplyForExport } from '@client/shared/replyUtils';
+import { visibleReplyForExport } from '@bike4mind/server-utils/shared/replyUtils';
 import { getInsufficientCreditsMessage } from '@client/app/utils/error';
 import { useSendToDataLakeStore } from '@client/app/stores/useSendToDataLakeStore';
 

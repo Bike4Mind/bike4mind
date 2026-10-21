@@ -117,7 +117,7 @@ test.describe('Agents - Navigation, CRUD & Validation', () => {
       await chatPage.sendMessageAndWaitForResponse('Who wrote Romeo and Juliet?');
 
       await verifyAnswers(['Shakespeare'], {
-        selector: '[data-testid="ai-response"]',
+        selector: '[data-testid="ai-response-body"]',
         logic: 'or',
       });
     });

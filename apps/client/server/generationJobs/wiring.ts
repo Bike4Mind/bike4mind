@@ -56,11 +56,11 @@ import {
   XaiVideoProvider,
   type VideoProvider,
 } from '@bike4mind/utils/videoProviders';
-import { isValidObjectId } from '@server/utils/objectId';
-import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
-import { sendToQueue } from '@server/utils/sqs';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
+import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
-import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
+import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 
 // Must outlive the worker timeout (5 min, infra/queues.ts generationJobQueue) so two workers never overlap on
 // one job, and stay under the queue visibility timeout (6 min).

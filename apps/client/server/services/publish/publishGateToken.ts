@@ -1,7 +1,7 @@
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 import type { Request, Response } from 'express';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 
 // Publish access-gate proof token (passphrase mode).
 //

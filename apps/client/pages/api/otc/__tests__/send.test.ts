@@ -20,11 +20,11 @@ vi.mock('@server/middlewares/checkBlockedIP', () => ({
   checkBlockedIP: () => (_req: any, _res: any, next: any) => next?.(),
 }));
 vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn(() => Promise.resolve()) } } }));
-vi.mock('@server/utils/mailer/emailHelpers', () => ({ getLogoUrl: () => undefined }));
+vi.mock('@bike4mind/server-utils/utils/mailer/emailHelpers', () => ({ getLogoUrl: () => undefined }));
 vi.mock('jsonwebtoken', () => ({ default: { sign: () => 'signed-pending-token' } }));
 
 const mockIsE2EEnabled = vi.fn();
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { JWT_SECRET: 'test-secret' },
   isE2EEnabled: () => mockIsE2EEnabled(),
 }));

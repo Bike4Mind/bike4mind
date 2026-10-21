@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { GatedToolCall } from '@bike4mind/agents';
-import { HEADLESS_CONNECTION_ID } from '@server/utils/headlessConnection';
+import { HEADLESS_CONNECTION_ID } from '@bike4mind/server-utils/utils/headlessConnection';
 import {
   classifyToolPermission,
   selectGatedToolCall,
@@ -699,12 +699,17 @@ describe('settleGatedCall', () => {
     );
 
     expect(outcome).toBe('denied');
-    expect(deps.markFailed).toHaveBeenCalledWith('exec_1', expect.objectContaining({ callerSafe: true }));
+    expect(deps.markFailed).toHaveBeenCalledWith('exec_1', {
+      message: 'Execution stopped: tool "image_generation" is not permitted.',
+      callerSafe: true,
+    });
     expect(deps.sendWs).toHaveBeenCalledWith('failed', {
       executionId: 'exec_1',
       reason: 'tool_denied',
       toolName: 'image_generation',
+      message: 'Execution stopped: tool "image_generation" is not permitted.',
     });
+    expect(deps.persistRunAsQuest).toHaveBeenCalledWith('Execution stopped: tool "image_generation" is not permitted.');
     expect(deps.updateStatus).not.toHaveBeenCalled();
     expect(deps.updatePermissionState).not.toHaveBeenCalled();
   });

@@ -36,7 +36,9 @@ vi.mock('@bike4mind/database', () => ({
   sessionRepository: {},
   userRepository: {},
 }));
-vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getSignedUrl: browserSigner }) }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
+  getFilesStorage: () => ({ getSignedUrl: browserSigner }),
+}));
 
 import '@pages/api/sessions/[id]/files';
 

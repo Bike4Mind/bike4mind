@@ -2,7 +2,7 @@ import { resolveAiEditVersionRetention, type IFabFileVersion } from '@bike4mind/
 import { adminSettingsRepository } from '@bike4mind/database';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 
 /** The admin-configured AI-edit version cap. Never throws: a settings outage must not fail an edit. */
 export async function getAiEditVersionRetention(): Promise<number> {

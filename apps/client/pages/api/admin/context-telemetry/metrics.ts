@@ -3,7 +3,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { Quest } from '@bike4mind/database';
 import { z } from 'zod';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { ApiKeyScope } from '@bike4mind/common';
 
 // Query parameter schema

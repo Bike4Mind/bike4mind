@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import { authSessionRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { EmailEvents } from '@server/utils/eventBus';
-import { buildEmailLogoImg } from '@server/utils/mailer/emailHelpers';
+import { buildEmailLogoImg } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 import { STEP_UP_WINDOW_MS } from './stepUp';
 
 /** Wrong codes allowed per emailed step-up challenge before it must be re-sent. */

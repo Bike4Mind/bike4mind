@@ -1,5 +1,35 @@
 # @bike4mind/desktop
 
+## Unreleased
+
+- Add persistent permission rules and optional sharing of Claude Code rules, with deny and ask precedence.
+- Enforce interactive tool denies and check symlink targets and shell file operands before applying standing allows.
+
+## 0.1.9
+
+### Patch Changes
+
+- Updated dependencies [[`78b942f`](https://github.com/Bike4Mind/bike4mind/commit/78b942fdac1e4a65ebb59e9aa8467b87eee53c75), [`9f6f66b`](https://github.com/Bike4Mind/bike4mind/commit/9f6f66b28964425db2fa7b1fecee47fcc5fc2aaa), [`3eeea1b`](https://github.com/Bike4Mind/bike4mind/commit/3eeea1b92b1cb3af52cdade73680c946389a9eee), [`0dcbad1`](https://github.com/Bike4Mind/bike4mind/commit/0dcbad11c888e1792484de1b5cc4235c75a9661f), [`a43e39d`](https://github.com/Bike4Mind/bike4mind/commit/a43e39da24f846df42f1c8de8631736e89bfc753), [`88476d1`](https://github.com/Bike4Mind/bike4mind/commit/88476d1a5aa9fceec132d7abc452f9ba0b18ad54), [`d1d146c`](https://github.com/Bike4Mind/bike4mind/commit/d1d146c73a2adebe4bd3ecf54facccd7a8514e14), [`f43c31e`](https://github.com/Bike4Mind/bike4mind/commit/f43c31e5001a396f02d17121b2d4654e50cc980c), [`4e05df4`](https://github.com/Bike4Mind/bike4mind/commit/4e05df42da2be56f4b2633fad440f41d9d24e570)]:
+  - @bike4mind/common@18.0.0
+  - @bike4mind/client-auth@0.2.1
+  - @bike4mind/mcp@2.1.8
+
+## 0.1.8
+
+### Patch Changes
+
+- Updated dependencies [[`174eeda`](https://github.com/Bike4Mind/bike4mind/commit/174eedabbbcafefe4282268d902efdc6ad12e125)]:
+  - @bike4mind/common@17.1.0
+  - @bike4mind/mcp@2.1.7
+
+## 0.1.7
+
+### Patch Changes
+
+- Updated dependencies [[`5598195`](https://github.com/Bike4Mind/bike4mind/commit/5598195554d31841e2a01afb4c1bb877bd315a58)]:
+  - @bike4mind/common@17.0.0
+  - @bike4mind/mcp@2.1.6
+
 ## 0.1.6
 
 ### Patch Changes

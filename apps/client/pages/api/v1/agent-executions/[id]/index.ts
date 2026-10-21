@@ -6,7 +6,7 @@
  * this handler only projects the trace onto the published snake_case shape.
  */
 
-import { NotFoundError } from '@server/utils/errors';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { getAgentExecutionContract, type AgentExecutionStep } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { loadAgentExecutionTrace } from '@server/utils/loadAgentExecutionTrace';

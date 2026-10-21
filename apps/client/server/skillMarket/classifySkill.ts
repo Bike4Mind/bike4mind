@@ -154,7 +154,11 @@ export async function classifySkill(snapshot: ISkillSnapshot, llm: ClassifierLlm
 }
 
 /** Production wiring: the admin-configured operations model, billed to the system key. */
-export async function getOperationsClassifierLlm(logger: Logger, endUserId: string): Promise<ClassifierLlm> {
+export async function getOperationsClassifierLlm(
+  logger: Logger,
+  endUserId: string,
+  opts: { maxTokens?: number } = {}
+): Promise<ClassifierLlm> {
   const operationsModel = await OperationsModelService.getOperationsModel();
   const modelInfo = operationsModel.modelInfo;
   const apiKey = await getEffectiveApiKeyByBackend('system', modelInfo.backend);
@@ -170,7 +174,7 @@ export async function getOperationsClassifierLlm(logger: Logger, endUserId: stri
           { role: 'system' as const, content: system },
           { role: 'user' as const, content: user },
         ],
-        { temperature: 0, maxTokens: 1500, stream: false },
+        { temperature: 0, maxTokens: opts.maxTokens ?? 1500, stream: false },
         async (parts: (string | null | undefined)[]) => {
           raw += parts.filter(Boolean).join('');
         }

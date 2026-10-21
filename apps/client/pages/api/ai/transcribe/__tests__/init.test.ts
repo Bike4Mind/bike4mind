@@ -34,7 +34,7 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { estimateTranscriptionCost, MIN_TRANSCRIPTION_USD_PER_MINUTE } from '@server/utils/transcriptionCost';
 import handler from '../init';
 

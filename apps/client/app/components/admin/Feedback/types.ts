@@ -96,8 +96,6 @@ export interface UseFeedbackPaginationReturn {
   handlePageChange: (newPage: number) => void;
   itemsPerPage: number;
   handleItemsPerPageChange: (items: number) => void;
-  /** Called when a filter changes: the current page number may not exist in the new result set. */
-  resetPage: () => void;
 }
 
 export interface UseFeedbackOperationsReturn {
@@ -106,6 +104,8 @@ export interface UseFeedbackOperationsReturn {
   organizations: string[];
   /** Total matching the current filters across all pages - drives pagination and the CSV count. */
   total: number;
+  /** Whether `total` is the answer for the current params rather than a previous query's. */
+  totalSettled: boolean;
   loading: boolean;
   refreshFeedback: () => Promise<void>;
   handleStatusChange: (feedbackItem: IExtendedFeedbackDocument, newValue: FeedbackStatus | null) => Promise<void>;

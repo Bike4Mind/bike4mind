@@ -124,9 +124,9 @@ export interface PromptScenario {
   /**
    * Per-response streaming budget, in seconds, for a prompt whose long pole is tool work rather
    * than token output. A web-search-heavy turn can spend minutes gathering sources before it emits
-   * a single character, and until then there is no partial text for the stabilisation fallback in
-   * ChatPage.waitForStreamingComplete to settle on - so a budget sized for plain streaming fails it
-   * as a hang. Omit for prompts that start streaming promptly; the suite's thresholdSec applies.
+   * a single character, and until then the streaming wait has no reply text of its own to finish
+   * on - so a budget sized for plain streaming fails it as a hang. Omit for prompts that start
+   * streaming promptly; the suite's thresholdSec applies.
    *
    * TEXT prompts only. Image/artifact prompts always take TIMEOUTS.IMAGE_GENERATION, so setting
    * this alongside expectsImage/generatesArtifact would be silently ignored - the suite factory

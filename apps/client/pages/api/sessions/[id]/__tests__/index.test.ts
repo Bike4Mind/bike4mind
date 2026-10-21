@@ -62,7 +62,7 @@ vi.mock('@server/utils/analyticsLog', () => ({ logEvent: (...a: unknown[]) => mo
 
 // Avoids constructing a real S3Storage (which reads an SST-bound bucket resource
 // unavailable in a test process) - only PUT's adapters touch this.
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ upload: vi.fn(), getSignedUrl: vi.fn(), getMetadata: vi.fn() }),
 }));
 

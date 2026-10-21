@@ -1,6 +1,29 @@
 import type { IOrganizationDocument, IUserDocument } from '@bike4mind/common';
 import { organizationService } from '@bike4mind/services';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
+
+export const API_KEY_DEPARTED_HOLDER_MESSAGE =
+  'This API key bills an organization you are no longer a member of. Re-mint the key to continue.';
+
+type ApiKeyOrgMembershipInput = {
+  billingOrg: IOrganizationDocument | null;
+  billingUser: Pick<IUserDocument, 'id' | 'isAdmin'>;
+  isApiKeyCaller: boolean;
+};
+
+/** The predicate behind assertApiKeyOrgMembership, for callers that report the failure as a value. */
+export function isApiKeyOrgMembershipStale({
+  billingOrg,
+  billingUser,
+  isApiKeyCaller,
+}: ApiKeyOrgMembershipInput): boolean {
+  return (
+    !!billingOrg &&
+    isApiKeyCaller &&
+    !billingUser.isAdmin &&
+    !organizationService.isCurrentOrgMember(billingOrg, billingUser.id)
+  );
+}
 
 /**
  * Fail closed when an org-billed API key's holder is no longer on the org it bills.
@@ -16,23 +39,8 @@ import { BadRequestError } from '@server/utils/errors';
  * them explicitly) and is never on that org's roster, so the authority arm is checked here rather
  * than inside isCurrentOrgMember, which reports roster attachment only.
  */
-export function assertApiKeyOrgMembership({
-  billingOrg,
-  billingUser,
-  isApiKeyCaller,
-}: {
-  billingOrg: IOrganizationDocument | null;
-  billingUser: Pick<IUserDocument, 'id' | 'isAdmin'>;
-  isApiKeyCaller: boolean;
-}): void {
-  if (
-    billingOrg &&
-    isApiKeyCaller &&
-    !billingUser.isAdmin &&
-    !organizationService.isCurrentOrgMember(billingOrg, billingUser.id)
-  ) {
-    throw new BadRequestError(
-      'This API key bills an organization you are no longer a member of. Re-mint the key to continue.'
-    );
+export function assertApiKeyOrgMembership(input: ApiKeyOrgMembershipInput): void {
+  if (isApiKeyOrgMembershipStale(input)) {
+    throw new BadRequestError(API_KEY_DEPARTED_HOLDER_MESSAGE);
   }
 }

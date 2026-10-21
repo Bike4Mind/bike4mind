@@ -8,6 +8,7 @@ import {
   TTS_MAX_INPUT_CHARS,
 } from '@bike4mind/common';
 import { AudioGenerationSettings } from '@client/app/components/Session/AISettings/AudioGenerationSettings';
+import GenerationPayerNote from '@client/app/components/Credits/GenerationPayerNote';
 import StudioModelsGate from '@client/app/components/Studio/StudioModelsGate';
 import { useAudioProviders } from '@client/app/hooks/data/audioProviders';
 import { useAudioGenSettings, type AudioGenMode } from '@client/app/stores/useAudioGenSettings';
@@ -67,6 +68,8 @@ const AudioStudioForm = ({ mode, testId }: { mode: AudioGenMode; testId: string 
       <Divider />
       <AudioGenerationSettings mode={mode} />
       <Divider />
+
+      <GenerationPayerNote data-testid="audio-form-payer-note" />
 
       <Button
         onClick={() => void generate(text)}

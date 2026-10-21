@@ -3,7 +3,7 @@ import { McpServerName } from '@bike4mind/common';
 import { GITHUB_REPOSITORY_FULL_NAME_PATTERN } from '@bike4mind/mcp/github/constants';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, InternalServerError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, InternalServerError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { decryptToken } from '@server/security/tokenEncryption';
 import { z } from 'zod';
 

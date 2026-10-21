@@ -14,7 +14,7 @@ import {
   type SpendServerPayload,
 } from '@bike4mind/common';
 import { CacheKeys } from '@server/utils/cacheKeys';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { resolveUserNames } from '@server/utils/resolveUserNames';
 import { Request } from 'express';
 import { z } from 'zod';

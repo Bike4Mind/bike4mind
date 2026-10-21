@@ -7,7 +7,7 @@ import type { IMessage } from '@bike4mind/common';
 import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import type { PermissionManager } from '../utils/PermissionManager.js';
-import type { PermissionResponse } from '../components/PermissionPrompt.js';
+import type { ShowPermissionPrompt } from '../tools/gateway/gatewayTypes.js';
 import type { ApiClient } from '../auth/ApiClient.js';
 import { withRetry, isRetryableError } from '@bike4mind/utils';
 import {
@@ -155,7 +155,7 @@ export interface OrchestratorDependencies {
   llm: ICompletionBackend;
   logger: Logger;
   permissionManager: PermissionManager;
-  showPermissionPrompt: (toolName: string, args: unknown, preview?: string) => Promise<{ action: PermissionResponse }>;
+  showPermissionPrompt: ShowPermissionPrompt;
   configStore: any;
   apiClient: ApiClient;
   /** Agent store for loading agent definitions */

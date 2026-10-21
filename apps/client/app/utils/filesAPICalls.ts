@@ -90,20 +90,17 @@ export const createFabFileOnServerWithUpload = async (
       const newSize = fileToUpload.size / (1024 * 1024);
       console.log(`[Upload] Image resized from ${originalSize.toFixed(2)}MB to ${newSize.toFixed(2)}MB`);
 
-      // Update formData with the resized file's size AND type. This posts to
-      // /api/files/createFabFile; its presigned PUT is not ContentType-bound, but the declared
-      // mimeType is stored on the file record and drives type-based handling, so it must match the
-      // bytes uploadFileToUrl actually sends (fileToUpload.type), which resizing can change (e.g.
-      // webp -> jpeg).
-      formData = {
-        ...formData,
-        fileSize: fileToUpload.size,
-        mimeType: fileToUpload.type,
-      };
+      // Update formData with the resized file's type. This posts to /api/files/createFabFile; its
+      // presigned PUT is not ContentType-bound, but the declared mimeType is stored on the file
+      // record and drives type-based handling, so it must match the bytes uploadFileToUrl actually
+      // sends (fileToUpload.type), which resizing can change (e.g. webp -> jpeg).
+      formData = { ...formData, mimeType: fileToUpload.type };
     }
   }
 
-  const newFabFile = await createFabFileOnServer(formData);
+  // The presigned PUT is bound to the declared byte length, so it is always the size of the bytes
+  // uploaded below, whatever the caller passed.
+  const newFabFile = await createFabFileOnServer({ ...formData, fileSize: fileToUpload.size });
 
   try {
     // Check if already aborted before starting upload

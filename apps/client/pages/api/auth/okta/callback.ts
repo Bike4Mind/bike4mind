@@ -33,11 +33,11 @@ import { logSignInSuccess, resolveSecondFactor, type SecondFactorOutcome } from 
 import { logEvent } from '@server/utils/analyticsLog';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { AuthEvents, AuthStrategy } from '@bike4mind/common';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { requireNonSystemUser } from '@server/auth/requireNonSystemUser';
 import { validateAppUrl } from '@server/utils/validators';
 import { encryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { authSessionService } from '@bike4mind/services';
 import { Logger } from '@bike4mind/observability';
 import { decideAutoLink, applyAccountLink } from '@server/utils/auth/oauthAccountLink';
@@ -46,9 +46,14 @@ import { applyEmailVerifiedGrants } from '@server/auth/emailVerifiedGrants';
 import { applyOAuthSignupDomainGrant } from '@server/utils/auth/oauthSignupGrants';
 import { emailMatchesIdpDomain, IDP_EMAIL_DOMAIN_MISMATCH } from '@server/utils/auth/idpEmailDomain';
 import { isLocalAppUrl } from '@server/utils/validators';
-import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
+import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 import { stampOAuthSourceTag } from '@server/utils/auth/oauthSourceTag';
-import { getClientIp } from '@server/utils/ip';
+import { getClientIp } from '@bike4mind/server-utils/utils/ip';
+import {
+  emitEmailVerifiedFunnelEvents,
+  emitSignupFunnelEvents,
+  recordSignupAcquisition,
+} from '@server/analytics/funnel';
 
 /**
  * Type guard to validate query parameter is a non-empty string.
@@ -313,6 +318,8 @@ const handleOktaCallback = async (req: Request, res: Response) => {
     // Tracks whether this callback links Okta to an existing account for the
     // first time (vs. a routine re-login on an already-linked provider).
     let isNewProviderLink = false;
+    let isNewUser = false;
+    let signupCreditsGranted = 0;
     if (user) {
       // Update existing user's OAuth credentials
       const authProviders: IAuthProviders[] = user.authProviders || [];
@@ -423,12 +430,17 @@ const handleOktaCallback = async (req: Request, res: Response) => {
       // Mirrors verifyCallback.ts: promotion is this account's email verification, so apply its
       // grants here (OTC login and Resend no longer will once emailVerified is set).
       if (promoteEmailVerified) {
-        await applyEmailVerifiedGrants({
+        const grants = await applyEmailVerifiedGrants({
           user: { id: user.id, tags: user.tags, pendingCreditGrant: user.pendingCreditGrant },
           verifiedEmail: email,
           trigger: 'oauth-link-verification',
           releaseReason: 'Okta account link (email verified)',
           logger: Logger.globalInstance,
+        });
+        await emitEmailVerifiedFunnelEvents({
+          user,
+          method: AuthStrategy.Okta,
+          creditsGranted: grants.creditsGranted + grants.subscriptionCreditsGranted,
         });
       }
       // Invariant (mirrors verifyCallback.ts): the new-provider tokenVersion bump must also revoke
@@ -466,9 +478,13 @@ const handleOktaCallback = async (req: Request, res: Response) => {
       const emailForNewAccount = userInfo.email_verified === true ? email : null;
       const baseUsername = deriveOAuthUsername(username ?? null, name, emailForNewAccount);
       user = await createUniqueOAuthUser({ name, baseUsername, email: emailForNewAccount, oauthCredentials });
+      isNewUser = true;
       Logger.debug('[Okta Callback] Created new user:', user.id);
       // Never reaches /api/email/verify, so the verified domain's grant runs here (no flat grant for Okta).
-      if (emailForNewAccount) await applyOAuthSignupDomainGrant(user.id, emailForNewAccount);
+      if (emailForNewAccount) {
+        const domainGrant = await applyOAuthSignupDomainGrant(user.id, emailForNewAccount);
+        signupCreditsGranted = domainGrant.creditsGranted + domainGrant.subscriptionCreditsGranted;
+      }
       await stampOAuthSourceTag(user.id, stateResult.payload.clientId);
     }
 
@@ -478,6 +494,16 @@ const handleOktaCallback = async (req: Request, res: Response) => {
     // paths consistent and guards against a future query adding +password. Never
     // persisted: nothing below calls user.save() (writes go via User.updateOne).
     user.password = null;
+
+    if (isNewUser) {
+      const signupFunnel = await recordSignupAcquisition({ req, user, method: AuthStrategy.Okta });
+      await emitSignupFunnelEvents({
+        user: { id: user.id, ...signupFunnel },
+        method: AuthStrategy.Okta,
+        emailVerified: userInfo.email_verified === true,
+        creditsGranted: signupCreditsGranted,
+      });
+    }
 
     // Check if user is banned
     if (user.isBanned) {

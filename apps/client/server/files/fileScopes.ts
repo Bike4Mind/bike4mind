@@ -1,6 +1,6 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { assertApiKeyScope, holdsApiKeyScope, type ScopedRequest } from '@server/middlewares/apiKeyScopeGate';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 /**
  * API-key scopes for the SPA-internal `/api/files` doors. They mirror the public doors'

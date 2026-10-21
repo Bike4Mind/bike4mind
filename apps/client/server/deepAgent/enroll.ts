@@ -9,7 +9,7 @@ import {
   type EvidenceTier,
 } from '@bike4mind/agents';
 import type { Logger } from '@bike4mind/observability';
-import { sendToQueue } from '@server/utils/sqs';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { MongoDeepAgentStore } from '@bike4mind/server-utils/deepAgent/store';
 
 /**
