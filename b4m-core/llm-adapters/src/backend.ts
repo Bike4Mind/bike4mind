@@ -174,6 +174,11 @@ export interface ICompletionOptions {
    */
   omitIdentityReminder?: boolean;
   /**
+   * Registry display name (ModelInfo.name) of the model serving THIS call, used in the identity
+   * reminder. Set per hop so a fallback names the fallback model; unset keeps the raw-id wording.
+   */
+  modelDisplayName?: string;
+  /**
    * Controls which tool the model should use.
    * - 'auto': Model decides whether to call a tool (default)
    * - 'required': Model must call at least one tool

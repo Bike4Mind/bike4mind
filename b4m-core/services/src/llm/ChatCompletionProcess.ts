@@ -4983,6 +4983,8 @@ export class ChatCompletionProcess {
               outboundMessages,
               {
                 ...options,
+                // Per attempt: a fallback hop must name the model that actually serves it.
+                modelDisplayName: currentModel.name,
                 // The preference is set from a selector shown only for OpenAI-style reasoning models, so
                 // it must not retune Claude, whose adapters honour reasoningEffort for the completions API.
                 // Checked per attempt: a fallback can swap a GPT model for a Claude one (and back).

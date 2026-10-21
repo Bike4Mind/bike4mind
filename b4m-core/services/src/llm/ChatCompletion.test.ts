@@ -2078,7 +2078,7 @@ describe('ChatCompletionProcess', () => {
       const modelInfo = (id: string, backend: ModelBackend): ModelInfo => ({
         id,
         type: 'text',
-        name: id,
+        name: `Display ${id}`,
         backend,
         max_tokens: 100,
         contextWindow: 1000,
@@ -2142,9 +2142,12 @@ describe('ChatCompletionProcess', () => {
 
           expect(primaryComplete).toHaveBeenCalledTimes(1);
           expect(primaryComplete.mock.calls[0][2].thinking).toEqual(primaryThinking);
+          // The identity line names whichever model serves the hop, not the requested one.
+          expect(primaryComplete.mock.calls[0][2].modelDisplayName).toBe(primary.name);
           expect(fallbackComplete).toHaveBeenCalledTimes(1);
           expect(fallbackComplete.mock.calls[0][0]).toBe(fallback.id);
           expect(fallbackComplete.mock.calls[0][2].thinking).toEqual(fallbackThinking);
+          expect(fallbackComplete.mock.calls[0][2].modelDisplayName).toBe(fallback.name);
         }
       );
     });
