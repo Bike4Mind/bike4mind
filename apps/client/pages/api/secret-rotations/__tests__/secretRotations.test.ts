@@ -38,11 +38,13 @@ const mockFindWithSecret = vi.hoisted(() => vi.fn().mockResolvedValue(null));
 const mockFindById = vi.hoisted(() => vi.fn());
 const mockFindActive = vi.hoisted(() => vi.fn().mockResolvedValue([]));
 const mockCreate = vi.hoisted(() => vi.fn());
+const mockExpirePreviousKey = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@bike4mind/database/infra', () => ({
   SecretRotation: {},
   secretRotationRepository: {
     update: (...a: unknown[]) => mockUpdate(...a),
     findByKeyNameWithSecret: (...a: unknown[]) => mockFindWithSecret(...a),
+    expirePreviousKey: (...a: unknown[]) => mockExpirePreviousKey(...a),
     findById: (...a: unknown[]) => mockFindById(...a),
     findActiveKeys: (...a: unknown[]) => mockFindActive(...a),
     create: (...a: unknown[]) => mockCreate(...a),
@@ -120,6 +122,15 @@ describe('POST /api/secret-rotations/renewed', () => {
     mockFindWithSecret.mockResolvedValue(null);
     mockUpdate.mockClear();
     mockUpdate.mockResolvedValue({ id: 's1' });
+    mockExpirePreviousKey.mockClear();
+  });
+
+  it('retires an expired previousKey on renewal, since no cron runs on every stage', async () => {
+    mockFindById.mockResolvedValue({ id: 's1', keyName: 'JWT_SECRET', rotationIntervalDays: 30 });
+    const { req, res } = request({ id: 's1' });
+    await mockRefs.postHandler!(req, res);
+
+    expect(mockExpirePreviousKey).toHaveBeenCalledWith('JWT_SECRET', 24 * 60 * 60 * 1000);
   });
 
   it('captures a previousKey for JWT_SECRET', async () => {

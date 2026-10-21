@@ -5,6 +5,7 @@ import { BadRequestError, ForbiddenError, InternalServerError, NotFoundError } f
 import { encryptAtRest, decryptAtRest } from '@bike4mind/utils/security';
 import { calculateNextRotationDate, toSafeSecretRotation } from '@client/lib/secretRotation/utils';
 import { Config } from '@bike4mind/server-utils/utils/config';
+import { SECRET_ROTATION_GRACE_MS } from '@server/auth/secretRotationGrace';
 import { baseApi } from '@server/middlewares/baseApi';
 import { z } from 'zod';
 
@@ -31,6 +32,10 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
   // key's life, which is why a capture that matches the last one is refused below.
   const currentFingerprint = createHash('sha256').update(Config.JWT_SECRET).digest('hex');
   if (secret.keyName === 'JWT_SECRET') {
+    // Retire a previous key whose grace window has closed before it is read. The rotation cron
+    // runs only where scheduled jobs are deployed, so this write path is what bounds the retired
+    // secret's lifetime on every other stage.
+    await secretRotationRepository.expirePreviousKey('JWT_SECRET', SECRET_ROTATION_GRACE_MS);
     const captured = await secretRotationRepository.findByKeyNameWithSecret('JWT_SECRET');
     if (
       captured?.capturedKeyFingerprint === currentFingerprint ||
