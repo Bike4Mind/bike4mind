@@ -17,7 +17,7 @@ const MODEL_ID_ALIASES = { 'grok-3-fast': { litellm: 'xai/grok-3-fast-latest' } 
 
 const { rowsInForce, createBedrockControlPlane, getDiscoveryCredentials } = vi.hoisted(() => ({
   rowsInForce: vi.fn(),
-  getDiscoveryCredentials: vi.fn(async () => ({})),
+  getDiscoveryCredentials: vi.fn(async (..._args: unknown[]) => ({})),
   createBedrockControlPlane: vi.fn(() => ({
     listFoundationModels: vi.fn(),
     getFoundationModelAvailability: vi.fn(),

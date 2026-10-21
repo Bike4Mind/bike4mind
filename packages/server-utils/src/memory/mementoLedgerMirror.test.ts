@@ -218,7 +218,9 @@ describe('createLedgerAppendSession - preserving a disagreement (#1501)', () => 
 
     // Asserted positively: "not the other belief's subject" is also true of a plain coalesce onto
     // the stored HMAC, so it would pass even with the preservation removed.
-    expect(callSubject(0)).toBe(figureScopedSubject(resolveSubject({ fact: 'Uptime is 99.5%' }), 'Uptime is 99.5%'));
+    expect(callSubject(0)).toBe(
+      figureScopedSubject(resolveSubject({ fact: 'Uptime is 99.5%' }) as string, 'Uptime is 99.5%')
+    );
     // ...and the scoping is what makes that distinct, since both facts derive the SAME bare subject.
     expect(resolveSubject({ fact: 'Uptime is 99.5%' })).toBe(resolveSubject({ fact: 'Uptime is 99.9%' }));
     expect(callSubject(0)).not.toBe(resolveSubject({ fact: 'Uptime is 99.5%' }));

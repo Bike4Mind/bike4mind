@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mockGetSettingsValue = vi.fn();
 const mockIncrementCounterConditional = vi.fn();
 const mockSendToQueue = vi.fn();
-const mockGetSourceQueueUrl = vi.fn(() => 'https://sqs.example.com/sreJobQueue');
+const mockGetSourceQueueUrl = vi.fn((..._args: unknown[]) => 'https://sqs.example.com/sreJobQueue');
 const mockResolveFullConfig = vi.fn();
 const mockGetConfiguredRepoSlugs = vi.fn();
 const mockSetGithubIssueState = vi.fn();

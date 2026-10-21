@@ -21,10 +21,10 @@ export interface AuditPrincipal {
  */
 export function resolveAuditPrincipal(
   user: { id: string },
-  // Pick<Express.ApiKeyInfo, 'keyId'> rather than a fresh structural type, so a future rename of
-  // `keyId` on the real type (declared globally in global.d.ts) is a compile error here too,
-  // instead of this silently continuing to type-check against a field that no longer exists.
-  apiKeyInfo: Pick<Express.ApiKeyInfo, 'keyId'> | undefined
+  // Structurally Pick<Express.ApiKeyInfo, 'keyId'>: that global lives in apps/client/global.d.ts,
+  // which this package cannot see. Callers pass `req.apiKeyInfo`, so a rename of `keyId` on the
+  // real type is still a compile error, at the call site.
+  apiKeyInfo: { keyId: string } | undefined
 ): AuditPrincipal {
   if (apiKeyInfo) {
     return { principalKind: 'apiKey', principalId: apiKeyInfo.keyId, onBehalfOfUserId: user.id };

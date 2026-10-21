@@ -29,7 +29,7 @@ function buildArgs(overrides: Partial<ModerateImportedKnowledgeFilesArgs> = {}):
     logger,
     claim: vi.fn(async () => ({ _id: 'oid', id: 'f1', mimeType: 'text/plain', moderationClaimedAt: CLAIMED_AT })),
     persist: vi.fn(async () => true),
-    release: vi.fn(async () => undefined),
+    release: vi.fn(async () => undefined) as unknown as ModerateImportedKnowledgeFilesArgs['release'],
     retireMissingObject: vi.fn(async () => true),
     downloadBytes: vi.fn(async () => Buffer.from('x')),
     downloadPartialBytes: vi.fn(async () => Buffer.from('x')),

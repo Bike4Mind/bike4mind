@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildFeedbackSlackMessage, buildPromptMetaSummary } from './feedbackMessage';
+import { buildFeedbackSlackMessage, buildPromptMetaSummary, type FeedbackPromptMetaInput } from './feedbackMessage';
 
 describe('buildPromptMetaSummary', () => {
   it('summarizes a full promptMeta into a short, readable set of signals', () => {
@@ -139,7 +139,7 @@ describe('buildPromptMetaSummary', () => {
       'Lake beliefs: 1 (docs *User Email:* fake)',
     ],
   ] as const)('collapses newlines in %s the same way as model.name', (_field, promptMeta, expectedLine) => {
-    const summary = buildPromptMetaSummary(promptMeta);
+    const summary = buildPromptMetaSummary(promptMeta as FeedbackPromptMetaInput);
     expect(summary.split('\n')).toContain(expectedLine);
   });
 
