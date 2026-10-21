@@ -213,8 +213,8 @@ function toApiKeyInfo(v: {
  *
  * Exactly one copy of the gate: `apiKeyAuth` calls {@link assertAccountStateUsable} rather than
  * repeating these conditions. The thrown error class is the status contract: the Function-URL
- * adapter (defineLambdaRoute) answers a ForbiddenError with 403 and every other auth throw with
- * 401, and the apiKeyOrJwt resolver (resolveContractAuth) surfaces a key's ForbiddenError when
+ * adapter (defineLambdaRoute) answers a ForbiddenError with 403, a 5xx HTTPError (see
+ * toApiKeyAuthError) with that status, and every other auth throw with 401, and the apiKeyOrJwt resolver (resolveContractAuth) surfaces a key's ForbiddenError when
  * the JWT fallback also fails. No apiKeyOrJwt transport forwards it yet: its only caller, the
  * Fargate SSE route (sseRoute.ts), reports any auth throw as a generic failure.
  *
@@ -307,7 +307,9 @@ function assertEmbedCredential(info: ApiKeyInfo): void {
  * Verify an API key that authorizes the public embed completion surface (the
  * raw-key path: X-API-Key / Authorization). Requires the EMBED_CHAT scope plus
  * the embed credential-class properties above.
- * @throws Error if the key lacks EMBED_CHAT, is not org-owned, or has no agent.
+ * @throws UnauthorizedError/ForbiddenError if the key lacks EMBED_CHAT, is not org-owned, or has no
+ * agent; a 5xx HTTPError (see toApiKeyAuthError) when the check itself fails, e.g. the database is
+ * unreachable
  */
 export async function verifyEmbedApiKey(headers: Record<string, string | undefined>): Promise<ApiKeyInfo> {
   const info = await verifyApiKey(headers, { requiredScopes: [ApiKeyScope.EMBED_CHAT] });
