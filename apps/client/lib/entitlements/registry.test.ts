@@ -1,6 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+// Hermetic against whatever overlay is mounted: this suite pins the built-in rows on their own.
+vi.mock('@client/app/premium-generated/premiumEntitlementGrants.generated', () => ({ premiumEntitlementGrants: {} }));
+
 import {
   __registryRows,
+  mergeContributedRows,
+  TAG_GRANTS,
   allKnownEntitlementKeys,
   entitlementsForEmail,
   entitlementsForPriceIds,
@@ -613,5 +619,40 @@ describe('BYPASS_EXEMPT_ENTITLEMENTS / isBypassExemptEntitlement', () => {
     for (const key of BYPASS_EXEMPT_ENTITLEMENTS) {
       expect(KNOWN_ENTITLEMENT_KEYS).toContain(key);
     }
+  });
+});
+
+describe('built-in rows with no contribution', () => {
+  const { builtInRows } = __registryRows;
+
+  it('serve every derived map unchanged', () => {
+    expect(__registryRows.contributedRows).toEqual({});
+    expect(__registryRows.tagGrantRows).toEqual(builtInRows.tagGrantRows);
+    expect(__registryRows.impliedRows).toEqual(builtInRows.impliedRows);
+    expect(__registryRows.signupCreditRows).toEqual(builtInRows.signupCreditRows);
+    expect(TAG_GRANTS).toEqual(new Map(builtInRows.tagGrantRows.map(row => [row.tag, row.entitlements])));
+    expect(IMPLIED_ENTITLEMENTS).toEqual(new Map(builtInRows.impliedRows.map(row => [row.ifHeld, row.alsoGrant])));
+    expect(SIGNUP_CREDITS).toEqual(new Map(builtInRows.signupCreditRows.map(row => [row.key, row.credits])));
+  });
+
+  it('keep every built-in key known', () => {
+    const builtInKeys = [
+      ...builtInRows.tagGrantRows.flatMap(row => row.entitlements),
+      ...builtInRows.impliedRows.flatMap(row => row.alsoGrant),
+    ];
+    expect(builtInKeys.length).toBeGreaterThan(0);
+    expect(unknownEntitlementKeys(builtInKeys)).toEqual([]);
+    expect(KNOWN_ENTITLEMENT_KEYS).toEqual([...allKnownEntitlementKeys()].sort());
+  });
+
+  it('are unchanged by a contribution that repeats them', () => {
+    const repeated = mergeContributedRows(builtInRows, {
+      tagGrants: builtInRows.tagGrantRows.map(row => ({ tag: row.tag.toUpperCase(), entitlements: row.entitlements })),
+      impliedEntitlements: builtInRows.impliedRows,
+      signupCredits: builtInRows.signupCreditRows,
+      internalStaffEntitlements: builtInRows.internalStaffEntitlements,
+    });
+    expect(repeated).toEqual(mergeContributedRows(builtInRows, {}));
+    expect(repeated.tagGrantRows).toEqual(builtInRows.tagGrantRows);
   });
 });
