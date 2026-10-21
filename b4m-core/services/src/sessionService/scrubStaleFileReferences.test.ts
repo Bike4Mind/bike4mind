@@ -27,7 +27,7 @@ const fabFiles = () => ({
 
 describe('scrubStaleSystemFiles', () => {
   it('removes system files whose file is gone or soft-deleted from the caller only', async () => {
-    const users = { pullSystemFiles: vi.fn(async () => undefined) };
+    const users = { pullSystemFilesForUsers: vi.fn(async () => undefined) };
     const removed = await scrubStaleSystemFiles(
       USER,
       [GONE, DELETED, LIVE],
@@ -36,22 +36,22 @@ describe('scrubStaleSystemFiles', () => {
     );
 
     expect(removed).toEqual([GONE, DELETED]);
-    expect(users.pullSystemFiles).toHaveBeenCalledWith(USER, [GONE, DELETED]);
+    expect(users.pullSystemFilesForUsers).toHaveBeenCalledWith([USER], [GONE, DELETED]);
   });
 
   it('keeps a system file whose file is live, even when this turn could not read it', async () => {
-    const users = { pullSystemFiles: vi.fn(async () => undefined) };
+    const users = { pullSystemFilesForUsers: vi.fn(async () => undefined) };
     const removed = await scrubStaleSystemFiles(USER, [LIVE], [unresolved(LIVE)], {
       db: { fabFiles: fabFiles(), users },
       logger,
     });
 
     expect(removed).toEqual([]);
-    expect(users.pullSystemFiles).not.toHaveBeenCalled();
+    expect(users.pullSystemFilesForUsers).not.toHaveBeenCalled();
   });
 
   it('ignores files that were delivered or dropped for a reason other than resolution', async () => {
-    const users = { pullSystemFiles: vi.fn(async () => undefined) };
+    const users = { pullSystemFilesForUsers: vi.fn(async () => undefined) };
     const files = fabFiles();
     const removed = await scrubStaleSystemFiles(USER, [GONE], [{ ...unresolved(GONE), band: 'audio' }], {
       db: { fabFiles: files, users },
@@ -63,7 +63,7 @@ describe('scrubStaleSystemFiles', () => {
   });
 
   it('never throws when the write fails', async () => {
-    const users = { pullSystemFiles: vi.fn(async () => Promise.reject(new Error('write failed'))) };
+    const users = { pullSystemFilesForUsers: vi.fn(async () => Promise.reject(new Error('write failed'))) };
     await expect(
       scrubStaleSystemFiles(USER, [GONE], [unresolved(GONE)], { db: { fabFiles: fabFiles(), users }, logger })
     ).resolves.toEqual([]);
@@ -146,5 +146,31 @@ describe('scrubStaleProjectFiles', () => {
 
     expect(removed).toEqual([]);
     expect(projects.pullFileReferences).not.toHaveBeenCalled();
+  });
+
+  it('never throws when the file lookup fails', async () => {
+    const projects = { pullFileReferences: vi.fn(async () => undefined) };
+    const failingLookup = {
+      findExistingIdsIncludingDeletedByIds: vi.fn(async () => Promise.reject(new Error('db down'))),
+      findExistingIdsByIds: vi.fn(async () => Promise.reject(new Error('db down'))),
+    };
+
+    await expect(
+      scrubStaleProjectFiles(
+        project(),
+        [unresolved(GONE)],
+        { db: { fabFiles: failingLookup, projects }, logger },
+        OWNER
+      )
+    ).resolves.toEqual([]);
+    expect(projects.pullFileReferences).not.toHaveBeenCalled();
+  });
+
+  it('never throws when the project write fails', async () => {
+    const projects = { pullFileReferences: vi.fn(async () => Promise.reject(new Error('write failed'))) };
+
+    await expect(
+      scrubStaleProjectFiles(project(), [unresolved(GONE)], { db: { fabFiles: fabFiles(), projects }, logger }, OWNER)
+    ).resolves.toEqual([]);
   });
 });
