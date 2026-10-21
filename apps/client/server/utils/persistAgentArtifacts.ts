@@ -121,9 +121,9 @@ export function buildAgentArtifactPayloads(args: {
 }
 
 /**
- * Injected so a test can drive this without a live database. Not a barrel guard: `./artifactGate`
- * already reaches @bike4mind/services statically, and @bike4mind/database is reachable from
- * `agentExecute.ts` regardless.
+ * Injected so a test can drive this without a live database. Not a barrel guard:
+ * `@bike4mind/server-utils/utils/artifactGate` already reaches @bike4mind/services statically, and
+ * @bike4mind/database is reachable from `agentExecute.ts` regardless.
  */
 export interface PersistAgentArtifactsDeps {
   /**

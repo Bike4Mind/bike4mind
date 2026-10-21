@@ -2065,7 +2065,7 @@ async function processExecution(
     //
     // Admin setting AND the caller's request flag, via the same resolver the chat pipeline uses - so
     // an opt-out is honoured on an autonomous run too, where no human is reading each turn. See
-    // `server/utils/artifactGate.ts` for the start-payload/doc precedence.
+    // `packages/server-utils/src/utils/artifactGate.ts` for the start-payload/doc precedence.
     const enableArtifacts = resolveAgentArtifactGate({
       adminEnableArtifacts: await adminSettingsRepository.getSettingsValue('EnableArtifacts'),
       startPayloadEnableArtifacts: startPayload?.enableArtifacts,
