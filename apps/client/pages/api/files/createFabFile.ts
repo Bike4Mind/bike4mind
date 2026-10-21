@@ -1,4 +1,5 @@
 import { signBrowserFileResponse } from '@server/files/signBrowserFileResponse';
+import { z } from 'zod';
 import {
   CreateFabFileRequestInputType,
   FabFileSourceType,
@@ -32,7 +33,9 @@ import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
 // No caller-chosen `prefix`: the key namespace decides how the S3 upload hook treats an object,
 // and a prefix such as `tmp` lands in one it skips (`isUntrackedFabFileKey`), so the object
 // would escape the storage charge, size check and moderation. Server-side callers still set it.
-const createFabFileSchema = fabFilesService.createFabFileSchema.omit({ prefix: true });
+const createFabFileSchema = fabFilesService.createFabFileSchema
+  .omit({ prefix: true })
+  .extend({ purpose: z.literal('modal-media').optional() });
 
 // The admin What's New media upload (AdminModalVideoFields) lands under the shared modal prefix, chosen
 // here, not by the caller. mp4 stays off the global allowlist (non-image uploads skip the content
@@ -52,7 +55,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
       const { user } = req;
 
       const parsed = createFabFileSchema.parse(req.body);
-      const adminModalMedia = !!user.isAdmin && req.body?.purpose === 'modal-media';
+      const adminModalMedia = !!user.isAdmin && parsed.purpose === 'modal-media';
       const params = adminModalMedia ? { ...parsed, prefix: MODAL_MEDIA_PREFIX } : parsed;
 
       // NOTE: unlike the presign siblings (generate-presigned-url.ts) we do NOT reject executable

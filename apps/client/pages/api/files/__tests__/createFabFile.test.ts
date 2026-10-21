@@ -464,12 +464,17 @@ describe('POST /api/files/createFabFile - admin modal video', () => {
   it.each([
     ['a non-admin', mp4(), { user: { id: 'u1', isAdmin: false } }],
     ['an admin naming the prefix instead of the purpose', mp4({ purpose: undefined, prefix: 'modals' }), asAdmin],
-    ['an admin with another purpose', mp4({ purpose: 'other' }), asAdmin],
     ['an admin claiming another video type', mp4({ mimeType: 'video/quicktime' }), asAdmin],
     ['an admin with a non-mp4 name', mp4({ fileName: 'demo.mov' }), asAdmin],
   ])('refuses %s with the usual 400', async (_case, payload, overrides) => {
     const { res } = makeRes();
     await expect(run(payload, res, overrides)).rejects.toThrow(/is not supported/);
+    expect(h.fabFileCreate).not.toHaveBeenCalled();
+  });
+
+  it('rejects a purpose it does not know', async () => {
+    const { res } = makeRes();
+    await expect(run(mp4({ purpose: 'other' }), res, asAdmin)).rejects.toThrow();
     expect(h.fabFileCreate).not.toHaveBeenCalled();
   });
 });
