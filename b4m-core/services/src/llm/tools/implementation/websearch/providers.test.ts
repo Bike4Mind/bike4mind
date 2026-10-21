@@ -468,9 +468,32 @@ describe('outgoing search request logging', () => {
 
     await createSearxngProvider('http://searxng:8080').search('q', 5);
 
-    expect(warnSpy).toHaveBeenCalledWith(
+    expect(logSpy).toHaveBeenCalledWith(
       'WebSearch Tool: SearXNG answered with no results',
       expect.objectContaining({ hits: 0, rawResults: 1, unresponsiveEngines: [] })
+    );
+  });
+
+  it('keeps a plain zero-hit answer at log level, so warn means an engine did not answer', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ results: [] }));
+
+    await createSearxngProvider('http://searxng:8080').search('no hits', 5);
+
+    expect(logSpy).toHaveBeenCalledWith(
+      'WebSearch Tool: SearXNG answered with no results',
+      expect.objectContaining({ hits: 0, unresponsiveEngines: [] })
+    );
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('keeps an unresponsive engine with a non-string reason, and still warns', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ results: [], unresponsive_engines: [['google', 42]] }));
+
+    await createSearxngProvider('http://searxng:8080').search('q', 5);
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      'WebSearch Tool: SearXNG answered with no results',
+      expect.objectContaining({ unresponsiveEngines: [{ engine: 'google', reason: '' }] })
     );
   });
 

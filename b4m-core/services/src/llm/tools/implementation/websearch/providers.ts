@@ -877,13 +877,18 @@ export function createSearxngProvider(baseUrl: string): WebSearchProvider {
         if (results.length > 0) {
           Logger.globalInstance.log('WebSearch Tool: SearXNG response', details);
         } else {
-          // At warn so an empty backup behind an alert leaves its reason next to it.
           const raw = (data as { results?: unknown } | null)?.results;
-          Logger.globalInstance.warn('WebSearch Tool: SearXNG answered with no results', {
-            ...details,
-            rawResults: Array.isArray(raw) ? raw.length : 0,
-            unresponsiveEngines: parseSearxngUnresponsiveEngines(data),
-          });
+          const unresponsiveEngines = parseSearxngUnresponsiveEngines(data);
+          const empty = { ...details, rawResults: Array.isArray(raw) ? raw.length : 0, unresponsiveEngines };
+          // An engine that did not answer is what tells a throttled instance from a query with no
+          // hits, so only that case is worth a warn; a plain zero-hit answer stays at log. When the
+          // empty answer strands the hedge, logHedgedProviderFailure raises the error either way.
+          const message = 'WebSearch Tool: SearXNG answered with no results';
+          if (unresponsiveEngines.length > 0) {
+            Logger.globalInstance.warn(message, empty);
+          } else {
+            Logger.globalInstance.log(message, empty);
+          }
         }
         return results;
       } catch (error) {
