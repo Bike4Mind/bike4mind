@@ -77,18 +77,12 @@ export async function runSignupBaselineReport(options: SignupBaselineOptions) {
   if (externalIds.length === 0)
     return buildSignupBaseline({ accounts, evidence, window, ...options, trailing90DaySignups });
 
-  const apiSessionRows = await Session.find({ userId: { $in: externalIds }, 'origin.channel': 'api' }, { _id: 1 })
-    .read('secondaryPreferred')
-    .lean<{ _id: unknown }[]>();
-  const apiSessionIds = new Set(apiSessionRows.map(session => String(session._id)));
-  const { userDays, apiExecutionIds } = await collectActivity(window.since, BATCH_SIZE, window.until, apiSessionIds);
-  evidence.userDays = userDays;
+  const dateRange = { $gte: window.since, $lt: window.until };
+  const apiSessions = new Set<string>();
   for (let offset = 0; offset < externalIds.length; offset += BATCH_SIZE) {
     const userIds = externalIds.slice(offset, offset + BATCH_SIZE);
-    const dateRange = { $gte: window.since, $lt: window.until };
-    const apiSessions = new Set<string>();
     const sessions = Session.find(
-      { userId: { $in: userIds }, firstCreated: dateRange },
+      { deletedAt: null, userId: { $in: userIds }, firstCreated: dateRange },
       { userId: 1, firstCreated: 1, origin: 1, clonedSourceId: 1, forkedSourceId: 1 }
     )
       .read('secondaryPreferred')
@@ -115,7 +109,12 @@ export async function runSignupBaselineReport(options: SignupBaselineOptions) {
         sessionId: id,
       });
     }
+  }
 
+  const { userDays, apiExecutionIds } = await collectActivity(window.since, BATCH_SIZE, window.until, apiSessions);
+  evidence.userDays = userDays;
+  for (let offset = 0; offset < externalIds.length; offset += BATCH_SIZE) {
+    const userIds = externalIds.slice(offset, offset + BATCH_SIZE);
     const quests = Quest.find(
       { 'promptMeta.session.userId': { $in: userIds }, type: { $in: ['message', 'error'] }, timestamp: dateRange },
       { timestamp: 1, sessionId: 1, 'promptMeta.session.userId': 1, agentExecutionId: 1, type: 1 }
