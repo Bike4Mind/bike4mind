@@ -221,7 +221,7 @@ describe('check-contract-gate.sh', () => {
       expect(r.stdout).toContain(rel);
     });
 
-    it.each(['bad.js', 'bad.jsx'])('flags a v1 %s that lacks nextRouteForContract', (name) => {
+    it.each(['bad.js', 'bad.jsx'])('flags a v1 %s that lacks nextRouteForContract', name => {
       const { dir, v1Dir } = makeTree();
       const rel = writeHandler(v1Dir, name, VIOLATING);
       const r = runGuard(dir);
@@ -246,15 +246,14 @@ describe('check-contract-gate.sh', () => {
       expect(r.stdout).toContain('::error::');
     });
 
-    it.each([
-      ["baseApi({ auth: 'jwtOnly' })"],
-      ['baseApi({ auth: "jwtOnly" })'],
-      ["baseApi({auth:'jwtOnly'})"],
-    ])('passes a jwtOnly handler outside v1: %s', (call) => {
-      const { dir } = makeTree();
-      writeApiHandler(dir, 'foo.ts', `export default ${call};\n`);
-      expect(runGuard(dir).status).toBe(0);
-    });
+    it.each([["baseApi({ auth: 'jwtOnly' })"], ['baseApi({ auth: "jwtOnly" })'], ["baseApi({auth:'jwtOnly'})"]])(
+      'passes a jwtOnly handler outside v1: %s',
+      call => {
+        const { dir } = makeTree();
+        writeApiHandler(dir, 'foo.ts', `export default ${call};\n`);
+        expect(runGuard(dir).status).toBe(0);
+      }
+    );
 
     it('does not accept the bare word jwtOnly in a comment', () => {
       const { dir } = makeTree();
@@ -264,7 +263,7 @@ describe('check-contract-gate.sh', () => {
       expect(r.stdout).toContain(rel);
     });
 
-    it.each(['foo.js', 'foo.jsx', 'nested/deep/foo.tsx'])('scans %s', (name) => {
+    it.each(['foo.js', 'foo.jsx', 'nested/deep/foo.tsx'])('scans %s', name => {
       const { dir } = makeTree();
       const rel = writeApiHandler(dir, name, API_KEY);
       const r = runGuard(dir);
