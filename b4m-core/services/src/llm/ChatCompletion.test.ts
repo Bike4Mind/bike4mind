@@ -1078,6 +1078,70 @@ describe('ChatCompletionProcess', () => {
     });
   });
 
+  // A trailing throttled publish reads `quest` at fire time, so without cancelling it at the
+  // terminal flip it publishes a `done` frame while the terminal save is still in flight.
+  describe('terminal status ordering', () => {
+    // Keep in sync with THROTTLE_INTERVAL in ChatCompletionProcess.ts.
+    const THROTTLE_INTERVAL_MS = 100;
+    const isTerminal = (status?: string) => status === 'done' || status === 'stopped';
+
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    it('publishes the first terminal frame only after the terminal save completes', async () => {
+      mockSession.userId = 'user1';
+      const body = wireMinimalTurn();
+      // Two chunks inside one throttle window: the second arms the trailing call.
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+          await cb(['Hel']);
+          await cb(['lo']);
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as any); // any: minimal backend shape, as elsewhere in this file
+
+      let releaseSave!: () => void;
+      const saveHeld = new Promise<void>(resolve => {
+        releaseSave = resolve;
+      });
+      let signalSaveEntered!: () => void;
+      const saveEntered = new Promise<void>(resolve => {
+        signalSaveEntered = resolve;
+      });
+      let held = false;
+      mockDb.quests.update.mockImplementation(async (doc: { status?: string }) => {
+        if (!held && isTerminal(doc?.status)) {
+          held = true;
+          signalSaveEntered();
+          await saveHeld;
+        }
+        return undefined;
+      });
+
+      const frames: Array<string | undefined> = [];
+      vi.mocked(service.sendStatusUpdate).mockImplementation(async (quest, _status, options) => {
+        if (!options?.silent) frames.push(quest?.status);
+      });
+
+      const processPromise = service.process({ body, logger: mockLogger });
+      await saveEntered;
+
+      // The settlement window is open and the throttle interval has elapsed:
+      // a trailing publish here would be a terminal frame ahead of the save.
+      await vi.advanceTimersByTimeAsync(THROTTLE_INTERVAL_MS * 2);
+      expect(frames.filter(isTerminal)).toHaveLength(0);
+
+      releaseSave();
+      await processPromise;
+      await vi.advanceTimersByTimeAsync(THROTTLE_INTERVAL_MS * 2);
+
+      const terminalFrames = frames.filter(isTerminal);
+      expect(terminalFrames).toHaveLength(1);
+      expect(frames.at(-1)).toBe(terminalFrames[0]);
+    });
+  });
+
   describe('resolveCorpusInlinePlan (defer only the tool-retrievable corpus subset)', () => {
     // The suite mocks @bike4mind/utils wholesale (getSettingsValue -> vi.fn() -> undefined). Restore
     // the production-equivalent numeric coercion so the threshold read behaves realistically here.
