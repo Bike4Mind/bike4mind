@@ -40,6 +40,25 @@ describe('redactLogValue', () => {
     expect(json(wide)).toContain('[Truncated]');
   });
 
+  it('keeps a provider error code and request id while redacting credentials in its message', () => {
+    const error = Object.assign(new Error('auth failed for Bearer sk-canary'), {
+      isAxiosError: true,
+      code: 'ERR_BAD_REQUEST',
+      response: { headers: { 'x-request-id': 'req-1' } },
+    });
+
+    expect(redactLogValue({ error })).toEqual({
+      error: {
+        name: 'Error',
+        message: 'auth failed for Bearer [REDACTED]',
+        code: 'ERR_BAD_REQUEST',
+        status: undefined,
+        requestId: 'req-1',
+      },
+    });
+    expect(json({ error })).not.toContain('sk-canary');
+  });
+
   it('keeps a plain error message but drops its stack secrets', () => {
     const error = new Error('boom with Bearer abc123');
     expect(redactLogValue({ error })).toMatchObject({
