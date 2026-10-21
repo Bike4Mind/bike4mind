@@ -8,29 +8,12 @@ import EmailVerificationTab from '@client/app/components/admin/EmailVerification
 import AdminSystemHealthTab from '@client/app/components/admin/AdminSystemHealthTab';
 import { useUser } from '@client/app/contexts/UserContext';
 import CloseIcon from '@mui/icons-material/Close';
-import DashboardIcon from '@mui/icons-material/Dashboard';
 import { IconButton } from '@mui/joy';
-import {
-  Accordion,
-  AccordionDetails,
-  AccordionGroup,
-  AccordionSummary,
-  Box,
-  Button,
-  Drawer,
-  Grid,
-  Sheet,
-  Stack,
-  TabPanel,
-  Tabs,
-  Typography,
-  Badge,
-  Tooltip,
-} from '@mui/joy';
+import { Box, Drawer, Grid, Sheet, TabPanel, Tabs, Typography, Tooltip } from '@mui/joy';
 import { useGetWaitingSubscribersCount } from '@client/app/hooks/data/subscribers';
 import { useRouter } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
-import { lazy, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { lazy, useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@client/app/contexts/ApiContext';
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
@@ -68,11 +51,11 @@ import SystemSecretsTab from './SystemSecretsTab';
 import MenuIcon from '@mui/icons-material/Menu';
 import ApiReferenceTab from './ApiReferenceTab';
 import ApiCookbookTab from './ApiCookbookTab';
-import { AdminTab, SIDEBAR_SECTIONS, type SidebarGate, type SidebarItem } from './adminSidebarConfig';
+import { AdminTab } from './adminSidebarConfig';
 import { canRenderAdminTab } from './adminTabRenderability';
 import { useAdminTabUrlSync } from './useAdminTabUrlSync';
 import { useAdminModal } from './useAdminModal';
-import { useAdminSidebarSections } from './useAdminSidebarSections';
+import { SidebarNav } from './AdminSidebarNav';
 
 export { AdminTab } from './adminSidebarConfig';
 
@@ -126,125 +109,6 @@ export const useAdminNotifications = create<{
     }
   },
 }));
-
-type SidebarNavProps = {
-  enableUserMigration?: boolean;
-  showLiveOpsTriageTab: boolean;
-  waitingSubscribersCount?: number;
-  hiddenNotifications: string[];
-  onTabSelect: (tab: AdminTab) => void;
-};
-
-const SidebarNav = ({
-  enableUserMigration,
-  showLiveOpsTriageTab,
-  waitingSubscribersCount,
-  hiddenNotifications,
-  onTabSelect,
-}: SidebarNavProps) => {
-  const activeTab = useAdminModal(state => state.activeTab);
-
-  const { isExpanded, toggleSection } = useAdminSidebarSections(activeTab);
-
-  const gates: Record<SidebarGate, boolean> = {
-    userMigration: !!enableUserMigration,
-    liveOpsTriage: showLiveOpsTriageTab,
-  };
-
-  const getMenuButtonSx = (tabValue: AdminTab) => ({
-    justifyContent: 'flex-start',
-    fontWeight: 500,
-    color: activeTab === tabValue ? 'primary.500' : 'neutral.600',
-    bgcolor: activeTab === tabValue ? 'primary.50' : 'transparent',
-    '&:hover': {
-      bgcolor: activeTab === tabValue ? 'primary.100' : 'neutral.50',
-    },
-    borderRadius: 'md',
-  });
-
-  const renderEndDecorator = (item: SidebarItem): ReactNode => {
-    if (
-      item.badge === 'waitingSubscribers' &&
-      waitingSubscribersCount &&
-      waitingSubscribersCount > 0 &&
-      !hiddenNotifications.includes('waiting-subscribers')
-    ) {
-      return (
-        <Box sx={{ marginLeft: 1 }}>
-          <Tooltip title={`Waiting subscribers: ${waitingSubscribersCount}`}>
-            <Badge
-              badgeContent={waitingSubscribersCount}
-              color="danger"
-              size="sm"
-              sx={{
-                '& .MuiBadge-badge': {
-                  justifyContent: 'center',
-                  fontSize: '10px',
-                  minWidth: '14px',
-                  height: '14px',
-                  padding: '0 3px',
-                },
-              }}
-            />
-          </Tooltip>
-        </Box>
-      );
-    }
-    return null;
-  };
-
-  return (
-    <Stack spacing={1} sx={{ p: 0.5 }}>
-      <Button
-        startDecorator={<DashboardIcon />}
-        onClick={() => onTabSelect(AdminTab.Dashboard)}
-        variant="plain"
-        sx={getMenuButtonSx(AdminTab.Dashboard)}
-        data-testid="admin-dashboard-tab-btn"
-      >
-        Dashboard
-      </Button>
-      <AccordionGroup sx={{ marginLeft: 0.5 }}>
-        {SIDEBAR_SECTIONS.map(section => {
-          const { Icon: SectionIcon } = section;
-          const visibleItems = section.items.filter(item => !item.gate || gates[item.gate]);
-          return (
-            <Accordion key={section.key} expanded={isExpanded(section.key)} onChange={() => toggleSection(section.key)}>
-              <AccordionSummary>
-                <SectionIcon color="primary" />
-                <Typography color="primary" level="body-md">
-                  {section.label}
-                </Typography>
-              </AccordionSummary>
-              <AccordionDetails sx={{ '& .MuiAccordionDetails-content': { p: 1 } }}>
-                <Stack direction={'column'} spacing={1}>
-                  {visibleItems.map(item => {
-                    const { Icon: ItemIcon } = item;
-                    return (
-                      <Button
-                        key={item.tab}
-                        {...(item.testid ? { 'data-testid': item.testid } : {})}
-                        startDecorator={<ItemIcon />}
-                        onClick={() => onTabSelect(item.tab)}
-                        variant="plain"
-                        sx={getMenuButtonSx(item.tab)}
-                        endDecorator={renderEndDecorator(item)}
-                      >
-                        <Typography level="body-sm" sx={{ color: 'inherit' }}>
-                          {item.label}
-                        </Typography>
-                      </Button>
-                    );
-                  })}
-                </Stack>
-              </AccordionDetails>
-            </Accordion>
-          );
-        })}
-      </AccordionGroup>
-    </Stack>
-  );
-};
 
 const EnvironmentBanner = () => {
   const router = useRouter();
