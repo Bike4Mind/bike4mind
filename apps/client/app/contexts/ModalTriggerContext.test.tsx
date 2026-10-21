@@ -106,6 +106,14 @@ describe('ModalTriggerContext whats-new trigger source', () => {
     expect(screen.queryByTestId('whats-new-slider')).not.toBeInTheDocument();
   });
 
+  it('still opens the slider for a manual trigger during a first signup session', () => {
+    markFirstSignupSession('user-1');
+    renderProvider();
+    fireEvent.click(screen.getByTestId('trigger-manual-btn'));
+    expect(screen.getByTestId('whats-new-slider')).toBeInTheDocument();
+    expect(sliderAuto()).toBe('false');
+  });
+
   it('auto-triggers the slider when the tab returns after 5+ minutes with an unseen slide', async () => {
     // Pin the user-facing settle delay; the advances below only exercise its boundary.
     expect(SETTLE_DELAY).toBe(2500);
