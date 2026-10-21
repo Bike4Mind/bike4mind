@@ -341,6 +341,21 @@ describe('ChatCompletionProcess', () => {
 
       expect(mockedGetSettingsMap).toHaveBeenCalledWith(mockDb, { logger: mockLogger, skipCache: true });
     });
+
+    it('falls back to the cached map when the fresh read fails, never to the fabricated defaults', async () => {
+      vi.mocked((service as any).loadAdminSettingsAsync).mockRestore();
+      mockedGetSettingsMap.mockClear();
+      mockedGetSettingsMap
+        .mockRejectedValueOnce(new Error('AdminSettings read timed out'))
+        .mockResolvedValueOnce({ enforceCredits: 'false' });
+
+      const settings = await (service as any).loadAdminSettingsAsync(mockLogger, 0);
+
+      // The fabricated default is 'true'; using it would charge a deployment that disabled metering.
+      expect(settings.enforceCredits).toBe('false');
+      expect(mockedGetSettingsMap).toHaveBeenNthCalledWith(1, mockDb, { logger: mockLogger, skipCache: true });
+      expect(mockedGetSettingsMap).toHaveBeenNthCalledWith(2, mockDb, { logger: mockLogger });
+    });
   });
 
   describe('resolveEntitlementKeys (fail-safe entitlement resolution)', () => {

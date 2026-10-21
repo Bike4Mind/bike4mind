@@ -6552,8 +6552,15 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       return adminSettings;
     } catch (error) {
       logger.warn(`Background admin settings fetch failed after ${Date.now() - adminSettingsStartTime}ms:`, error);
-      // Return defaults if background fetch fails
-      return this.getDefaultAdminSettings();
+      // A stale-but-real map beats fabricated defaults here: getDefaultAdminSettings() hardcodes
+      // enforceCredits 'true', which would charge a deployment whose admin turned metering off.
+      // Fall back to the cached map, and to the defaults only when there is no cached map either.
+      try {
+        return await getSettingsMap(this.db, { logger });
+      } catch (cacheError) {
+        logger.warn('Cached admin settings fallback failed too; using defaults:', cacheError);
+        return this.getDefaultAdminSettings();
+      }
     }
   }
 
