@@ -23,10 +23,10 @@ function advisory(overrides = {}) {
 const report = (...advisories) => ({ advisories: Object.fromEntries(advisories.map((a, i) => [i + 1, a])) });
 
 describe('computeOverrideFixes', () => {
-  it('(1) adds a floor override for a single advisory', () => {
+  it('(1) adds a floor override scoped to the patched semver line for a single advisory', () => {
     const result = computeOverrideFixes(report(advisory()), ALLOWLIST, { esbuild: '0.28.1' });
     expect(result.changed).toBe(true);
-    expect(result.overrides).toEqual({ esbuild: '0.28.1', 'some-pkg@<1.11.0': '^1.11.0' });
+    expect(result.overrides).toEqual({ esbuild: '0.28.1', 'some-pkg@>=1.0.0 <1.11.0': '^1.11.0' });
     expect(result.fixes[0]).toMatchObject({ ghsa: 'GHSA-new-aaaa-aaaa', from: '(none)' });
   });
 
@@ -39,6 +39,35 @@ describe('computeOverrideFixes', () => {
       ['z', '2.0.0'],
     ]);
     expect(current).toEqual({ a: '1.0.0', 'some-pkg@<1.9.0': '^1.9.0', z: '2.0.0' });
+  });
+
+  it('raises an existing line-scoped floor in place', () => {
+    const current = { a: '1.0.0', 'some-pkg@>=1.0.0 <1.9.0': '^1.9.0' };
+    const result = computeOverrideFixes(report(advisory()), ALLOWLIST, current);
+    expect(Object.entries(result.overrides)).toEqual([
+      ['a', '1.0.0'],
+      ['some-pkg@>=1.0.0 <1.11.0', '^1.11.0'],
+    ]);
+  });
+
+  it('collapses an unscoped and a scoped lower floor into one unscoped floor', () => {
+    const current = { 'some-pkg@<1.5.0': '^1.5.0', 'some-pkg@>=1.0.0 <1.9.0': '^1.9.0' };
+    const result = computeOverrideFixes(report(advisory()), ALLOWLIST, current);
+    expect(result.overrides).toEqual({ 'some-pkg@<1.11.0': '^1.11.0' });
+  });
+
+  it('scopes a floor below 1.0.0 to its minor line', () => {
+    const zero = advisory({ patched_versions: '>=0.35.5', findings: [{ version: '0.35.4' }] });
+    expect(computeOverrideFixes(report(zero), ALLOWLIST, {}).overrides).toEqual({
+      'some-pkg@>=0.35.0 <0.35.5': '^0.35.5',
+    });
+  });
+
+  it('recognises a line-scoped floor that already reaches the patched version', () => {
+    const current = { 'some-pkg@>=1.0.0 <1.12.0': '^1.12.0' };
+    const result = computeOverrideFixes(report(advisory()), ALLOWLIST, current);
+    expect(result.overrides).toEqual(current);
+    expect(result.skipped[0].reason).toMatch(/already reaches the patched version/);
   });
 
   it('(3) ignores allowlisted and medium advisories', () => {
@@ -70,7 +99,7 @@ describe('computeOverrideFixes', () => {
       ALLOWLIST,
       {}
     );
-    expect(result.overrides).toEqual({ 'some-pkg@<2.1.0': '^2.1.0' });
+    expect(result.overrides).toEqual({ 'some-pkg@>=2.0.0 <2.1.0': '^2.1.0' });
   });
 
   it('leaves a floor that would move an installed copy across a major to a human', () => {
@@ -135,16 +164,17 @@ describe('computeOverrideFixes', () => {
     expect(newer.skipped[0].reason).toMatch(/`3\.1\.0` would move across a major/);
     const sameLine = new Map([['some-pkg', ['2.0.4', '2.2.0', '2.9.0']]]);
     expect(computeOverrideFixes(report(scoped), ALLOWLIST, {}, sameLine).overrides).toEqual({
-      'some-pkg@<2.3.1': '^2.3.1',
+      'some-pkg@>=2.0.0 <2.3.1': '^2.3.1',
     });
   });
 
   it('leaves a package whose existing floor is on another major to a human', () => {
     const scoped = advisory({ patched_versions: '>=2.3.1', findings: [{ version: '2.2.0' }] });
-    const current = { 'some-pkg@<1.5.0': '^1.5.0' };
-    const result = computeOverrideFixes(report(scoped), ALLOWLIST, current);
-    expect(result.overrides).toEqual(current);
-    expect(result.skipped[0].reason).toMatch(/floor on another major/);
+    for (const current of [{ 'some-pkg@<1.5.0': '^1.5.0' }, { 'some-pkg@>=1.0.0 <1.5.0': '^1.5.0' }]) {
+      const result = computeOverrideFixes(report(scoped), ALLOWLIST, current);
+      expect(result.overrides).toEqual(current);
+      expect(result.skipped[0].reason).toMatch(/floor on another major/);
+    }
   });
 
   it('fails closed when no installed version is known', () => {
@@ -296,7 +326,7 @@ describe('main (CLI)', () => {
     expect(res.status).toBe(0);
     expect(res.output).toBe('changed=true\n');
     expect(parseOverrides(fs.readFileSync(path.join(dir, 'pnpm-workspace.yaml'), 'utf8'))).toEqual({
-      'some-pkg@<1.11.0': '^1.11.0',
+      'some-pkg@>=1.0.0 <1.11.0': '^1.11.0',
     });
     expect(res.summary).toMatch(/GHSA-new-aaaa-aaaa/);
     expect(res.summary).toMatch(/CONTRIBUTING\.md#fixing-a-dependency-advisory/);
