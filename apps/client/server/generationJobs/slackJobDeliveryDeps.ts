@@ -1,11 +1,7 @@
-import type { VideoJobOutput } from '@bike4mind/common';
 import { slackDevWorkspaceRepository } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
-import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { downloadServeableOutput, signOutputUrl } from '@server/generations/signOutputUrl';
 import type { SlackJobDeliveryDeps } from './slackJobDelivery';
-
-const storageFor = (output: VideoJobOutput) =>
-  output.location === 'files' ? getFilesStorage() : getGeneratedImageStorage();
 
 export const createSlackJobDeliveryDeps = (logger: Logger): SlackJobDeliveryDeps => ({
   getSlackClient: async workspaceId => {
@@ -23,8 +19,8 @@ export const createSlackJobDeliveryDeps = (logger: Logger): SlackJobDeliveryDeps
     initializeSlackPackage();
     return new SlackClient(token, logger);
   },
-  downloadOutput: output => storageFor(output).download(output.s3Key),
-  signOutputUrl: (output, expiresInSeconds) =>
-    storageFor(output).getSignedUrl(output.s3Key, 'get', { expiresIn: expiresInSeconds, audience: 'browser' }),
+  downloadOutput: downloadServeableOutput,
+  signOutputUrl,
+  sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
   logger,
 });
