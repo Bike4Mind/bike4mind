@@ -113,6 +113,7 @@ export function createAiLatencySuite({
     const scenario = selectedPrompts[index];
 
     test(scenario.prompt, async ({ navigationPage, chatPage, modelSelector }) => {
+      const testStartMs = Date.now();
       test.setTimeout(timeoutMultiplier * TIMEOUTS.TEST);
 
       await navigationPage.navigateToNewChat();
@@ -153,10 +154,17 @@ export function createAiLatencySuite({
           } else if (await chatPage.hasArtifact()) {
             // A chat prompt that came back as an artifact: settle it so the scrape reads the final
             // reply, and flag it so the result is excluded from the gate (see completedResult).
-            // A settle timeout must not discard the stream window already measured: the keyword
-            // check below still fails the prompt, but the timing stays recorded.
+            // The settle is bounded by the test's remaining time so a stuck placeholder cannot
+            // outlast the test and discard the stream window already measured.
             artifactRendered = true;
-            await chatPage.waitForArtifactSettled(TIMEOUTS.IMAGE_GENERATION).catch(() => undefined);
+            await chatPage
+              .waitForArtifactSettled(
+                Math.max(
+                  1_000,
+                  Math.min(TIMEOUTS.IMAGE_GENERATION, test.info().timeout - (Date.now() - testStartMs) - 15_000)
+                )
+              )
+              .catch(() => undefined);
           }
         }
       } catch (err: unknown) {
