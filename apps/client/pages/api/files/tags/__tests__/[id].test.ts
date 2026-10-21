@@ -177,6 +177,16 @@ describe('PUT /api/files/tags/[id]', () => {
     adapters.assertWriteScope();
     expect(h.assertDataLakeWriteScope).toHaveBeenCalledTimes(1);
   });
+
+  // A failed ledger shred leaves the rename half-applied; the route must not report success for it.
+  it('propagates a shred failure from the service', async () => {
+    const { res } = makeRes();
+    h.update.mockRejectedValueOnce(new Error('memory ledger unavailable'));
+
+    await expect(
+      call({ method: 'PUT', query: { id: 't1' }, body: { id: 't1', name: 'receipts' }, user: { id: 'u1' } }, res)
+    ).rejects.toThrow('memory ledger unavailable');
+  });
 });
 
 describe('DELETE /api/files/tags/[id]', () => {
@@ -267,6 +277,16 @@ describe('DELETE /api/files/tags/[id]', () => {
     expect(h.assertDataLakeWriteScope).not.toHaveBeenCalled();
     adapters.assertWriteScope();
     expect(h.assertDataLakeWriteScope).toHaveBeenCalledTimes(1);
+  });
+
+  // Same reason as the rename above, on the delete path.
+  it('propagates a shred failure from the service', async () => {
+    const { res } = makeRes();
+    h.remove.mockRejectedValueOnce(new Error('memory ledger unavailable'));
+
+    await expect(call({ method: 'DELETE', query: { id: 't1' }, user: { id: 'u1' } }, res)).rejects.toThrow(
+      'memory ledger unavailable'
+    );
   });
 });
 
