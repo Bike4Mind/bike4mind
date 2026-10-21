@@ -188,7 +188,13 @@ export class AdminPage extends BasePage {
     await this.fillMuiInput(this.page.getByTestId('login-as-mfa-input').locator('input'), code);
   }
 
+  /** Admin actions the server audits gate their confirm button on a reason (AdminReasonField, min 5 chars). */
+  async fillAdminActionReason(testId: string, reason = 'E2E automated admin action') {
+    await this.page.getByTestId(testId).fill(reason);
+  }
+
   async confirmLoginAs() {
+    await this.fillAdminActionReason('login-as-reason-input');
     const confirmBtn = this.page.getByTestId('login-as-mfa-confirm-btn');
     await expect(confirmBtn).toBeEnabled({ timeout: TIMEOUTS.ELEMENT_STATE });
     await confirmBtn.click();
@@ -227,6 +233,7 @@ export class AdminPage extends BasePage {
   }
 
   async confirmDeleteUser() {
+    await this.fillAdminActionReason('user-delete-reason-input');
     await this.page.getByTestId('confirm-delete-btn').click();
     // Wait for the confirm button itself to disappear (the delete modal closed)
     await expect(this.page.getByTestId('confirm-delete-btn')).toBeHidden({ timeout: TIMEOUTS.ACTION });
