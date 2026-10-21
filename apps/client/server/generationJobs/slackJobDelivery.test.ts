@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import type { IGenerationJobDocument } from '@bike4mind/common';
 import {
   deliverJobToSlack,
+  SCAN_WAIT_ATTEMPTS,
+  SCAN_WAIT_INTERVAL_MS,
   SLACK_VIDEO_LINK_TTL_SECONDS,
   SLACK_VIDEO_UPLOAD_MAX_BYTES,
   type SlackJobDeliveryDeps,
@@ -36,7 +38,8 @@ const build = (client: Partial<SlackPoster> | null = {}) => {
   const deps: SlackJobDeliveryDeps = {
     getSlackClient: vi.fn().mockResolvedValue(client === null ? null : poster),
     downloadOutput: vi.fn().mockResolvedValue(Buffer.from('clip')),
-    signOutputUrl: vi.fn().mockResolvedValue('https://example.test/clip.mp4'),
+    signOutputUrl: vi.fn().mockResolvedValue({ availability: 'ready', url: 'https://example.test/clip.mp4' }),
+    sleep: vi.fn().mockResolvedValue(undefined),
     logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() } as never,
   };
   return { poster, deps };
@@ -95,6 +98,40 @@ describe('deliverJobToSlack', () => {
     expect(poster.sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({ text: expect.stringContaining('could not post it here') })
     );
+  });
+
+  it('waits for the moderation scan, then uploads the clip', async () => {
+    const { poster, deps } = build();
+    vi.mocked(deps.signOutputUrl)
+      .mockResolvedValueOnce({ availability: 'pending_scan' })
+      .mockResolvedValueOnce({ availability: 'pending_scan' })
+      .mockResolvedValue({ availability: 'ready', url: 'https://example.test/clip.mp4' });
+    await deliverJobToSlack(job(), deps);
+    expect(deps.sleep).toHaveBeenCalledTimes(2);
+    expect(deps.sleep).toHaveBeenCalledWith(SCAN_WAIT_INTERVAL_MS);
+    expect(poster.uploadFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives up after the wait budget and says the clip could not be posted, without touching the bytes', async () => {
+    const { poster, deps } = build();
+    vi.mocked(deps.signOutputUrl).mockResolvedValue({ availability: 'pending_scan' });
+    await deliverJobToSlack(job(), deps);
+    expect(deps.signOutputUrl).toHaveBeenCalledTimes(SCAN_WAIT_ATTEMPTS);
+    expect(deps.downloadOutput).not.toHaveBeenCalled();
+    expect(poster.uploadFile).not.toHaveBeenCalled();
+    expect(poster.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining('could not post it here') })
+    );
+  });
+
+  it('never uploads or links an output that failed moderation or is gone', async () => {
+    const { poster, deps } = build();
+    vi.mocked(deps.signOutputUrl).mockResolvedValue({ availability: 'unavailable' });
+    await deliverJobToSlack(job(), deps);
+    expect(deps.sleep).not.toHaveBeenCalled();
+    expect(deps.downloadOutput).not.toHaveBeenCalled();
+    expect(poster.uploadFile).not.toHaveBeenCalled();
+    expect(vi.mocked(poster.sendMessage).mock.calls[0][0].text).not.toContain('https://');
   });
 
   it.each([
