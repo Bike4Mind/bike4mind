@@ -8,6 +8,7 @@ import { logger } from '../utils/Logger.js';
 /** Both scopes the tools need; named in a 403 so callers know what to grant. */
 const REQUIRED_SCOPES = [ApiKeyScope.OPTIHASHI_READ, ApiKeyScope.OPTIHASHI_COMPUTE];
 const SOLVER_SCOPES = REQUIRED_SCOPES.join(' and ');
+const SOLVER_DISCOVERY_TIMEOUT_MS = 5 * 1000;
 
 /**
  * The route's GET answer, trusted only as far as the tool schemas need. Everything beyond these
@@ -69,10 +70,15 @@ function solveInputShape(catalog: SolverCatalog) {
  */
 export async function registerSolverTools(server: McpServer, client: B4mApiClient): Promise<void> {
   let catalog: SolverCatalog;
+  let discoveryTimer: ReturnType<typeof setTimeout> | undefined;
   try {
-    // Concurrent so the pair shares one startup budget. The key's own scopes are checked here: an API
-    // key holding only one of the two is never offered the tools.
-    const [rawCatalog, scopes] = await Promise.all([client.getSolverCatalog(), client.getOwnKeyScopes()]);
+    // Axios timeouts do not cover credential loading or OAuth refresh in its interceptors.
+    const [rawCatalog, scopes] = await Promise.race([
+      Promise.all([client.getSolverCatalog(), client.getOwnKeyScopes()]),
+      new Promise<never>((_resolve, reject) => {
+        discoveryTimer = setTimeout(() => reject(new Error('solver discovery timed out')), SOLVER_DISCOVERY_TIMEOUT_MS);
+      }),
+    ]);
     if (scopes && !REQUIRED_SCOPES.every(scope => scopes.includes(scope))) {
       logger.debug(`mcp: solver tools not offered: key lacks ${SOLVER_SCOPES}`);
       return;
@@ -81,6 +87,8 @@ export async function registerSolverTools(server: McpServer, client: B4mApiClien
   } catch (err) {
     logger.debug(`mcp: solver tools not offered: ${mapApiError(err, client.baseURL, SOLVER_SCOPES)}`);
     return;
+  } finally {
+    clearTimeout(discoveryTimer);
   }
 
   const run = async (fn: () => Promise<unknown>) => {

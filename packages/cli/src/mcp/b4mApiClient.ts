@@ -1,5 +1,5 @@
 import { isAxiosError } from 'axios';
-import type { z } from 'zod';
+import { z } from 'zod';
 import { B4mApiError, createClient, parseRetryAfterSeconds, type B4mClient, type JsonBody } from '@bike4mind/sdk';
 import { ApiClient, NotAuthenticatedError } from '../auth/ApiClient.js';
 import { isProviderKeyFailure } from '../auth/providerKeyFailure.js';
@@ -43,6 +43,14 @@ const SOLVER_ROUTE = '/api/premium-optihashi/quantum/solve';
  * user, entitled or not.
  */
 const SOLVER_CATALOG_TIMEOUT_MS = 5 * 1000;
+
+const keyScopeListSchema = z.array(
+  z.object({
+    keyPrefix: z.string().optional(),
+    scopes: z.array(z.string()).optional(),
+    status: z.string().optional(),
+  })
+);
 
 /**
  * An empty or dot-segment id collapses `/api/sessions/{id}` to `/api/sessions`, whose DELETE wipes every
@@ -592,13 +600,12 @@ export class B4mApiClient {
   async getOwnKeyScopes(): Promise<string[] | undefined> {
     const apiKey = this.apiKey;
     if (!apiKey) return undefined;
-    const keys = await this.client.get<{ keyPrefix?: string; scopes?: string[]; status?: string }[]>(
-      '/api/user-api-keys',
-      { timeout: SOLVER_CATALOG_TIMEOUT_MS }
+    const keys = keyScopeListSchema.parse(
+      await this.client.get<unknown>('/api/user-api-keys', { timeout: SOLVER_CATALOG_TIMEOUT_MS })
     );
     const matches = keys.filter(k => k.status === 'active' && !!k.keyPrefix && apiKey.startsWith(k.keyPrefix));
-    const longest = Math.max(0, ...matches.map(k => k.keyPrefix!.length));
-    const best = matches.filter(k => k.keyPrefix!.length === longest);
+    const longest = matches.reduce((length, key) => Math.max(length, key.keyPrefix?.length ?? 0), 0);
+    const best = matches.filter(k => k.keyPrefix?.length === longest);
     return best.length === 1 ? (best[0].scopes ?? []) : [];
   }
 

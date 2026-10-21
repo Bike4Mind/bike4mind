@@ -33,7 +33,26 @@ describe('stdio solver tools', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it.each(['catalog', 'scopes'])('finishes startup when %s discovery never settles', async stalled => {
+    vi.useFakeTimers();
+    const fetchCatalog = vi.spyOn(B4mApiClient.prototype, 'getSolverCatalog').mockResolvedValue(catalog);
+    const fetchScopes = vi.spyOn(B4mApiClient.prototype, 'getOwnKeyScopes').mockResolvedValue(BOTH_SCOPES);
+    if (stalled === 'catalog') fetchCatalog.mockReturnValue(new Promise(() => {}));
+    else fetchScopes.mockReturnValue(new Promise(() => {}));
+
+    const building = buildStdioMcpServer(options);
+    await vi.advanceTimersByTimeAsync(5000);
+    const server = await building;
+    expect(vi.getTimerCount()).toBe(0);
+    vi.useRealTimers();
+
+    const client = await connect(server);
+    expect(await toolNames(client)).toContain('list_notebooks');
+    expect((await toolNames(client)).filter(name => name.startsWith('optihashi_'))).toEqual([]);
   });
 
   it('lists the solver tools for an entitled, scoped caller', async () => {
@@ -92,6 +111,37 @@ describe('stdio solver tools', () => {
 
     expect(result.isError).toBe(true);
     expect(result.content).toEqual([{ type: 'text', text: 'Invalid problem' }]);
+  });
+
+  it.each([
+    ['unknown family', { familyId: 'unknown', problem: {} }],
+    ['unknown solver', { problem: {}, solverIds: ['unknown'] }],
+    ['empty race', { problem: {}, solverIds: [] }],
+    ['too many solvers', { problem: {}, solverIds: Array(5).fill('greedy') }],
+    ['timeout below minimum', { problem: {}, timeoutMs: 99 }],
+    ['timeout above ceiling', { problem: {}, timeoutMs: 15001 }],
+    ['fractional timeout', { problem: {}, timeoutMs: 100.5 }],
+  ])('rejects %s without submitting a race', async (_label, args) => {
+    vi.spyOn(B4mApiClient.prototype, 'getSolverCatalog').mockResolvedValue(catalog);
+    const race = vi.spyOn(B4mApiClient.prototype, 'runSolverRace');
+    const client = await connect(await buildStdioMcpServer(options));
+
+    const result = await client.callTool({ name: 'optihashi_solve', arguments: args });
+
+    expect(result.isError).toBe(true);
+    expect(race).not.toHaveBeenCalled();
+  });
+
+  it('returns a tool error if refreshing the roster fails', async () => {
+    vi.spyOn(B4mApiClient.prototype, 'getSolverCatalog')
+      .mockResolvedValueOnce(catalog)
+      .mockRejectedValueOnce(new Error('catalog unavailable'));
+    const client = await connect(await buildStdioMcpServer(options));
+
+    const result = await client.callTool({ name: 'optihashi_solvers', arguments: {} });
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toEqual([{ type: 'text', text: 'catalog unavailable' }]);
   });
 
   it.each([
@@ -160,7 +210,9 @@ describe('stdio solver tools', () => {
     const dir = fileURLToPath(new URL('.', import.meta.url));
     const sources = readdirSync(dir).filter(f => f.endsWith('.ts') && !f.endsWith('.test.ts'));
     const importing = sources.filter(f =>
-      /from\s+['"]@bike4mind\/(premium-|optihashi-engine)/.test(readFileSync(join(dir, f), 'utf8'))
+      /\b(?:from\s*|import\s*(?:\(\s*)?|require\s*\(\s*)['"]@bike4mind\/(premium-|optihashi-engine)/.test(
+        readFileSync(join(dir, f), 'utf8')
+      )
     );
 
     expect(sources).toContain('solverTools.ts');

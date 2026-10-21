@@ -164,6 +164,35 @@ describe('B4mApiClient', () => {
     expect(mockGet).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['a non-array response', {}],
+    ['a null row', [null]],
+    ['a non-string prefix', [{ status: 'active', keyPrefix: 42, scopes: [] }]],
+    [
+      'a scope string instead of a list',
+      [{ status: 'active', keyPrefix: 'b4m_live_', scopes: 'optihashi:read optihashi:compute' }],
+    ],
+    ['a non-string scope', [{ status: 'active', keyPrefix: 'b4m_live_', scopes: [42] }]],
+  ])('rejects malformed key metadata: %s', async (_label, response) => {
+    mockGet.mockResolvedValue(response);
+    await expect(client.getOwnKeyScopes()).rejects.toThrow();
+  });
+
+  it('ignores missing and empty prefixes even on active scoped keys', async () => {
+    mockGet.mockResolvedValue([
+      { status: 'active', scopes: ['optihashi:read', 'optihashi:compute'] },
+      { status: 'active', keyPrefix: '', scopes: ['optihashi:read', 'optihashi:compute'] },
+    ]);
+    await expect(client.getOwnKeyScopes()).resolves.toEqual([]);
+  });
+
+  it('forwards solver race arguments to the solver route', async () => {
+    const body = { problem: {}, solverIds: ['greedy'], timeoutMs: 100, includeTrace: true };
+    mockPost.mockResolvedValue({ winner: { solverId: 'greedy' } });
+    await expect(client.runSolverRace(body)).resolves.toEqual({ winner: { solverId: 'greedy' } });
+    expect(mockPost).toHaveBeenCalledWith('/api/premium-optihashi/quantum/solve', body);
+  });
+
   it('creates a notebook with only the provided fields', async () => {
     mockFetch.mockResolvedValue(jsonResponse({ id: 'n1' }));
     await client.createNotebook({ name: 'My NB' });
