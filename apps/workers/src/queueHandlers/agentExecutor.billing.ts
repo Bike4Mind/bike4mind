@@ -363,7 +363,7 @@ export async function billIteration(params: BillIterationParams): Promise<void> 
     });
   }
   // A zero-priced model still made real provider calls: settle it as a zero-credit iteration so
-  // the usage event (one row per call, which usage analytics count) and the billing record are
+  // the usage event (one row per settled iteration) and the billing record are
   // written, rather than skipping it and carrying its tokens into the next iteration's delta.
   const agentDeltas = [deltas.inputTokens, deltas.outputTokens, deltas.cacheReadTokens, deltas.cacheWriteTokens];
   const zeroCostWork =
