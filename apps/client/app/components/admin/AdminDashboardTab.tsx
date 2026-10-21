@@ -171,7 +171,7 @@ export default function AdminDashboardTab({ onNavigate }: AdminDashboardTabProps
             No tracked activity in the last 7 days.
           </Typography>
         )}
-        {!isLoading && !isError && metrics.length > 0 && (
+        {!isLoading && metrics.length > 0 && (
           <OverviewTab metrics={metrics} chartData={processChartData(metrics)} showUsageBySource={false} />
         )}
       </Stack>

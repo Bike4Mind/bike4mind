@@ -163,7 +163,7 @@ describe('AdminDashboardTab', () => {
     expect(screen.queryByTestId('admin-dashboard-activity-empty')).not.toBeInTheDocument();
   });
 
-  it('distinguishes a failed activity request from an empty window and allows retry', () => {
+  it('keeps cached activity visible beside the error when a refresh fails and allows retry', () => {
     useEventMetrics.mockReturnValue({
       data: [event],
       isLoading: false,
@@ -175,10 +175,19 @@ describe('AdminDashboardTab', () => {
 
     expect(screen.getByTestId('admin-dashboard-activity-error')).toBeInTheDocument();
     expect(screen.queryByTestId('admin-dashboard-activity-empty')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('activity-charts')).not.toBeInTheDocument();
+    expect(screen.getByTestId('activity-charts')).toBeInTheDocument();
     expect(screen.getByTestId('usage-by-source-card')).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('admin-dashboard-refresh'));
     expect(forceRefresh).toHaveBeenCalledOnce();
+  });
+
+  it('shows only the error when a failed request has no cached activity', () => {
+    useEventMetrics.mockReturnValue({ data: [], isLoading: false, isFetching: false, isError: true, forceRefresh });
+    render(<AdminDashboardTab onNavigate={vi.fn()} />, { wrapper: Wrapper });
+
+    expect(screen.getByTestId('admin-dashboard-activity-error')).toBeInTheDocument();
+    expect(screen.queryByTestId('admin-dashboard-activity-empty')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('activity-charts')).not.toBeInTheDocument();
   });
 
   it('shows an empty state when the window has no activity', () => {
