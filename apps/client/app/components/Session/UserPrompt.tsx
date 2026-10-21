@@ -169,9 +169,9 @@ const remarkPlugins: PluggableList = [remarkBreaks, [remarkMath, { singleDollarT
 const rehypePlugins: PluggableList = [rehypeKatex];
 
 /**
- * Renders markdown or code content. The components map and plugins are stable so a streaming
- * re-render of the parent does not remount the markdown subtree; a remounted image would be
- * fetched again and would lose the viewer's approval in ReplyMarkdownImage.
+ * Renders markdown or code content. The components map is memoized so a streaming re-render of
+ * the parent does not remount the markdown subtree; a remounted image would be fetched again
+ * and would lose the viewer's approval in ReplyMarkdownImage.
  */
 const PromptContent: FC<{
   content: string;

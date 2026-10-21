@@ -6,7 +6,9 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import UserPrompt from './UserPrompt';
 
 vi.mock('./ImageContainer', () => ({
-  default: ({ src }: { src: string }) => <img data-testid="loaded-image" src={src} />,
+  default: ({ src, onSendMessage }: { src: string; onSendMessage?: (...args: unknown[]) => unknown }) => (
+    <img data-testid="loaded-image" src={src} onClick={() => onSendMessage?.('hi')} />
+  ),
 }));
 vi.mock('@client/app/components/common/HighlightedCode', () => ({
   default: ({ code }: { code: string }) => <pre data-testid="highlighted-code">{code}</pre>,
@@ -45,6 +47,17 @@ it('keeps an approved image mounted when the parent re-renders with new callback
   rerender(ui(IMAGE_PROMPT, vi.fn(), vi.fn()));
   expect(screen.getByTestId('loaded-image')).toBe(img);
   expect(screen.queryByTestId('reply-image-load-btn')).toBeNull();
+});
+
+it('sends through the latest onSendMessage after a re-render', () => {
+  const first = vi.fn();
+  const latest = vi.fn();
+  const { rerender } = render(ui(IMAGE_PROMPT, vi.fn(), first));
+  fireEvent.click(screen.getByTestId('reply-image-load-btn'));
+  rerender(ui(IMAGE_PROMPT, vi.fn(), latest));
+  fireEvent.click(screen.getByTestId('loaded-image'));
+  expect(latest).toHaveBeenCalledWith('hi');
+  expect(first).not.toHaveBeenCalled();
 });
 
 it('still renders text and fenced code', () => {
