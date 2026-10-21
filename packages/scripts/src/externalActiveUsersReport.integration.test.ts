@@ -4,7 +4,7 @@ import { Quest, UsageEvent, User } from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../database/src/__test__/createMongoServer';
 
 import { formatUtcDay } from './externalActiveUsers';
-import { collectActivity, runExternalActivityReport } from './externalActiveUsersReport';
+import { collectActivity, runExternalActivityReport, type MessageAttempt } from './externalActiveUsersReport';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -267,6 +267,33 @@ describe('runExternalActivityReport', () => {
 
 describe('collectActivity', () => {
   const windowStart = new Date('2026-10-01T00:00:00Z');
+
+  it('streams only original non-API cohort attempts and opts into failures without changing legacy activity', async () => {
+    const kept = await insertUser('kept@customer.example');
+    const other = await insertUser('other@customer.example');
+    await quest(kept, '2026-10-10');
+    await quest(kept, '2026-10-11', { type: 'error', prompt: 'SECRET_PROMPT' });
+    await quest(other, '2026-10-11', { type: 'error' });
+    await quest(kept, '2026-10-12', { type: 'error', sessionId: 'api-session' });
+    await quest(kept, '2026-10-12', { type: 'error', deletedAt: NOW });
+    await quest(kept, '2026-10-12', { type: 'error', _id: idAt(NOW) });
+    const apiRun = await agent(kept, '2026-10-12', { apiKeyId: 'key1' });
+    await quest(kept, '2026-10-12', { type: 'error', agentExecutionId: String(apiRun.insertedId) });
+    await quest(kept, '2026-10-13', { type: 'error', timestamp: NOW, _id: idAt(NOW) });
+    const attempts: MessageAttempt[] = [];
+    const baseline = await collectActivity(windowStart, 100, NOW, new Set(['api-session']), new Set([kept]), {
+      includeFailedAttempts: true,
+      onAttempt: attempt => attempts.push(attempt),
+    });
+    const legacy = await collectActivity(windowStart, 100, NOW, new Set(['api-session']), new Set([kept]));
+
+    expect(attempts).toHaveLength(2);
+    expect(attempts).toContainEqual({ userId: kept, at: at('2026-10-11'), sessionId: 's1', outcome: 'failed' });
+    expect(attempts).toContainEqual({ userId: kept, at: at('2026-10-10'), sessionId: 's1', outcome: 'recorded' });
+    expect(JSON.stringify(attempts)).not.toContain('SECRET_PROMPT');
+    expect([...(baseline.userDays.get(kept) ?? [])].map(formatUtcDay).sort()).toEqual(['2026-10-10', '2026-10-11']);
+    expect([...(legacy.userDays.get(kept) ?? [])].map(formatUtcDay)).toEqual(['2026-10-10']);
+  });
 
   it('excludes activity at or after windowEnd from every source', async () => {
     const user = await insertUser('late@customer.example');

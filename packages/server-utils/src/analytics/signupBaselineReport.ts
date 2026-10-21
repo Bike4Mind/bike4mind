@@ -1,5 +1,5 @@
-import { CounterLog, CreditTransaction, Quest, Session, User } from '@bike4mind/database';
-import { exclusionReason, isOriginalQuest, recordActivity } from './externalActiveUsers';
+import { CounterLog, CreditTransaction, Session, User } from '@bike4mind/database';
+import { exclusionReason } from './externalActiveUsers';
 import { collectActivity } from './externalActiveUsersReport';
 import {
   baselineRules,
@@ -25,14 +25,6 @@ type SessionRow = {
   origin?: { channel?: string };
   clonedSourceId?: string;
   forkedSourceId?: string;
-};
-type QuestRow = {
-  _id: { getTimestamp(): Date };
-  timestamp: Date;
-  sessionId: string;
-  agentExecutionId?: string;
-  type: string;
-  promptMeta?: { session?: { userId?: string } };
 };
 type GrantRow = { ownerId: string; createdAt: Date; credits: number; transactionId?: string };
 type ProductEventRow = { userId: string; datetime: Date; counterName: string };
@@ -111,41 +103,20 @@ export async function runSignupBaselineReport(options: SignupBaselineOptions) {
     }
   }
 
-  const { userDays, apiExecutionIds } = await collectActivity(
+  const { userDays } = await collectActivity(
     window.since,
     BATCH_SIZE,
     window.until,
     apiSessions,
-    new Set(externalIds)
+    new Set(externalIds),
+    {
+      includeFailedAttempts: true,
+      onAttempt: ({ userId, ...attempt }) => recordEvent(evidence.events, userId, { ...attempt, kind: 'message_sent' }),
+    }
   );
   evidence.userDays = userDays;
   for (let offset = 0; offset < externalIds.length; offset += BATCH_SIZE) {
     const userIds = externalIds.slice(offset, offset + BATCH_SIZE);
-    const quests = Quest.find(
-      { 'promptMeta.session.userId': { $in: userIds }, type: { $in: ['message', 'error'] }, timestamp: dateRange },
-      { timestamp: 1, sessionId: 1, 'promptMeta.session.userId': 1, agentExecutionId: 1, type: 1 }
-    )
-      .read('secondaryPreferred')
-      .lean<QuestRow[]>()
-      .cursor({ batchSize: BATCH_SIZE });
-    for await (const quest of quests) {
-      const userId = quest.promptMeta?.session?.userId;
-      if (
-        !userId ||
-        !isOriginalQuest(quest._id, quest.timestamp) ||
-        apiSessions.has(quest.sessionId) ||
-        (quest.agentExecutionId && apiExecutionIds.has(quest.agentExecutionId))
-      )
-        continue;
-      recordActivity(evidence.userDays, userId, quest.timestamp);
-      recordEvent(evidence.events, userId, {
-        at: quest.timestamp,
-        kind: 'message_sent',
-        sessionId: quest.sessionId,
-        outcome: quest.type === 'error' ? 'failed' : 'recorded',
-      });
-    }
-
     const grants = CreditTransaction.find(
       { ownerId: { $in: userIds }, ownerType: 'User', type: 'generic_add', createdAt: dateRange },
       { ownerId: 1, createdAt: 1, credits: 1, transactionId: 1, _id: 0 }

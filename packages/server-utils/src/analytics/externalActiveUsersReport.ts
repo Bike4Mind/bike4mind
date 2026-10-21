@@ -44,8 +44,21 @@ interface QuestActivityRow {
   timestamp: Date;
   agentExecutionId?: string;
   sessionId?: string;
+  type: 'message' | 'error';
   promptMeta?: { session?: { userId?: string } };
 }
+
+export type MessageAttempt = {
+  userId: string;
+  at: Date;
+  sessionId?: string;
+  outcome: 'failed' | 'recorded';
+};
+
+type MessageCollectionOptions = {
+  includeFailedAttempts: boolean;
+  onAttempt: (attempt: MessageAttempt) => void;
+};
 
 const OBJECT_ID_RE = /^[0-9a-f]{24}$/i;
 
@@ -62,7 +75,8 @@ export async function collectActivity(
   batchSize: number,
   windowEnd = new Date(),
   apiSessionIds: ReadonlySet<string> = new Set(),
-  userIds?: ReadonlySet<string>
+  userIds?: ReadonlySet<string>,
+  messageCollection?: MessageCollectionOptions
 ) {
   const included = (userId: string | undefined): userId is string =>
     !!userId && (userIds === undefined || userIds.has(userId));
@@ -112,9 +126,14 @@ export async function collectActivity(
   // Copied quests (clone, fork, snip) are dropped by isOriginalQuest, so _id is projected.
   // A Quest carries no API-key marker of its own, so POST /api/chat turns count as app activity;
   // only a Quest written by an API-key agent run is told apart, via agentExecutionId.
+  // The census consumes projected attempts in this same pass, avoiding a scan per user batch.
+  // Failed attempts are opt-in so the legacy activity report keeps its existing definition.
   const quests = Quest.find(
-    { type: 'message', timestamp: { $gte: windowStart, $lt: windowEnd } },
-    { 'promptMeta.session.userId': 1, timestamp: 1, agentExecutionId: 1, sessionId: 1 }
+    {
+      type: messageCollection?.includeFailedAttempts ? { $in: ['message', 'error'] } : 'message',
+      timestamp: { $gte: windowStart, $lt: windowEnd },
+    },
+    { 'promptMeta.session.userId': 1, timestamp: 1, agentExecutionId: 1, sessionId: 1, type: 1 }
   )
     .read('secondaryPreferred')
     .lean<QuestActivityRow[]>()
@@ -126,6 +145,13 @@ export async function collectActivity(
       (quest.sessionId !== undefined && apiSessionIds.has(quest.sessionId)) ||
       (quest.agentExecutionId !== undefined && apiExecutionIds.has(quest.agentExecutionId));
     recordActivity(viaApi ? apiUserDays : userDays, userId, quest.timestamp);
+    if (!viaApi)
+      messageCollection?.onAttempt({
+        userId,
+        at: quest.timestamp,
+        sessionId: quest.sessionId,
+        outcome: quest.type === 'error' ? 'failed' : 'recorded',
+      });
   }
 
   return { userDays, apiUserDays, sourceCounts, apiExecutionIds };

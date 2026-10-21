@@ -10,6 +10,7 @@ beforeAll(async () => {
   server = await createMongoServer();
   await mongoose.connect(server.getUri());
 });
+
 afterAll(async () => {
   await mongoose.disconnect();
   await server?.stop();
@@ -135,4 +136,35 @@ it('runs the read-only census against persisted data without leaking content or 
   expect(JSON.stringify(result)).not.toContain('@example.org');
   expect(JSON.stringify(result)).not.toContain('999999');
   expect(await Promise.all(collections.map(model => model.collection.countDocuments()))).toEqual(before);
+});
+
+it('reads message attempts once across multiple account batches', async () => {
+  const createdAt = at('2026-11-01T10:00:00Z');
+  const accountIds = Array.from({ length: 501 }, () => new mongoose.Types.ObjectId());
+  await User.collection.insertMany(accountIds.map(_id => ({ _id, createdAt, email: `${_id}@example.org` })));
+  await Quest.collection.insertMany(
+    [accountIds[0], accountIds[500]].map((userId, index) => ({
+      _id: idAt(createdAt),
+      type: index === 0 ? 'message' : 'error',
+      timestamp: createdAt,
+      sessionId: `batch-${index}`,
+      promptMeta: { session: { userId: String(userId) } },
+    }))
+  );
+  const questReads = vi.spyOn(Quest, 'find');
+  try {
+    const result = await runSignupBaselineReport({
+      since: at('2026-11-01T00:00:00Z'),
+      until: at('2026-11-10T00:00:00Z'),
+      staffDomains: 'staff.example.org',
+    });
+    expect(result.total.signups).toBe(501);
+    expect(result.total.sentFirstMessage.count).toBe(2);
+    expect(result.census.find(row => row.userId === String(accountIds[500]))?.timeline).toContainEqual(
+      expect.objectContaining({ kind: 'message_sent', outcome: 'failed' })
+    );
+    expect(questReads).toHaveBeenCalledTimes(1);
+  } finally {
+    questReads.mockRestore();
+  }
 });
