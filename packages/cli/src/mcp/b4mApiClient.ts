@@ -34,6 +34,15 @@ export const NOTEBOOK_ID_PATTERN = /^[a-f0-9]{24}$/i;
 
 const STOP_REPLY_TIMEOUT_MS = 10 * 1000;
 
+/** Only the route is known here: the solver roster and limits are fetched at runtime. */
+const SOLVER_ROUTE = '/api/premium-optihashi/quantum/solve';
+
+/**
+ * The catalog is fetched before the stdio handshake completes, so it must not inherit the client's
+ * 10-minute default: a hung backend would otherwise stall `initialize` for every user, entitled or not.
+ */
+const SOLVER_CATALOG_TIMEOUT_MS = 5 * 1000;
+
 /**
  * An empty or dot-segment id collapses `/api/sessions/{id}` to `/api/sessions`, whose DELETE wipes every
  * notebook the caller owns, so write paths refuse anything that is not an ObjectId before any request.
@@ -568,6 +577,16 @@ export class B4mApiClient {
       `/api/briefcase/prompts/${encodeURIComponent(promptId)}`
     );
     return result.prompt;
+  }
+
+  /** GET on the entitlement-gated solver route: the runnable rosters and limits for this caller. */
+  async getSolverCatalog(): Promise<unknown> {
+    return this.client.get<unknown>(SOLVER_ROUTE, { timeout: SOLVER_CATALOG_TIMEOUT_MS });
+  }
+
+  /** POST on the same route: run a bounded solver race. The body is validated server-side. */
+  async runSolverRace(body: Record<string, unknown>): Promise<unknown> {
+    return this.client.post<unknown>(SOLVER_ROUTE, body);
   }
 }
 
