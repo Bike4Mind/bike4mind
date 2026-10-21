@@ -1,6 +1,7 @@
 import { appFilesBucket, fabFileBucket, generatedImagesBucket } from './buckets';
-import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT, TEST_GENERATION_PROVIDER_ENVIRONMENT } from './constants';
 import { eventBus } from './eventBus';
+import { generationJobQueue } from './queues';
 import { slackEventBus } from './bus';
 import { imageProcessor } from './imageProcessor';
 import { mcpHandler } from './mcp';
@@ -42,9 +43,11 @@ export const slackQuestProcessor = new sst.aws.Function('SlackQuestProcessor', {
     eventBus,
     slackEventBus,
     imageProcessor,
+    generationJobQueue,
   ],
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
+    ...TEST_GENERATION_PROVIDER_ENVIRONMENT,
     // Personal sst dev stages serve files via the local proxy (apps/client/pages/api/app-files/serve); deployed stages use the real distribution.
     NEXT_PUBLIC_CDN_URL: cdnUrlForLambdaEnv(),
     ...(searxngUrl ? { SEARXNG_BASE_URL: searxngUrl } : {}),
