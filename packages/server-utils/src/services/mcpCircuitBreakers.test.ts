@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { recordCircuitBreakerTransition } from '@bike4mind/server-utils/utils/cloudwatch';
+import { recordCircuitBreakerTransition } from '../utils/cloudwatch';
 
 // Mock CloudWatch to avoid real AWS calls
 vi.mock('../utils/cloudwatch', () => ({
