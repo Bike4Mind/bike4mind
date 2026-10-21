@@ -122,14 +122,15 @@ async function walkMarkdown(
     return files;
   }
 
-  // The root is a commands/skills directory, never a skill folder itself.
+  // The root is a commands/skills directory, never a skill folder itself. An unloadable SKILL.md
+  // (broken link, escaping target) still marks a skill folder, so its supporting docs stay out.
   if (options.stopAtSkillFile && !isRoot) {
     const skillEntry = entries.find(entry => entry.name.toLowerCase() === 'skill.md');
     if (skillEntry) {
       const skillPath = path.join(directory, skillEntry.name);
-      if ((await classifyEntry(skillPath, skillEntry)) === 'file') {
-        return (await isContained(skillPath, realRoot)) ? [skillPath] : [];
-      }
+      const loadable =
+        (await classifyEntry(skillPath, skillEntry)) === 'file' && (await isContained(skillPath, realRoot));
+      return loadable ? [skillPath] : [];
     }
   }
 

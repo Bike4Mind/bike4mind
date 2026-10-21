@@ -153,6 +153,15 @@ describe('findMarkdownFiles', () => {
       expect(found).toEqual([]);
     });
 
+    it('keeps a folder with a broken SKILL.md link from leaking its supporting docs', async () => {
+      await write('ship/references/guide.md');
+      await fs.symlink(path.join(store, 'gone.md'), path.join(root, 'ship', 'SKILL.md'));
+
+      const found = await findMarkdownFiles(root, undefined, { stopAtSkillFile: true });
+
+      expect(found).toEqual([]);
+    });
+
     it('lists every .md when the option is off', async () => {
       await write('brag/SKILL.md');
       await write('brag/references/tones.md');
