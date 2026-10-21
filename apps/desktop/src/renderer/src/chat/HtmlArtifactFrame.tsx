@@ -36,7 +36,18 @@ const FRAME_HEIGHT = 420;
  * an opaque origin cannot be named as a targetOrigin, hence '*'. Nothing is read back - the
  * parent only ever posts - so there is no channel from artifact to renderer to get wrong.
  */
-export function HtmlArtifactFrame({ content, title }: { content: string; title: string }) {
+export function HtmlArtifactFrame({
+  content,
+  title,
+  height = FRAME_HEIGHT,
+  preview = false,
+}: {
+  content: string;
+  title: string;
+  height?: number | string;
+  /** A thumbnail: drawn but never focused, clicked or announced; the card around it is the control. */
+  preview?: boolean;
+}) {
   const frame = useRef<HTMLIFrameElement>(null);
   const sent = useRef(false);
   const [failed, setFailed] = useState(false);
@@ -89,7 +100,15 @@ export function HtmlArtifactFrame({ content, title }: { content: string; title: 
       // run, so the frame's own listener is certainly up by the time this posts.
       onLoad={send}
       onError={() => setFailed(true)}
-      sx={{ display: 'block', width: '100%', height: FRAME_HEIGHT, border: 'none', bgcolor: 'common.white' }}
+      {...(preview ? { tabIndex: -1, 'aria-hidden': true } : {})}
+      sx={{
+        display: 'block',
+        width: '100%',
+        height,
+        border: 'none',
+        bgcolor: 'common.white',
+        ...(preview ? { pointerEvents: 'none' } : {}),
+      }}
       data-testid="chat-artifact-frame"
     />
   );

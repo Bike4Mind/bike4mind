@@ -26,6 +26,37 @@ const summaries: ChatArtifactSummary[] = [
   { id: 'a3', title: 'Gamma page', type: 'html', createdAt: '2026-06-10T00:00:00.000Z' },
 ];
 
+/**
+ * A hand-driven IntersectionObserver: nothing is on screen until a test says so, which is what
+ * lets these tests see which bodies the panel asks for and when.
+ */
+const observed: { element: Element; callback: IntersectionObserverCallback }[] = [];
+class ManualObserver {
+  constructor(private readonly callback: IntersectionObserverCallback) {}
+  observe(element: Element) {
+    observed.push({ element, callback: this.callback });
+  }
+  unobserve() {}
+  disconnect() {
+    for (let i = observed.length - 1; i >= 0; i--) if (observed[i].callback === this.callback) observed.splice(i, 1);
+  }
+  takeRecords() {
+    return [];
+  }
+}
+
+async function bringNear(elements: readonly Element[]): Promise<void> {
+  await act(async () => {
+    for (const { element, callback } of [...observed]) {
+      if (!elements.includes(element)) continue;
+      callback(
+        [{ isIntersecting: true, target: element } as unknown as IntersectionObserverEntry],
+        {} as IntersectionObserver
+      );
+    }
+  });
+}
+
 const listArtifacts = vi.fn<() => Promise<ChatArtifactLibrary>>();
 const readArtifact = vi.fn<(id: string) => Promise<ChatArtifactContent>>();
 
@@ -33,6 +64,8 @@ let root: Root | null = null;
 let host: HTMLElement | null = null;
 
 beforeEach(() => {
+  observed.length = 0;
+  vi.stubGlobal('IntersectionObserver', ManualObserver);
   listArtifacts.mockReset();
   readArtifact.mockReset();
   (window as unknown as { b4m: unknown }).b4m = {
@@ -50,6 +83,7 @@ afterEach(() => {
   host?.remove();
   root = null;
   host = null;
+  vi.unstubAllGlobals();
 });
 
 async function mount(): Promise<void> {
@@ -69,7 +103,7 @@ const byTestId = (id: string) => host?.querySelector<HTMLElement>(`[data-testid=
 const allByTestId = (id: string) => [...(host?.querySelectorAll<HTMLElement>(`[data-testid="${id}"]`) ?? [])];
 // A Joy Chip's click target is an overlay button beside its label, so the label is the parent's text.
 const chipText = (id: string) => byTestId(id)?.parentElement?.textContent;
-const titles = () => allByTestId('artifact-library-row-title').map(node => node.textContent);
+const titles = () => allByTestId('artifact-library-card-title').map(node => node.textContent);
 
 async function type(value: string): Promise<void> {
   const input = byTestId('artifact-library-search-input') as HTMLInputElement;
@@ -125,11 +159,16 @@ describe('ArtifactLibraryPanel list', () => {
     listArtifacts.mockResolvedValue({ artifacts: summaries, total: 3 });
   });
 
-  it('lists newest first with an initial avatar and a type label per row', async () => {
+  it('lays the cards out newest first, each with a placeholder thumbnail and a type label', async () => {
     await mount();
+    expect(byTestId('artifact-library-grid')).not.toBeNull();
     expect(titles()).toEqual(['Gamma page', 'Alpha flow', 'Beta chart']);
-    expect(allByTestId('artifact-library-row-avatar').map(node => node.textContent)).toEqual(['G', 'A', 'B']);
-    expect(allByTestId('artifact-library-row-type').map(node => node.textContent)).toEqual(['HTML', 'Diagram', 'HTML']);
+    expect(allByTestId('artifact-library-card-avatar').map(node => node.textContent)).toEqual(['G', 'A', 'B']);
+    expect(allByTestId('artifact-library-card-type').map(node => node.textContent)).toEqual([
+      'HTML',
+      'Diagram',
+      'HTML',
+    ]);
     expect(byTestId('artifact-library-truncated')).toBeNull();
   });
 
@@ -187,41 +226,87 @@ describe('ArtifactLibraryPanel list', () => {
     expect(titles()).toEqual(['Gamma page', 'Alpha flow', 'Beta chart']);
   });
 
-  it('fetches a body only when its row is opened, and only once', async () => {
-    readArtifact.mockResolvedValue({ artifact: { id: 'a3', type: 'code', title: 'Gamma page', content: 'body' } });
+  it('fetches a thumbnail body only once its card nears the viewport, and only once', async () => {
+    readArtifact.mockResolvedValue({
+      artifact: { id: 'a3', type: 'code', title: 'Gamma page', content: 'const x = 1;' },
+    });
     await mount();
     expect(readArtifact).not.toHaveBeenCalled();
 
-    const [first] = allByTestId('artifact-library-row-summary');
-    await click(first ?? null);
+    const [first] = allByTestId('artifact-library-card');
+    await bringNear([first]);
     expect(readArtifact).toHaveBeenCalledTimes(1);
     expect(readArtifact).toHaveBeenCalledWith('a3');
-    expect(byTestId('artifact-library-row-detail')).not.toBeNull();
+    expect(byTestId('artifact-library-thumb-source')?.textContent).toBe('const x = 1;');
 
-    await click(first ?? null);
-    expect(byTestId('artifact-library-row-detail')).toBeNull();
-    await click(allByTestId('artifact-library-row-expand-btn')[0] ?? null);
-    expect(byTestId('artifact-library-row-detail')).not.toBeNull();
+    await bringNear([first]);
     expect(readArtifact).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps an opened row open and fetched when a filter hides it and brings it back', async () => {
+  it('reads at most four bodies at once and starts the next as one lands', async () => {
+    const many: ChatArtifactSummary[] = Array.from({ length: 6 }, (_, i) => ({
+      id: `m${i}`,
+      title: `Card ${i}`,
+      type: 'code',
+      createdAt: `2026-0${i + 1}-01T00:00:00.000Z`,
+    }));
+    listArtifacts.mockResolvedValue({ artifacts: many, total: 6 });
+    const settle: Array<() => void> = [];
+    readArtifact.mockImplementation(
+      id =>
+        new Promise(resolve => settle.push(() => resolve({ artifact: { id, type: 'code', title: id, content: id } })))
+    );
+    await mount();
+    await bringNear(allByTestId('artifact-library-card'));
+    expect(readArtifact).toHaveBeenCalledTimes(4);
+
+    await act(async () => settle[0]());
+    expect(readArtifact).toHaveBeenCalledTimes(5);
+  });
+
+  it('opens a card to fill the panel, and goes back to the grid on the cards it left', async () => {
     readArtifact.mockResolvedValue({ artifact: { id: 'a2', type: 'code', title: 'Alpha flow', content: 'body' } });
     await mount();
-    await click(allByTestId('artifact-library-row-summary')[1] ?? null);
-    expect(readArtifact).toHaveBeenCalledWith('a2');
+    await click(allByTestId('artifact-library-card')[1] ?? null);
 
-    await click(byTestId('artifact-library-filter-html-chip'));
-    expect(byTestId('artifact-library-row-detail')).toBeNull();
-    await click(byTestId('artifact-library-filter-html-chip'));
-    expect(byTestId('artifact-library-row-description')?.textContent).toBe('Login steps');
+    expect(readArtifact).toHaveBeenCalledWith('a2');
+    expect(byTestId('artifact-library-grid')).toBeNull();
+    expect(byTestId('artifact-library-detail-title')?.textContent).toBe('Alpha flow');
+    expect(byTestId('artifact-library-detail-description')?.textContent).toBe('Login steps');
+    expect(byTestId('chat-artifact-card')).not.toBeNull();
+    expect(document.activeElement).toBe(byTestId('artifact-library-detail-back-btn'));
+
+    await click(byTestId('artifact-library-detail-back-btn'));
+    expect(byTestId('artifact-library-detail')).toBeNull();
+    expect(titles()).toHaveLength(3);
+    expect(document.activeElement?.getAttribute('data-artifact-id')).toBe('a2');
+
+    // Opened again from what it already fetched.
+    await click(allByTestId('artifact-library-card')[1] ?? null);
     expect(readArtifact).toHaveBeenCalledTimes(1);
   });
 
-  it('shows a row-level error when a body cannot be read', async () => {
-    readArtifact.mockResolvedValue({ error: 'Gone.' });
+  it('goes back to the grid on Escape', async () => {
+    readArtifact.mockResolvedValue({ artifact: { id: 'a3', type: 'code', title: 'Gamma page', content: 'body' } });
     await mount();
-    await click(allByTestId('artifact-library-row-summary')[0] ?? null);
-    expect(byTestId('artifact-library-row-error')?.textContent).toBe('Gone.');
+    await click(allByTestId('artifact-library-card')[0] ?? null);
+    expect(byTestId('artifact-library-detail')).not.toBeNull();
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    });
+    expect(byTestId('artifact-library-detail')).toBeNull();
+  });
+
+  it('shows an opened card that cannot be read, with a retry', async () => {
+    readArtifact.mockResolvedValueOnce({ error: 'Gone.' });
+    await mount();
+    await click(allByTestId('artifact-library-card')[0] ?? null);
+    expect(byTestId('artifact-library-detail-error')?.textContent).toContain('Gone.');
+
+    readArtifact.mockResolvedValueOnce({ artifact: { id: 'a3', type: 'code', title: 'Gamma page', content: 'body' } });
+    await click(byTestId('artifact-library-detail-retry-btn'));
+    expect(readArtifact).toHaveBeenCalledTimes(2);
+    expect(byTestId('chat-artifact-card')).not.toBeNull();
   });
 });
