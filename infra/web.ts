@@ -29,6 +29,7 @@ import {
 } from './emailIngestion';
 import { eventBus } from './eventBus';
 import { mcpHandler } from './mcp';
+import { providerFederation } from './providerFederation';
 import {
   fabFileChunkQueue,
   fabFileVectorizeQueue,
@@ -424,6 +425,7 @@ export const web = new sst.aws.Nextjs(
           $interpolate`arn:aws:logs:us-east-1:${aws.getCallerIdentityOutput().accountId}:log-group:aws-waf-logs-bike4mind-*`,
         ],
       },
+      ...providerFederation.permissions,
     ],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
@@ -539,6 +541,7 @@ export const web = new sst.aws.Nextjs(
       // checks. A typo or a stale value after a domain change costs more than
       // leaving it unset. Verify `_ga` is present on the serving host after setting.
       ...(process.env.GA_COOKIE_DOMAIN ? { NEXT_PUBLIC_GA_COOKIE_DOMAIN: process.env.GA_COOKIE_DOMAIN } : {}),
+      ...providerFederation.environment,
     },
     // warm pings invoke the handler, keeping the lazy OpenNext bundle resident — the lever for
     // the #8985 cold-open tail (provisioned concurrency only pre-runs the ~165ms init, not the
