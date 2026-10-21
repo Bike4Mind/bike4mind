@@ -16,12 +16,14 @@ import { escape } from 'html-escaper';
 
 const CreateReferralRequestSchema = z.object({
   userName: z.string(),
-  friendEmail: z.array(z.string().email()),
+  friendEmail: z.array(z.string().email()).min(1),
   emailTitle: z.string(),
   emailBody: z.string(),
   tags: z.array(z.string()).optional(),
 });
 
+// Attaches a rejection handler at creation. Deliveries start mid-loop while the loop keeps
+// running, so an unobserved promise that rejects early would surface as an unhandled rejection.
 const observeOperation = async (operation: Promise<unknown>): Promise<PromiseSettledResult<unknown>> => {
   const [outcome] = await Promise.allSettled([operation]);
   return outcome;
@@ -73,7 +75,7 @@ const handler = baseApi().post(
     const logoUrl = getLogoUrl();
 
     const notificationPromises: Promise<PromiseSettledResult<unknown>>[] = [];
-    const emailPromises: Promise<PromiseSettledResult<unknown>>[] = [];
+    const emailPromises: { target: string; outcome: Promise<PromiseSettledResult<unknown>> }[] = [];
     const slackErrorMessages: string[] = [];
 
     // `sent` tracks genuine sends for the analytics counter; the caller instead sees
@@ -166,15 +168,16 @@ const handler = baseApi().post(
         // Queue the invite email; sent in a batch after the loop.
         if (getSettingsValue('EnableReferralToEmail', settings)) {
           console.log(emailBody, 'QQQ: Sending email to', target, `with body ${finalBody}`);
-          emailPromises.push(
-            observeOperation(
+          emailPromises.push({
+            target,
+            outcome: observeOperation(
               EmailEvents.Send.publish({
                 to: target,
                 subject: emailTitle,
                 body: finalBody,
               })
-            )
-          );
+            ),
+          });
         }
 
         sent.push(target);
@@ -187,14 +190,36 @@ const handler = baseApi().post(
       }
     }
 
-    // All started deliveries are observed even when persistence or another delivery fails.
-    const outcomes = await Promise.all([
-      observeOperation(userRepository.settleReferrals(userId, refundCount, newInviteIds)),
-      ...notificationPromises,
-      ...emailPromises,
-    ]);
-    const failure = outcomes.find(outcome => outcome.status === 'rejected');
-    if (failure?.status === 'rejected') throw failure.reason;
+    // Settle before deciding the outcome, then await every delivery that already started. A
+    // settle failure is the only one that fails the request: the reservation has been charged
+    // and the caller must know. A delivery failure does not - the invite exists and the charge
+    // stands, so a 5xx would only invite a retry that charges the same addresses again.
+    const settlement = await observeOperation(userRepository.settleReferrals(userId, refundCount, newInviteIds));
+    const emailOutcomes = await Promise.all(emailPromises.map(delivery => delivery.outcome));
+    await Promise.all(notificationPromises);
+
+    if (settlement.status === 'rejected') {
+      // The refund and invite ids never reached the user document; record them for repair.
+      console.error('Referral settlement failed', {
+        userId,
+        refundCount,
+        newInviteIds,
+        error: settlement.reason,
+      });
+      throw settlement.reason;
+    }
+
+    emailPromises.forEach((delivery, index) => {
+      const outcome = emailOutcomes[index];
+      if (outcome.status !== 'rejected') return;
+      const reason: unknown = outcome.reason;
+      const errorMessage = `Failed to deliver referral email to ${delivery.target}: ${
+        reason instanceof Error ? reason.message : reason
+      }`;
+      console.error(errorMessage);
+      slackErrorMessages.push(errorMessage);
+      failed.push(delivery.target);
+    });
 
     // Send accumulated error/skip messages to Slack as one batch.
     if (slackErrorMessages.length > 0) {
@@ -207,13 +232,15 @@ const handler = baseApi().post(
     // reservation includes skips, keeping the remaining quota free of the same signal.
     const failedSet = new Set(failed);
     const accepted = friendEmail.filter(email => !failedSet.has(email));
+    // `sent` gains a target before its delivery resolves, so a later email failure removes it.
+    const delivered = sent.filter(email => !failedSet.has(email));
 
     await logEvent(
       {
         userId,
         type: RegInviteEvents.REFER_REGINVITE,
-        counterValue: sent.length,
-        metadata: { ids: user.regInvites, referredEmails: sent },
+        counterValue: delivered.length,
+        metadata: { ids: user.regInvites, referredEmails: delivered },
       },
       { ability: req.ability }
     );

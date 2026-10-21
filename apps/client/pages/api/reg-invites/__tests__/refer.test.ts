@@ -48,6 +48,7 @@ vi.mock('@bike4mind/utils', () => ({
 }));
 
 import { getSettingsValue } from '@bike4mind/utils';
+import { createRegInvite } from '@server/managers/regInviteManager';
 import handler from '@pages/api/reg-invites/refer';
 
 function invokeHandler(req: unknown, res: unknown) {
@@ -224,28 +225,47 @@ describe('/api/reg-invites/refer - quota reservation', () => {
     expect(res._getJSONData()).toMatchObject({ sent: [], failed: ['friend@example.com'] });
   });
 
-  it('retains quota and records the invite when async email publication fails', async () => {
+  it('retains quota and reports an async email failure as failed instead of erroring', async () => {
     vi.mocked(getSettingsValue).mockImplementation(key => key === 'EnableReferralToEmail');
     mockEmailPublish.mockRejectedValueOnce(new Error('publish failed'));
     const { req, res } = makeReqRes({ id: 'user-1', emailVerified: true });
-    await expect(invokeHandler(req, res)).rejects.toThrow('publish failed');
+    await invokeHandler(req, res);
+    // The invite exists and the charge stands, so a retry must not be invited by a 5xx.
+    expect(res._getStatusCode()).toBe(201);
+    expect(res._getJSONData()).toMatchObject({ sent: [], failed: ['friend@example.com'] });
     expect(mockSettleReferrals).toHaveBeenCalledWith('user-1', 0, ['invite-1']);
   });
 
-  it('finishes settlement before reporting an async delivery failure', async () => {
+  it('awaits in-flight deliveries before responding', async () => {
     vi.mocked(getSettingsValue).mockImplementation(key => key === 'EnableReferralToEmail');
-    const error = new Error('publish failed');
-    mockEmailPublish.mockRejectedValueOnce(error);
-    const settlement = Promise.withResolvers<void>();
-    mockSettleReferrals.mockReturnValueOnce(settlement.promise);
+    const delivery = Promise.withResolvers<void>();
+    mockEmailPublish.mockReturnValueOnce(delivery.promise);
+    const { req, res } = makeReqRes({ id: 'user-1', emailVerified: true });
+    let finished = false;
+    const request = invokeHandler(req, res).finally(() => {
+      finished = true;
+    });
+    await vi.waitFor(() => expect(mockSettleReferrals).toHaveBeenCalled());
+    expect(finished).toBe(false);
+    delivery.resolve();
+    await request;
+    expect(res._getStatusCode()).toBe(201);
+  });
+
+  it('fails the request when settlement fails, after started deliveries finish', async () => {
+    vi.mocked(getSettingsValue).mockImplementation(key => key === 'EnableReferralToEmail');
+    const delivery = Promise.withResolvers<void>();
+    mockEmailPublish.mockReturnValueOnce(delivery.promise);
+    const dbError = new Error('settle failed');
+    mockSettleReferrals.mockRejectedValueOnce(dbError);
     const { req, res } = makeReqRes({ id: 'user-1', emailVerified: true });
     const rejected = vi.fn();
     const request = invokeHandler(req, res).catch(rejected);
     await vi.waitFor(() => expect(mockSettleReferrals).toHaveBeenCalled());
     expect(rejected).not.toHaveBeenCalled();
-    settlement.resolve();
+    delivery.resolve();
     await request;
-    expect(rejected).toHaveBeenCalledWith(error);
+    expect(rejected).toHaveBeenCalledWith(dbError);
   });
 
   it('retains quota if publication throws synchronously after minting', async () => {
@@ -257,5 +277,36 @@ describe('/api/reg-invites/refer - quota reservation', () => {
     await invokeHandler(req, res);
     expect(mockSettleReferrals).toHaveBeenCalledWith('user-1', 0, ['invite-1']);
     expect(res._getJSONData()).toMatchObject({ failed: ['friend@example.com'] });
+  });
+});
+
+describe('/api/reg-invites/refer - reusing an existing invite', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockReserveReferrals.mockResolvedValue(true);
+    vi.mocked(getSettingsValue).mockReturnValue(false);
+    process.env.APP_URL = 'https://app.test.local';
+  });
+
+  it('sends through the existing invite without minting or refunding one', async () => {
+    mockInviteFindOne.mockResolvedValue({ code: 'EXIST' });
+    const { req, res } = makeReqRes({ id: 'user-1', emailVerified: true });
+    await invokeHandler(req, res);
+    expect(createRegInvite).not.toHaveBeenCalled();
+    expect(mockSettleReferrals).toHaveBeenCalledWith('user-1', 0, []);
+    expect(res._getStatusCode()).toBe(201);
+    expect(res._getJSONData()).toMatchObject({ sent: ['friend@example.com'], failed: [] });
+  });
+
+  it('retains the charge when the existing invite fails to send', async () => {
+    mockInviteFindOne.mockResolvedValue({ code: 'EXIST' });
+    vi.mocked(getSettingsValue).mockImplementation(key => key === 'EnableReferralToEmail');
+    mockEmailPublish.mockImplementationOnce(() => {
+      throw new Error('publish failed');
+    });
+    const { req, res } = makeReqRes({ id: 'user-1', emailVerified: true });
+    await invokeHandler(req, res);
+    expect(mockSettleReferrals).toHaveBeenCalledWith('user-1', 0, []);
+    expect(res._getJSONData()).toMatchObject({ sent: [], failed: ['friend@example.com'] });
   });
 });
