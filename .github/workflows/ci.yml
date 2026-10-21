@@ -544,6 +544,11 @@ jobs:
             filter: '--filter @bike4mind/workers'
             workers: '2'
             script: 'test:integration'
+          # Same split for packages/server-utils' real-Mongo suites. See its vitest.config.mts.
+          - name: server-utils-integration
+            filter: '--filter @bike4mind/server-utils'
+            workers: '2'
+            script: 'test:integration'
           - name: services
             filter: '--filter @bike4mind/services'
             workers: ''
