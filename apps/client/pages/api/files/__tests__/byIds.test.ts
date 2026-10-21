@@ -43,7 +43,7 @@ vi.mock('@server/dataLakes', () => ({
   resolveAccessibleLakes: (...args: unknown[]) => resolveAccessibleLakes(...args),
   grantingLakes: (...args: unknown[]) => grantingLakes(...args),
 }));
-vi.mock('@server/dataLakes/resolveAuditPrincipal', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/resolveAuditPrincipal', () => ({
   resolveAuditPrincipal: (user: { id: string }) => ({ principalKind: 'user', principalId: user.id }),
 }));
 

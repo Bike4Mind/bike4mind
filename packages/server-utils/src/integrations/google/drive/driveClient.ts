@@ -1,6 +1,6 @@
 import { Logger } from '@bike4mind/observability';
 import { auth as googleAuth, drive as driveApi, drive_v3 } from '@googleapis/drive';
-import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError } from '../../../utils/errors';
 
 export type DriveFile = {
   id: string;

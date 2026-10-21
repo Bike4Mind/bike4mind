@@ -6,7 +6,7 @@ import { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
 import { z } from 'zod';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
-import { emitModalGenerationMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
+import { emitModalGenerationMetrics } from '../utils/cloudwatch';
 import { WHATS_NEW_DEFAULT_REPOSITORY } from '@bike4mind/common';
 
 // Configuration constants

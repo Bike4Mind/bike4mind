@@ -19,8 +19,8 @@ import {
 } from '@bike4mind/common';
 import { adminSettingsRepository, cacheRepository, sreErrorTrackingRepository } from '@bike4mind/database';
 import { createHash } from 'crypto';
-import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
-import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
+import { getSourceQueueUrl } from '../../utils/dlqRegistry';
+import { sendToQueue } from '../../utils/sqs';
 import { z } from 'zod';
 
 /** Dedup window for fingerprint-based dispatch dedup (1 hour, matches delivery-level dedup). */

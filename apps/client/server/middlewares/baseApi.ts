@@ -1,5 +1,5 @@
 import { authMiddleware, auth } from '@server/auth/auth';
-import { registerToolGearObserver } from '@server/services/gears/toolGearObserver';
+import { registerToolGearObserver } from '@bike4mind/server-utils/services/gears/toolGearObserver';
 import { logging } from '@server/middlewares/logging';
 import errorHandler from '@server/middlewares/errorHandler';
 import { apiKeyAuth } from '@server/middlewares/apiKeyAuth';

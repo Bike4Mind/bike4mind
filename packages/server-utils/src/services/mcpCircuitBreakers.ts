@@ -5,7 +5,7 @@ import {
   type CircuitBreakerSnapshot,
 } from '@bike4mind/utils';
 import { isAxiosError } from 'axios';
-import { recordCircuitBreakerTransition } from '@bike4mind/server-utils/utils/cloudwatch';
+import { recordCircuitBreakerTransition } from '../utils/cloudwatch';
 
 export type OperationType = 'read' | 'write';
 

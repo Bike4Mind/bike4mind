@@ -25,7 +25,7 @@ vi.mock('@server/auth/oauthFlowCookie', () => ({
   clearStateNonce: vi.fn(),
 }));
 
-vi.mock('@server/integrations/integrationAuditLogger', () => ({
+vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
   IntegrationAuditLogger: { create: () => ({ setUserId: vi.fn(), success: vi.fn(), failure: vi.fn() }) },
 }));
 

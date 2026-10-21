@@ -1,7 +1,11 @@
 import { dataLakeRepository, fabFileRepository } from '@bike4mind/database';
 import type { RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import { resolveEffectiveEmbeddingModel } from '@bike4mind/server-utils/embeddings/effectiveEmbeddingModel';
-import { recallLakeMemory, type AccessibleLake, type LakeBeliefRecall } from './recallLakeMemory';
+import {
+  recallLakeMemory,
+  type AccessibleLake,
+  type LakeBeliefRecall,
+} from '@bike4mind/server-utils/memory/recallLakeMemory';
 import {
   createReachableSourcesResolver,
   createLakeMemberSourcesResolver,

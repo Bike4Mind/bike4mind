@@ -27,7 +27,7 @@ import {
 } from '@bike4mind/utils';
 import { logEvent } from '@server/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
-import { reserveVoiceHold, settlePriorVoiceHold } from '@server/voice/settleVoiceHold';
+import { reserveVoiceHold, settlePriorVoiceHold } from '@bike4mind/server-utils/voice/settleVoiceHold';
 import {
   REALTIME_VOICE_RESERVE_USD,
   REALTIME_VOICE_HOLD_SECONDS,

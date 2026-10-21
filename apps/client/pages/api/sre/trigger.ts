@@ -17,7 +17,7 @@ import {
   computeIssueFingerprint,
   type SreIssuePayload,
   type SreDispatchResult,
-} from '@server/integrations/github/sreWebhookDispatch';
+} from '@bike4mind/server-utils/integrations/github/sreWebhookDispatch';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
 

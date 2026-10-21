@@ -14,8 +14,8 @@ import {
   type EvidenceTier,
   type Principal,
 } from '@bike4mind/memory';
-import { appendMemoryEvent, createLedgerMemoryStore } from '@bike4mind/server-utils/memory/ledgerMemoryStore';
-import { createKeyProvider } from '@bike4mind/server-utils/memory/factCipher';
+import { appendMemoryEvent, createLedgerMemoryStore } from './ledgerMemoryStore';
+import { createKeyProvider } from './factCipher';
 
 /**
  * The Mementos V2 WRITE seam.

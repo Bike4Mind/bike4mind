@@ -21,7 +21,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
   getSettingsMap: vi.fn(async () => h.settings),
 }));
-vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({ delete: h.deleteObject }) }));
+vi.mock('../utils/storage/index', () => ({ getFilesStorage: () => ({ delete: h.deleteObject }) }));
 
 import { admitLandedUpload, judgeLandedUpload, rejectLandedUpload, type LandedUploadRow } from './uploadSizeGate';
 

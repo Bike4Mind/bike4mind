@@ -1,8 +1,8 @@
 import { Octokit } from '@octokit/rest';
 import { createAppAuth } from '@octokit/auth-app';
 import { parseRateLimitHeaders, resolveRetryAfterDelayMs } from '@bike4mind/common';
-import { Config } from '@bike4mind/server-utils/utils/config';
-import type { GitHubTreeEntry } from '@bike4mind/server-utils/integrations/github/dataLake/lakeFileFilter';
+import { Config } from '../../../utils/config';
+import type { GitHubTreeEntry } from './lakeFileFilter';
 
 /**
  * Thin client for the read-only data-lake GitHub App (see infra/secrets.ts GITHUB_LAKE_APP_*).

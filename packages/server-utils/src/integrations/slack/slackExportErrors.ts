@@ -5,7 +5,7 @@
  * This file only contains createSlackExportError which depends on server-specific BadRequestError.
  */
 
-import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError } from '../../utils/errors';
 import {
   isSlackUserValidationError,
   SLACK_USER_VALIDATION_ERRORS,

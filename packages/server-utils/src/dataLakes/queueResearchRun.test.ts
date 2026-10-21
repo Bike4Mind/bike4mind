@@ -7,7 +7,7 @@ const h = vi.hoisted(() => ({
   recordResearchRunOutcome: vi.fn(),
 }));
 
-vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
+vi.mock('../utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('@bike4mind/database', () => ({
   dataLakeResearchRunRepository: { settleQueuedRun: h.settleQueuedRun },
   lakeConfigChangeEventRepository: {},

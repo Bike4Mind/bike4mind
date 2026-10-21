@@ -42,7 +42,7 @@ vi.mock('@server/utils/cacheExternalImage', () => ({
   cacheExternalImages: vi.fn(async (images: unknown[]) => images),
 }));
 
-vi.mock('@server/services/whatsNewDistribution', () => ({
+vi.mock('@bike4mind/server-utils/services/whatsNewDistribution', () => ({
   WhatsNewDistributionService: {
     updateExistingModal: vi.fn(async (...args: unknown[]) => {
       mockRefs.updateExistingModalCall = args;

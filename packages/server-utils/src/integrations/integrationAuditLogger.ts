@@ -7,7 +7,7 @@ import {
 } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import type { IncomingMessage } from 'http';
-import { getClientIp } from '@bike4mind/server-utils/utils/ip';
+import { getClientIp } from '../utils/ip';
 
 /**
  * Fields to redact from metadata for security (tokens, secrets, etc.)

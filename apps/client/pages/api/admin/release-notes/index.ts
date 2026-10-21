@@ -4,11 +4,8 @@ import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { decodeTimeIdCursor, encodeTimeIdCursor } from '@server/utils/cursorPagination';
 import { ForbiddenError, UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
-import {
-  isReleaseNotesWriteOnlyKey,
-  loadReleaseNotesConfig,
-  toAdminReleaseNote,
-} from '@server/releaseNotes/adminReleaseNotes';
+import { loadReleaseNotesConfig, toAdminReleaseNote } from '@bike4mind/server-utils/releaseNotes/adminReleaseNotes';
+import { isReleaseNotesWriteOnlyKey } from '@server/releaseNotes/releaseNotesWriteOnlyKey';
 
 const QuerySchema = z.object({
   status: z.enum(['scheduled', 'published', 'hidden']).default('scheduled'),

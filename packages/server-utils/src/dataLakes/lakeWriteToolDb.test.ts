@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { memoryLedgerRepository, lakeMembershipRemovalRepository } from '@bike4mind/database';
-import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
-import { lakeMembershipAuditDb } from '@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb';
-import { lakeWriteToolDb } from '@server/dataLakes/lakeWriteToolDb';
+import { lakeConfigAuditDb } from './lakeConfigAuditDb';
+import { lakeMembershipAuditDb } from './lakeMembershipAuditDb';
+import { lakeWriteToolDb } from './lakeWriteToolDb';
 
 describe('lakeWriteToolDb', () => {
   it('carries the real removal and audit repositories', () => {

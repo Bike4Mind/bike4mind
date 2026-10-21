@@ -1,4 +1,4 @@
-import type { ModalForHighlights } from '@bike4mind/server-utils/whatsNew/whatsNewHighlights.types';
+import type { ModalForHighlights } from './whatsNewHighlights.types';
 
 /**
  * Template variables available for custom prompt templates

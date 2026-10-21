@@ -1,5 +1,5 @@
-import { GENERATED_AUDIO_OFFLOAD_PREFIX } from '@bike4mind/server-utils/utils/generatedAudioOffloadPrefix';
-import { TEXT_EDIT_BACKUP_PREFIX } from '@bike4mind/server-utils/utils/textEditBackupPrefix';
+import { GENERATED_AUDIO_OFFLOAD_PREFIX } from '../utils/generatedAudioOffloadPrefix';
+import { TEXT_EDIT_BACKUP_PREFIX } from '../utils/textEditBackupPrefix';
 
 /** Fab-file bucket keys written without a FabFile row, skipped by both object-created paths before the lookup. */
 export const isUntrackedFabFileKey = (key: string): boolean =>

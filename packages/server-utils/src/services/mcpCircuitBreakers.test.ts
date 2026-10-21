@@ -9,7 +9,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { recordCircuitBreakerTransition } from '@bike4mind/server-utils/utils/cloudwatch';
 
 // Mock CloudWatch to avoid real AWS calls
-vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
+vi.mock('../utils/cloudwatch', () => ({
   recordCircuitBreakerTransition: vi.fn().mockResolvedValue(undefined),
   recordCircuitBreakerRejection: vi.fn().mockResolvedValue(undefined),
 }));

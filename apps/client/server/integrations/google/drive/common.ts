@@ -8,8 +8,11 @@ import { encryptToken, decryptToken } from '@server/security/tokenEncryption';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { createStateToken } from '@server/auth/jwtStateStore';
 import { issueStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
-import { DRIVE_RECONNECT_REQUIRED_MESSAGE } from '@server/integrations/google/drive/driveClient';
-import { isInvalidGrantError, isTerminalDriveGrantError } from '@server/integrations/google/drive/driveGrantErrors';
+import { DRIVE_RECONNECT_REQUIRED_MESSAGE } from '@bike4mind/server-utils/integrations/google/drive/driveClient';
+import {
+  isInvalidGrantError,
+  isTerminalDriveGrantError,
+} from '@bike4mind/server-utils/integrations/google/drive/driveGrantErrors';
 
 export { isInvalidGrantError, isTerminalDriveGrantError };
 

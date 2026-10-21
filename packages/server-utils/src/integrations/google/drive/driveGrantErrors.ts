@@ -1,4 +1,4 @@
-import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError } from '../../../utils/errors';
 
 // Kept apart from common.ts, which reads Config at import: test suites that mock common.ts reuse
 // these real predicates (vi.importActual) instead of hand-copying them.

@@ -1,10 +1,7 @@
 import { VIDEO_MODEL_IDS } from '@bike4mind/common';
 import { createVideoJob, type CreateVideoJobDeps } from '@bike4mind/services/videoJobs';
 import type { VideoToolConfig } from '@bike4mind/services/llm/tools';
-import {
-  listUsableVideoModels,
-  type VideoModelAvailabilityDeps,
-} from '@bike4mind/server-utils/videoGenerations/listUsableVideoModels';
+import { listUsableVideoModels, type VideoModelAvailabilityDeps } from './listUsableVideoModels';
 
 type BuildVideoToolConfigDeps = {
   availability: VideoModelAvailabilityDeps;

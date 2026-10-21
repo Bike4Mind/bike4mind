@@ -4,7 +4,7 @@ import type { MongoMemoryServer } from 'mongodb-memory-server';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { OrgGitHubLakeConnection, OrgGoogleDriveConnection } from '@bike4mind/database';
-import { ConflictError } from '@bike4mind/server-utils/utils/errors';
+import { ConflictError } from '../utils/errors';
 import { assertLakeConnectorFree } from './assertLakeConnectorFree';
 
 /**

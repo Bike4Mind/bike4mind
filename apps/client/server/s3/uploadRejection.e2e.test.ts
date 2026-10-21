@@ -4,7 +4,7 @@ import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { FabFile, DataLakeBatchModel, dataLakeBatchRepository } from '@bike4mind/database';
 import { KnowledgeType } from '@bike4mind/common';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
-import { admitLandedUpload, rejectLandedUpload } from './uploadSizeGate';
+import { admitLandedUpload, rejectLandedUpload } from '@bike4mind/server-utils/s3/uploadSizeGate';
 import { recordRejectedUploadBatch } from './recordRejectedUploadBatch';
 
 const h = vi.hoisted(() => ({ deleteObject: vi.fn(), sendToClient: vi.fn(), finalize: vi.fn() }));

@@ -52,7 +52,7 @@ vi.mock('@server/utils/orgAccess', () => ({
   verifyOrgAccess: h.verifyOrgAccess,
   verifyOrgAdminRead: h.verifyOrgAdminRead,
 }));
-vi.mock('@server/integrations/github/dataLake/lakeAppClient', () => ({
+vi.mock('@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient', () => ({
   getGitHubLakeAppConfig: h.getGitHubLakeAppConfig,
 }));
 vi.mock('@server/integrations/github/dataLake/githubLakeConnection', () => ({

@@ -26,7 +26,7 @@ initializeSlackPackage();
 import { NextApiRequest, NextApiResponse } from 'next';
 import { randomUUID } from 'crypto';
 import { Logger } from '@bike4mind/observability';
-import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
+import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
 import {
   // Entity types
   IJiraWebhookSubscriptionDocument,
