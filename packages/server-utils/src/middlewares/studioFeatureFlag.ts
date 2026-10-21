@@ -1,6 +1,6 @@
 import { STUDIO_FEATURE_FLAGS, isStudioFeatureOpen, type StudioFeature } from '@bike4mind/common';
 import type { RequestHandler } from 'express';
-import { isFeatureEnabled } from './featureFlag';
+import { isFeatureEnabled, requireFeature } from './featureFlag';
 
 type StudioViewer = { isAdmin?: boolean } | null | undefined;
 
@@ -20,21 +20,9 @@ export async function isStudioFeatureEnabled(feature: StudioFeature, user: Studi
  * body requireFeatureEnabled sends, both when the flag is off and when the caller is not an admin, so the
  * response does not reveal which one it was.
  */
-export const requireStudioFeature =
-  (feature: StudioFeature): RequestHandler =>
-  async (req, res, next) => {
-    // The Request augmentations that declare user and requestId live in apps/client/global.d.ts,
-    // outside this package.
-    const { user, requestId } = req as { user?: StudioViewer; requestId?: string };
-    try {
-      if (!(await isStudioFeatureEnabled(feature, user))) {
-        return res
-          .status(403)
-          .json({ error: 'Feature not available', code: 'FEATURE_DISABLED', request_id: requestId });
-      }
-      next();
-    } catch (error) {
-      console.error(`Error checking Studio feature ${feature}:`, error);
-      return res.status(500).json({ error: 'Unable to verify feature access', request_id: requestId });
-    }
-  };
+export const requireStudioFeature = (feature: StudioFeature): RequestHandler =>
+  requireFeature(
+    // The Request augmentation that declares user lives in apps/client/global.d.ts, outside this package.
+    req => isStudioFeatureEnabled(feature, (req as { user?: StudioViewer }).user),
+    `Studio feature ${feature}`
+  );
