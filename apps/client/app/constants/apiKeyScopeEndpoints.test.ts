@@ -194,15 +194,24 @@ const PAGE_EXTENSIONS = ['.ts', '.tsx'];
 
 /**
  * Whether `source` serves `method`: a handler chain link (`).post(`, `}).get<T>(`), a `req.method`
- * comparison ('POST'), or a handler bound to a variable (`const api = baseApi(...); api.get(`).
- * Chain links anchor on the `)` they follow, so `Promise.all(` and `headers.get(` do not.
+ * check (`req.method !== 'POST'`, `case 'POST'` under `switch (req.method)`, `[..].includes(req.method)`),
+ * or a handler bound to a variable (`const api = baseApi(...); api.get(`). Chain links anchor on the
+ * `)` they follow, so `Promise.all(` and `headers.get(` do not, and a bare `'POST'` (an outbound
+ * fetch's `method`) is not a check.
  */
 function servesVerb(source: string, method: string): boolean {
   const lower = method.toLowerCase();
   const bound = [...source.matchAll(/\bconst (\w+)\s*=\s*baseApi\(/g)].map(
     m => `\\b${m[1]}\\s*\\.(${lower}|all)\\s*[<(]`
   );
-  return new RegExp([`\\)\\s*\\.(${lower}|all)\\s*[<(]`, `['"]${method}['"]`, ...bound].join('|')).test(source);
+  const verb = `['"]${method}['"]`;
+  const methodChecks = [
+    String.raw`\breq\.method\s*[!=]==?\s*${verb}`,
+    String.raw`${verb}\s*[!=]==?\s*req\.method\b`,
+    String.raw`\bswitch\s*\(\s*req\.method\s*\)[\s\S]*?\bcase\s+${verb}`,
+    String.raw`\[[^[\]]*${verb}[^[\]]*\]\.includes\(\s*req\.method\b`,
+  ];
+  return new RegExp([`\\)\\s*\\.(${lower}|all)\\s*[<(]`, ...methodChecks, ...bound].join('|')).test(source);
 }
 
 /** The pages/ file that serves `routePath`, preferring a literal segment over a dynamic one. */
@@ -315,6 +324,13 @@ describe('apiKeyScopes endpoint claims', () => {
   it('finds no export name shared by two scope modules, which would shadow one gate list', () => {
     const names = SCOPE_MODULES.flatMap(m => Object.keys(m));
     expect(names.filter((name, i) => names.indexOf(name) !== i)).toEqual([]);
+  });
+
+  it('serves a verb a req.method check names, not one an outbound call names', () => {
+    expect(servesVerb("if (req.method !== 'POST') return res.status(405).end();", 'POST')).toBe(true);
+    expect(servesVerb("switch (req.method) {\n  case 'PUT':\n    break;\n}", 'PUT')).toBe(true);
+    expect(servesVerb("if (!['GET', 'HEAD'].includes(req.method)) return;", 'GET')).toBe(true);
+    expect(servesVerb("await fetch(url, { method: 'POST', body });", 'POST')).toBe(false);
   });
 
   it('parses every endpoint entry, or it is prose that names no /api/ path', () => {
