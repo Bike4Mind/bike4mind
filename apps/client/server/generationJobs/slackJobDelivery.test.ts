@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { IGenerationJobDocument } from '@bike4mind/common';
+import { GENERATION_JOB_ERROR_CODES, type IGenerationJobDocument } from '@bike4mind/common';
 import {
   deliverJobToSlack,
   SCAN_WAIT_ATTEMPTS,
@@ -91,8 +91,8 @@ describe('deliverJobToSlack', () => {
     );
   });
 
-  it('tells the user when neither the upload nor a link can be produced', async () => {
-    const { poster, deps } = build({ uploadFile: vi.fn().mockResolvedValue({ success: false }) });
+  it('falls back to the could-not-post message when the moderation gate throws', async () => {
+    const { poster, deps } = build();
     vi.mocked(deps.signOutputUrl).mockRejectedValue(new Error('no signer'));
     await deliverJobToSlack(job(), deps);
     expect(poster.sendMessage).toHaveBeenCalledWith(
@@ -155,18 +155,22 @@ describe('deliverJobToSlack', () => {
     expect(poster.uploadFile).not.toHaveBeenCalled();
   });
 
-  it("never posts the job's own error text into the thread", async () => {
-    const { poster, deps } = build();
-    const leaky = 'connect ECONNREFUSED 10.0.0.1:443 <!channel> No API key configured for veo';
-    await deliverJobToSlack(
-      job({ state: 'failed', payload: {}, error: { code: 'provider_error', message: leaky } }),
-      deps
-    );
-    const { text } = vi.mocked(poster.sendMessage).mock.calls[0][0];
-    expect(text).not.toContain('ECONNREFUSED');
-    expect(text).not.toContain('<!channel>');
-    expect(text).not.toContain('veo');
-  });
+  it.each([...GENERATION_JOB_ERROR_CODES, undefined])(
+    "never posts the job's own error text into the thread (error code %s)",
+    async code => {
+      const { poster, deps } = build();
+      const leaky = 'connect ECONNREFUSED 10.0.0.1:443 <!channel> No API key configured for veo';
+      await deliverJobToSlack(
+        job({ state: 'failed', payload: {}, ...(code && { error: { code, message: leaky } }) }),
+        deps
+      );
+      const { text } = vi.mocked(poster.sendMessage).mock.calls[0][0];
+      expect(text).toMatch(/^Video generation failed/);
+      expect(text).not.toContain('ECONNREFUSED');
+      expect(text).not.toContain('<!channel>');
+      expect(text).not.toContain('veo');
+    }
+  );
 
   it('does not promise a link lifetime', async () => {
     const { poster, deps } = build();
