@@ -105,6 +105,25 @@ describe('SkillCatalog project trust', () => {
     expect((await store.forModel(project)).some(command => command.name === 'private-notes')).toBe(false);
   });
 
+  it('offers a skill folder once, never its supporting docs, to the picker and the skill tool alike', async () => {
+    const skillDir = join(project, '.claude', 'skills', 'deploy');
+    await mkdir(join(skillDir, 'references'), { recursive: true });
+    await mkdir(join(skillDir, 'scripts', 'nested'), { recursive: true });
+    await writeFile(join(skillDir, 'references', 'step-1-inspect.md'), '# Step 1', 'utf8');
+    await writeFile(join(skillDir, 'README.md'), '# Readme', 'utf8');
+    await writeFile(join(skillDir, 'scripts', 'nested', 'helper.md'), '# Helper', 'utf8');
+
+    const store = catalog();
+    await store.setTrusted(project, true);
+
+    const picker = (await store.state(project)).skills.filter(skill => skill.source === 'project');
+    const model = (await store.forModel(project)).filter(command => command.source === 'project');
+    expect(picker.map(skill => skill.name)).toEqual(['deploy']);
+    expect(model.map(command => command.name)).toEqual(['deploy']);
+    await expect(store.get(project, 'step-1-inspect')).resolves.toBeUndefined();
+    await expect(store.get(project, 'README')).resolves.toBeUndefined();
+  });
+
   it('moves its revision only when trust changes, so a snapshot keyed on it holds otherwise', async () => {
     const store = catalog();
     const before = store.revision;

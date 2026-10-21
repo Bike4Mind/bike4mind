@@ -178,7 +178,8 @@ export class CustomCommandStore {
   }
 
   /**
-   * Recursively scans a directory for .md files and loads them as commands
+   * Recursively scans a directory for .md files and loads them as commands. A
+   * folder holding SKILL.md yields that one skill; its other Markdown is not a command.
    *
    * @param directory - Directory to scan
    * @param source - Source identifier ('global' or 'project')
@@ -194,6 +195,7 @@ export class CustomCommandStore {
       // target escapes the project root. Global dirs stay unconstrained.
       const commandFiles = await findMarkdownFiles(directory, source === 'project' ? this.projectRoot : undefined, {
         skipHiddenDirectories: true,
+        stopAtSkillFile: true,
       });
 
       for (const filePath of commandFiles) {
