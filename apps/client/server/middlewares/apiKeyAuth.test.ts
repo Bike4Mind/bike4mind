@@ -4,6 +4,7 @@ import {
   ApiKeyScope,
   CreditHolderType,
   ForbiddenError,
+  InternalServerError,
   ServiceUnavailableError,
   UnauthorizedError,
 } from '@bike4mind/common';
@@ -354,7 +355,7 @@ describe('apiKeyAuth infrastructure failures', () => {
     validateUserApiKeyMock.mockRejectedValue(networkError());
     const { error } = await run(undefined, makeReq());
     expect(error).toBeInstanceOf(ServiceUnavailableError);
-    expect(error).not.toBeInstanceOf(UnauthorizedError);
+    expect((error as ServiceUnavailableError).additionalInfo).toMatchObject({ retryAfter: expect.any(Number) });
   });
 
   it('503s when the owner lookup loses its database connection', async () => {
@@ -363,12 +364,15 @@ describe('apiKeyAuth infrastructure failures', () => {
     expect(error).toBeInstanceOf(ServiceUnavailableError);
   });
 
-  it('re-throws any other unexpected error as-is so it surfaces as a 500, not a 401', async () => {
-    const unexpected = new TypeError('boom');
+  it('500s any other unexpected error without echoing its message to the caller', async () => {
+    const unexpected = Object.assign(new Error('Connection pool for db-host:27017 was cleared'), {
+      name: 'MongoServerError',
+    });
     validateUserApiKeyMock.mockRejectedValue(unexpected);
     const req = makeReq();
     const { error } = await run(undefined, req);
-    expect(error).toBe(unexpected);
+    expect(error).toBeInstanceOf(InternalServerError);
+    expect(error?.message).toBe('Authentication failed');
     expect(req.logger.error).toHaveBeenCalledWith('API key authentication error', unexpected);
   });
 
