@@ -7859,6 +7859,28 @@ describe('ChatCompletionProcess', () => {
       expect(await hasViewRegistry([])).toBe(false);
     });
 
+    // sharedPromptPrefix.test.ts hands buildTaggedContextMessages its sources, so it cannot see what
+    // this process puts into them; a per-caller value slipped into a shared source only shows here.
+    it('sends two very different callers the same system stack up to the shareable boundary', async () => {
+      const sharedHead = async (isAdmin: boolean, timezone: string, path: string) => {
+        (service as any).user.isAdmin = isAdmin;
+        const extraContextMessages = [{ role: 'user', content: `[Current View Context]\nPath: ${path}` }];
+        const stack: any[] = (await runWithTools([navigateTool], undefined, { timezone, extraContextMessages }))![1];
+        const boundary = stack.findIndex((m: any) => m.cache === true);
+        expect(boundary).toBeGreaterThanOrEqual(0);
+        return { head: JSON.stringify(stack.slice(0, boundary + 1)), tail: JSON.stringify(stack.slice(boundary + 1)) };
+      };
+      try {
+        const admin = await sharedHead(true, 'Asia/Tokyo', '/admin');
+        const member = await sharedHead(false, 'America/Denver', '/notebook');
+
+        expect(admin.head).toEqual(member.head);
+        expect(admin.tail).not.toEqual(member.tail);
+      } finally {
+        delete (service as any).user.isAdmin;
+      }
+    });
+
     const hasReplyChoices = async (extraBody: Record<string, unknown>) =>
       ((await runWithTools([], undefined, extraBody))?.[1] ?? ([] as any[])).some(
         (m: any) => typeof m?.content === 'string' && m.content === REPLY_CHOICES_GUIDANCE
