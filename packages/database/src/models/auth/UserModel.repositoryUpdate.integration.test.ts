@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import mongoose, { Types } from 'mongoose';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../__test__/createMongoServer';
+import { NotFoundError } from '@bike4mind/utils';
 import { User, userRepository } from './UserModel';
 
 /**
@@ -172,11 +173,38 @@ describe('BaseRepository.update whole-document hazard (via userRepository)', () 
   });
 
   it('rejects invalid counts without changing quota', async () => {
-    const user = await seed();
+    const user = await User.create({
+      username: 'referrer',
+      name: 'R',
+      email: 'r@example.com',
+      numReferralsAvailable: 3,
+    });
     const id = String(user._id);
     for (const count of [-1, 0.5, NaN, Infinity]) {
       await expect(userRepository.reserveReferrals(id, count)).rejects.toThrow('Invalid referral');
       await expect(userRepository.settleReferrals(id, count, [])).rejects.toThrow('Invalid referral');
     }
+    expect((await User.findById(id))!.numReferralsAvailable).toBe(3);
+  });
+
+  it('reports an unknown user instead of silently dropping the write', async () => {
+    const missing = new Types.ObjectId().toString();
+    await expect(userRepository.reserveReferrals(missing, 1)).resolves.toBe(false);
+    await expect(userRepository.settleReferrals(missing, 0, [])).rejects.toThrow(NotFoundError);
+  });
+
+  it('does not duplicate an invite id that settlement already recorded', async () => {
+    const user = await User.create({
+      username: 'referrer',
+      name: 'R',
+      email: 'r@example.com',
+      numReferralsAvailable: 1,
+      regInvites: [],
+    });
+    const id = String(user._id);
+    const invite = new Types.ObjectId().toString();
+    await userRepository.settleReferrals(id, 0, [invite]);
+    await userRepository.settleReferrals(id, 0, [invite]);
+    expect((await User.findById(id))!.regInvites.map(String)).toEqual([invite]);
   });
 });
