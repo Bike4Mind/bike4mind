@@ -741,6 +741,21 @@ function parseSearxngResults(data: unknown, numResults: number): WebSearchProvid
 }
 
 /**
+ * SearXNG lists each upstream engine that did not answer as `[name, reason]` (e.g. a CAPTCHA or
+ * "too many requests"), which is what tells a throttled instance from a query with no hits.
+ */
+function parseSearxngUnresponsiveEngines(data: unknown): { engine: string; reason: string }[] {
+  if (typeof data !== 'object' || data === null) return [];
+  const engines = (data as { unresponsive_engines?: unknown }).unresponsive_engines;
+  if (!Array.isArray(engines)) return [];
+  return engines.flatMap(entry =>
+    Array.isArray(entry) && typeof entry[0] === 'string'
+      ? [{ engine: entry[0], reason: typeof entry[1] === 'string' ? entry[1] : '' }]
+      : []
+  );
+}
+
+/**
  * Map-category SearXNG results (its OpenStreetMap/Photon engines) carry `latitude`/`longitude`
  * and an `osm` {type, id}; anything without coordinates is not a place and is skipped.
  */
@@ -858,11 +873,18 @@ export function createSearxngProvider(baseUrl: string): WebSearchProvider {
         }
         const data: unknown = await response.json();
         const results = parseSearxngResults(data, limit);
-        Logger.globalInstance.log('WebSearch Tool: SearXNG response', {
-          status: response.status,
-          request,
-          hits: results.length,
-        });
+        const details = { status: response.status, request, hits: results.length };
+        if (results.length > 0) {
+          Logger.globalInstance.log('WebSearch Tool: SearXNG response', details);
+        } else {
+          // At warn so an empty backup behind an alert leaves its reason next to it.
+          const raw = (data as { results?: unknown } | null)?.results;
+          Logger.globalInstance.warn('WebSearch Tool: SearXNG answered with no results', {
+            ...details,
+            rawResults: Array.isArray(raw) ? raw.length : 0,
+            unresponsiveEngines: parseSearxngUnresponsiveEngines(data),
+          });
+        }
         return results;
       } catch (error) {
         logSearxngFailure(options, '❌ WebSearch Tool: SearXNG request failed:', {

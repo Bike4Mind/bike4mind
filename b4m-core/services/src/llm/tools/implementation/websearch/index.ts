@@ -196,6 +196,11 @@ export const WEB_SEARCH_NOT_CONFIGURED_MSG =
   'Web search is not configured: an administrator needs to set a Serper API key or a local SearXNG URL ' +
   'in Admin > API Keys. No search was performed.';
 
+export const WEB_SEARCH_UNAVAILABLE_MSG =
+  'Web search is temporarily unavailable: one search provider failed and the other returned nothing, ' +
+  'so the web was not actually searched. Do not conclude that nothing exists for this query; ' +
+  'tell the user the search could not be completed.';
+
 // A multi-entity comparison fans out to one search per entity plus a refinement or two; past this
 // the model is re-searching rather than answering, and each extra round costs a full model turn.
 export const MAX_WEB_SEARCHES_PER_TURN = 6;
@@ -255,7 +260,8 @@ function logHedgedProviderFailure(provider: WebSearchProvider, error: unknown): 
  * backup the lead keeps its own failure mode (SearXNG fail-soft, SerpAPI throws). Returns the
  * provider that answered so follow-up calls (images, places) go to a live provider. With a backup,
  * results are empty when neither provider has any (both empty, or one empty and the other failed),
- * and it throws only when both failed.
+ * and it throws only when both failed. `providerFailed` marks the empty-and-failed case: the empty
+ * side may be a throttled SearXNG, so "no results" is not an answer the caller can trust.
  */
 export async function searchWithHedge(
   lead: WebSearchProvider,
@@ -263,7 +269,7 @@ export async function searchWithHedge(
   query: string,
   numResults: number,
   searchOptions?: WebSearchOptions
-): Promise<{ results: WebSearchProviderResult[]; servedBy: WebSearchProvider }> {
+): Promise<{ results: WebSearchProviderResult[]; servedBy: WebSearchProvider; providerFailed?: boolean }> {
   if (!backup) return { results: await lead.search(query, numResults, searchOptions), servedBy: lead };
 
   const fromLead = lead.search(query, numResults, { ...searchOptions, throwOnError: true });
@@ -309,11 +315,11 @@ export async function searchWithHedge(
     // so this is the only error-level record of the failure (transient attempt failures log at warn).
     if (leadError instanceof EmptySearchAnswer) {
       logHedgedProviderFailure(backup, backupError);
-      return { results: [], servedBy: lead };
+      return { results: [], servedBy: lead, providerFailed: !(backupError instanceof EmptySearchAnswer) };
     }
     if (backupError instanceof EmptySearchAnswer) {
       logHedgedProviderFailure(lead, leadError);
-      return { results: [], servedBy: backup };
+      return { results: [], servedBy: backup, providerFailed: true };
     }
     throw new Error(
       `Web search failed on both providers. ${lead.name}: ${errorMessage(leadError)}; ` +
@@ -348,11 +354,16 @@ export async function performWebSearch(
     const cached = searchCacheGet(params.query, numResults, isPlaceSearch);
     let results: WebSearchProviderResult[];
     let servedBy = provider;
+    let providerFailed = false;
     if (cached) {
       Logger.globalInstance.log('WebSearch Tool: cache hit', { query: params.query });
       results = cached;
     } else {
-      ({ results, servedBy } = await searchWithHedge(provider, backup, params.query, numResults, searchOptions));
+      ({
+        results,
+        servedBy,
+        providerFailed = false,
+      } = await searchWithHedge(provider, backup, params.query, numResults, searchOptions));
       if (results.length > 0) searchCacheSet(params.query, numResults, results, isPlaceSearch);
     }
     Logger.globalInstance.log(
@@ -448,7 +459,9 @@ export async function performWebSearch(
         (numberedCitables ? `\n${INDEXED_TOOL_CITATION_RULE}\n` : '')
       : imageSection || placeSection
         ? "Here's what I found from searching the web:\n"
-        : 'No results found from web search.';
+        : providerFailed
+          ? WEB_SEARCH_UNAVAILABLE_MSG
+          : 'No results found from web search.';
     const formattedOutput =
       baseText +
       imageSection +

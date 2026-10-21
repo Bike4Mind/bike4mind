@@ -10,6 +10,7 @@ import {
   createWebSearchBudget,
   MAX_WEB_SEARCHES_PER_TURN,
   WEB_SEARCH_NOT_CONFIGURED_MSG,
+  WEB_SEARCH_UNAVAILABLE_MSG,
   shouldIncludeImages,
   formatImageResults,
   searchCacheClear,
@@ -770,11 +771,22 @@ describe('webSearchTool - hedged backup and cache', () => {
     await expect(pending).resolves.toContain('serp.example');
   });
 
-  it('returns no results rather than failing when the lead is empty and the backup fails', async () => {
+  it('reports search as unavailable rather than failing when the lead is empty and the backup fails', async () => {
     configure('searxng');
     stubProviders({ searxng: { status: 200, body: { results: [] } }, serpOrganic: [{ status: 503 }] });
 
-    await expect(buildTool().toolFn({ query: 'q' })).resolves.toBe('No results found from web search.');
+    await expect(buildTool().toolFn({ query: 'q' })).resolves.toBe(WEB_SEARCH_UNAVAILABLE_MSG);
+  });
+
+  // The production alert: SerpAPI times out on both attempts while a throttled SearXNG answers 200
+  // with nothing. Neither provider searched, so "No results found" would mislead the model.
+  it('reports search as unavailable when the SerpAPI lead fails and the SearXNG backup is empty', async () => {
+    configure('auto');
+    stubProviders({ serpOrganic: [{ status: 503 }, { status: 503 }], searxng: { status: 200, body: { results: [] } } });
+
+    const result = await performWebSearch(mockAdapters, { query: 'q' });
+
+    expect(result).toEqual({ formattedResults: WEB_SEARCH_UNAVAILABLE_MSG, citables: [] });
   });
 
   it('returns no results when both providers answer empty', async () => {
@@ -859,7 +871,7 @@ describe('webSearchTool - hedged backup and cache', () => {
       configure('searxng');
       stubProviders({ searxng: { status: 200, body: { results: [] } }, serpOrganic: [{ status: 503 }] });
 
-      await expect(buildTool().toolFn({ query: 'q' })).resolves.toBe('No results found from web search.');
+      await expect(buildTool().toolFn({ query: 'q' })).resolves.toBe(WEB_SEARCH_UNAVAILABLE_MSG);
       expect(errorSpy).toHaveBeenCalledTimes(1);
       expect(errorSpy).toHaveBeenCalledWith(
         expect.stringContaining('provider failed while the other answered empty'),
@@ -874,7 +886,7 @@ describe('webSearchTool - hedged backup and cache', () => {
         searxng: { status: 200, body: { results: [] } },
       });
 
-      await expect(buildTool().toolFn({ query: 'q' })).resolves.toBe('No results found from web search.');
+      await expect(buildTool().toolFn({ query: 'q' })).resolves.toBe(WEB_SEARCH_UNAVAILABLE_MSG);
       expect(errorSpy).toHaveBeenCalledTimes(1);
       expect(errorSpy).toHaveBeenCalledWith(
         expect.stringContaining('provider failed while the other answered empty'),
