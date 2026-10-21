@@ -339,6 +339,9 @@ export const SettingKeySchema = z.enum([
   'UseImagePrompt',
   'EnableReactViewer',
   'EnableInertArtifactRender',
+  'EnableStudioCreateV2',
+  'EnableStudioImage',
+  'EnableStudioProductions',
   'pricePerCredit',
   'ModerationEnabled',
   'BedrockGuardrailId',
@@ -2047,6 +2050,9 @@ export const API_SERVICE_GROUPS = {
       { key: 'EnableParallelToolExecution', order: 230 },
       { key: 'EnableReactViewer', order: 240 },
       { key: 'EnableInertArtifactRender', order: 241 },
+      { key: 'EnableStudioCreateV2', order: 242 },
+      { key: 'EnableStudioImage', order: 243 },
+      { key: 'EnableStudioProductions', order: 244 },
       { key: 'EnableStreamIdleTimeout', order: 250 },
       { key: 'StreamIdleTimeoutSeconds', order: 251 },
       { key: 'EnableFmpFinancialData', order: 260 },
@@ -2790,6 +2796,41 @@ export const settingsMap = {
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 241,
+  }),
+  // The Studio rebuild ships dark behind these three. While building, they take effect for admins
+  // only: the client gate (apps/client/app/components/Studio/studioFlags.ts) ANDs each with isAdmin
+  // and the two children with EnableStudioCreateV2, since dependsOn is only an admin-console hint.
+  EnableStudioCreateV2: makeBooleanSetting({
+    key: 'EnableStudioCreateV2',
+    name: 'Enable Studio Create v2',
+    defaultValue: false,
+    description:
+      'Restructured Studio (Create, Productions and Library sections with a medium rail). Admin-only while in development; the current Studio tabs are unchanged when off.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 242,
+  }),
+  EnableStudioImage: makeBooleanSetting({
+    key: 'EnableStudioImage',
+    name: 'Enable Image in Studio',
+    defaultValue: false,
+    description:
+      'Image medium in Studio Create, backed by the image generation job kind. Admin-only while in development.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 243,
+    dependsOn: 'EnableStudioCreateV2',
+  }),
+  EnableStudioProductions: makeBooleanSetting({
+    key: 'EnableStudioProductions',
+    name: 'Enable Studio Productions',
+    defaultValue: false,
+    description:
+      'Studio Productions: assemble generated assets into ads and short films on a timeline and render them. Admin-only while in development.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 244,
+    dependsOn: 'EnableStudioCreateV2',
   }),
   DefaultChunkSize: makeNumberSetting({
     key: 'DefaultChunkSize',

@@ -12,9 +12,17 @@ const h = vi.hoisted(() => ({
   mutate: vi.fn(),
   musicMutate: vi.fn(),
   navigate: vi.fn(),
+  isAdmin: false,
+  enabledSettings: new Set<string>(),
 }));
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => h.navigate }));
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: (selector: (state: { isAdmin: boolean }) => unknown) => selector({ isAdmin: h.isAdmin }),
+}));
+vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
+  useAdminSettingsCache: () => ({ isFeatureEnabled: (key: string) => h.enabledSettings.has(key) }),
+}));
 vi.mock('@client/app/hooks/data/musicGenerations', () => ({
   useMusicModels: () => h.musicModels,
   useCreateMusicGeneration: () => ({ mutate: h.musicMutate, isPending: false }),
@@ -67,7 +75,11 @@ const renderPage = (modality: StudioModality = 'video') =>
     </CssVarsProvider>
   );
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  h.isAdmin = false;
+  h.enabledSettings = new Set();
+});
 
 describe('StudioPage (video)', () => {
   it('sets the tab title and keeps the video page test id under the Studio heading', () => {
@@ -198,5 +210,45 @@ describe('StudioPage (sound effects)', () => {
       'Sound effect generation is not available for your account yet.'
     );
     expect(screen.getByTestId('sound-effects-gallery-stub')).toBeInTheDocument();
+  });
+});
+
+describe('StudioPage Studio rebuild flags', () => {
+  const ALL_STUDIO_FLAGS = ['EnableStudioCreateV2', 'EnableStudioImage', 'EnableStudioProductions'];
+  const tabTestIds = () =>
+    screen
+      .getByTestId('studio-tabs')
+      .querySelectorAll('[role="tab"]')
+      .values()
+      .map(tab => tab.getAttribute('data-testid'))
+      .toArray();
+
+  it("renders today's four tabs and no preview marker with every flag off, even for an admin", () => {
+    h.models = { isPending: true, data: undefined };
+    h.isAdmin = true;
+    renderPage();
+    expect(tabTestIds()).toEqual([
+      'studio-tab-video',
+      'studio-tab-music',
+      'studio-tab-speech',
+      'studio-tab-sound-effects',
+    ]);
+    expect(screen.queryByTestId('studio-create-v2-preview')).not.toBeInTheDocument();
+  });
+
+  it('shows the Create v2 marker to an admin once the flag is on', () => {
+    h.models = { isPending: true, data: undefined };
+    h.isAdmin = true;
+    h.enabledSettings = new Set(['EnableStudioCreateV2']);
+    renderPage();
+    expect(screen.getByTestId('studio-create-v2-preview')).toBeInTheDocument();
+  });
+
+  it("keeps a non-admin on today's page with every flag on", () => {
+    h.models = { isPending: true, data: undefined };
+    h.enabledSettings = new Set(ALL_STUDIO_FLAGS);
+    renderPage();
+    expect(screen.queryByTestId('studio-create-v2-preview')).not.toBeInTheDocument();
+    expect(tabTestIds()).toHaveLength(4);
   });
 });

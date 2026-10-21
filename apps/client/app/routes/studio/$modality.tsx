@@ -1,14 +1,16 @@
-import { Stack, Tab, TabList, Tabs, Typography } from '@mui/joy';
+import { Chip, Stack, Tab, TabList, Tabs, Typography } from '@mui/joy';
 import { useNavigate } from '@tanstack/react-router';
 import PageFrame from '@client/app/components/common/PageFrame';
 import { STUDIO_MODALITIES, isStudioModality, type StudioModality } from '@client/app/components/Studio/studioModality';
 import { STUDIO_MODALITY_DEFINITIONS } from '@client/app/components/Studio/studioModalityRegistry';
+import { useStudioFlags } from '@client/app/components/Studio/studioFlags';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 
 const StudioPage = ({ modality }: { modality: StudioModality }) => {
   const navigate = useNavigate();
   const { tabLabel, galleryTitle, testId, Workspace, Gallery } = STUDIO_MODALITY_DEFINITIONS[modality];
   useDocumentTitle(`${tabLabel} Studio`);
+  const studioFlags = useStudioFlags();
 
   return (
     <PageFrame testId={`${testId}-page`}>
@@ -16,6 +18,18 @@ const StudioPage = ({ modality }: { modality: StudioModality }) => {
         <Typography level="h2" component="h1">
           Studio
         </Typography>
+        {/* Admin-visible marker that the Create v2 gate is live; the Create v2 layout replaces it. */}
+        {studioFlags.createV2 && (
+          <Chip
+            size="sm"
+            variant="soft"
+            color="primary"
+            data-testid="studio-create-v2-preview"
+            sx={{ alignSelf: 'flex-start' }}
+          >
+            Create v2 preview
+          </Chip>
+        )}
         {/* Each tab is its own URL (/studio/<modality>), so a tab can be linked to and survives a reload. */}
         <Tabs
           value={modality}
