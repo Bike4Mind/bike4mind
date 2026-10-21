@@ -28,7 +28,7 @@ import {
   Tooltip,
 } from '@mui/joy';
 import { useGetWaitingSubscribersCount } from '@client/app/hooks/data/subscribers';
-import { useRouter, useSearch } from '@tanstack/react-router';
+import { useRouter } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { lazy, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { api } from '@client/app/contexts/ApiContext';
@@ -69,7 +69,6 @@ import MenuIcon from '@mui/icons-material/Menu';
 import ApiReferenceTab from './ApiReferenceTab';
 import ApiCookbookTab from './ApiCookbookTab';
 import { AdminTab, SIDEBAR_SECTIONS, type SidebarGate, type SidebarItem } from './adminSidebarConfig';
-import { adminTabFromSlug } from './adminTabSlugs';
 import { canRenderAdminTab } from './adminTabRenderability';
 import { useAdminTabUrlSync } from './useAdminTabUrlSync';
 import { useAdminModal } from './useAdminModal';
@@ -320,9 +319,6 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
   const [activeTab, setActiveTab] = useAdminModal(useShallow(state => [state.activeTab, state.setActiveTab]));
   const hiddenNotifications = useAdminNotifications(state => state.hiddenNotifications);
   const { currentUser } = useUser();
-  // `select` keeps a keystroke in a tab's own search params (Admin Settings' `q`) from re-rendering
-  // the whole console through this page.
-  const requestedTabSlug = useSearch({ strict: false, select: search => (search as { tab?: string }).tab });
 
   // LiveOps Triage tab visibility - show everywhere except fork production environments
   const { data: liveopsEnvData, isError: isLiveOpsEnvError } = useQuery({
@@ -400,17 +396,6 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
 
   // Get waiting subscribers count for badge
   const waitingSubscribers = useGetWaitingSubscribersCount({ enabled: currentUser?.isAdmin });
-
-  // Set default tab based on migration availability. Skipped when the URL asked for a tab: both
-  // this and the `?tab=` effect above read the same `activeTab` snapshot, so on a render where
-  // enableUserMigration is already true they would both fire and this one would land last,
-  // silently overriding the deep link. Today it only loses that race because the flag arrives
-  // from a query a tick later.
-  useEffect(() => {
-    if (enableUserMigration && activeTab === AdminTab.Users && !adminTabFromSlug(requestedTabSlug)) {
-      setActiveTab(AdminTab.Migrate);
-    }
-  }, [enableUserMigration, activeTab, setActiveTab, requestedTabSlug]);
 
   if (!currentUser?.isAdmin) {
     return (
