@@ -9,7 +9,8 @@ export function minifyRouterFunction(code: string): string {
     minifySyntax: true,
     minifyIdentifiers: false,
     legalComments: 'none',
-    target: 'es2020',
+    // Match SST's compiler target so minification cannot introduce unsupported edge syntax.
+    target: 'es2018',
   }).code;
   const size = Buffer.byteLength(minified, 'utf8');
   if (size > CLOUDFRONT_FUNCTION_MAX_BYTES) {

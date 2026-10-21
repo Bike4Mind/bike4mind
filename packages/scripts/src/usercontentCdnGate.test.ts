@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
+import { transformSync } from 'esbuild';
 import { expect, it } from 'vitest';
 import { allowsUsercontentRequest } from '../../server-utils/src/utils/usercontentRequest';
 import { minifyRouterFunction } from '../../../infra/routerFunctionCode';
@@ -43,4 +44,22 @@ it('minifies the routing code while preserving the CloudFront entry point and mo
 
 it('rejects routing code that still exceeds the CloudFront byte limit after minification', () => {
   expect(() => minifyRouterFunction(`function handler(){return "${'x'.repeat(10_240)}";}`)).toThrow(/maximum is 10240/);
+});
+
+it('retains SST runtime syntax instead of introducing newer syntax during minification', () => {
+  const sstCode = transformSync(
+    `function handler(event) {
+      let override = event.request.origin;
+      override = override ?? {};
+      try { return override?.domainName || event.request.uri; }
+      catch (error) { return 'failed'; }
+    }`,
+    { minifyWhitespace: true, minifySyntax: true, target: 'es2018' }
+  ).code;
+  const minified = minifyRouterFunction(sstCode);
+  expect(minified).not.toMatch(/\?\?|\?\.|catch\s*\{/);
+  expect(runInNewContext(`${minified}; handler({request: {uri: '/login'}})`)).toBe('/login');
+  expect(runInNewContext(`${minified}; handler({request: {origin: {domainName: 'origin.example.com'}}})`)).toBe(
+    'origin.example.com'
+  );
 });
