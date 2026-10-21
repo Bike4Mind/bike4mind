@@ -171,14 +171,18 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
         } catch (error) {
           req.logger.warn('DELETE /api/files: failed to unlink references to deleted files', { error, userId });
         }
-        const userIds = Array.from(
-          new Set([userId, ...ownedFiles.flatMap(file => fabFilesService.referenceHolderIds(file))])
-        );
-        await fabFilesService.cleanUpDeletedFileReferences(
-          { fileIds: fabFileIds, userIds },
-          { users: userRepository, projects: projectRepository },
-          req.logger
-        );
+        try {
+          const userIds = Array.from(
+            new Set([userId, ...ownedFiles.flatMap(file => fabFilesService.referenceHolderIds(file))])
+          );
+          await fabFilesService.cleanUpDeletedFileReferences(
+            { fileIds: fabFileIds, userIds },
+            { users: userRepository, projects: projectRepository },
+            req.logger
+          );
+        } catch (error) {
+          req.logger.warn('DELETE /api/files: failed to unlink references to deleted files', { error, userId });
+        }
       }
 
       return res.status(204).send();

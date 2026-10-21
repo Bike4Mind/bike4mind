@@ -143,11 +143,17 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
 
     // One system-file/project unlink for the whole batch, over the union of every deleted file's
     // owner and direct-share recipients (see deleteFabFile's deferReferenceCleanup).
-    await fabFilesService.cleanUpDeletedFileReferences(
-      { fileIds: [...cleanupFileIds], userIds: [...cleanupUserIds] },
-      { users: userRepository, projects: projectRepository },
-      req.logger
-    );
+    // Best-effort like the helper itself: the files are already deleted, so nothing here may
+    // change the response.
+    try {
+      await fabFilesService.cleanUpDeletedFileReferences(
+        { fileIds: [...cleanupFileIds], userIds: [...cleanupUserIds] },
+        { users: userRepository, projects: projectRepository },
+        req.logger
+      );
+    } catch (error) {
+      req.logger.warn('Bulk delete: failed to unlink references to deleted files', { error });
+    }
 
     // One refund per owner after all deletions; one owner's failure does not skip the others.
     for (const { owner, bytes } of sumStorageDeltaByOwner(refunds)) {

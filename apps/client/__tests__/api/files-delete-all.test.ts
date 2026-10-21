@@ -1,21 +1,38 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const captured = vi.hoisted(() => ({ handlers: {} as Record<string, any> }));
+const cleanup = vi.hoisted(() => ({
+  referenceHolderIds: vi.fn(),
+  cleanUpDeletedFileReferences: vi.fn(),
+  pullKnowledgeIds: vi.fn(),
+  pullSystemFilesForUsers: vi.fn(),
+  pullFileReferences: vi.fn(),
+}));
 
 vi.mock('@bike4mind/database', () => ({
   FabFile: { find: vi.fn(), deleteMany: vi.fn(), updateMany: vi.fn() },
   User: { findById: vi.fn() },
   adminSettingsRepository: {},
   fabFileRepository: {},
-  projectRepository: {},
-  userRepository: {},
+  projectRepository: { pullFileReferences: cleanup.pullFileReferences },
+  sessionRepository: { pullKnowledgeIds: cleanup.pullKnowledgeIds },
+  userRepository: { pullSystemFilesForUsers: cleanup.pullSystemFilesForUsers },
   withTransaction: vi.fn(async (fn: (s: unknown) => Promise<unknown>) => fn('txn')),
 }));
 
-// The real stored-object delete, so the legal-hold and generated-copy rules run against this route's projection.
+// The real stored-object delete, so the legal-hold and generated-copy rules run against this route's
+// projection; the real reference cleanup too, behind spies a test can make fail.
 vi.mock('@bike4mind/services', async importOriginal => {
   const { fabFilesService } = await importOriginal<typeof import('@bike4mind/services')>();
-  return { fabFilesService: { deleteStoredObjects: fabFilesService.deleteStoredObjects } };
+  cleanup.referenceHolderIds.mockImplementation(fabFilesService.referenceHolderIds);
+  cleanup.cleanUpDeletedFileReferences.mockImplementation(fabFilesService.cleanUpDeletedFileReferences);
+  return {
+    fabFilesService: {
+      deleteStoredObjects: fabFilesService.deleteStoredObjects,
+      referenceHolderIds: cleanup.referenceHolderIds,
+      cleanUpDeletedFileReferences: cleanup.cleanUpDeletedFileReferences,
+    },
+  };
 });
 vi.mock('@server/files/generatedCopyStore', () => ({
   getGeneratedCopyStore: () => ({
@@ -126,12 +143,9 @@ describe('DELETE /api/files scoping', () => {
       } as never);
   });
 
-  const run = async () => {
+  const run = async (logger = { error: vi.fn(), warn: vi.fn() }) => {
     const res = makeRes();
-    await captured.handlers.delete(
-      { user: { id: CALLER }, ability: { __ability: true }, logger: { error: vi.fn(), warn: vi.fn() } },
-      res
-    );
+    await captured.handlers.delete({ user: { id: CALLER }, ability: { __ability: true }, logger }, res);
     return res;
   };
 
@@ -188,5 +202,27 @@ describe('DELETE /api/files scoping', () => {
 
     const [deleteFilter] = vi.mocked(FabFile.deleteMany).mock.calls[0];
     expect(JSON.stringify(deleteFilter)).toContain(CALLER);
+  });
+
+  it('unlinks system files and projects for the deleted files after the delete', async () => {
+    await run();
+
+    expect(cleanup.pullKnowledgeIds).toHaveBeenCalledWith(['mine']);
+    expect(cleanup.pullSystemFilesForUsers).toHaveBeenCalledWith([CALLER], ['mine']);
+    expect(cleanup.pullFileReferences).toHaveBeenCalledWith(['mine'], { userIds: [CALLER] });
+  });
+
+  it('still returns its normal success response when the reference cleanup throws', async () => {
+    cleanup.referenceHolderIds.mockImplementationOnce(() => {
+      throw new Error('cleanup failed');
+    });
+    const logger = { error: vi.fn(), warn: vi.fn() };
+
+    const res = await run(logger);
+
+    expect(res.out.statusCode).toBe(204);
+    expect(res.send).toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalled();
+    expect(storageDelete).toHaveBeenCalledWith('owned/mine.txt');
   });
 });

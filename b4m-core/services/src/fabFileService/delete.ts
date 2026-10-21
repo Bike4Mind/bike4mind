@@ -191,9 +191,16 @@ export const deleteFabFile = async (
 
     // The file is gone for everyone: unlink it from its owner's and direct-share recipients' system
     // files and projects. Group- or lake-held references are left to the turn-time scrub.
-    const references = { fileIds: [ownedFile.id], userIds: referenceHolderIds(ownedFile) };
-    if (adapter.deferReferenceCleanup) adapter.deferReferenceCleanup(references);
-    else await cleanUpDeletedFileReferences(references, db);
+    try {
+      const references = { fileIds: [ownedFile.id], userIds: referenceHolderIds(ownedFile) };
+      if (adapter.deferReferenceCleanup) adapter.deferReferenceCleanup(references);
+      else await cleanUpDeletedFileReferences(references, db);
+    } catch (err) {
+      Logger.globalInstance.warn('[deleteFabFile] failed to unlink system-file/project references', {
+        fileId: ownedFile.id,
+        err,
+      });
+    }
 
     await deleteStoredObjects([ownedFile], { files: storage, generated: generatedCopies });
 
