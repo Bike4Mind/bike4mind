@@ -162,7 +162,7 @@ async function baseRefFor(directory: string, base: string): Promise<string> {
     await fetchRemoteFor(directory, fallback);
     return fallback;
   }
-  const remote = `origin/${base}`;
+  const remote = remoteRefFor(base);
   try {
     await fetchRemoteFor(directory, remote);
     await git(directory, ['rev-parse', '--verify', '--quiet', `${remote}^{commit}`]);
@@ -171,6 +171,22 @@ async function baseRefFor(directory: string, base: string): Promise<string> {
   } catch {
     return base;
   }
+}
+
+function remoteRefFor(base: string): string {
+  return `origin/${base}`;
+}
+
+/**
+ * Start the fetch a branch cut from `base` will wait on, without waiting for it: the same ref
+ * baseRefFor fetches, so the cut finds it fresh (see fetchRemoteFor). Called where a start is
+ * about to be asked for - a spawn card drawn, a worktree toggle turned on.
+ */
+export function prefetchBase(directory: string, base: string): void {
+  const target = !base || base === 'HEAD' ? (base ? Promise.resolve(base) : resolveBaseRef(directory)) : null;
+  void (target ?? Promise.resolve(remoteRefFor(base)))
+    .then(ref => fetchRemoteFor(directory, ref))
+    .catch(() => undefined);
 }
 
 /**

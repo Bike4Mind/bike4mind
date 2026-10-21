@@ -79,7 +79,7 @@ import type { DependencyInstaller } from './project/dependencyInstall';
 import { defaultUserInstructionsRoot } from './project/instructions';
 import { type MemoryStore, memoryStoreFor } from './project/memory';
 import { ProjectContextCache } from './project/projectContext';
-import { resolveWorkspace, type WorkspaceOutcome } from './project/workspace';
+import { prefetchBase, resolveWorkspace, type WorkspaceOutcome } from './project/workspace';
 import { MAX_ATTACHMENTS_PER_TURN, textAttachmentBlock } from './attachments';
 import type { AttachmentStore } from './AttachmentStore';
 import type { SidebarSectionStore } from './SidebarSectionStore';
@@ -797,6 +797,7 @@ export class ChatService {
     });
     timer.lap('create');
     this.deps.logger.debug(`CHAT: code session ${session.id} timing ${timer.summary()}`);
+    if (awaitsWorktree(session.project)) prefetchBase(directory, branch);
 
     return { ok: true, session };
   }
@@ -896,6 +897,8 @@ export class ChatService {
       contextDirectories: movedProject ? [] : (current?.contextDirectories ?? []),
     });
     if (!updated) return { ok: false, error: 'This conversation is no longer available.' };
+    // The first message will cut the worktree; its fetch can start while that is being typed.
+    if (awaitsWorktree(updated.project)) prefetchBase(directory, branch);
     return { ok: true, session: updated };
   }
 
@@ -2966,7 +2969,13 @@ export class ChatService {
     return {
       spawn: (prompt, title, placement) => this.spawnSession(session, prompt, title, placement),
 
-      spawnBase: () => spawnBaseFor(project),
+      // Asked for only to draw a spawn card, so the fetch a start would wait on begins here, while
+      // the user reads it.
+      spawnBase: async () => {
+        const base = await spawnBaseFor(project);
+        prefetchBase(project.directory, base);
+        return base;
+      },
 
       listSessions: async ({ includeArchived }) => {
         const all = await this.deps.store.list();
