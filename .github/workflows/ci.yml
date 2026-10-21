@@ -1050,6 +1050,46 @@ jobs:
       contents: read
       pull-requests: write
 
+  # Pre-merge sensitive-term scan: a private workflow scans docs-site PRs and posts a `docs/sensitive-scan`
+  # commit status on the PR head. This job turns that status into a gate through `ci-complete`, since a
+  # required status that only some PRs ever receive would block every other PR. Merge queue runs skip it
+  # (the PR head was already gated). Fails closed if the status never arrives.
+  docs-scan-gate:
+    name: Docs Sensitive Scan
+    needs: changes
+    if: needs.changes.outputs.docs-changed == 'true' && github.event_name == 'pull_request'
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: read
+      statuses: read
+    steps:
+      - name: Wait for the docs scan result
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -uo pipefail
+          FILES=$(gh api --paginate "repos/${REPO}/pulls/${PR}/files" --jq '.[].filename') || { echo "::error::could not list PR files"; exit 1; }
+          if ! printf '%s\n' "$FILES" | grep -q '^docs-site/'; then
+            echo "No docs-site files in this PR, scan not required."
+            exit 0
+          fi
+          for _ in $(seq 1 48); do
+            STATE=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/statuses" --jq '[.[] | select(.context == "docs/sensitive-scan")][0].state // "missing"')
+            echo "docs/sensitive-scan: ${STATE}"
+            case "$STATE" in
+              success) exit 0 ;;
+              failure|error) echo "::error::The docs sensitive-term scan failed for this commit. Remove the flagged content and push, or once a maintainer re-runs the scan to success, re-run this job."; exit 1 ;;
+            esac
+            sleep 20
+          done
+          echo "::error::No docs/sensitive-scan result after 16 minutes. Ask a maintainer to re-run the scan, then re-run this job once it reports success."
+          exit 1
+
   # ============================================================
   # CI gate aggregation. The branch rulesets (main-protection + prod-protection)
   # require a single status check named exactly "CI Complete". Deploy moved out
@@ -1057,7 +1097,7 @@ jobs:
   # job re-exposes one stable check that turns red if any CI leg failed.
   #
   # Red when ANY CI leg (changes/core-build/typecheck/lint/test/cli-e2e/help-docs/
-  # verify-docs-build/published-dts)
+  # verify-docs-build/docs-scan-gate/published-dts)
   # genuinely FAILED. Green when everything succeeded OR was legitimately
   # skipped (a non-deployable change skips core-build..cli-e2e, and a skipped
   # required check counts as passing). This surfaces typecheck/lint/cli-e2e
@@ -1074,7 +1114,7 @@ jobs:
   # ============================================================
   ci-complete:
     name: CI Complete
-    needs: [changes, core-build, typecheck, lint, openapi, test, cli-e2e, help-docs, verify-docs-build, published-dts]
+    needs: [changes, core-build, typecheck, lint, openapi, test, cli-e2e, help-docs, verify-docs-build, docs-scan-gate, published-dts]
     if: ${{ !cancelled() }}
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     steps:
@@ -1089,12 +1129,13 @@ jobs:
           CLI_E2E: ${{ needs.cli-e2e.result }}
           HELP_DOCS: ${{ needs.help-docs.result }}
           VERIFY_DOCS: ${{ needs.verify-docs-build.result }}
+          DOCS_SCAN: ${{ needs.docs-scan-gate.result }}
           PUBLISHED_DTS: ${{ needs.published-dts.result }}
         run: |
-          echo "results: changes=$CHANGES core-build=$CORE_BUILD typecheck=$TYPECHECK lint=$LINT openapi=$OPENAPI test=$TEST cli-e2e=$CLI_E2E help-docs=$HELP_DOCS verify-docs-build=$VERIFY_DOCS published-dts=$PUBLISHED_DTS"
+          echo "results: changes=$CHANGES core-build=$CORE_BUILD typecheck=$TYPECHECK lint=$LINT openapi=$OPENAPI test=$TEST cli-e2e=$CLI_E2E help-docs=$HELP_DOCS verify-docs-build=$VERIFY_DOCS docs-scan=$DOCS_SCAN published-dts=$PUBLISHED_DTS"
           # A CI leg that genuinely failed flips the check red. Skipped
           # (non-deployable change) is treated as passing.
-          for r in "$CHANGES" "$CORE_BUILD" "$TYPECHECK" "$LINT" "$OPENAPI" "$TEST" "$CLI_E2E" "$HELP_DOCS" "$VERIFY_DOCS" "$PUBLISHED_DTS"; do
+          for r in "$CHANGES" "$CORE_BUILD" "$TYPECHECK" "$LINT" "$OPENAPI" "$TEST" "$CLI_E2E" "$HELP_DOCS" "$VERIFY_DOCS" "$DOCS_SCAN" "$PUBLISHED_DTS"; do
             if [ "$r" = "failure" ]; then
               echo "::error::A CI gate failed; failing the required check."
               exit 1
