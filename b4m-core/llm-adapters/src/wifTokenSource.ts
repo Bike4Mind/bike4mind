@@ -1,5 +1,3 @@
-import { GetWebIdentityTokenCommand, STSClient } from '@aws-sdk/client-sts';
-
 /**
  * Where a provider's workload identity federation gets its subject JWT, chosen by
  * PROVIDER_WIF_TOKEN_SOURCE: `github-actions` (default, CI jobs with `id-token: write`) or
@@ -32,13 +30,22 @@ export async function githubActionsIdToken(audience: string): Promise<string> {
   return body.value;
 }
 
-let stsClient: STSClient | undefined;
+type StsModule = typeof import('@aws-sdk/client-sts');
+
+// Loaded on first use so consumers that never federate through STS skip its bundle and cold-start cost.
+let stsModule: Promise<StsModule> | undefined;
+let stsClient: InstanceType<StsModule['STSClient']> | undefined;
 
 /**
  * A fresh STS-signed JWT for `audience`. GetWebIdentityToken is not served by the global STS
  * endpoint, so the client relies on AWS_REGION (always set on Lambda) to pick a regional one.
  */
 export async function awsStsIdToken(audience: string): Promise<string> {
+  stsModule ??= import('@aws-sdk/client-sts').catch(err => {
+    stsModule = undefined;
+    throw err;
+  });
+  const { STSClient, GetWebIdentityTokenCommand } = await stsModule;
   stsClient ??= new STSClient({});
   const out = await stsClient.send(new GetWebIdentityTokenCommand({ Audience: [audience], SigningAlgorithm: 'RS256' }));
   if (!out.WebIdentityToken) throw new Error('STS GetWebIdentityToken returned no token');
