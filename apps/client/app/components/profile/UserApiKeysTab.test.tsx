@@ -497,10 +497,13 @@ describe('UserApiKeysTab - Bob scopes', () => {
     const scopes = mintScopes();
     expect(scopes).toContain(ApiKeyScope.BOB_READ);
     expect(scopes).not.toContain(ApiKeyScope.BOB_RUN);
+    expect(scopes).not.toContain(ApiKeyScope.WRITE_NOTEBOOKS);
   });
 
   it('keeps bob:run out of Read & write, which still carries bob:read', () => {
     const scopes = mintScopes('readwrite');
+    // A write scope proves the preset click took effect: without it this case reads like Read-only.
+    expect(scopes).toContain(ApiKeyScope.WRITE_NOTEBOOKS);
     expect(scopes).toContain(ApiKeyScope.BOB_READ);
     expect(scopes).not.toContain(ApiKeyScope.BOB_RUN);
   });

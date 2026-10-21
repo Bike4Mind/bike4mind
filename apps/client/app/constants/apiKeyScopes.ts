@@ -363,7 +363,8 @@ export interface ApiKeyScopeAccess {
 
 /**
  * Product scopes offered only when the matching ApiKeyScopeAccess flag holds; every other scope is ungated.
- * `bob:read` and `bob:run` are deliberately absent: every signed-in account can use Bob.
+ * `bob:read` and `bob:run` are deliberately absent: every signed-in account can use Bob, so no
+ * flag holds for some viewers and not others (see the `bob` row in lib/entitlements/registry.ts).
  */
 export const GATED_API_KEY_SCOPES: Readonly<Partial<Record<ApiKeyScope, keyof ApiKeyScopeAccess>>> = {
   [ApiKeyScope.OPTIHASHI_READ]: 'hasOptiAccess',
