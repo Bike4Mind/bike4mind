@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { IconButton, Tooltip } from '@mui/joy';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 
@@ -9,25 +9,52 @@ type AnalyticsTermHelpProps = {
 
 export function AnalyticsTermHelp({ term, description }: AnalyticsTermHelpProps) {
   const [open, setOpen] = useState(false);
+  // Set by a click, so a second click closes the help while a click after hover/focus-open keeps it.
+  const pinned = useRef(false);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+
+  const close = () => {
+    pinned.current = false;
+    setOpen(false);
+  };
+
+  // WebKit does not focus a tapped button, so blur never fires there; dismiss on a tap elsewhere.
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (buttonRef.current?.contains(event.target as Node)) return;
+      pinned.current = false;
+      setOpen(false);
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => document.removeEventListener('pointerdown', onPointerDown);
+  }, [open]);
+
+  const onClick = () => {
+    if (open && pinned.current) return close();
+    pinned.current = true;
+    setOpen(true);
+  };
 
   return (
     <Tooltip
       title={description}
       open={open}
       onOpen={() => setOpen(true)}
-      onClose={() => setOpen(false)}
+      onClose={close}
       describeChild
       disableTouchListener
       sx={{ maxWidth: 300 }}
     >
       <IconButton
+        ref={buttonRef}
         size="sm"
         variant="plain"
         color="neutral"
         aria-label={`About ${term}`}
-        onClick={() => setOpen(true)}
+        onClick={onClick}
         onFocus={() => setOpen(true)}
-        onBlur={() => setOpen(false)}
+        onBlur={close}
         sx={{ verticalAlign: 'middle' }}
       >
         <HelpOutlineIcon fontSize="small" />

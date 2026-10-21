@@ -89,4 +89,19 @@ describe('UsageBySourceCard help', () => {
       'Someone active in two sources contributes two to this total.'
     );
   });
+
+  // fireEvent.click does not move focus, matching WebKit where a tapped button never blurs.
+  it('closes tap-opened help on a second tap or a tap elsewhere without relying on blur', async () => {
+    renderCard();
+    const help = screen.getByRole('button', { name: 'About Manual' });
+    fireEvent.click(help);
+    expect(await screen.findByRole('tooltip')).toBeInTheDocument();
+    fireEvent.click(help);
+    await waitFor(() => expect(screen.queryByRole('tooltip')).not.toBeInTheDocument());
+
+    fireEvent.click(help);
+    expect(await screen.findByRole('tooltip')).toBeInTheDocument();
+    fireEvent.pointerDown(screen.getByTestId('usage-by-source-table'));
+    await waitFor(() => expect(screen.queryByRole('tooltip')).not.toBeInTheDocument());
+  });
 });
