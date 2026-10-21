@@ -35,6 +35,7 @@ const SCAN_ROOTS = [
   'apps/workers/src',
   'b4m-core/services/src',
   'b4m-core/slack/src',
+  'packages/server-utils/src',
 ];
 
 const EXCLUDED_DIR_NAMES = new Set(['__tests__', 'dist', '.next', 'node_modules']);
