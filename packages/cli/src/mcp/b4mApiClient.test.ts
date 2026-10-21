@@ -1095,6 +1095,12 @@ describe('B4mApiClient Bob routes', () => {
     await expect(client.getBobComparison('c')).rejects.toThrow('answered the Bob comparison without its agent view');
   });
 
+  it("throws a re-check's 200 refusal in Bob's words", async () => {
+    mockPost.mockResolvedValue({ ok: false, error: 'Re-checks are paused.' });
+
+    await expect(client.recheckBob({ runId: RUN_ID, checkId: 'x' })).rejects.toThrow(/^Re-checks are paused\.$/);
+  });
+
   it('posts a re-check and unwraps the reading', async () => {
     mockPost.mockResolvedValue({ ok: true, recheck: { checkId: 'x', state: 'pass' } });
 

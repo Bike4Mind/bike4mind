@@ -701,6 +701,7 @@ export class B4mApiClient {
   /** POST bob-recheck: re-run one check of a run against its site. Answers with the new reading. */
   async recheckBob(args: { runId: string; checkId: string }): Promise<unknown> {
     const result = await this.client.post<{ recheck?: unknown }>(`${BOB_ROUTE}/bob-recheck`, args);
+    throwBobRefusal(result);
     return result.recheck;
   }
 
@@ -732,7 +733,7 @@ export class B4mApiClient {
   }
 }
 
-/** A 2xx `{ ok: false, error }` from a Bob start is a refusal (the daily cap, credits), not a transport error. */
+/** A 2xx `{ ok: false, error }` from Bob is a refusal (the daily cap, credits), not a transport error. */
 function throwBobRefusal(body: unknown): void {
   const refusal = bobRefusalSchema.safeParse(body);
   if (refusal.success) throw new Error(refusal.data.error);

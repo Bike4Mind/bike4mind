@@ -150,6 +150,14 @@ describe('Bob tool catalog', () => {
     expect(description).toMatch(/publishes (the|each) report/);
   });
 
+  it('says only the two start tools spend credits, and that a re-check costs none', () => {
+    const spenders = TOOL_META.filter(t => t.description.includes("Spends the key owner's credits")).map(t => t.name);
+    expect(spenders).toEqual(['bob_read_site', 'bob_compare_sites']);
+    const recheck = TOOL_META.find(t => t.name === 'bob_recheck')!.description;
+    expect(recheck).toContain('Costs no credits');
+    expect(recheck).toContain('adds the reading to the existing report');
+  });
+
   it('lists all twenty-six tools over MCP', async () => {
     const server = buildMcpServer({ baseURL: BASE, apiKey: 'b4m_live_key', version: '0.0.0' });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -429,7 +437,7 @@ describe('bob_read_site', () => {
     beforeEach(() => vi.useFakeTimers());
     afterEach(() => vi.useRealTimers());
 
-    it("reports Bob's done and total, sending only when the count rises", async () => {
+    it("reports on every poll, with rising progress and Bob's done and total in the message", async () => {
       // No count, then an empty one (a read with no personas to count), then the real count.
       serveRuns(
         { progress: null },
@@ -449,16 +457,20 @@ describe('bob_read_site', () => {
       await vi.runAllTimersAsync();
       const result = await pending;
 
-      expect(sendNotification.mock.calls.map(([n]) => n)).toEqual([
-        {
-          method: 'notifications/progress',
-          params: { progressToken: 'tok', progress: 0, total: 3, message: 'reading acme.io (0 of 3)' },
-        },
-        {
-          method: 'notifications/progress',
-          params: { progressToken: 'tok', progress: 2, total: 3, message: 'reading acme.io (2 of 3)' },
-        },
+      const sent = sendNotification.mock.calls.map(([n]) => n);
+      expect(sent.map(n => n.params.message)).toEqual([
+        'reading acme.io',
+        'reading acme.io',
+        'reading acme.io (0 of 3)',
+        'reading acme.io (0 of 3)',
+        'reading acme.io (2 of 3)',
       ]);
+      // MCP requires progress to rise on every notification, even while Bob's count stays flat.
+      expect(sent.map(n => n.params.progress)).toEqual([0, 2, 4, 6, 8]);
+      expect(sent[0]).toEqual({
+        method: 'notifications/progress',
+        params: { progressToken: 'tok', progress: 0, message: 'reading acme.io' },
+      });
       expect(result.structuredContent).toMatchObject({ status: 'ok' });
     });
 
@@ -586,6 +598,48 @@ describe('bob_compare_sites', () => {
     );
   });
 
+  it('names one side with no run when a failed comparison is missing it', async () => {
+    mockGet.mockImplementation(async (_url: string, config: { params: { id: string } }) => {
+      const { you } = mockPost.mock.calls[0][1];
+      return {
+        ok: true,
+        comparison: {
+          comparisonId: config.params.id,
+          status: 'failed',
+          you: agentRun(you.runId, { url: 'acme.io', status: 'failed', error: 'Timed out.' }),
+          them: null,
+          summaryMarkdown: null,
+          appPath: `/bob?compare=${config.params.id}`,
+        },
+      };
+    });
+
+    const result = await tools().call('bob_compare_sites', { yourUrl: 'acme.io', theirUrl: 'rival.io' });
+
+    expect(text(result)).toMatch(
+      /^Bob could not read either site: acme\.io: Timed out\.; one side has no run \(comparison /
+    );
+  });
+
+  it('still returns both ids at the deadline when no poll got through', async () => {
+    mockGet.mockRejectedValue(axiosError(502));
+
+    const result = await tools().call('bob_compare_sites', {
+      yourUrl: 'acme.io',
+      theirUrl: 'rival.io',
+      waitSeconds: 0,
+    });
+
+    const body = mockPost.mock.calls[0][1];
+    expect(result.structuredContent).toEqual({
+      comparisonId: body.comparisonId,
+      status: 'reading',
+      you: { url: 'acme.io', runId: body.you.runId },
+      them: { url: 'rival.io', runId: body.them.runId },
+      note: expect.stringContaining('get_bob_comparison'),
+    });
+  });
+
   it('returns the comparisonId when the wait runs out', async () => {
     serveComparisons({ status: 'reading' });
 
@@ -632,7 +686,7 @@ describe('bob_compare_sites', () => {
       expect(sendNotification).toHaveBeenCalledTimes(1);
       expect(sendNotification).toHaveBeenCalledWith({
         method: 'notifications/progress',
-        params: { progressToken: 7, progress: 1, total: 6, message: 'reading both sites (1 of 6)' },
+        params: { progressToken: 7, progress: 0, message: 'reading both sites (1 of 6)' },
       });
     } finally {
       vi.useRealTimers();

@@ -187,7 +187,7 @@ export const TOOL_META: ToolMeta[] = [
     name: 'bob_recheck',
     title: 'Re-check a Bob finding',
     description:
-      'Re-check one check from a Bob report against the live site, e.g. after a fix, and return the new reading; it is saved with the run next to the original. checkId is the id the report shows in backticks beside the check. Re-checks are rate-limited, and a refusal says how long to wait.',
+      'Re-scan one check from a Bob report against the live site, e.g. after a fix, and return the new reading. Costs no credits and adds the reading to the existing report beside the original; no new report is published. checkId is the id the report shows in backticks beside the check. Re-checks are rate-limited, and a refusal says how long to wait.',
     scope: 'bob:run',
   },
   {
@@ -1011,20 +1011,20 @@ interface ProgressContext {
 }
 
 /**
- * Turn a quest poll's progress callback into MCP `notifications/progress`, or nothing when the
- * client sent no progressToken. Progress also lets a client that resets its request timeout on
- * progress wait out a slow quest.
+ * Turn a poll's progress callback into MCP `notifications/progress`, or nothing when the client
+ * sent no progressToken. Progress counts elapsed seconds, so it rises on every poll, and that lets a
+ * client that resets its request timeout on progress wait out slow work.
  */
-function progressReporter(
+function progressReporter<T>(
   { _meta, sendNotification }: ProgressContext,
-  describe: (quest?: QuestResponse) => string
-): PollOptions['onProgress'] {
+  describe: (latest?: T) => string
+): PollOptions<T>['onProgress'] {
   const progressToken = _meta?.progressToken;
   if (progressToken === undefined) return undefined;
-  return (elapsedMs, quest) =>
+  return (elapsedMs, latest) =>
     sendNotification({
       method: 'notifications/progress',
-      params: { progressToken, progress: Math.floor(elapsedMs / 1000), message: describe(quest) },
+      params: { progressToken, progress: Math.floor(elapsedMs / 1000), message: describe(latest) },
     });
 }
 
@@ -1042,29 +1042,12 @@ interface BobCount {
 }
 
 /**
- * MCP progress from Bob's own counts. The spec requires each notification's progress to rise, so a
- * poll that saw no new count sends nothing, and nothing is sent before Bob reports a count.
+ * Bob's own done/total count goes in the progress message, not in `progress`: a count can stay flat
+ * for a while, and MCP needs `progress` to rise on every notification (see {@link progressReporter}).
  */
-function bobProgressReporter<T>(
-  { _meta, sendNotification }: ProgressContext,
-  count: (latest: T) => BobCount | null,
-  describe: (count: BobCount) => string
-): PollOptions<T>['onProgress'] {
-  const progressToken = _meta?.progressToken;
-  if (progressToken === undefined) return undefined;
-  let sent = -1;
-  return async (_elapsedMs, latest) => {
-    const current = latest === undefined ? null : count(latest);
-    if (!current || current.total <= 0 || current.done <= sent) return;
-    sent = current.done;
-    await sendNotification({
-      method: 'notifications/progress',
-      params: { progressToken, progress: current.done, total: current.total, message: describe(current) },
-    });
-  };
+function bobProgressMessage(what: string, count: BobCount | null | undefined): string {
+  return count && count.total > 0 ? `${what} (${count.done} of ${count.total})` : what;
 }
-
-const bobRunCount = (run: BobAgentRun): BobCount | null => run.progress ?? null;
 
 function bobComparisonCount(comparison: BobAgentComparison): BobCount | null {
   const counts = [comparison.you?.progress, comparison.them?.progress].filter((c): c is BobCount => !!c);
@@ -1464,7 +1447,9 @@ export function registerTools(server: McpServer, client: B4mApiClient): void {
       runBob('bob:run', () =>
         bobReadSite(client, args, {
           signal: extra.signal,
-          onProgress: bobProgressReporter(extra, bobRunCount, c => `reading ${args.url} (${c.done} of ${c.total})`),
+          onProgress: progressReporter(extra, (run?: BobAgentRun) =>
+            bobProgressMessage(`reading ${args.url}`, run?.progress)
+          ),
         })
       )
   );
@@ -1480,10 +1465,8 @@ export function registerTools(server: McpServer, client: B4mApiClient): void {
       runBob('bob:run', () =>
         bobCompareSites(client, args, {
           signal: extra.signal,
-          onProgress: bobProgressReporter(
-            extra,
-            bobComparisonCount,
-            c => `reading both sites (${c.done} of ${c.total})`
+          onProgress: progressReporter(extra, (comparison?: BobAgentComparison) =>
+            bobProgressMessage('reading both sites', comparison && bobComparisonCount(comparison))
           ),
         })
       )
