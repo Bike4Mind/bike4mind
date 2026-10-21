@@ -369,7 +369,12 @@ handler.get(async (req, res) => {
     // which is the exact disclosure this block exists to close.
     const documentSources = (belief: (typeof profile.beliefs)[number]): string[] =>
       (belief.sources ?? []).filter(isDocumentSource);
-    const surviving = await survivingSources(id, [...new Set(profile.beliefs.flatMap(documentSources))]);
+    // Keyed by the lake's `datalakeTag` (the principal id), NOT the URL id: the ledger and the
+    // reachability lookup both address the lake by tag, and passing the ObjectId/slug here makes
+    // `findByDatalakeTag` miss, which reads as "every source is gone" and hides every sourced belief.
+    const surviving = await survivingSources(resolution.principal.id, [
+      ...new Set(profile.beliefs.flatMap(documentSources)),
+    ]);
     // A belief citing no DOCUMENT is kept: nothing was destroyed, so it is not an orphan.
     const kept = profile.beliefs.filter(b => {
       const sources = documentSources(b);

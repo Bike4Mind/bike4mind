@@ -136,8 +136,10 @@ beforeEach(() => {
   h.setLakeMemoryCursor.mockResolvedValue(undefined);
   h.stampLakeMemoryPurge.mockResolvedValue(undefined);
   h.logAuditEvent.mockResolvedValue(undefined);
-  // Default: every cited source still exists and belongs to the lake.
-  h.findByDatalakeTag.mockResolvedValue(LAKE);
+  // Default: every cited source still exists and belongs to the lake. Keyed on the argument, so a
+  // lookup made with the URL id instead of the lake's datalakeTag finds nothing - which is exactly
+  // the bug the orphan tests below exist to catch.
+  h.findByDatalakeTag.mockImplementation(async (tag: string) => (tag === LAKE.datalakeTag ? LAKE : null));
   h.findAllByIds.mockImplementation(async (ids: string[]) => ids.map(id => ({ id, tags: [LAKE.datalakeTag] })));
 });
 
@@ -202,6 +204,8 @@ describe('GET /api/memory/lake/:id - org-shared read', () => {
     const payload = json.mock.calls[0][0];
     expect(payload.profile.beliefs.map((b: { id: string }) => b.id)).toEqual(['live']);
     expect(payload.withheldOrphans).toBe(1);
+    // The membership lookup addresses the lake the way the ledger does.
+    expect(h.findByDatalakeTag).toHaveBeenCalledWith(LAKE.datalakeTag);
   });
 
   it.each([undefined, 'question'])('withholds a live source removed from the lake (query: %s)', async q => {
