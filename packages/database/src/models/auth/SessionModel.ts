@@ -121,6 +121,7 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     surface: { type: String, required: false },
     enabledTools: [{ type: String, required: false }],
     disabledTools: [{ type: String, required: false }],
+    autoAddedTools: [{ type: String, required: false }],
     disableUserIntegrations: { type: Boolean, required: false },
     userSetFields: { type: [String], required: false, default: undefined },
     forceKnowledgeRetrieval: { type: Boolean, required: false },
@@ -557,6 +558,11 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
       throw new NotFoundError('Session not found');
     }
     return session;
+  }
+
+  async addAutoAddedTools(sessionId: string, toolNames: string[]) {
+    if (toolNames.length === 0) return;
+    await this.sessionModel.updateOne({ _id: sessionId }, { $addToSet: { autoAddedTools: { $each: toolNames } } });
   }
 
   async detachAgent(sessionId: string, agentId: string) {

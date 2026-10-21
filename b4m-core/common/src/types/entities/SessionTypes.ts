@@ -684,6 +684,13 @@ export interface ISession {
    */
   disabledTools?: string[];
   /**
+   * Server-owned: tools the completion path added on its own because a turn's message called for them
+   * (blog, data-lake save, skill). Only ever grows, so the tool list a session sends stays the same
+   * from turn to turn: any change to it invalidates the provider's whole prompt cache. Never written
+   * from a client.
+   */
+  autoAddedTools?: string[];
+  /**
    * When true, suppress the user's personal integrations for this session - their
    * MCP servers and agent delegation are not layered onto the session's toolset, so
    * it runs only its curated, server-owned tools. Generic capability - lets a product
@@ -1110,6 +1117,15 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
    * @returns The updated session
    */
   attachAgent: (sessionId: string, agentId: string) => Promise<ISessionDocument>;
+
+  /**
+   * Record tools the completion path auto-added, atomically and add-only ($addToSet), so concurrent
+   * turns cannot drop one another's entries.
+   *
+   * @param sessionId - The session ID
+   * @param toolNames - Tool names to add to `autoAddedTools`
+   */
+  addAutoAddedTools: (sessionId: string, toolNames: string[]) => Promise<void>;
 
   /**
    * Detach an agent from a session

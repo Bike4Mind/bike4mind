@@ -18,6 +18,7 @@ import ShowMoreButton from '@client/app/components/common/ShowMoreButton';
 import { actionButtonSx } from '@client/app/components/common/actionButtonSx';
 import { artifactFileName } from '@client/app/utils/artifactFileName';
 import { getCodeFileType } from './codeArtifactFileType';
+import { CodeBlockActionControls, useCodeBlockActionOutlet } from '@client/app/components/common/CodeBlockActions';
 
 interface CodeArtifactData {
   title: string;
@@ -37,6 +38,7 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
   const { currentSession, setCurrentSession, currentSessionId } = useSessions();
   const workBenchFiles = useWorkBenchFiles(currentSessionId);
   const { setWorkBenchFiles } = useWorkBenchActions();
+  const { outputSlot, outlet } = useCodeBlockActionOutlet();
 
   // Reveals the rest of a truncated body in place. There is no card-level fold: bounding
   // the body is the truncation's job, and Show less puts it back.
@@ -207,6 +209,8 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
             className="code-artifact-actions"
             sx={{ display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0 }}
           >
+            <CodeBlockActionControls code={data.code} language={data.language || 'text'} outputSlot={outputSlot} />
+
             <Tooltip title="Copy code to clipboard" placement="top">
               <IconButton size="sm" variant="plain" color="neutral" sx={actionButtonSx} onClick={handleCopy}>
                 <CopyIcon />
@@ -298,6 +302,7 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
             )}
           </>
         )}
+        {outlet}
       </Box>
     </Card>
   );

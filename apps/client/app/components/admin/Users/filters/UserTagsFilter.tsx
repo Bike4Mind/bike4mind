@@ -4,8 +4,7 @@ import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import LocalOfferIcon from '@mui/icons-material/LocalOffer';
 import { Box, Checkbox, Dropdown, Menu, MenuButton, MenuItem } from '@mui/joy';
 import React, { useMemo } from 'react';
-import { useShallow } from 'zustand/react/shallow';
-import { useUsersTab } from '../useUsersTabParams';
+import { useUsersParams } from '../useUsersTabParams';
 
 interface UserTagsFilterProps {
   disabled?: boolean;
@@ -13,7 +12,7 @@ interface UserTagsFilterProps {
 }
 
 const UserTagsFilter: React.FC<UserTagsFilterProps> = ({ disabled, fullWidth }) => {
-  const [params, setParams] = useUsersTab(useShallow(state => [state.params, state.setParams]));
+  const [params, setParams] = useUsersParams();
   const userTags = useGetUserTags();
 
   const selected = params.tags || [];

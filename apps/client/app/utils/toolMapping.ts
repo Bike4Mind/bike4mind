@@ -26,6 +26,7 @@ import {
   ShowChart as FinanceIcon,
   Groups as BobPanelIcon,
   SaveAlt as SaveToDataLakeIcon,
+  Balance as DecideIcon,
 } from '@mui/icons-material';
 import { B4MLLMTools, B4MLLMToolsList } from '@bike4mind/common';
 import type { SlackLlmTools } from '@bike4mind/services/llm';
@@ -234,6 +235,13 @@ export const TOOL_MAPPING: Record<PublicTools, ToolInfo> = {
     icon: KnowledgeBaseIcon,
     color: '#7c3aed',
   },
+  decide: {
+    name: 'decide',
+    displayName: 'Decisions',
+    description: 'Classify, route or score text with calibrated probabilities instead of a full answer',
+    icon: DecideIcon,
+    color: '#00695c',
+  },
   // Chess engine
   chess_engine: {
     name: 'chess_engine',
@@ -431,6 +439,7 @@ export const TOOL_CATEGORIES: Record<string, string> = {
   planet_visibility: 'Astronomy',
   // Knowledge base
   search_knowledge_base: 'Search',
+  decide: 'Analysis',
   // Chess engine
   chess_engine: 'Games',
   retrieve_knowledge_content: 'Search',

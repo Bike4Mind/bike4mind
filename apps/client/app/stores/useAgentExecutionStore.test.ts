@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useAgentExecutionStore, selectPendingApprovalForSession, findChildAnyDepth } from './useAgentExecutionStore';
 
 // Reset only the data fields between tests - using setState's replace flag
@@ -1010,5 +1010,205 @@ describe('useAgentExecutionStore - final_answer collapse (issue #35)', () => {
     const child = useAgentExecutionStore.getState().executions['exec-1'].childExecutions['child-1'];
     expect(child.iterations).toHaveLength(1);
     expect(child.pendingTextByIteration).toBeUndefined();
+  });
+});
+
+// `ConfidenceGateCard` renders purely on `pendingGate` presence, so the field
+// must flip status to `paused` when it lands, clear on every terminal
+// transition, and survive a reconnect only for a still-active run.
+describe('useAgentExecutionStore - pendingGate lifecycle', () => {
+  beforeEach(resetStore);
+
+  const GATE = { iteration: 2, confidence: 0.42, reason: 'confidence 42% below threshold 60%', requestedAt: 1234 };
+
+  it('setPendingGate stores the gate and flips the run to paused', () => {
+    const { startExecution, setPendingGate } = useAgentExecutionStore.getState();
+    startExecution('exec-gate', 'session-A');
+    expect(useAgentExecutionStore.getState().executions['exec-gate'].status).toBe('running');
+
+    setPendingGate('exec-gate', GATE);
+
+    const exec = useAgentExecutionStore.getState().executions['exec-gate'];
+    expect(exec.pendingGate).toEqual(GATE);
+    expect(exec.status).toBe('paused');
+  });
+
+  it('setPendingGate(undefined) clears the gate without touching status', () => {
+    const { startExecution, setPendingGate } = useAgentExecutionStore.getState();
+    startExecution('exec-gate-clear', 'session-A');
+    setPendingGate('exec-gate-clear', GATE);
+    setPendingGate('exec-gate-clear', undefined);
+
+    const exec = useAgentExecutionStore.getState().executions['exec-gate-clear'];
+    expect(exec.pendingGate).toBeUndefined();
+    expect(exec.status).toBe('paused');
+  });
+
+  it('markCompleted / markFailed / markAborted all clear pendingGate', () => {
+    const { startExecution, setPendingGate, markCompleted, markFailed, markAborted } =
+      useAgentExecutionStore.getState();
+
+    startExecution('exec-gate-done', 'session-A');
+    setPendingGate('exec-gate-done', GATE);
+    markCompleted('exec-gate-done', 'partial answer', 2);
+    expect(useAgentExecutionStore.getState().executions['exec-gate-done'].pendingGate).toBeUndefined();
+
+    startExecution('exec-gate-failed', 'session-A');
+    setPendingGate('exec-gate-failed', GATE);
+    markFailed('exec-gate-failed', 'boom');
+    expect(useAgentExecutionStore.getState().executions['exec-gate-failed'].pendingGate).toBeUndefined();
+
+    startExecution('exec-gate-aborted', 'session-A');
+    setPendingGate('exec-gate-aborted', GATE);
+    markAborted('exec-gate-aborted');
+    expect(useAgentExecutionStore.getState().executions['exec-gate-aborted'].pendingGate).toBeUndefined();
+  });
+
+  it('hydrateFromReconnect restores the gate for a paused run', () => {
+    useAgentExecutionStore.getState().hydrateFromReconnect({
+      executionId: 'exec-gate-recon',
+      sessionId: 'session-A',
+      status: 'paused',
+      totalCreditsUsed: 1,
+      iterationCount: 3,
+      pendingGate: GATE,
+    });
+
+    const exec = useAgentExecutionStore.getState().executions['exec-gate-recon'];
+    expect(exec.pendingGate).toEqual(GATE);
+    expect(exec.status).toBe('paused');
+  });
+
+  it('hydrateFromReconnect drops a stale gate for a TERMINAL run', () => {
+    useAgentExecutionStore.getState().hydrateFromReconnect({
+      executionId: 'exec-gate-recon-done',
+      sessionId: 'session-A',
+      status: 'completed',
+      totalCreditsUsed: 1,
+      iterationCount: 3,
+      pendingGate: GATE,
+    });
+
+    expect(useAgentExecutionStore.getState().executions['exec-gate-recon-done'].pendingGate).toBeUndefined();
+  });
+
+  it('hydrateFromReconnect drops the stored gate for an ACTIVE run that reports no gate', () => {
+    // The ack-window reconcile's clearing path: by the time the reconnect is
+    // answered, the pause was resumed, so the snapshot is `running` with no
+    // `pendingGate`. Only that drop removes a card the server will no longer
+    // answer for, so the stored gate must not be preserved here.
+    const { startExecution, setPendingGate } = useAgentExecutionStore.getState();
+    startExecution('exec-gate-recon-live', 'session-A');
+    setPendingGate('exec-gate-recon-live', GATE);
+
+    useAgentExecutionStore.getState().hydrateFromReconnect({
+      executionId: 'exec-gate-recon-live',
+      sessionId: 'session-A',
+      status: 'running',
+      totalCreditsUsed: 1,
+      iterationCount: 3,
+    });
+
+    const exec = useAgentExecutionStore.getState().executions['exec-gate-recon-live'];
+    expect(exec.status).toBe('running');
+    expect(exec.pendingGate).toBeUndefined();
+  });
+
+  it('hydrateFromReconnect drops a gate that arrives on a RUNNING snapshot', () => {
+    // A snapshot read before an in-flight `gate_response` was applied can report
+    // `running` and still carry the gate. Restoring it there is what let a dead
+    // card survive the following `resumed` frame.
+    useAgentExecutionStore.getState().hydrateFromReconnect({
+      executionId: 'exec-gate-recon-race',
+      sessionId: 'session-A',
+      status: 'running',
+      totalCreditsUsed: 1,
+      iterationCount: 3,
+      pendingGate: GATE,
+    });
+
+    expect(useAgentExecutionStore.getState().executions['exec-gate-recon-race'].pendingGate).toBeUndefined();
+  });
+
+  it('hydrateFromReconnect drops a stored gate when a paused snapshot reports none', () => {
+    // The reconnect snapshot is authoritative for the gate as well as the
+    // status: the server writes `pendingGate` atomically with `paused`, so a
+    // paused snapshot without one means the pause is not a gate pause.
+    const { startExecution, setPendingGate } = useAgentExecutionStore.getState();
+    startExecution('exec-gate-recon-paused', 'session-A');
+    setPendingGate('exec-gate-recon-paused', GATE);
+
+    useAgentExecutionStore.getState().hydrateFromReconnect({
+      executionId: 'exec-gate-recon-paused',
+      sessionId: 'session-A',
+      status: 'paused',
+      totalCreditsUsed: 1,
+      iterationCount: 3,
+    });
+
+    expect(useAgentExecutionStore.getState().executions['exec-gate-recon-paused'].pendingGate).toBeUndefined();
+  });
+
+  it('setStatus clears the gate when the run leaves paused', () => {
+    const { startExecution, setPendingGate, setStatus } = useAgentExecutionStore.getState();
+    startExecution('exec-gate-resumed', 'session-A');
+    setPendingGate('exec-gate-resumed', GATE);
+
+    setStatus('exec-gate-resumed', 'running');
+
+    const exec = useAgentExecutionStore.getState().executions['exec-gate-resumed'];
+    expect(exec.status).toBe('running');
+    expect(exec.pendingGate).toBeUndefined();
+  });
+
+  it('setStatus keeps the gate while the run stays paused', () => {
+    const { startExecution, setPendingGate, setStatus } = useAgentExecutionStore.getState();
+    startExecution('exec-gate-still-paused', 'session-A');
+    setPendingGate('exec-gate-still-paused', GATE);
+
+    setStatus('exec-gate-still-paused', 'paused');
+
+    expect(useAgentExecutionStore.getState().executions['exec-gate-still-paused'].pendingGate).toEqual(GATE);
+  });
+
+  it('ignores a confidence_gate that arrives after the run finished', () => {
+    const { startExecution, setPendingGate, markCompleted } = useAgentExecutionStore.getState();
+    startExecution('exec-gate-late', 'session-A');
+    markCompleted('exec-gate-late', 'done', 1);
+
+    setPendingGate('exec-gate-late', GATE);
+
+    const exec = useAgentExecutionStore.getState().executions['exec-gate-late'];
+    expect(exec.pendingGate).toBeUndefined();
+    expect(exec.status).toBe('completed');
+  });
+});
+
+describe('useAgentExecutionStore - reconnect request lifetime', () => {
+  beforeEach(resetStore);
+
+  it('bounds unanswered requests and clears correlation state on reset', () => {
+    const store = useAgentExecutionStore.getState();
+    for (let index = 0; index < 101; index += 1) {
+      store.registerReconnectRequest(`request-${index}`, 'session-A');
+    }
+    expect(Object.keys(useAgentExecutionStore.getState().pendingReconnectRequests)).toHaveLength(100);
+    expect(store.consumeReconnectRequest('request-0', 'exec-new')).toBeUndefined();
+    store.clearAll();
+    expect(useAgentExecutionStore.getState().pendingReconnectRequests).toEqual({});
+    expect(store.consumeReconnectRequest('request-100', 'exec-new')).toBeUndefined();
+  });
+
+  it('prunes expired requests when another request is sent', () => {
+    vi.useFakeTimers();
+    try {
+      const store = useAgentExecutionStore.getState();
+      store.registerReconnectRequest('expired', 'session-A');
+      vi.advanceTimersByTime(60_000);
+      store.registerReconnectRequest('fresh', 'session-A');
+      expect(Object.keys(useAgentExecutionStore.getState().pendingReconnectRequests)).toEqual(['fresh']);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

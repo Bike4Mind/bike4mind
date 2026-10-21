@@ -97,6 +97,8 @@ export const CORE_TOOL_DESCRIPTORS: ReadonlyMap<string, ToolDescriptor> = new Ma
     weather_info: reader(CORE, { openWorld: true }),
     web_search: reader(CORE, { openWorld: true }),
     web_fetch: reader(CORE, { openWorld: true }),
+    // Server call to B4M's decision endpoint; reads the caller's input, writes nothing here.
+    decide: reader(CORE, { openWorld: true }),
     deep_research: reader(CORE, { openWorld: true }),
     check_shell_output: reader(),
     list_background_shells: reader(),

@@ -145,15 +145,27 @@ interface AgentExecutePermissionResponse {
   rememberForSession?: boolean;
 }
 
+interface AgentExecuteGateResponse {
+  action: 'agent_execute';
+  command: 'gate_response';
+  executionId: string;
+  decision: 'continue' | 'stop';
+}
+
 interface AgentExecuteReconnect {
   action: 'agent_execute';
   command: 'reconnect';
+  requestId?: string;
   executionId?: string;
   sessionId?: string;
 }
 
 export type AgentExecuteCommand =
-  AgentExecuteStart | AgentExecuteAbort | AgentExecutePermissionResponse | AgentExecuteReconnect;
+  | AgentExecuteStart
+  | AgentExecuteAbort
+  | AgentExecutePermissionResponse
+  | AgentExecuteGateResponse
+  | AgentExecuteReconnect;
 
 /** Length cap for the background-completion toast preview. The spec asks for
  * 200 chars; server-side truncation on subagent steps is 2KB, so the final
@@ -457,9 +469,30 @@ export function useAgentExecutionSubscriptions(): void {
     );
 
     unsubscribers.push(
+      subscribeToAction('confidence_gate', async (msg: IMessageDataToClient) => {
+        if (msg.action !== 'confidence_gate') return;
+        store().setPendingGate(msg.executionId, {
+          iteration: msg.iteration,
+          confidence: msg.confidence,
+          reason: msg.reason,
+          requestedAt: Date.now(),
+        });
+      })
+    );
+
+    unsubscribers.push(
       subscribeToAction('reconnect_result', async (msg: IMessageDataToClient) => {
         if (msg.action !== 'reconnect_result') return;
-        if (!msg.found || !msg.executionId || !msg.status) return;
+        const reconnectSequence = store().consumeReconnectRequest(
+          msg.requestId,
+          msg.found ? msg.executionId : undefined,
+          msg.status
+        );
+        if (reconnectSequence === 'retry') {
+          reconnectRef.current(msg.sessionId, msg.executionId, false);
+          return;
+        }
+        if (!msg.found || !msg.executionId || !msg.status || reconnectSequence === undefined) return;
         const executionId = msg.executionId;
         // Taken from the response, never from request order: responses to a
         // sweep or to concurrent mount probes arrive in any order, and a
@@ -527,6 +560,7 @@ export function useAgentExecutionSubscriptions(): void {
 
         store().hydrateFromReconnect({
           executionId,
+          reconnectSequence,
           sessionId,
           status: msg.status,
           totalCreditsUsed: msg.totalCreditsUsed ?? 0,
@@ -543,6 +577,17 @@ export function useAgentExecutionSubscriptions(): void {
                     ? msg.pendingPermission.requestedAt.getTime()
                     : new Date(msg.pendingPermission.requestedAt).getTime(),
                 toolCallId: msg.pendingPermission.toolCallId,
+              }
+            : undefined,
+          pendingGate: msg.pendingGate
+            ? {
+                iteration: msg.pendingGate.iteration,
+                confidence: msg.pendingGate.confidence,
+                reason: msg.pendingGate.reason,
+                requestedAt:
+                  msg.pendingGate.requestedAt instanceof Date
+                    ? msg.pendingGate.requestedAt.getTime()
+                    : new Date(msg.pendingGate.requestedAt).getTime(),
               }
             : undefined,
         });
@@ -742,11 +787,33 @@ export function useAgentExecutionSubscriptions(): void {
   }, [subscribeToAction, queryClient]);
 }
 
+/**
+ * How long a `gate_response` - either decision - waits for the run to move off
+ * `paused` before the client re-asks the server for the truth. Neither decision
+ * is acknowledged directly: `continue` re-invokes the executor (whose `resumed`
+ * frame moves the run), `stop` ends it with a `completed` frame, and a response
+ * for a pause the stale sweep already closed is dropped in silence (the gate
+ * handler returns without sending anything).
+ */
+export const GATE_ACK_WINDOW_MS = 10_000;
+
 export function useAgentExecutionDispatch() {
   const { sendJsonMessage } = useWebsocket();
 
-  return useMemo(
-    () => ({
+  return useMemo(() => {
+    const reconnect = (sessionId?: string, executionId?: string, retryAllowed = true) => {
+      const requestId = crypto.randomUUID();
+      useAgentExecutionStore.getState().registerReconnectRequest(requestId, sessionId, executionId, retryAllowed);
+      sendJsonMessage({
+        action: 'agent_execute',
+        command: 'reconnect',
+        requestId,
+        sessionId,
+        executionId,
+      } as unknown as Parameters<typeof sendJsonMessage>[0]);
+    };
+
+    return {
       start: (payload: Omit<AgentExecuteStart, 'action' | 'command'>) => {
         // Track the sessionId so the matching `execution_started` event can be
         // associated with it; the server doesn't echo sessionId back.
@@ -778,14 +845,24 @@ export function useAgentExecutionDispatch() {
           approved,
           rememberForSession,
         } as unknown as Parameters<typeof sendJsonMessage>[0]),
-      reconnect: (sessionId?: string, executionId?: string) =>
+      respondToGate: (executionId: string, decision: 'continue' | 'stop') => {
         sendJsonMessage({
           action: 'agent_execute',
-          command: 'reconnect',
-          sessionId,
+          command: 'gate_response',
           executionId,
-        } as unknown as Parameters<typeof sendJsonMessage>[0]),
-    }),
-    [sendJsonMessage]
-  );
+          decision,
+        } as unknown as Parameters<typeof sendJsonMessage>[0]);
+        // A decision the server never answers (the pause was swept to
+        // `aborted`, so `handleGateResponse` drops it silently) leaves the run
+        // painting "Paused" forever. Re-ask once the ack window passes; a
+        // `reconnect_result` then restores the gate or the real status.
+        setTimeout(() => {
+          const execution = useAgentExecutionStore.getState().executions[executionId];
+          if (execution?.status !== 'paused') return;
+          reconnect(execution.sessionId, executionId);
+        }, GATE_ACK_WINDOW_MS);
+      },
+      reconnect,
+    };
+  }, [sendJsonMessage]);
 }

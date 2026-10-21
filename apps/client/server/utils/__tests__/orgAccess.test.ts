@@ -45,7 +45,7 @@ const STRANGER = '650000000000000000000333';
 const APPOINTED_ADMIN = '650000000000000000000555';
 const OTHER_ORG = '650000000000000000000def';
 
-const org = { id: ORG, userId: OWNER, managerId: MANAGER };
+const org = { id: ORG, userId: OWNER, adminUserIds: [MANAGER], users: [{ userId: MANAGER, permissions: ['read'] }] };
 
 // verifyOrgMembership takes a full IUserDocument because the shareable ACL it delegates to is
 // declared that way; only id/groups/isAdmin are ever read, so the fixtures supply those and cast.
@@ -167,7 +167,7 @@ describe('verifyOrgAccess', () => {
  * caller would pass the write gate as `canManage`.
  */
 describe('verifyOrgAdminRead', () => {
-  const orgWithAdmins = { ...org, adminUserIds: [APPOINTED_ADMIN] };
+  const orgWithAdmins = { ...org, adminUserIds: [APPOINTED_ADMIN, MANAGER] };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -355,11 +355,6 @@ describe('verifyOrgMemberOrManager', () => {
 
     expect((inaccessible as Error).constructor).toBe((missing as Error).constructor);
     expect((inaccessible as Error).message).toBe((missing as Error).message);
-  });
-
-  it('does not let an empty managerId match an empty caller id', async () => {
-    mockFindById.mockResolvedValue({ ...org, managerId: '' });
-    await expect(verifyOrgMemberOrManager(asCaller(''), ORG)).rejects.toBeInstanceOf(NotFoundError);
   });
 });
 

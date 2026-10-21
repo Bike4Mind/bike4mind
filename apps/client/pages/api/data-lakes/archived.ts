@@ -4,7 +4,9 @@ import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featu
 import { dataLakeService } from '@bike4mind/services';
 import { dataLakeRepository, dataLakeAccessGrantRepository, adminSettingsRepository } from '@bike4mind/database';
 import { Request } from 'express';
+import { dataLakeListResponseSchema } from '@bike4mind/common';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { respond } from '@server/utils/respond';
 
 // GET /api/data-lakes/archived - archived lakes accessible to the user (management view)
 const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
@@ -17,7 +19,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
         settings: adminSettingsRepository,
       },
     });
-    return res.json({ data: dataLakes });
+    return respond(res, dataLakeListResponseSchema, { data: dataLakes });
   });
 
 export const config = {

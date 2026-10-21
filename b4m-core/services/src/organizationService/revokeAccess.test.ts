@@ -166,32 +166,6 @@ describe('organizationService - revokeAccess', () => {
     expect(mockAdapters.db.organizations.removeMember).not.toHaveBeenCalled();
   });
 
-  it('should allow manager to revoke access', async () => {
-    const orgWithManager = {
-      ...existingOrganization,
-      managerId: 'manager1',
-    };
-
-    mockAdapters.db.organizations.findById.mockResolvedValue(orgWithManager);
-
-    const mockManagerUser: Partial<IUserDocument> = {
-      id: 'manager1',
-      name: 'Manager User',
-      email: 'manager@example.com',
-    };
-
-    const revokeParams = {
-      id: 'org1',
-      userId: 'user1',
-    };
-
-    await revokeAccess(mockManagerUser as IUserDocument, revokeParams, mockAdapters);
-
-    expect(mockAdapters.db.organizations.findById).toHaveBeenCalledWith('org1');
-
-    expect(mockAdapters.db.organizations.removeMember).toHaveBeenCalledWith('org1', 'user1');
-  });
-
   it('lets an org manager (adminUserIds, on the roster) revoke a plain member', async () => {
     mockAdapters.db.organizations.findById.mockResolvedValue({
       ...existingOrganization,
@@ -232,22 +206,6 @@ describe('organizationService - revokeAccess', () => {
     await expect(
       revokeAccess({ id: 'user2' } as IUserDocument, { id: 'org1', userId: 'user2' }, mockAdapters)
     ).rejects.toThrow(BadRequestError);
-
-    expect(mockAdapters.db.organizations.removeMember).not.toHaveBeenCalled();
-  });
-
-  it('refuses the legacy managerId removing an org manager', async () => {
-    mockAdapters.db.organizations.findById.mockResolvedValue({
-      ...existingOrganization,
-      users: [...existingOrganization.users!],
-      userDetails: [...existingOrganization.userDetails!],
-      managerId: 'manager1',
-      adminUserIds: ['user1'],
-    });
-
-    await expect(
-      revokeAccess({ id: 'manager1' } as IUserDocument, { id: 'org1', userId: 'user1' }, mockAdapters)
-    ).rejects.toThrow(ForbiddenError);
 
     expect(mockAdapters.db.organizations.removeMember).not.toHaveBeenCalled();
   });
@@ -346,36 +304,6 @@ describe('organizationService - revokeAccess', () => {
     expect(mockAdapters.db.organizations.removeMember).not.toHaveBeenCalled();
     expect(mockAdapters.db.users.removeGroupsFromUser).not.toHaveBeenCalled();
     expect(mockAdapters.db.dataLakeAccessGrants.upsertGrant).not.toHaveBeenCalled();
-  });
-
-  it('clears the manager appointment when the removed member held it', async () => {
-    // `managerId` is a SECOND org-admin rung: `findIdsWithAdminRights` matches on it, which feeds
-    // administeredOrgIds and therefore canManageLake's org rung. Leaving it set meant a removed
-    // manager's own grants lapsed while their authority over every lake in the org survived.
-    mockAdapters.db.organizations.findById.mockResolvedValue({
-      ...existingOrganization,
-      users: [...existingOrganization.users!],
-      userDetails: existingOrganization.userDetails?.map(d => ({ ...d })),
-      managerId: 'user1',
-    });
-
-    const result = await revokeAccess(mockOwnerUser as IUserDocument, { id: 'org1', userId: 'user1' }, mockAdapters);
-
-    expect(result.managerId).toBeNull();
-    expect(result).toEqual(expect.objectContaining({ managerId: null }));
-  });
-
-  it('leaves a manager appointment held by somebody else alone', async () => {
-    mockAdapters.db.organizations.findById.mockResolvedValue({
-      ...existingOrganization,
-      users: [...existingOrganization.users!],
-      userDetails: existingOrganization.userDetails?.map(d => ({ ...d })),
-      managerId: 'manager1',
-    });
-
-    const result = await revokeAccess(mockOwnerUser as IUserDocument, { id: 'org1', userId: 'user1' }, mockAdapters);
-
-    expect(result.managerId).toBe('manager1');
   });
 
   it('attributes a key-driven removal to the API KEY, keeping the human findable', async () => {

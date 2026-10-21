@@ -117,8 +117,8 @@ export interface AcceptLakeOwnershipOfferResult {
  *  - the offerer still holds the authority the offer was made under: current ADMIN rights for the
  *    org-admin rung (not mere roster membership, which the offer-time gate never granted it), and for
  *    the ownership rungs whatever `resolveLakeTransferAuthority` admitted at offer time - platform
- *    admin, billing owner, a roster row that still confers membership, team manager or appointed
- *    admin - re-read live;
+ *    admin, billing owner, a roster row that still confers membership, or a manager - re-read
+ *    live;
  *  - the recipient is still a member of the lake's organization.
  *
  * The offer is resolved `pending -> accepted` BEFORE the grants are written. `resolve` is atomic on
@@ -190,8 +190,8 @@ export async function acceptLakeOwnershipOffer(
   if (lakeOrg) {
     const org = await db.organizations.findById(lakeOrg);
     if (offer.offeredVia === 'org-admin') {
-      // The org-admin rung is granted only through `administeredOrgIds` (billing owner, team manager,
-      // appointed admin) - NOT roster membership, which `isOrgOwnershipCandidate` would also accept.
+      // The org-admin rung is granted only through `administeredOrgIds` (billing owner or a manager
+      // in `adminUserIds`) - NOT roster membership, which `isOrgOwnershipCandidate` would also accept.
       // Re-checking the rung the offer actually used, or a demoted admin could still demote an owner.
       if (!org || !isOrgAdminOf(org, offer.offeredByUserId)) {
         throw new BadRequestError(
@@ -201,7 +201,7 @@ export async function acceptLakeOwnershipOffer(
     } else if (offer.offeredVia !== 'platform-admin') {
       // The ownership rungs (`creator`/`grant-owner`) re-check what the OFFER-time gate admitted
       // (`resolveLakeTransferAuthority`'s `inLakeOrg || isAdmin`), re-read live: platform admin,
-      // billing owner, a roster row that still confers membership, team manager, or appointed admin.
+      // billing owner, a roster row that still confers membership, or a manager.
       // The rung is picked owner-first, so admins and managers land here.
       const offerer = await db.users.findById(offer.offeredByUserId);
       if (!org || !offerer || !(isOrgMember(offerer, org) || isOrgAdminOf(org, offer.offeredByUserId))) {

@@ -19,12 +19,15 @@ import { APP_DECISION_COOKIE } from '@bike4mind/server-utils/lib/consentCookies'
 import { pseudonymize } from './pseudonymize';
 import { stableEventId } from './signupEvents';
 import {
+  emitEmailVerifiedFunnelEvents,
   emitFunnelEvent,
+  emitSignupFunnelEvents,
   isSyntheticIdentity,
   parseDomainList,
   recordFirstChatValue,
   recordFirstValue,
   recordSignupAcquisition,
+  recordSyntheticIdentity,
   toUserAcquisition,
 } from './funnel';
 
@@ -140,6 +143,30 @@ describe('recordSignupAcquisition', () => {
   });
 });
 
+describe('recordSyntheticIdentity', () => {
+  it.each([
+    [{ id: 'u1', username: 'persona-admin', email: 'a@real.example' }, ''],
+    [{ id: 'u2', username: 'admin-seeded', email: 'a@test.example' }, 'test.example'],
+  ])(
+    'persists a synthetic admin-created account and keeps every funnel emit out of Overwatch',
+    async (user, domains) => {
+      mockGetSetting.mockResolvedValue(domains);
+
+      const isSynthetic = await recordSyntheticIdentity(user);
+      await emitSignupFunnelEvents({
+        user: { ...user, isSynthetic },
+        method: 'admin',
+        emailVerified: false,
+        creditsGranted: 50,
+      });
+
+      expect(isSynthetic).toBe(true);
+      expect(mockUserUpdate).toHaveBeenCalledWith({ id: user.id, isSynthetic: true });
+      expect(mockEmit).not.toHaveBeenCalled();
+    }
+  );
+});
+
 describe('emitFunnelEvent', () => {
   it('sends to the host product, keyed once per user, with the stored first touch as utm', async () => {
     const sent = await emitFunnelEvent({
@@ -166,6 +193,56 @@ describe('emitFunnelEvent', () => {
   it('never throws when the emitter rejects', async () => {
     mockEmit.mockRejectedValue(new Error('network'));
     await expect(emitFunnelEvent({ user: { id: 'u1' }, event: 'email_verified' })).resolves.toBe(true);
+  });
+});
+
+describe('emitSignupFunnelEvents', () => {
+  it('emits the verified, zero-credit and completed stages with one method', async () => {
+    await emitSignupFunnelEvents({ user: { id: 'u1' }, method: 'github', emailVerified: true, creditsGranted: 0 });
+
+    expect(mockEmit.mock.calls.map(([event]) => [event.event, event.metadata])).toEqual([
+      ['email_verified', { method: 'github' }],
+      ['credits_granted', { amount: 0, source: 'signup', method: 'github' }],
+      ['signup_completed', { method: 'github' }],
+    ]);
+  });
+
+  it('defers a zero-credit grant for an unverified signup but still emits signup_completed', async () => {
+    await emitSignupFunnelEvents({ user: { id: 'u1' }, method: 'github', emailVerified: false, creditsGranted: 0 });
+
+    expect(mockEmit.mock.calls.map(([event]) => event.event)).toEqual(['signup_completed']);
+  });
+
+  it('emits credits_granted for an unverified signup that was granted credits', async () => {
+    await emitSignupFunnelEvents({ user: { id: 'u1' }, method: 'github', emailVerified: false, creditsGranted: 50 });
+
+    expect(mockEmit.mock.calls.map(([event]) => [event.event, event.metadata])).toEqual([
+      ['credits_granted', { amount: 50, source: 'signup', method: 'github' }],
+      ['signup_completed', { method: 'github' }],
+    ]);
+  });
+});
+
+describe('emitEmailVerifiedFunnelEvents', () => {
+  it('emits email_verified and credits_granted for a post-launch account', async () => {
+    await emitEmailVerifiedFunnelEvents({
+      user: { id: 'u1', createdAt: new Date('2026-10-11T00:00:00Z') },
+      method: 'otc',
+      creditsGranted: 70,
+    });
+
+    expect(mockEmit.mock.calls.map(([event]) => [event.event, event.metadata])).toEqual([
+      ['email_verified', { method: 'otc' }],
+      ['credits_granted', { amount: 70, source: 'signup', method: 'otc' }],
+    ]);
+  });
+
+  it('skips a pre-launch or undated account', async () => {
+    const early = { id: 'u1', createdAt: new Date('2026-10-10T23:59:59Z') };
+    await emitEmailVerifiedFunnelEvents({ user: early, method: 'otc', creditsGranted: 70 });
+    await emitEmailVerifiedFunnelEvents({ user: { id: 'u1' }, method: 'otc', creditsGranted: 70 });
+
+    expect(mockEmit).not.toHaveBeenCalled();
   });
 });
 

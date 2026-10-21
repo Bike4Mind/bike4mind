@@ -114,8 +114,8 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
     return result.sort((a, b) => (sortOrder === 'asc' ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name)));
   }, [users, search, sortOrder, pendingUsers, organization]);
 
-  // Each roster control mirrors the server predicate behind its own endpoint. The sets differ: the
-  // legacy managerId may revoke but not invite, and only the owner may revoke a manager.
+  // Each roster control mirrors the server predicate behind its own endpoint; only the owner may
+  // revoke a manager.
   // Invites (create + cancel) gate on isOrgMember, then isOrgOwnerOrCurrentAdmin, in sharingService;
   // an appointed admin whose users[] row lacks read/write fails the first check.
   const canInviteMembers =

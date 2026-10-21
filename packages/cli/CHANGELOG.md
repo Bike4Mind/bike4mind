@@ -1,5 +1,13 @@
 # @bike4mind/cli
 
+## 3.3.0
+
+### Minor Changes
+
+- [#4996](https://github.com/Bike4Mind/bike4mind/pull/4996) [`de55441`](https://github.com/Bike4Mind/bike4mind/commit/de554410692906f78ff0c6f51c6edbdb26b4b760) Thanks [@onoya](https://github.com/onoya)! - ask before retrying a sandbox-denied command outside the sandbox
+
+- [#5161](https://github.com/Bike4Mind/bike4mind/pull/5161) [`ded54cd`](https://github.com/Bike4Mind/bike4mind/commit/ded54cd85be360b44f87070416c46c30918a627f) Thanks [@julsanchez](https://github.com/julsanchez)! - RemoteSkillSource: opt-in `includeImports` (Skill Market imports kept and marked `untrusted`, for hosts that run them wrapped as untrusted content) and `invalidate()` to refetch inside the TTL. CLI behaviour is unchanged.
+
 ## 3.2.0
 
 ### Minor Changes

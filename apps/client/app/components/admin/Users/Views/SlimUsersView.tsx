@@ -105,7 +105,7 @@ const RecentActivityCell: React.FC<{ userId: string }> = ({ userId }) => {
 };
 
 const UserActions: React.FC<{ userId: string }> = ({ userId }) => {
-  const setFullUserViewUserId = useFullUserViewModal(state => state.setUserId);
+  const { setUserId: setFullUserViewUserId } = useFullUserViewModal();
 
   return (
     <Stack direction="row" spacing={0.5} alignItems="center" sx={{ flexShrink: 0 }}>

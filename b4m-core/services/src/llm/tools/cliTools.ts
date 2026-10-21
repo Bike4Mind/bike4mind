@@ -52,6 +52,7 @@ import { fileReadTool } from './implementation/fileRead';
 import { editLocalFileTool } from './implementation/editLocalFile';
 import { recentChangesTool } from './implementation/recentChanges';
 import { askUserQuestionTool } from './implementation/askUserQuestion';
+import { decideTool } from './implementation/decide';
 
 // Shared b4mTools the CLI enables. Imported individually (not via `b4mTools` from
 // tools/index) so the CLI never statically reaches the server-only image/excel
@@ -110,6 +111,9 @@ export const cliSharedTools = {
   weather_info: weatherTool,
   web_search: webSearchTool,
   web_fetch: webFetchTool,
+  // Executed server-side through /api/ai/v1/tools (see ToolRouter's SERVER_TOOLS); this entry
+  // supplies the schema, and the local fn refuses if it is ever reached directly.
+  decide: decideTool,
 } satisfies Partial<Record<LlmTools, ToolDefinition>>;
 
 /**

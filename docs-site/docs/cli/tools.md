@@ -14,44 +14,45 @@ The B4M CLI agent has access to various tools for file operations, code search, 
 
 These tools run automatically without permission prompts:
 
-| Tool | Description |
-|------|-------------|
-| `math_evaluate` | Evaluate mathematical expressions |
-| `current_datetime` | Get current date and time |
-| `dice_roll` | Roll dice (for fun/games) |
-| `prompt_enhancement` | Enhance prompts |
+| Tool                 | Description                       |
+| -------------------- | --------------------------------- |
+| `math_evaluate`      | Evaluate mathematical expressions |
+| `current_datetime`   | Get current date and time         |
+| `dice_roll`          | Roll dice (for fun/games)         |
+| `prompt_enhancement` | Enhance prompts                   |
 
 ### Prompt Default (Can Be Trusted)
 
 These tools prompt for permission by default but can be trusted:
 
-| Tool | Description |
-|------|-------------|
-| `file_read` | Read file contents |
-| `grep_search` | Search file contents with regex |
-| `glob_files` | Find files by pattern |
-| `get_file_tree` | Get directory structure |
-| `web_search` | Search the web |
-| `deep_research` | In-depth web research |
-| `weather_info` | Get weather data |
-| `git_status` | Git repository status |
-| `git_diff` | Show git differences |
-| `git_log` | Show commit history |
-| `git_branch` | List/manage branches |
+| Tool            | Description                                       |
+| --------------- | ------------------------------------------------- |
+| `file_read`     | Read file contents                                |
+| `grep_search`   | Search file contents with regex                   |
+| `glob_files`    | Find files by pattern                             |
+| `get_file_tree` | Get directory structure                           |
+| `web_search`    | Search the web                                    |
+| `deep_research` | In-depth web research                             |
+| `weather_info`  | Get weather data                                  |
+| `decide`        | Classify, route, or score text with probabilities |
+| `git_status`    | Git repository status                             |
+| `git_diff`      | Show git differences                              |
+| `git_log`       | Show commit history                               |
+| `git_branch`    | List/manage branches                              |
 
 ### Prompt Always (Cannot Be Trusted)
 
 These tools always require permission due to their destructive potential:
 
-| Tool | Description |
-|------|-------------|
-| `create_file` | Create or overwrite files |
-| `edit_file` | Edit existing files |
-| `delete_file` | Delete files |
-| `bash_execute` | Execute shell commands |
-| `shell_execute` | Execute shell commands |
-| `git_commit` | Create git commits |
-| `git_push` | Push to remote |
+| Tool            | Description               |
+| --------------- | ------------------------- |
+| `create_file`   | Create or overwrite files |
+| `edit_file`     | Edit existing files       |
+| `delete_file`   | Delete files              |
+| `bash_execute`  | Execute shell commands    |
+| `shell_execute` | Execute shell commands    |
+| `git_commit`    | Create git commits        |
+| `git_push`      | Push to remote            |
 
 ## File Operations
 
@@ -60,15 +61,18 @@ These tools always require permission due to their destructive potential:
 Read the contents of a file.
 
 **Parameters**:
+
 - `path` (string): Relative path to the file
 
 **Security**:
+
 - Path must be within current working directory
 - Symlinks outside cwd are blocked
 - Binary files return an error
 - Maximum file size: 1MB
 
 **Example prompt**:
+
 ```
 Read the contents of src/index.ts
 ```
@@ -78,6 +82,7 @@ Read the contents of src/index.ts
 Create a new file or overwrite an existing one.
 
 **Parameters**:
+
 - `path` (string): Relative path for the file
 - `content` (string): File contents
 
@@ -85,6 +90,7 @@ Create a new file or overwrite an existing one.
 Shows the file path and diff (for overwrites).
 
 **Example prompt**:
+
 ```
 Create a new file utils/helpers.ts with a sum function
 ```
@@ -94,11 +100,13 @@ Create a new file utils/helpers.ts with a sum function
 Edit an existing file using search/replace.
 
 **Parameters**:
+
 - `path` (string): File to edit
 - `search` (string): Text to find
 - `replace` (string): Replacement text
 
 **Example prompt**:
+
 ```
 In src/config.ts, change the port from 3000 to 8080
 ```
@@ -108,9 +116,11 @@ In src/config.ts, change the port from 3000 to 8080
 Delete a file.
 
 **Parameters**:
+
 - `path` (string): File to delete
 
 **Example prompt**:
+
 ```
 Delete the old config.bak file
 ```
@@ -122,12 +132,14 @@ Delete the old config.bak file
 Search file contents using regular expressions.
 
 **Parameters**:
+
 - `pattern` (string): Regex pattern to search
 - `path` (string, optional): Directory or file to search
 - `include` (string, optional): File pattern to include
 - `exclude` (string, optional): File pattern to exclude
 
 **Example prompts**:
+
 ```
 Find all uses of useState in the src directory
 
@@ -139,10 +151,12 @@ Search for TODO comments in TypeScript files
 Find files matching a glob pattern.
 
 **Parameters**:
+
 - `pattern` (string): Glob pattern (e.g., `**/*.ts`)
 - `cwd` (string, optional): Starting directory
 
 **Example prompts**:
+
 ```
 Find all TypeScript files in the project
 
@@ -154,10 +168,12 @@ List all package.json files
 Get the directory structure.
 
 **Parameters**:
+
 - `path` (string, optional): Root directory
 - `depth` (number, optional): Maximum depth
 
 **Example prompt**:
+
 ```
 Show me the directory structure of src/
 ```
@@ -169,16 +185,19 @@ Show me the directory structure of src/
 Execute a shell command.
 
 **Parameters**:
+
 - `command` (string): Command to execute
 - `cwd` (string, optional): Working directory
 - `timeout` (number, optional): Timeout in milliseconds
 
 **Security**:
+
 - Always requires permission
 - Shows the exact command before execution
 - Output is captured and returned
 
 **Example prompts**:
+
 ```
 Run npm test
 
@@ -189,6 +208,7 @@ List all running processes
 
 **Direct Usage**:
 You can also use the `!` prefix:
+
 ```
 !npm test
 !git status
@@ -201,12 +221,14 @@ You can also use the `!` prefix:
 Search the web using Serper API.
 
 **Parameters**:
+
 - `query` (string): Search query
 - `num` (number, optional): Number of results
 
 **Note**: Server-side tool using Bike4Mind API keys.
 
 **Example prompt**:
+
 ```
 Search for React 19 new features
 ```
@@ -216,14 +238,30 @@ Search for React 19 new features
 Get current weather for a location.
 
 **Parameters**:
+
 - `location` (string): City name or coordinates
 
 **Note**: Server-side tool using Bike4Mind API keys.
 
 **Example prompt**:
+
 ```
 What&apos;s the weather in Tokyo?
 ```
+
+## Decisions
+
+### decide
+
+Use `decide` to answer predicate, choice, or ordered-score questions about text. For example:
+
+```text
+Use the decide tool to classify this feedback as a bug report, feature request, or praise, with probabilities for each label: "Please add a dark theme."
+```
+
+You receive answers in question order; a refused question returns a refusal. The tool runs on your Bike4Mind server and uses the same credit billing as decision API calls. It prompts for permission by default and is available in plan mode, but is excluded from CLI eval runs.
+
+The CLI offers `decide` only when your deployment reports a callable decision model for your account. Activate an OpenAI or TypeSafe key in Profile > API Keys, or ask your administrator to configure one. Explicit tool allowlists and denylists still apply. See [decision tool troubleshooting](./troubleshooting.md#decide-is-missing-or-unavailable) if it does not appear.
 
 ## Git Tools
 
@@ -232,6 +270,7 @@ What&apos;s the weather in Tokyo?
 Show the working tree status.
 
 **Example prompt**:
+
 ```
 What files have I changed?
 ```
@@ -241,10 +280,12 @@ What files have I changed?
 Show changes between commits, commit and working tree, etc.
 
 **Parameters**:
+
 - `ref` (string, optional): Commit or branch to compare
 - `staged` (boolean, optional): Show staged changes
 
 **Example prompt**:
+
 ```
 Show me what changes are staged for commit
 ```
@@ -254,10 +295,12 @@ Show me what changes are staged for commit
 Show commit logs.
 
 **Parameters**:
+
 - `count` (number, optional): Number of commits
 - `branch` (string, optional): Branch to show
 
 **Example prompt**:
+
 ```
 Show the last 5 commits on main
 ```
@@ -267,10 +310,12 @@ Show the last 5 commits on main
 Create a new commit.
 
 **Parameters**:
+
 - `message` (string): Commit message
 - `files` (string[], optional): Files to commit (default: all staged)
 
 **Example prompt**:
+
 ```
 Commit my changes with message &quot;Fix authentication bug&quot;
 ```
@@ -280,10 +325,12 @@ Commit my changes with message &quot;Fix authentication bug&quot;
 Push commits to remote.
 
 **Parameters**:
+
 - `remote` (string, optional): Remote name (default: origin)
 - `branch` (string, optional): Branch to push
 
 **Example prompt**:
+
 ```
 Push my changes to origin
 ```
@@ -295,9 +342,11 @@ Push my changes to origin
 Evaluate mathematical expressions.
 
 **Parameters**:
+
 - `expression` (string): Math expression
 
 **Example prompts**:
+
 ```
 Calculate 15% of 1250
 
@@ -311,6 +360,7 @@ Get the current date and time.
 **Parameters**: None
 
 **Example prompt**:
+
 ```
 What time is it?
 ```
@@ -336,6 +386,7 @@ Preview:
 ```
 
 **Options**:
+
 - **Allow (A)**: Execute this once
 - **Deny (D)**: Block this execution
 - **Trust (T)**: Allow this tool for the session
@@ -350,6 +401,7 @@ For tools you use frequently:
 ```
 
 Choose where to save:
+
 - **Local**: This project, gitignored
 - **Project**: Team-shared, committed
 - **Global**: All projects
@@ -382,6 +434,7 @@ Some tools run on the Bike4Mind server using company API keys:
 - `weather_info` - Uses OpenWeather API
 
 This means:
+
 - No API key configuration needed
 - Usage is tracked in your credits
 - Tools work immediately after authentication
@@ -391,11 +444,13 @@ This means:
 ### Efficient File Reading
 
 Instead of reading many files one by one:
+
 ```
 Read all files in src/components/
 ```
 
 Use glob and targeted reads:
+
 ```
 Find React components using hooks, then read the relevant ones
 ```
@@ -403,6 +458,7 @@ Find React components using hooks, then read the relevant ones
 ### Batch Operations
 
 The agent can chain tools:
+
 ```
 Find all TODO comments, create a summary, and save it to TODO.md
 ```

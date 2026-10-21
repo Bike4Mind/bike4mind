@@ -177,7 +177,14 @@ export function useUpdateOrganization() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ orgId, data }: { orgId: string; data: Partial<IOrganizationDocument> }) => {
+    mutationFn: async ({
+      orgId,
+      data,
+    }: {
+      orgId: string;
+      // creditReason is required by the server whenever an admin changes currentCredits.
+      data: Partial<IOrganizationDocument> & { creditReason?: string };
+    }) => {
       const response = await api.put<WithId<IOrganizationDocument>>(`/api/organizations/${orgId}`, data);
       return response.data;
     },
@@ -289,18 +296,6 @@ export function useGetUserOrganizations(userId: string | undefined | null) {
     enabled: !!userId,
     staleTime: 1000 * 60 * 5, // 5 minutes
     refetchOnMount: false,
-  });
-}
-
-export function useGetManagedOrganizations(userId: string | undefined | null) {
-  return useQuery({
-    queryKey: ['organizations', 'managed', userId],
-    queryFn: async () => {
-      const { data } = await api.get<IOrganizationDocument[]>('/api/organizations/managed');
-      return data;
-    },
-    enabled: !!userId,
-    staleTime: 1000 * 60 * 5,
   });
 }
 

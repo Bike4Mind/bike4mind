@@ -4,6 +4,7 @@ import {
   parseStorageLimitErrorInfo,
   type MusicGenerationApiErrorCode,
 } from '@bike4mind/common';
+import type { PayerAccount } from './generationBillingTarget';
 import { describeGenerationError, readErrorCode } from './generationErrors';
 
 // Keyed by the API's errorCode (b4m-core/common/src/schemas/musicGenerations.ts). As with video, the response's
@@ -37,10 +38,20 @@ export function describeMusicCancelError(error: unknown): string {
   return describeMusicGenerationError(error, 'Could not cancel the song. Try again.');
 }
 
-export function describeMusicGenerationError(error: unknown, fallback: string): string {
+export function describeMusicGenerationError(
+  error: unknown,
+  fallback: string,
+  billingAccount?: PayerAccount | null
+): string {
   // Only music has a storage quota to report; a rate limit still wins over it.
   if (isAxiosError(error) && error.response?.status !== 429 && parseStorageLimitErrorInfo(error.response?.data)) {
     return STORAGE_FULL_MESSAGE;
   }
-  return describeGenerationError(MUSIC_GENERATION_API_ERROR_CODES, MESSAGES, error, fallback);
+  return describeGenerationError(
+    MUSIC_GENERATION_API_ERROR_CODES,
+    MESSAGES,
+    error,
+    fallback,
+    billingAccount === undefined ? undefined : { noun: 'song', billingAccount }
+  );
 }

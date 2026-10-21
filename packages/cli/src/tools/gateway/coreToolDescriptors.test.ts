@@ -44,6 +44,7 @@ const LEGACY_POLICY: ReadonlyArray<[string, ToolCategory, boolean, boolean, stri
   ['check_shell_output', 'prompt_default', true, false, undefined],
   ['list_background_shells', 'prompt_default', true, false, undefined],
   ['web_fetch', 'prompt_default', true, false, undefined],
+  ['decide', 'prompt_default', true, false, undefined],
   ['deep_research', 'prompt_default', true, false, undefined],
   ['file_read', 'prompt_default', true, false, undefined],
   ['grep_search', 'prompt_default', true, false, undefined],

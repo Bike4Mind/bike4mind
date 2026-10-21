@@ -52,7 +52,14 @@ export type AuditLogPage = { entries: AuditEntry[]; nextCursor: string | null };
 export type AuditSummary = {
   windowDays: AuditSummaryWindow;
   since: string;
-  creditGrants: { count: number; topGranters: Array<{ userId: string | null; name: string; count: number }> };
+  creditGrants: {
+    /** Credit-category entries, excluding denied attempts. */
+    count: number;
+    /** Sums of the signed `details.credits` stamp: positive amounts, and the magnitude of negative ones. */
+    grantedCredits: number;
+    deductedCredits: number;
+    topGranters: Array<{ userId: string | null; name: string; count: number }>;
+  };
   /** Category 'access', excluding impersonation actions. */
   permissionChanges: number;
   impersonations: number;

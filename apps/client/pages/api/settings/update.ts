@@ -10,8 +10,11 @@ import {
   MIN_PRICE_PER_CREDIT_USD,
   partitionEmailList,
   settingsMap,
+  type SettingKey,
 } from '@bike4mind/common';
+import { withTransaction } from '@bike4mind/database';
 import { AdminSettings } from '@bike4mind/database/infra';
+import { adminAuditService } from '@bike4mind/services';
 import { invalidateSettingsCache } from '@bike4mind/utils';
 import { decryptAtRest } from '@bike4mind/utils/security';
 
@@ -22,10 +25,44 @@ import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/serve
 import { encryptSecret, isEncrypted, isValidEncryptionKey } from '@bike4mind/server-utils/security/secretEncryption';
 import { materializePublicSettingsArtifactSafe } from '@server/utils/publicSettingsArtifact';
 import { refuseFloorAboveMeasured } from '@server/utils/refuseFloorAboveMeasured';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 // One-time guard so a self-host install running without a configured key logs the
 // plaintext-at-rest degradation once, rather than silently or on every write.
 let warnedSelfHostPlaintext = false;
+
+type AuditRequest = Parameters<typeof recordAdminActionFromRequest>[0];
+
+const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+// Large JSON settings (e.g. sreAgentConfig) record only the top-level keys that differ, one change each.
+const diffChanges = (key: SettingKey, before: unknown, after: unknown) => {
+  if (isPlainRecord(before) && isPlainRecord(after)) {
+    const subKeys = [...new Set([...Object.keys(before), ...Object.keys(after)])];
+    const changed = subKeys.filter(subKey => JSON.stringify(before[subKey]) !== JSON.stringify(after[subKey]));
+    if (changed.length > 0) {
+      return changed.map(subKey => ({ field: `${key}.${subKey}`, before: before[subKey], after: after[subKey] }));
+    }
+  }
+  return [{ field: key, before, after }];
+};
+
+/**
+ * Strict entry for an AdminSettings write; call it inside the write's transaction. A sensitive value
+ * is never recorded, and sreAgentConfig's nested secrets are dropped by the writer's redactor.
+ */
+const recordSettingChange = (req: AuditRequest, key: SettingKey, before: unknown, after: unknown) => {
+  const hidden = settingsMap[key].isSensitive === true;
+  return recordAdminActionFromRequest(req, {
+    action: 'settings.admin_settings.updated',
+    target: { kind: 'settings', id: key, displayName: key },
+    summary: after === null ? `cleared ${key}` : `updated ${key}`,
+    changes: hidden
+      ? [{ field: key, before: adminAuditService.REDACTED_PLACEHOLDER, after: adminAuditService.REDACTED_PLACEHOLDER }]
+      : diffChanges(key, before, after),
+  });
+};
 
 // Update Admin Setting
 const handler = baseApi().put(
@@ -45,7 +82,11 @@ const handler = baseApi().put(
     // Delete, not store the default, so the setting reads as unset again. hardDelete: the upsert below
     // would match a soft-deleted tombstone without reviving it (softDeletePlugin, db-core/src/utils/mongo.ts).
     if (settingsMap[key].clearDeletesRow && isBlankSettingValue(req.body.value)) {
-      await AdminSettings.deleteOne({ settingName: key }, { hardDelete: true });
+      await withTransaction(async () => {
+        const existing = await AdminSettings.findOne({ settingName: key }).lean();
+        await AdminSettings.deleteOne({ settingName: key }, { hardDelete: true });
+        await recordSettingChange(req, key, existing?.settingValue ?? null, null);
+      });
       invalidateSettingsCache(key);
       // null, not the declared default: the client renders that as "per embedding space", so an
       // admin can tell a cleared setting apart from one pinned to the default's own number.
@@ -177,11 +218,16 @@ const handler = baseApi().put(
       }
     }
 
-    const updatedSetting = await AdminSettings.findOneAndUpdate(
-      { settingName: key },
-      { $set: { settingValue: settingValueToStore } },
-      { upsert: true, new: true }
-    );
+    const updatedSetting = await withTransaction(async () => {
+      const existing = await AdminSettings.findOne({ settingName: key }).lean();
+      const written = await AdminSettings.findOneAndUpdate(
+        { settingName: key },
+        { $set: { settingValue: settingValueToStore } },
+        { upsert: true, new: true }
+      );
+      await recordSettingChange(req, key, existing?.settingValue ?? null, written?.settingValue ?? null);
+      return written;
+    });
 
     if (!updatedSetting) throw new NotFoundError('Admin setting not found');
 

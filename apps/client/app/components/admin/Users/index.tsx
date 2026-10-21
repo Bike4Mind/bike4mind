@@ -6,14 +6,13 @@ import { useGetAllOrganizations } from '@client/app/utils/organizationAPICalls';
 import { Box, LinearProgress, Sheet, Stack } from '@mui/joy';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
-import { useShallow } from 'zustand/react/shallow';
 import AdminProfileModal from '../AdminProfileModal';
 import ComplianceModal from './ComplianceModal';
 import CreateUserModal, { useCreateUserModal } from './CreateUserModal';
 import { exportUsersCsv } from './exportUsersCsv';
 import MobileFiltersDrawer from './MobileFiltersDrawer';
 import PaginationControls from './PaginationControls';
-import { PAGE_LIMIT_OPTIONS, useUsersTab } from './useUsersTabParams';
+import { PAGE_LIMIT_OPTIONS, useUsersParams, useUsersTab, useUsersTabUrlSync } from './useUsersTabParams';
 import UsersFilterBar, { UsersDisplayMode } from './UsersFilterBar';
 import { FullUsersView } from './Views/FullUsersView';
 import RecentActivityView from './Views/RecentActivityView';
@@ -28,7 +27,8 @@ const UsersTab: React.FC = () => {
   const { setOpen: setCreateUserModalOpen } = useCreateUserModal();
 
   const [totalUsers, setTotalUsers] = useState<number>(1);
-  const [params, setParams] = useUsersTab(useShallow(state => [state.params, state.setParams]));
+  useUsersTabUrlSync();
+  const [params, setParams] = useUsersParams();
 
   // Seed from the persisted params so the sync effect below does not wipe a restored search.
   const {
