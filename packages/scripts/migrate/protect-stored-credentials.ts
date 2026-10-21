@@ -1,5 +1,5 @@
 import { pathToFileURL } from 'node:url';
-import { connectDB } from '@bike4mind/database';
+import { connectDB, whenCatalogSeeded } from '@bike4mind/database';
 import { Resource } from 'sst';
 import mongoose from 'mongoose';
 import { protectStoredCredentials } from './protect-stored-credentials-backfill';
@@ -16,6 +16,9 @@ async function run(): Promise<void> {
     await protectStoredCredentials();
     console.info('Credential backfill completed. Repeat the command to verify convergence before resuming writers.');
   } finally {
+    // connectDB kicks off a fire-and-forget catalog seed; disconnecting under it throws
+    // MongoExpiredSessionError after the real result is printed. whenCatalogSeeded never rejects.
+    await whenCatalogSeeded().catch(() => {});
     await mongoose.disconnect();
   }
 }

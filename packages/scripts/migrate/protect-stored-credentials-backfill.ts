@@ -3,7 +3,15 @@ import { createHash } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import mongoose from 'mongoose';
 import { ApiKey, McpServer, SlackDevWorkspace, User, SecretRotation } from '@bike4mind/database';
-import { decryptAtRest, encryptAtRest, isEncrypted, isSecretsAtRestConfigured } from '@bike4mind/utils/security';
+import {
+  apiKeySecretContext,
+  decryptAtRest,
+  encryptAtRest,
+  isContextBound,
+  isEncrypted,
+  isSecretsAtRestConfigured,
+  mcpEnvSecretContext,
+} from '@bike4mind/utils/security';
 import { resolveMasterKey, rewrapLegacyDek } from '@bike4mind/server-utils/memory/factCipher';
 
 const slackFields = [
@@ -13,39 +21,72 @@ const slackFields = [
   'appConfigurationToken',
 ] as const;
 
-function decryptStored(value: string): string {
+/**
+ * A row this run could not convert. Rows are independent, so one bad value must not stop the
+ * rest of the backfill (the later phases convert different collections, and a rerun would die on
+ * the same row); the run reports them all at the end instead.
+ */
+interface BackfillFailure {
+  collection: string;
+  id: string;
+  field: string;
+}
+
+function decryptStored(value: string, failures: BackfillFailure[], where: BackfillFailure): string | null {
   const plaintext = decryptAtRest(value);
-  if (value && !plaintext) throw new Error('Stored credential cannot be decrypted; migration remains pending');
+  if (value && !plaintext) {
+    failures.push(where);
+    return null;
+  }
   return plaintext;
+}
+
+function reportFailures(failures: BackfillFailure[]): void {
+  if (failures.length === 0) return;
+  const rows = failures.map(failure => `  ${failure.collection}/${failure.id}.${failure.field}`).join('\n');
+  throw new Error(
+    `Stored credentials remain pending in ${failures.length} value(s); migration is incomplete:\n${rows}`
+  );
 }
 
 export async function protectStoredCredentials(): Promise<void> {
   if (!isSecretsAtRestConfigured()) throw new Error('Configure SECRET_ENCRYPTION_KEY before credential migration');
   const masterKey = resolveMasterKey();
   if (!masterKey) throw new Error('Configure MEMORY_KEY_SECRET before memory key migration');
+  const failures: BackfillFailure[] = [];
 
   for await (const row of ApiKey.collection.find({})) {
-    if (!row.apiKey || row.apiKey.startsWith('v2:')) continue;
-    const context = JSON.stringify(['ApiKey', row.userId, String(row._id), 'apiKey']);
+    if (!row.apiKey || isContextBound(row.apiKey)) continue;
+    const context = apiKeySecretContext(row.userId, String(row._id));
+    const plaintext = decryptStored(row.apiKey, failures, {
+      collection: 'ApiKey',
+      id: String(row._id),
+      field: 'apiKey',
+    });
+    if (plaintext === null) continue;
     await ApiKey.collection.updateOne(
       { _id: row._id, apiKey: row.apiKey },
-      { $set: { apiKey: encryptAtRest(decryptStored(row.apiKey), context) } }
+      { $set: { apiKey: encryptAtRest(plaintext, context) } }
     );
   }
   for await (const row of McpServer.collection.find({})) {
     const variables = z
       .array(z.object({ key: z.string(), value: z.string() }).passthrough())
       .parse(row.envVariables ?? []);
-    if (!variables.some(variable => variable.value && !variable.value.startsWith('v2:'))) continue;
-    const envVariables = variables.map(variable => ({
-      ...variable,
-      value: variable.value.startsWith('v2:')
-        ? variable.value
-        : encryptAtRest(
-            decryptStored(variable.value),
-            JSON.stringify(['mcp', row.userId, String(row._id), variable.key])
-          ),
-    }));
+    if (!variables.some(variable => variable.value && !isContextBound(variable.value))) continue;
+    const envVariables = variables.map(variable => {
+      if (isContextBound(variable.value)) return variable;
+      const plaintext = decryptStored(variable.value, failures, {
+        collection: 'McpServer',
+        id: String(row._id),
+        field: variable.key,
+      });
+      if (plaintext === null) return variable;
+      return {
+        ...variable,
+        value: encryptAtRest(plaintext, mcpEnvSecretContext(row.userId, String(row._id), variable.key)),
+      };
+    });
     await McpServer.collection.updateOne({ _id: row._id, envVariables: row.envVariables }, { $set: { envVariables } });
   }
   for await (const row of SlackDevWorkspace.collection.find({})) {
@@ -81,7 +122,12 @@ export async function protectStoredCredentials(): Promise<void> {
   }
   for await (const row of SecretRotation.collection.find({ previousKey: { $exists: true } })) {
     if (!row.previousKey) continue;
-    const plaintext = decryptStored(row.previousKey);
+    const plaintext = decryptStored(row.previousKey, failures, {
+      collection: 'SecretRotation',
+      id: String(row._id),
+      field: 'previousKey',
+    });
+    if (plaintext === null) continue;
     const capturedKeyFingerprint = createHash('sha256').update(plaintext).digest('hex');
     const expired = new Date(row.rotatedAt).getTime() <= Date.now() - 24 * 60 * 60 * 1000;
     await SecretRotation.collection.updateOne(
@@ -103,4 +149,6 @@ export async function protectStoredCredentials(): Promise<void> {
     const wrapped = rewrapLegacyDek(row.dek, masterKey);
     await keys.updateOne({ _id: row._id, dek: row.dek }, { $set: { dek: wrapped } });
   }
+
+  reportFailures(failures);
 }

@@ -91,4 +91,24 @@ describe('credential backfill', () => {
     await expect(protectStoredCredentials()).rejects.toThrow('MEMORY_KEY_SECRET');
     expect((await ApiKey.collection.findOne({ _id: row.insertedId }))!.apiKey).toBe('provider-canary');
   });
+
+  it('names an undecryptable row and still converts the later phases', async () => {
+    // Format-valid but encrypted under a key nobody holds: a rerun can never convert it, so the
+    // run must say WHICH row is stuck rather than dying on an anonymous message, and it must not
+    // leave the other collections un-migrated because of it.
+    const stuck = await ApiKey.collection.insertOne({
+      userId: 'owner',
+      apiKey: `${'11'.repeat(16)}:${'22'.repeat(16)}:${'33'.repeat(8)}`,
+    });
+    const mcp = await McpServer.collection.insertOne({
+      userId: 'owner',
+      name: 'notion',
+      envVariables: [{ key: 'TOKEN', value: 'mcp-canary' }],
+    });
+
+    await expect(protectStoredCredentials()).rejects.toThrow(new RegExp(`ApiKey/${stuck.insertedId}`));
+
+    const mcpRow = await McpServer.collection.findOne({ _id: mcp.insertedId });
+    expect(mcpRow!.envVariables[0].value.startsWith('v2:')).toBe(true);
+  });
 });
