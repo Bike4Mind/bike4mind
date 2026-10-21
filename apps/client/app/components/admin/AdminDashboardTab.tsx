@@ -175,7 +175,7 @@ export default function AdminDashboardTab({ onNavigate }: AdminDashboardTabProps
               Recent activity
               <AnalyticsTermHelp
                 term="Recent activity"
-                description="A snapshot of up to the latest 1,000 recorded events in the last seven calendar days, using your browser's time zone. Today is still in progress. Busy periods may fill the limit, so these charts cannot establish overall feature popularity or adoption. Refresh activity reloads this snapshot only."
+                description="A snapshot of up to the latest 1,000 recorded events in the last seven calendar days, using your browser's time zone. Today is still in progress. Busy periods may fill the limit, so these charts cannot establish overall feature popularity or adoption. The snapshot is cached for up to 12 hours; Refresh activity rebuilds it from the latest events and reloads nothing else."
               />
             </Typography>
             <Typography level="body-sm">Last 7 days, including today</Typography>
