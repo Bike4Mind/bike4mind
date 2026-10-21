@@ -111,6 +111,7 @@ import publishHandler from '@pages/api/skills/market/publish';
 import versionsHandler from '@pages/api/skills/market/[id]/versions';
 import rescanHandler from '@pages/api/skills/market/versions/[vid]/rescan';
 import reviewHandler from '@pages/api/skills/market/versions/[vid]/review';
+import updateSkillHandler from '@pages/api/skills/[id]/index';
 import reviewQueueHandler from '@pages/api/skills/market/review-queue';
 import byTokenHandler from '@pages/api/skills/market/by-token/[token]';
 
@@ -214,6 +215,38 @@ async function call(
 }
 
 describe('Skill Market (real mongod)', () => {
+  it.each([false, true])(
+    'stores an emptied argument hint as an empty string (isGlobalRead: %j)',
+    async isGlobalRead => {
+      const skill = await makeSkill(AUTHOR, 'Rewrite the text as bullets.', {
+        argumentHint: '<topic>',
+        isGlobalRead,
+      });
+      const response = await call(updateSkillHandler, 'PUT', AUTHOR, { id: skill.id }, { argumentHint: '' }, true);
+      expect(response._getJSONData()).toHaveProperty('argumentHint', '');
+      expect(await skillRepository.findById(skill.id)).toHaveProperty('argumentHint', '');
+    }
+  );
+
+  it.each([
+    { isGlobalRead: false, argumentHint: null },
+    { isGlobalRead: true, argumentHint: null },
+  ])('removes a null argument hint from storage (%j)', async ({ isGlobalRead, argumentHint }) => {
+    const skill = await makeSkill(AUTHOR, 'Rewrite the text as bullets.', {
+      argumentHint: '<topic>',
+      isGlobalRead,
+    });
+    const response = await call(updateSkillHandler, 'PUT', AUTHOR, { id: skill.id }, { argumentHint }, true);
+    expect(response._getJSONData()).not.toHaveProperty('argumentHint');
+    expect(await skillRepository.findById(skill.id)).not.toHaveProperty('argumentHint');
+  });
+
+  it('preserves an omitted argument hint in storage during a partial update', async () => {
+    const skill = await makeSkill(AUTHOR, 'Rewrite the text as bullets.', { argumentHint: '<topic>' });
+    await call(updateSkillHandler, 'PUT', AUTHOR, { id: skill.id }, { description: 'New description' });
+    expect(await skillRepository.findById(skill.id)).toHaveProperty('argumentHint', '<topic>');
+  });
+
   it('auto-approves a clean Public listing and serves it in search', async () => {
     const { listing, version } = await publish(await makeSkill(AUTHOR, 'Rewrite the text as bullets.'), 'public');
     expect(version).toMatchObject({ scanStatus: 'passed', riskTier: 'clean', reviewStatus: 'auto_approved' });

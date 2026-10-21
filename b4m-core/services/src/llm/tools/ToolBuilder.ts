@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import {
   CreditHolderType,
   IChatHistoryItemDocument,
@@ -28,7 +29,7 @@ import {
   stripCitationIndices,
 } from './citationNumbering';
 import { ToolDefinition, type ToolContext } from './base/types';
-import { validateUserCredits, validateAudioCredits } from './base/utils';
+import { validateImageCredits, validateAudioCredits } from './base/utils';
 import { estimateImageCredits } from '../../imageCost';
 import {
   toImageCostInput,
@@ -436,6 +437,8 @@ export interface BuildToolsArgs {
     adminSettingsEnforceCredits: boolean;
     models: ModelInfo[];
   };
+  /** See `ToolBuilderDeps.subagentModels`. */
+  subagentModels?: ModelInfo[];
   agentOnlyMcpServers?: string[];
   apiKeyTable?: ApiKeyTable;
   getAbortSignal?: () => AbortSignal | undefined;
@@ -491,6 +494,11 @@ export interface BuildToolPromptArgs {
   extraContextMessages: ExtraContextMessage[];
 }
 
+// The tools whose onToolStart records a gate estimate (gateImageCredits, gateAudioCredits).
+const GATED_TOOL_NAMES = new Set(['image_generation', 'edit_image', 'audio_generation']);
+// Reuse one async context store for the process; each tool invocation gets a unique token.
+const gatedToolInvocation = new AsyncLocalStorage<symbol>();
+
 export class ToolBuilder {
   constructor(private readonly deps: ToolBuilderConfig) {}
 
@@ -511,6 +519,8 @@ export class ToolBuilder {
     const queue = this.deps.toolCreditsMap.get(toolName) ?? [];
     queue.push(credits);
     this.deps.toolCreditsMap.set(toolName, queue);
+    // This call's gate estimate is now superseded by its settled charge.
+    this.releaseGatedToolCredits(toolName);
     // Only a charging call contributes: a zero-credit call is absent from the aggregate
     // ledger row's amount, so recording anything for it would be misleading.
     // ASSUMES this queue only ever carries positive charges, which every call site holds
@@ -527,6 +537,54 @@ export class ToolBuilder {
     if (credits > 0) this.deps.toolCreditModels.add(model ?? UNATTRIBUTED_TOOL_CHARGE);
   }
 
+  /** Each invocation owns its estimate, including when same-name calls finish out of order. */
+  private readonly gatedToolCredits = new Map<string, Map<symbol, number>>();
+
+  private trackGatedCalls(tools: ICompletionOptionTools[]): ICompletionOptionTools[];
+  private trackGatedCalls(tools: ICompletionOptionTools[] | undefined): ICompletionOptionTools[] | undefined;
+  private trackGatedCalls(tools: ICompletionOptionTools[] | undefined): ICompletionOptionTools[] | undefined {
+    return tools?.map(tool => {
+      const name = tool.toolSchema.name;
+      if (!GATED_TOOL_NAMES.has(name)) return tool;
+      const toolFn: ICompletionOptionTools['toolFn'] = (...args) => {
+        const invocation = Symbol(name);
+        return gatedToolInvocation.run(invocation, async () => {
+          try {
+            return await tool.toolFn(...args);
+          } finally {
+            this.gatedToolCredits.get(name)?.delete(invocation);
+          }
+        });
+      };
+      return { ...tool, toolFn };
+    });
+  }
+
+  private releaseGatedToolCredits(toolName: string): void {
+    const estimates = this.gatedToolCredits.get(toolName);
+    // Direct gate/settle callers are sequential; wrapped tools carry their invocation across awaits.
+    const invocation = gatedToolInvocation.getStore() ?? estimates?.keys().next().value;
+    if (invocation !== undefined) estimates?.delete(invocation);
+  }
+
+  /** Credits this turn has committed to tool calls: settled charges plus in-flight gate estimates. */
+  private committedToolCredits(): number {
+    let total = 0;
+    for (const queue of this.deps.toolCreditsMap.values()) {
+      for (const credits of queue) total += credits;
+    }
+    for (const estimates of this.gatedToolCredits.values()) {
+      for (const credits of estimates.values()) total += credits;
+    }
+    return total;
+  }
+
+  private recordGatedToolCredits(toolName: string, credits: number): void {
+    const estimates = this.gatedToolCredits.get(toolName) ?? new Map<symbol, number>();
+    estimates.set(gatedToolInvocation.getStore() ?? Symbol(toolName), credits);
+    this.gatedToolCredits.set(toolName, estimates);
+  }
+
   /**
    * Up-front affordability gate for audio_generation (onToolStart): throws
    * insufficient_credits before the paid provider call. Speech is gated on a conservative
@@ -536,7 +594,14 @@ export class ToolBuilder {
    */
   gateAudioCredits(data: AudioCostInput, enforceCredits: boolean, organization?: IOrganizationDocument | null): void {
     if (!enforceCredits || !this.deps.db.creditTransactions) return;
-    validateAudioCredits(this.deps.user, data, this.deps.logger, organization);
+    const { requiredCredits } = validateAudioCredits(
+      this.deps.user,
+      data,
+      this.deps.logger,
+      organization,
+      this.committedToolCredits()
+    );
+    this.recordGatedToolCredits('audio_generation', requiredCredits);
   }
 
   /**
@@ -654,14 +719,16 @@ export class ToolBuilder {
   ): Promise<void> {
     const modelInfo = this.resolveBilledImageModel(data, enforceCredits, availableModels);
     if (!modelInfo) return;
-    await validateUserCredits(
+    const { requiredCredits } = validateImageCredits(
       this.deps.user,
       modelInfo,
       data.n || 1,
       toImageCostInput(toolName, data),
       this.deps.logger,
-      organization
+      organization,
+      this.committedToolCredits()
     );
+    this.recordGatedToolCredits(toolName, requiredCredits);
   }
 
   /**
@@ -862,6 +929,7 @@ export class ToolBuilder {
     model,
     organization,
     precomputed,
+    subagentModels,
     agentOnlyMcpServers = [],
     apiKeyTable,
     getAbortSignal,
@@ -870,7 +938,7 @@ export class ToolBuilder {
     externalTools,
     toolAvailability,
   }: BuildToolsArgs): ICompletionOptionTools[] | undefined {
-    return buildSharedTools(
+    const tools = buildSharedTools(
       {
         userId: this.deps.user.id,
         user: this.deps.user,
@@ -898,6 +966,7 @@ export class ToolBuilder {
         llm,
         model,
         precomputed,
+        subagentModels,
         apiKeyTable,
         thinking,
         agentStore,
@@ -1099,8 +1168,12 @@ export class ToolBuilder {
         getAbortSignal,
         externalTools,
         toolAvailability,
+        // Subagents get the same wrapper the returned array does, so a failed inner call drops
+        // its gate estimate instead of leaving this turn looking over-committed.
+        wrapChildTools: childTools => this.trackGatedCalls(childTools),
       }
     );
+    return this.trackGatedCalls(tools);
   }
 
   /**

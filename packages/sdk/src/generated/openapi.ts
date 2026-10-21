@@ -144,7 +144,7 @@ export interface paths {
      *
      *     TOOL SEARCH. On a model whose `GET /api/v1/models` row has `supports_tool_search: true` and `backend: "anthropic"`, a `tools` entry may set `toolSchema.defer_loading: true`, and a `{ "serverTool": { "type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex" } }` (or the `bm25` pair) entry adds Anthropic's tool search, so deferred definitions load only when the model searches for them. The stream then carries `provider_block` events (`{ type, provider: "anthropic", block }`) for the server-run search; echo each block back verbatim, in order, in the assistant `messages` content of the next request, and never answer one with a `tool_result`. When the server-run search loop hits its iteration limit the stream ends with `stopReason: "pause_turn"`; continue by re-sending the conversation with that assistant turn's provider blocks echoed. A client-side search may return `{ "type": "tool_reference", "tool_name": "..." }` blocks inside a `tool_result`'s content. On every other model, Bedrock-served Claude included, `defer_loading` is ignored (every tool is sent as usual) and a server tool, a `tool_reference` or an echoed tool search block is refused with a `400` rather than run without it.
      *
-     *     ERRORS. Everything checked before the model provider is called fails with a JSON error body and a real HTTP status, before any stream opens: a malformed or otherwise invalid request or an unknown `model` `400` (`errorCode: "unknown_model"` for the latter), a bad credential `401`, a key without a required scope `403` (with `required_scopes`), a body over 25 MB `413`, a body that fails schema validation `422`, insufficient credits `422` with `errorCode: "insufficient_credits"` (personal or org balance, or an org per-member credit cap), a rate limit `429` with `Retry-After`, and a catalogued model whose provider is not configured on this deployment `503` with `errorCode: "provider_not_configured"` (retryable). Once the stream has opened the status stays `200` and a failure arrives as one terminal in-band `error` event. Branch on that event's `code`, never on `message`, which is prose and may change: `insufficient_credits` (buy credits) when credits run out mid-generation, `provider_rejected` when the model provider refused our credentials, `content_blocked` when the model declined the request (do not retry it unchanged), and `provider_error` for any other provider failure. Treat `code` as optional.
+     *     ERRORS. Everything checked before the model provider is called fails with a JSON error body and a real HTTP status, before any stream opens: a malformed or otherwise invalid request or an unknown `model` `400` (`errorCode: "unknown_model"` for the latter), a bad credential `401`, a key without a required scope `403` (with `required_scopes`), a body over 25 MB `413`, a body that fails schema validation `422`, insufficient credits `422` with `errorCode: "insufficient_credits"` (personal or org balance, or an org per-member credit cap), a rate limit `429` with `Retry-After`, and a catalogued model whose provider is not configured on this deployment, or a model that could only come from a self-hosted model server (Ollama, local image) that is currently unreachable, `503` with `errorCode: "provider_not_configured"` (retryable). Once the stream has opened the status stays `200` and a failure arrives as one terminal in-band `error` event. Branch on that event's `code`, never on `message`, which is prose and may change: `insufficient_credits` (buy credits) when credits run out mid-generation, `provider_rejected` when the model provider refused our credentials, `content_blocked` when the model declined the request (do not retry it unchanged), and `provider_error` for any other provider failure. Treat `code` as optional.
      */
     post: operations['createCompletion'];
     delete?: never;
@@ -1027,7 +1027,7 @@ export interface paths {
      * Transcribe audio
      * @description Transcribes an upload minted by `POST /api/v1/transcriptions/uploads` and returns the text. Call it within 5 minutes of minting the upload. Credits are charged by file size. The uploaded audio is deleted when the call returns, whether it succeeds or fails, so each upload can be transcribed once.
      *
-     *     **Limit:** this call is synchronous. The request times out after about 60 seconds, while the AWS speech backend can take up to about 5 minutes on long audio, so a long recording can fail with a gateway timeout (`504`) instead of returning text. A timed-out upload may not be deleted right away (it expires on its own), so do not retry with the same `file_key`: mint a new upload, or send shorter audio.
+     *     **Limit:** this call is synchronous. Provider work stops being awaited after 45 seconds from request arrival, leaving time to return reserved credits and delete the upload before the hosted server stops at 60 seconds. A slow recording returns a gateway timeout (`504`) instead of text. AWS batch jobs cannot be cancelled remotely and may finish later; their output expires automatically. Do not retry with the same `file_key`: mint a new upload and send shorter audio. If cleanup fails, the upload may not be deleted right away (it expires on its own).
      */
     post: operations['createTranscription'];
     delete?: never;
@@ -6637,7 +6637,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description Temporarily unavailable: the model's provider is not configured on this deployment (`errorCode: "provider_not_configured"`), or the database is unreachable (no `errorCode`). Retry later. */
+      /** @description Temporarily unavailable: the model's provider is not configured on this deployment, or the self-hosted model server that lists it (Ollama, local image) is unreachable (`errorCode: "provider_not_configured"`), or the database is unreachable (no `errorCode`). Retry later. */
       503: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -15107,6 +15107,29 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['createTranscriptionResponse503'];
+        };
+      };
+      /** @description The transcription exceeded the request deadline; reserved credits are returned. */
+      504: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
         };
       };
     };

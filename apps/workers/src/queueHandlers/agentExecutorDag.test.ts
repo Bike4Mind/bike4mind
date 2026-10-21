@@ -93,6 +93,7 @@ vi.mock('@bike4mind/database', () => ({
 const {
   buildDagResumeReport,
   clampMaxIterationsForOverCapAggregationWake,
+  clampMaxIterationsForUnrunnableAggregationWake,
   isDagAggregationWake,
   makeDagDispatcher,
   onDagNodeTerminal,
@@ -290,6 +291,49 @@ describe('clampMaxIterationsForOverCapAggregationWake', () => {
       clampMaxIterationsForOverCapAggregationWake({
         isAggregationOnlyWake: true,
         isOverCap: false,
+        maxIterations: 25,
+        iterationIndex: 7,
+      })
+    ).toBe(25);
+  });
+});
+
+describe('clampMaxIterationsForUnrunnableAggregationWake', () => {
+  it('caps to the next iteration when the wake is aggregation-only and its model is not runnable', () => {
+    expect(
+      clampMaxIterationsForUnrunnableAggregationWake({
+        isAggregationOnlyWake: true,
+        isRunnable: false,
+        maxIterations: 25,
+        iterationIndex: 7,
+      })
+    ).toBe(8);
+  });
+
+  it('never raises the ceiling above the original maxIterations', () => {
+    expect(
+      clampMaxIterationsForUnrunnableAggregationWake({
+        isAggregationOnlyWake: true,
+        isRunnable: false,
+        maxIterations: 5,
+        iterationIndex: 20,
+      })
+    ).toBe(5);
+  });
+
+  it('leaves maxIterations untouched when the model is runnable or the wake is not aggregation-only', () => {
+    expect(
+      clampMaxIterationsForUnrunnableAggregationWake({
+        isAggregationOnlyWake: true,
+        isRunnable: true,
+        maxIterations: 25,
+        iterationIndex: 7,
+      })
+    ).toBe(25);
+    expect(
+      clampMaxIterationsForUnrunnableAggregationWake({
+        isAggregationOnlyWake: false,
+        isRunnable: false,
         maxIterations: 25,
         iterationIndex: 7,
       })
