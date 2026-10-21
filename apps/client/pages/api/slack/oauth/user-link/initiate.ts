@@ -3,7 +3,7 @@ initializeSlackPackage();
 
 import { Logger } from '@bike4mind/observability';
 import { baseApi } from '@server/middlewares/baseApi';
-import { issueStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
+import { issueStateNonce, NONCE_SLOT } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 import {
   getOAuthWorkspaceWithCredentials,
   buildUserLinkRedirectUri,

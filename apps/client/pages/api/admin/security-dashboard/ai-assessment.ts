@@ -4,7 +4,7 @@ import { Resource } from 'sst';
 import { securityDashboardSnapshotRepository, cacheRepository } from '@bike4mind/database';
 import { z } from 'zod';
 import crypto from 'crypto';
-import { OperationsModelService } from '@client/services/operationsModelService';
+import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { cacheService } from '@bike4mind/services';
 import { CacheKeys } from '@server/utils/cacheKeys';
 import { Logger } from '@bike4mind/observability';

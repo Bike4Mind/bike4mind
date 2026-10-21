@@ -6,7 +6,7 @@ import {
   withTransaction,
 } from '@bike4mind/database';
 
-import { SubscriptionMetadata, SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
+import { SubscriptionMetadata, SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { acquisitionFromStripeMetadata } from '@server/analytics/acquisition';
 
 import { Logger } from '@bike4mind/observability';

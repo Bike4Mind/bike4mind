@@ -1,7 +1,7 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { getActivitySummary } from '@server/admin/getActivitySummary';
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })

@@ -14,7 +14,7 @@ vi.mock('@bike4mind/database/infra', () => ({
   organizationRepository: {},
 }));
 vi.mock('@bike4mind/database/auth', () => ({ User: {}, userRepository: {} }));
-vi.mock('@server/security/tokenEncryption', () => ({ encryptToken: vi.fn() }));
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({ encryptToken: vi.fn() }));
 vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
   IntegrationAuditLogger: { create: () => ({ failure: vi.fn(), success: vi.fn(), setUserId: vi.fn() }) },
 }));

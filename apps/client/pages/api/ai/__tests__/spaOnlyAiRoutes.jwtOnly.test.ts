@@ -19,11 +19,11 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: vi.fn().mockResolvedValue({ allowed: true, headers: {} }),
 }));
-vi.mock('@server/middlewares/rateLimit', async () =>
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', async () =>
   (await import('@server/generations/__test__/routeHarness')).rateLimitMiddlewareMock()
 );
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('@client/services/operationsModelService', async orig => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   OperationsModelService: { getOperationsModel: (...a: unknown[]) => mockGetOperationsModel(...a) },
 }));

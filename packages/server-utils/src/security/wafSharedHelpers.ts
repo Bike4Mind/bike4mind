@@ -5,7 +5,7 @@
  */
 
 import { Resource } from 'sst';
-import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { NotFoundError } from '../utils/errors';
 
 export type WafTrafficRange = '1h' | '24h' | '7d';
 

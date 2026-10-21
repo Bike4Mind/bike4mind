@@ -1,6 +1,6 @@
 import type { IOrganizationDocument, IUserDocument } from '@bike4mind/common';
 import { organizationService } from '@bike4mind/services';
-import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError } from '../utils/errors';
 import { persistedIsAdmin } from '@server/auth/apiKeyAdminScope';
 
 export const API_KEY_DEPARTED_HOLDER_MESSAGE =

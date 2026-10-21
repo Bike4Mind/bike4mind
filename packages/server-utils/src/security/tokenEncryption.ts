@@ -3,9 +3,9 @@ import {
   decryptSecret,
   isEncrypted,
   isValidEncryptionKey,
-} from '@bike4mind/server-utils/security/secretEncryption';
+} from './secretEncryption';
 import { mcpEnvSecretContext } from '@bike4mind/utils/security';
-import { Config } from '@bike4mind/server-utils/utils/config';
+import { Config } from '../utils/config';
 
 function requireKey(): string {
   const key = Config.SECRET_ENCRYPTION_KEY;

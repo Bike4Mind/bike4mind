@@ -1,6 +1,6 @@
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import { EditedFieldsState } from '@client/app/components/admin/Users/Views/FullUsersView';
-import { allKnownEntitlementKeys, grantTagForEntitlement } from '@client/lib/entitlements/registry';
+import { allKnownEntitlementKeys, grantTagForEntitlement } from '@bike4mind/server-utils/lib/entitlements/registry';
 import { DEVELOPER_USER_TAGS, IUserDocument, hasDeveloperUserTag } from '@bike4mind/common';
 import { Button, FormHelperText, FormLabel, Input, Radio, RadioGroup, Stack, Tooltip, IconButton } from '@mui/joy';
 import React, { useState } from 'react';

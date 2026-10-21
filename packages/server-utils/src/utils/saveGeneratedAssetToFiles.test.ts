@@ -17,7 +17,7 @@ vi.mock('@bike4mind/database', () => ({
   scopedSettingsRepository: mocks.scopedSettingsRepository,
   User: {},
 }));
-vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
+vi.mock('./storage/index', () => ({
   getFilesStorage: () => ({ upload: mocks.upload, getSignedUrl: mocks.getSignedUrl }),
 }));
 

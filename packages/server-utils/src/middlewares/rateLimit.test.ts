@@ -12,7 +12,7 @@ const { tryIncrementMock } = vi.hoisted(() => ({
 vi.mock('@bike4mind/database', () => ({
   cacheRepository: { tryIncrementWithinLimitFixedWindow: tryIncrementMock },
 }));
-vi.mock('@bike4mind/server-utils/utils/ip', () => ({ getClientIp: () => '203.0.113.7' }));
+vi.mock('../utils/ip', () => ({ getClientIp: () => '203.0.113.7' }));
 
 import { rateLimit } from './rateLimit';
 

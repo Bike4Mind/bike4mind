@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { ForbiddenError } from './errors';
 import { assertArtifactSourceRefsAccessible, type ArtifactRefAccessDeps } from './assertArtifactSourceRefsAccessible';
 
 const OWNER = 'user-1';

@@ -16,7 +16,7 @@ import {
   OperationsModelResult,
   getDefaultImageModel,
   getApiKeyTypeFromBackend,
-} from '@bike4mind/server-utils/utils/modelResolvers';
+} from '../utils/modelResolvers';
 
 /**
  * System-level key table passed to getAvailableModels/getLlmByModel. Aliases the

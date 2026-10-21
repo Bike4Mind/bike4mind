@@ -71,7 +71,7 @@ vi.mock('@bike4mind/services/llm/SmallLLMService', () => ({
 vi.mock('@bike4mind/services/llm/reranker', () => ({
   ReRankService: class {},
 }));
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModel: vi.fn(async () => ({ modelId: 'm', llm: {} })) },
 }));
 

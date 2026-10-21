@@ -29,7 +29,7 @@ vi.mock('@bike4mind/services', async () => ({
   ).meterCompletionBackend,
 }));
 vi.mock('@bike4mind/services/llm/refineText', () => ({ refineText: mockRefineText }));
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModel: mockGetOperationsModel },
   OperationsModelUnavailableError: class OperationsModelUnavailableError extends Error {},
 }));

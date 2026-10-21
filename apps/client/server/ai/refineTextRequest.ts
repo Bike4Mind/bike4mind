@@ -3,7 +3,7 @@ import type { Logger } from '@bike4mind/observability';
 import { cacheRepository } from '@bike4mind/database';
 import { cacheService, meterCompletionBackend, type CompletionMeter } from '@bike4mind/services';
 import { refineText } from '@bike4mind/services/llm/refineText';
-import { OperationsModelService, OperationsModelUnavailableError } from '@client/services/operationsModelService';
+import { OperationsModelService, OperationsModelUnavailableError } from '@bike4mind/server-utils/services/operationsModelService';
 import { CacheKeys } from '@server/utils/cacheKeys';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 import { createRequestCompletionMeter, type MeteredRequest } from '@server/billing/meterPlatformCompletion';

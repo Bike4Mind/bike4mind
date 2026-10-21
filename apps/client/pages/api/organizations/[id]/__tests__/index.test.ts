@@ -91,7 +91,7 @@ vi.mock('@server/utils/adminAudit', () => ({
   recordAdminActionFromRequest: credits.recordAdminAction,
 }));
 vi.mock('@server/models/Subscription', () => ({ subscriptionRepository: {} }));
-vi.mock('@client/lib/subscriptions/types', () => ({ SubscriptionOwnerType: { Organization: 'organization' } }));
+vi.mock('@bike4mind/server-utils/lib/subscriptions/types', () => ({ SubscriptionOwnerType: { Organization: 'organization' } }));
 
 import '@pages/api/organizations/[id]/index';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';

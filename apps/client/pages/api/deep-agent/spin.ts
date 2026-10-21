@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { Logger } from '@bike4mind/observability';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 // Direct file imports (NOT the @server/deepAgent barrel): the barrel's subtree
 // pulls in wakeHandler -> queueHandlers/utils -> the Lambda-runtime import graph,
 // which deadlocks module init under the Next dev server. Every other deep-agent

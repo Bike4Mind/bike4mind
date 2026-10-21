@@ -14,7 +14,7 @@ import {
   consumePublishAction,
   type PublishActionReceipt,
 } from '@server/services/publish';
-import { OperationsModelService } from '@client/services/operationsModelService';
+import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 /**

@@ -5,7 +5,7 @@ import { useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { useGetSubscriptionPlans } from '@client/app/hooks/data/stripe';
 import { useGetSubscriptions } from '@client/app/hooks/data/subscriptions';
-import { isCancellableSubscriptionStatus } from '@client/lib/subscriptions/types';
+import { isCancellableSubscriptionStatus } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { CREDIT_PACKAGES } from '@client/lib/credits/constants';
 import { TransactionType } from '@client/lib/credits/types';
 import { SUBSCRIPTION_PLANS_GROUPED_BY_INTERVAL } from '@client/lib/userSubscriptions/constants';

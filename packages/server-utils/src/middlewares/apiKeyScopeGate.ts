@@ -1,5 +1,5 @@
 import { ApiKeyScope, ApiKeyScopeValue, CONFINED_API_KEY_SCOPES } from '@bike4mind/common';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { ForbiddenError } from '../utils/errors';
 import { ALL_KNOWN_API_KEY_SCOPE_VALUES } from '@client/app/constants/apiKeyScopes';
 
 /**

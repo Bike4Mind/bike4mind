@@ -8,7 +8,7 @@ import {
   gateEmbedBrandingWrite,
   type EmbedKeyOwnerRef,
 } from '@server/entitlements/embedKeyEntitlement';
-import { EMBED_WHITELABEL_ENTITLEMENT_KEY } from '@client/lib/entitlements/registry';
+import { EMBED_WHITELABEL_ENTITLEMENT_KEY } from '@bike4mind/server-utils/lib/entitlements/registry';
 import { logEventSafe } from '@server/utils/analyticsLog';
 import { resolveApiKeyTrust } from '@server/utils/apiKeyTrust';
 import {

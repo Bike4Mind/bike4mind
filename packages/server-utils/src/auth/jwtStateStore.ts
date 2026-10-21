@@ -1,6 +1,6 @@
 import jwt, { Algorithm, SignOptions, VerifyOptions } from 'jsonwebtoken';
 import { randomUUID } from 'crypto';
-import { Config } from '@bike4mind/server-utils/utils/config';
+import { Config } from '../utils/config';
 import { Logger } from '@bike4mind/observability';
 
 // Default expiration for OAuth state (5 minutes is industry standard)

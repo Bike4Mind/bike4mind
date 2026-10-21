@@ -1,5 +1,5 @@
 import { rateLimitSnapshotRepository, type IntegrationType } from '@bike4mind/database';
-import { recordRateLimitEvent } from '@bike4mind/server-utils/utils/cloudwatch';
+import { recordRateLimitEvent } from './cloudwatch';
 import {
   normalizeEndpoint,
   isNearLimit,
