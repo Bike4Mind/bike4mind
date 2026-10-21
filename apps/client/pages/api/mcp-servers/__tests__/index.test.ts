@@ -285,6 +285,8 @@ describe('POST /api/mcp-servers', () => {
     const [, owner] = mockEncrypt.mock.calls[0] as [unknown, { userId: string; id: string }];
     const created = mockCreate.mock.calls[0][0] as { _id: string };
     expect(owner).toMatchObject({ userId: 'u1', name: 'linkedin' });
+    // Pin the type: without it, a route that stops minting an id still passes, both sides undefined.
+    expect(owner.id).toEqual(expect.any(String));
     expect(created._id).toBe(owner.id);
   });
 
