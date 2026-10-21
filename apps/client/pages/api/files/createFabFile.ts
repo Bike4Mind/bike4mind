@@ -1,5 +1,11 @@
 import { signBrowserFileResponse } from '@server/files/signBrowserFileResponse';
-import { CreateFabFileRequestInputType, FabFileSourceType, FileEvents, Permission } from '@bike4mind/common';
+import {
+  CreateFabFileRequestInputType,
+  FabFileSourceType,
+  FileEvents,
+  MODAL_MEDIA_PREFIX,
+  Permission,
+} from '@bike4mind/common';
 import {
   adminSettingsRepository,
   dataLakeBatchRepository,
@@ -28,10 +34,9 @@ import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
 // would escape the storage charge, size check and moderation. Server-side callers still set it.
 const createFabFileSchema = fabFilesService.createFabFileSchema.omit({ prefix: true });
 
-// The admin What's New media upload (AdminModalVideoFields) lands under `modals/`, chosen here, not
-// by the caller. mp4 stays off the global allowlist (non-image uploads skip the content scan), so
-// only that admin upload admits it.
-const MODAL_MEDIA_PREFIX = 'modals';
+// The admin What's New media upload (AdminModalVideoFields) lands under the shared modal prefix, chosen
+// here, not by the caller. mp4 stays off the global allowlist (non-image uploads skip the content
+// scan), so only that admin upload admits it.
 const isModalVideo = (params: { mimeType?: string | null; fileName: string }) =>
   params.mimeType === 'video/mp4' && getFileExtension(params.fileName) === 'mp4';
 

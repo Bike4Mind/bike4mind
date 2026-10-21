@@ -1,15 +1,13 @@
 import {
+  MODAL_MEDIA_PREFIX,
   RELEASE_NOTE_MEDIA_FIELDS,
+  RELEASE_NOTE_MEDIA_PATH,
   toPublicReleaseNoteVideo,
   type ModalVideo,
   type ModalVideoField,
   type PublicReleaseNoteVideo,
   type ReleaseNoteMediaAsset,
 } from '@bike4mind/common';
-
-export const RELEASE_NOTE_MEDIA_PATH = '/api/v1/whats-new/media';
-// The admin What's New upload lands here (pages/api/files/createFabFile.ts); nothing else in the bucket is served.
-const MODAL_MEDIA_KEY_PREFIX = 'modals/';
 
 const MEDIA_ASSETS = Object.entries(RELEASE_NOTE_MEDIA_FIELDS) as [ReleaseNoteMediaAsset, ModalVideoField][];
 
@@ -33,7 +31,7 @@ export function ownModalMediaKey(url: string, bucket: string): string | null {
   } catch {
     return null;
   }
-  return key.startsWith(MODAL_MEDIA_KEY_PREFIX) ? key : null;
+  return key.startsWith(`${MODAL_MEDIA_PREFIX}/`) ? key : null;
 }
 
 /**

@@ -1,4 +1,4 @@
-import type { ModalVideo } from '@bike4mind/common';
+import { RELEASE_NOTE_MEDIA_PATH, type ModalVideo } from '@bike4mind/common';
 
 export type SlideVideoOrientation = 'landscape' | 'portrait';
 
@@ -43,8 +43,7 @@ export function storageKeyOf(url: string): string | null {
   return key || null;
 }
 
-// The release note media route (pages/api/v1/whats-new/media), which redirects to a freshly signed URL.
-const MEDIA_ROUTE_PATH = '/api/v1/whats-new/media/';
+const MEDIA_ROUTE_PATH = `${RELEASE_NOTE_MEDIA_PATH}/`;
 
 export function isMediaRouteUrl(url: string, base = window.location.origin): boolean {
   try {

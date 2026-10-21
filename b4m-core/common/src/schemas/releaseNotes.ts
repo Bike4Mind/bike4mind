@@ -119,6 +119,12 @@ export const RELEASE_NOTE_MEDIA_FIELDS = {
 } as const satisfies Record<string, ModalVideoField>;
 export type ReleaseNoteMediaAsset = keyof typeof RELEASE_NOTE_MEDIA_FIELDS;
 
+/** Path of the media route, GET /api/v1/whats-new/media/{id}/{asset}, which signs an upload on request. */
+export const RELEASE_NOTE_MEDIA_PATH = '/api/v1/whats-new/media';
+
+/** Bucket prefix of an admin What's New video or poster; the media route only signs keys under it. */
+export const MODAL_MEDIA_PREFIX = 'modals';
+
 export const ReleaseNoteMediaParamsSchema = z.object({
   id: z.string().min(1),
   asset: z.enum(Object.keys(RELEASE_NOTE_MEDIA_FIELDS) as [ReleaseNoteMediaAsset, ...ReleaseNoteMediaAsset[]]),
