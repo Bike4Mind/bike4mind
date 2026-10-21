@@ -5,10 +5,10 @@ import { tmpdir } from 'os';
 import { createHash } from 'crypto';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 
-// executeTool routes through ToolRouter (server/WebSocket executors, output
-// sanitizer). Override just executeTool to invoke the tool's own fn, so these
-// tests exercise ONLY the permission wrapper's cleanup guard and risk-driven
-// force-prompt - not tool routing.
+// executeTool routes through ToolRouter (server/WebSocket executors). Override
+// just executeTool to invoke the tool's own fn, so these tests exercise ONLY the
+// permission wrapper's cleanup guard and risk-driven force-prompt - not tool
+// routing. The output stage still redacts and caps around it.
 vi.mock('../../llm/ToolRouter', async importOriginal => {
   const actual = await importOriginal<typeof import('../../llm/ToolRouter')>();
   return {
