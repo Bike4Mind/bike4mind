@@ -92,29 +92,38 @@ describe('PublishDialog', () => {
     expect(h.publish).toHaveBeenCalledWith({ skillId: 'skill-1', visibility: 'public', tags: [] });
   });
 
-  it('shows a live result with the honest summary and a mismatch warning', async () => {
-    h.publish.mockResolvedValue({
-      listing: { id: 'l1', visibility: 'organization', status: 'approved' },
-      version: version({
-        riskTier: 'review',
-        honestSummary: {
-          whatItDoes: 'Posts your text to a service.',
-          toolsUsed: [],
-          dataItTouches: 'Your text',
-          riskNotes: [],
-          descriptionMatches: false,
-          mismatchNote: 'Says it formats text but uploads it.',
-        },
-      }),
-    });
-    renderDialog();
-    fireEvent.click(screen.getByTestId('market-publish-submit-btn'));
+  it.each(['public', 'organization', 'unlisted'] as const)(
+    'shows a pending %s result with the honest summary and a mismatch warning',
+    async visibility => {
+      h.publish.mockResolvedValue({
+        listing: { id: 'l1', visibility, status: 'in_review' },
+        version: version({
+          riskTier: 'review',
+          reviewStatus: 'pending',
+          honestSummary: {
+            whatItDoes: 'Posts your text to a service.',
+            toolsUsed: [],
+            dataItTouches: 'Your text',
+            riskNotes: [],
+            descriptionMatches: false,
+            mismatchNote: 'Says it formats text but uploads it.',
+          },
+        }),
+      });
+      renderDialog();
+      fireEvent.click(screen.getByTestId('market-publish-submit-btn'));
 
-    await waitFor(() => expect(screen.getByTestId('market-scan-passed')).toHaveTextContent('Live on the Skill Market'));
-    expect(screen.getByTestId('market-honest-summary')).toHaveTextContent('Posts your text to a service.');
-    expect(screen.getByTestId('market-mismatch-alert')).toHaveTextContent('Says it formats text but uploads it.');
-    expect(screen.getByTestId('market-publish-view-btn')).toBeInTheDocument();
-  });
+      await waitFor(() =>
+        expect(screen.getByTestId('market-scan-passed')).toHaveTextContent('Waiting for a human reviewer')
+      );
+      expect(screen.getByTestId('market-scan-passed')).toHaveTextContent(
+        'Listings with findings are checked by a person before they go live.'
+      );
+      expect(screen.getByTestId('market-honest-summary')).toHaveTextContent('Posts your text to a service.');
+      expect(screen.getByTestId('market-mismatch-alert')).toHaveTextContent('Says it formats text but uploads it.');
+      expect(screen.queryByTestId('market-publish-view-btn')).toBeNull();
+    }
+  );
 
   it('offers a retry when the scan errored (fail closed)', async () => {
     h.publish.mockResolvedValue({

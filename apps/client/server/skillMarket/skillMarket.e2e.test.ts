@@ -262,6 +262,7 @@ describe('Skill Market (real mongod)', () => {
     'holds an understated %s listing until a reviewer approves it',
     async visibility => {
       orgs.members.set(AUTHOR, [ORG]);
+      orgs.members.set(OTHER, [ORG]);
       orgs.admins.set('org-admin', [ORG]);
       const { listing, version } = await publish(
         await makeSkill(AUTHOR, 'MISMATCH formatter'),
@@ -271,6 +272,18 @@ describe('Skill Market (real mongod)', () => {
       expect(version).toMatchObject({ riskTier: 'review', reviewStatus: 'pending' });
       expect(version.honestSummary?.descriptionMatches).toBe(false);
       expect(listing.currentApprovedVersionId).toBeNull();
+
+      await expect(
+        call(
+          importHandler,
+          'POST',
+          OTHER,
+          { id: listing.id },
+          {
+            ...(visibility === 'unlisted' ? { token: listing.shareToken } : {}),
+          }
+        )
+      ).rejects.toMatchObject({ statusCode: 404 });
 
       // Neither the org feed nor the share link serves a version that is still pending.
       if (visibility === 'organization') expect((await browse([ORG])).data).toEqual([]);
@@ -288,6 +301,49 @@ describe('Skill Market (real mongod)', () => {
       expect((await SkillListing.findById(listing.id))!.currentApprovedVersionId).toBe(version.id);
       if (visibility === 'organization') expect((await browse([ORG])).data.map(l => l.id)).toEqual([listing.id]);
       else expect((await call(byTokenHandler, 'GET', OTHER, { token: listing.shareToken }))._getStatusCode()).toBe(200);
+    }
+  );
+
+  it.each(['organization', 'unlisted'] as const)(
+    'keeps the approved %s snapshot visible and importable while a review-tier update waits',
+    async visibility => {
+      orgs.members.set(OTHER, [ORG]);
+      const source = await makeSkill(AUTHOR, 'Rewrite as bullets v1.');
+      const { listing, version: approved } = await publish(
+        source,
+        visibility,
+        visibility === 'organization' ? ORG : undefined
+      );
+      await skillRepository.update({ id: source.id, body: 'MISMATCH v2' });
+      const pending = await submitListingVersion(listing, (await skillRepository.findById(source.id))!, deps);
+
+      expect(pending).toMatchObject({ riskTier: 'review', reviewStatus: 'pending' });
+      expect(await SkillListing.findById(listing.id)).toMatchObject({
+        currentApprovedVersionId: approved.id,
+        currentVersion: 1,
+        pendingVersionId: pending.id,
+      });
+      const detail =
+        visibility === 'organization'
+          ? await call(detailHandler, 'GET', OTHER, { id: listing.id })
+          : await call(byTokenHandler, 'GET', OTHER, { token: listing.shareToken! });
+      expect(detail._getJSONData().version).toMatchObject({
+        id: approved.id,
+        snapshot: { body: source.body },
+      });
+      const imported = await call(
+        importHandler,
+        'POST',
+        OTHER,
+        { id: listing.id },
+        {
+          ...(visibility === 'unlisted' ? { token: listing.shareToken } : {}),
+        }
+      );
+      expect(await skillRepository.findById(imported._getJSONData().skill.id)).toMatchObject({
+        body: source.body,
+        importedFrom: { versionId: approved.id, version: 1 },
+      });
     }
   );
 
