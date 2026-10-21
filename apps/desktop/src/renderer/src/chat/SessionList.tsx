@@ -532,7 +532,8 @@ function ProjectHeader({
 
 /**
  * A user section's header: its name, then a "+" for a new session in it and a menu to start one,
- * rename or delete it, both showing on hover like a row's.
+ * rename or delete it, both showing on hover like a row's. Double-clicking the name renames it, as
+ * it does a session row's title.
  */
 function CustomSectionHeader({
   section,
@@ -562,6 +563,7 @@ function CustomSectionHeader({
         level="body-xs"
         noWrap
         sx={{ flex: 1, minWidth: 0, fontWeight: 'lg' }}
+        onDoubleClick={() => onRename(section)}
         data-testid="sidebar-section-name"
       >
         {section.name}
@@ -783,13 +785,16 @@ export function SessionList({
 
   const [archivedOpen, setArchivedOpen] = useState(false);
 
-  // `section` is set when the right-click landed in a user section, which then offers a new session in it.
+  // `section` is set when the right-click landed in a user section, which then offers a new session in
+  // it and a rename.
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; section?: SidebarSection } | null>(null);
   const [draggedSession, setDraggedSession] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
   const [revealId, setRevealId] = useState<string | null>(null);
   const dragFrame = useRef(0);
   const [nameRequest, setNameRequest] = useState<SectionNameRequest | null>(null);
+  const requestRename = (section: SidebarSection) =>
+    setNameRequest({ kind: 'rename', sectionId: section.id, currentName: section.name });
 
   const searching = query.trim() !== '';
   const sections = useMemo(() => {
@@ -976,7 +981,7 @@ export function SessionList({
       <CustomSectionHeader
         section={group.section}
         onCreateSession={section => onCreateInSection(section.id)}
-        onRename={section => setNameRequest({ kind: 'rename', sectionId: section.id, currentName: section.name })}
+        onRename={requestRename}
         onDelete={section => sectionActions.remove(section.id)}
       />
       {group.sessions.length > 0 ? (
@@ -1276,6 +1281,14 @@ export function SessionList({
               data-testid="sidebar-context-new-in-section-btn"
             >
               New session in {contextMenu.section.name}
+            </MenuItem>
+          )}
+          {contextMenu?.section && (
+            <MenuItem
+              onClick={() => contextMenu.section && requestRename(contextMenu.section)}
+              data-testid="sidebar-context-rename-section-btn"
+            >
+              Rename section
             </MenuItem>
           )}
           <MenuItem onClick={onCreate} data-testid="sidebar-context-new-session-btn">
