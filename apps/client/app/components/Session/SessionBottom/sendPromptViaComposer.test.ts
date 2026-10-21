@@ -27,7 +27,7 @@ describe('sendPromptViaComposer', () => {
     expect(onBlocked).toHaveBeenCalledWith('uploading');
   });
 
-  it('does not toast or report the block a second time within the gate window', async () => {
+  it('still reports the block when the toast gate stays silent, so analytics sees every reason', async () => {
     const handleSendClick = vi.fn();
     const toastInfo = vi.fn();
     const shouldToastBlockedSend = vi.fn().mockReturnValue(false);
@@ -43,7 +43,7 @@ describe('sendPromptViaComposer', () => {
     });
 
     expect(toastInfo).not.toHaveBeenCalled();
-    expect(onBlocked).not.toHaveBeenCalled();
+    expect(onBlocked).toHaveBeenCalledWith('reconnecting');
     expect(handleSendClick).not.toHaveBeenCalled();
   });
 

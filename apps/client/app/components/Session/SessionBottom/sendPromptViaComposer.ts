@@ -38,11 +38,9 @@ export async function sendPromptViaComposer({
   onBlocked,
 }: SendPromptViaComposerParams): Promise<boolean> {
   if (sendBlockedReason) {
-    // Shares the toast's rate limit so mashing Enter while blocked logs one event, not one per keypress.
-    if (shouldToastBlockedSend(sendBlockedReason)) {
-      onBlocked?.(sendBlockedReason);
-      toastInfo(getBlockedSendToastLabel(sendBlockedReason, t));
-    }
+    // Reported on every refusal, independent of the toast gate; the caller rate-limits its own logging.
+    onBlocked?.(sendBlockedReason);
+    if (shouldToastBlockedSend(sendBlockedReason)) toastInfo(getBlockedSendToastLabel(sendBlockedReason, t));
     return false;
   }
   let sent = true;

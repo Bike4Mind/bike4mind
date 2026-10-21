@@ -363,13 +363,20 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
 
   const [shouldToastBlockedSend] = useState(() => createBlockedSendToastGate());
   const [shouldToastBlockedClick] = useState(() => createBlockedSendToastGate({ toastEveryReason: true }));
+  // Separate from the toast gates so every reason is logged (incl. 'generating'), once per reason per window.
+  const [shouldLogBlockedSend] = useState(() => createBlockedSendToastGate({ toastEveryReason: true }));
+  const logBlockedSend = useCallback(
+    (reason: SendBlockedReason) => {
+      if (shouldLogBlockedSend(reason)) logEvent({ type: FirstRunEvents.SEND_BLOCKED, metadata: { reason } });
+    },
+    [shouldLogBlockedSend, logEvent]
+  );
   const handleVoiceSendBlocked = useCallback(
     (reason: SendBlockedReason) => {
-      if (!shouldToastBlockedClick(reason)) return;
-      logEvent({ type: FirstRunEvents.SEND_BLOCKED, metadata: { reason } });
-      toast.info(getBlockedSendToastLabel(reason, t));
+      logBlockedSend(reason);
+      if (shouldToastBlockedClick(reason)) toast.info(getBlockedSendToastLabel(reason, t));
     },
-    [shouldToastBlockedClick, logEvent, t]
+    [shouldToastBlockedClick, logBlockedSend, t]
   );
   const handleEditorSubmit = useCallback(async () => {
     // Same gate as the Send button: Enter must not send what the button would refuse. The
@@ -380,9 +387,9 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
       toastInfo: toast.info,
       t,
       handleSendClick,
-      onBlocked: reason => logEvent({ type: FirstRunEvents.SEND_BLOCKED, metadata: { reason } }),
+      onBlocked: logBlockedSend,
     });
-  }, [sendBlockedReason, shouldToastBlockedSend, t, handleSendClick, logEvent]);
+  }, [sendBlockedReason, shouldToastBlockedSend, t, handleSendClick, logBlockedSend]);
 
   // Expose handleSendClick for programmatic use (e.g., InteractiveChessBoard, reply-choice
   // buttons); resolves false when the send was refused before dispatch so a caller can undo
@@ -399,9 +406,9 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
         toastInfo: toast.info,
         t,
         handleSendClick,
-        onBlocked: reason => logEvent({ type: FirstRunEvents.SEND_BLOCKED, metadata: { reason } }),
+        onBlocked: logBlockedSend,
       }),
-    [sendBlockedReason, shouldToastBlockedClick, t, handleSendClick, logEvent]
+    [sendBlockedReason, shouldToastBlockedClick, t, handleSendClick, logBlockedSend]
   );
   useEffect(() => {
     registerSendPrompt(sendPromptCallback);
