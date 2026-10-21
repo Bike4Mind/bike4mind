@@ -33,7 +33,7 @@ type AttemptResult =
 /**
  * Delivers one generation completion callback: a POST of the quest's poll body, signed with the
  * calling API key's secret (apps/workers/src/webhooks/signedWebhook.ts). Armed and enqueued by
- * server/generationCallback/dispatchQuestCallback.ts.
+ * packages/server-utils/src/generationCallback/dispatchQuestCallback.ts.
  *
  * Everything is re-read per attempt, so a retry signs with the key's current secret and a
  * key revoked mid-retry stops the delivery. A message whose eventId no longer matches the

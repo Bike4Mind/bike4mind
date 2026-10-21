@@ -3965,7 +3965,7 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     // ETag of the object version the moderation verdict covers - see IFabFile.moderationETag.
     moderationETag: { type: String, required: false },
     moderationRevision: { type: Number, required: false },
-    // See IFabFile.clientUpload and apps/client/server/s3/uploadSizeGate.ts.
+    // See IFabFile.clientUpload and packages/server-utils/src/s3/uploadSizeGate.ts.
     clientUpload: { type: Boolean, required: false },
     uploadRejectedAt: { type: Date, required: false },
     // Failed-attempt bookkeeping for the rescue sweep's fairness ordering and backoff - see

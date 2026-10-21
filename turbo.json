@@ -183,6 +183,7 @@
         "../../apps/client/pages/**",
         "../../apps/client/server/**",
         "../../apps/workers/src/**",
+        "../../packages/server-utils/src/**",
         "../services/src/**",
         "../slack/src/**"
       ]

@@ -44,7 +44,7 @@ export enum OllamaEmbeddingModel {
  *
  * Deliberately answers from the ENVIRONMENT only, and deliberately does NOT try to answer "can this
  * deployment actually reach that model". It cannot: on a hosted stage an SST secret arrives as a
- * linked Resource, never as process.env (see apps/client/server/modelDiscovery/adapters.ts), so an
+ * linked Resource, never as process.env (see packages/server-utils/src/modelDiscovery/adapters.ts), so an
  * absent OPENAI_API_KEY here means "unknown", not "no key" - it is absent on production too. This
  * function is also bundled into the browser via settingsMap, where every env read is undefined, so
  * any answer it gives must be one that is safe as a stage-neutral constant.
