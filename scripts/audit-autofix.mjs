@@ -3,10 +3,11 @@
 // Raises the root pnpm-workspace.yaml overrides past the high/critical advisories that
 // scripts/audit-gate.mjs would fail on, as a floor scoped to the patched version's
 // semver line (`name@>=14.0.0 <14.3.3: ^14.3.3`, or `>=0.M.0` below 1.0.0) so it
-// cannot reach a dependent of an older major the advisory does not cover. Used by the scheduled audit job in
-// .github/workflows/audit-gate.yml to open an auto-fix PR; a human reviews and
-// merges it. Anything it cannot fix safely (no patched release, an unparseable
-// patched range, an exact pin) is listed for a human instead of guessed.
+// does not reach a dependent that declares only an older major. Used by the
+// scheduled audit job in .github/workflows/audit-gate.yml to open an auto-fix PR;
+// a human reviews and merges it. Anything it cannot fix safely (no patched
+// release, an unparseable patched range, an exact pin) is listed for a human
+// instead of guessed.
 //
 // Usage: PACKAGES_JSON_REPORT_PATH=report.json AUTOFIX_SUMMARY_PATH=summary.md node scripts/audit-autofix.mjs
 // Writes `changed=true|false` to $GITHUB_OUTPUT, and the skipped advisories to
@@ -86,8 +87,9 @@ export function lockfileVersions(lockText) {
 
 // Why a floor cannot be applied, or null when it can. pnpm applies a floor key to
 // every dependent whose declared range intersects the key's range (a `*` dependent
-// intersects even a line-scoped one), and the lockfile does not record declared ranges, so every installed copy, above or below X, must be
-// on X's semver line. Each vulnerable copy must be below X or the floor fixes nothing.
+// intersects even a line-scoped one), and the lockfile does not record declared
+// ranges, so every installed copy, above or below X, must be on X's semver line.
+// Each vulnerable copy must be below X or the floor fixes nothing.
 function floorProblem(floor, vulnerable, installed) {
   if (vulnerable.length === 0 && installed.length === 0) return 'no installed version found';
   for (const v of vulnerable) {
