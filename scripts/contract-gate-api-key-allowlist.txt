@@ -20,6 +20,7 @@ apps/client/pages/api/[type]/[id]/invites/index.ts
 apps/client/pages/api/[type]/[id]/revokeSharing.ts
 apps/client/pages/api/[type]/[id]/updateSharing.ts
 apps/client/pages/api/activities/index.ts
+apps/client/pages/api/admin/activity-summary.ts  # deliberately accepts ADMIN-scoped API keys, like the other admin metrics handlers here
 apps/client/pages/api/admin/agent-executions/cleanup.ts
 apps/client/pages/api/admin/agent-executions/stuck.ts
 apps/client/pages/api/admin/agent-ops-settings.ts
