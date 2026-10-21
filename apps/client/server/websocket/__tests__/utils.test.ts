@@ -168,6 +168,20 @@ describe('withWebSocketContext - auth-error detection', () => {
     expect(JSON.parse(result.body ?? '{}')).toEqual({ error: 'Authentication failed' });
   });
 
+  it('refuses with 503 when the database connection is lost outside the API-key check', async () => {
+    const handler = withWebSocketContext(
+      async () => {
+        throw Object.assign(new Error('connect ECONNREFUSED 10.0.0.1:27017'), { name: 'MongoNetworkError' });
+      },
+      { skipDatabase: true }
+    );
+
+    const result = await handler({} as never, mockContext);
+
+    expect(result.statusCode).toBe(503);
+    expect(JSON.parse(result.body ?? '{}')).toEqual({ error: 'Service temporarily unavailable' });
+  });
+
   it('still answers 200 for a plain Error', async () => {
     const handler = withWebSocketContext(
       async () => {
