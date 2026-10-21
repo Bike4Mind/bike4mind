@@ -87,6 +87,7 @@ export const sessionHasHistory = (recentMessages: IChatHistoryItemDocument[]): b
  *   [N] user: "<prompt>" -> image generated   (for image-gen turns)
  *   [N] user: "<prompt>" -> assistant: "<reply truncated to 250 chars>"   (for text turns)
  *   [N] user: "<prompt>" -> error             (for error turns)
+ *   [N] user: "<prompt>" -> stopped before any reply   (for turns stopped with no output)
  */
 export const buildHistoryTranscript = (recentMessages: IChatHistoryItemDocument[]): string => {
   const oldestFirst = [...recentMessages].reverse();
@@ -103,6 +104,9 @@ export const buildHistoryTranscript = (recentMessages: IChatHistoryItemDocument[
       const reply = extractReply(msg);
       if (reply) {
         return `[${idx}] user: "${promptText}" → assistant: "${truncateReply(reply)}"`;
+      }
+      if (msg.status === 'stopped') {
+        return `[${idx}] user: "${promptText}" \u2192 stopped before any reply`;
       }
       return `[${idx}] user: "${promptText}" → reply`;
     })
