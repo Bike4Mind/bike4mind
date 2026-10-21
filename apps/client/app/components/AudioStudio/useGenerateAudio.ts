@@ -230,9 +230,10 @@ export function useGenerateAudio(mode: AudioGenMode) {
         } else if (parsed.status === 401) {
           toast.error('No provider API key is configured. Ask your administrator to set one up.');
         } else if (parsed.errorCode === 'insufficient_credits') {
-          // Prefer the server's specific "you have X, need Y" message when it
-          // carries the figures (sound-effects and music routes). `bodyMessage`, not
-          // `message`: the latter would substitute a bare "Error: 422".
+          // Only reached before the account list loads, since a selection takes
+          // the branch above. Until then the server's "you have X, need Y" figures
+          // are the only credit context: `bodyMessage`, not `message`, which would
+          // substitute a bare "Error: 422".
           toast.error(parsed.bodyMessage ?? 'You do not have enough credits to generate this audio.');
         } else {
           toast.error(parsed.message);
