@@ -54,7 +54,9 @@ export const rateLimit =
     // and never fill. `getClientIp` resolves the real client IP from CDN
     // headers on deployed stages, and on self-host from the socket or the
     // trusted-proxy hop only (see TRUSTED_PROXY_HOPS in server/utils/ip.ts).
-    const resolvedSubject = subject?.(req) ?? (req.user?.id || getClientIp(req));
+    // The Request augmentation that declares `user` lives in apps/client/global.d.ts, outside
+    // this package's compilation.
+    const resolvedSubject = subject?.(req) ?? ((req as { user?: { id?: string } }).user?.id || getClientIp(req));
     const key = `rate-limit:${resolvedSubject}:${pathname}`;
 
     const { success, expiresAt } = await cacheRepository.tryIncrementWithinLimitFixedWindow(
