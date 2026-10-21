@@ -56,6 +56,7 @@ interface Props {
   collapsed?: boolean;
   mode?: ChatSessionMode;
   userSections?: SidebarSectionsState;
+  onSelect?: (sessionId: string) => void;
 }
 
 let root: Root | null = null;
@@ -68,6 +69,7 @@ function render({
   collapsed = false,
   mode = 'code',
   userSections = EMPTY_SIDEBAR_SECTIONS,
+  onSelect = () => {},
 }: Props) {
   act(() => {
     root?.render(
@@ -82,7 +84,7 @@ function render({
           prSummaries={new Map()}
           collapsed={collapsed}
           onToggleCollapsed={() => {}}
-          onSelect={() => {}}
+          onSelect={onSelect}
           onCreate={() => {}}
           onOpenArtifacts={() => {}}
           onCreateInProject={() => {}}
@@ -202,6 +204,50 @@ describe('SessionList project cap', () => {
     expect(showMore()).toBeNull();
     typeSearch('');
     expect(groupTitles()).toHaveLength(20);
+  });
+
+  it('stays capped for a search of nothing but spaces', () => {
+    render({ sessions: projectSessions(25) });
+    typeSearch('   ');
+    expect(groupTitles()).toHaveLength(20);
+    expect(showMore()).not.toBeNull();
+  });
+
+  it('keeps a row drawn past the cap once it stops running or stops being selected', () => {
+    const sessions = projectSessions(25);
+    render({ sessions, statuses: new Map([['s24', 'processing']]) });
+    expect(groupTitles()).toContain('Task 24');
+
+    render({ sessions, statuses: new Map([['s24', 'done']]) });
+    expect(groupTitles()).toContain('Task 24');
+
+    render({ sessions, activeId: 's20' });
+    expect(groupTitles()).toContain('Task 24');
+
+    render({ sessions, activeId: 's0' });
+    expect(groupTitles()).toContain('Task 24');
+  });
+
+  it('reaches only the rows it draws with the quick-switch digits', () => {
+    const onSelect = vi.fn();
+    render({ sessions: projectSessions(25), onSelect });
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Digit9', key: '9', metaKey: true }));
+    });
+    expect(onSelect).toHaveBeenCalledWith('s8');
+  });
+
+  it('leaves the no-project and archived lists whole', () => {
+    const loose = projectSessions(30, () => ({ project: undefined }));
+    render({ sessions: loose });
+    expect(all('chat-session-item')).toHaveLength(30);
+    expect(document.querySelector('[data-testid$="-show-more-btn"]')).toBeNull();
+
+    const archived = projectSessions(30, () => ({ archived: true }));
+    render({ sessions: archived });
+    click(query('sidebar-archived-btn'));
+    expect(all('chat-session-item')).toHaveLength(30);
+    expect(document.querySelector('[data-testid$="-show-more-btn"]')).toBeNull();
   });
 
   it('keeps the count across a sidebar collapse, a mode switch and a remount', () => {

@@ -629,8 +629,9 @@ const isLive = (status: ChatSessionStatus | undefined) => status === 'processing
 
 /**
  * A group's rows, capped at GROUP_ROW_CAP with "Show more" below them. The active, live and
- * just-moved rows draw in place whatever the cap. `uncapped` is set while a search is narrowing
- * the list, which then shows every match.
+ * just-moved rows draw in place whatever the cap, and a row that has drawn past the cap keeps
+ * drawing for the rest of the run. `uncapped` is set while a search is narrowing the list, which
+ * then shows every match.
  */
 function CappedSessionRows({
   groupKey,
@@ -653,21 +654,23 @@ function CappedSessionRows({
   row: (session: ChatSessionSummary) => ReactNode;
 }) {
   const limit = useGroupLimit(groupKey);
-  const capped = useMemo(
-    () =>
-      uncapped
-        ? null
-        : capRows(
-            sessions,
-            limit,
-            session =>
-              session.id === activeId ||
-              session.pinned === true ||
-              isLive(statuses.get(session.id)) ||
-              session.id === revealId
-          ),
-    [sessions, uncapped, limit, activeId, statuses, revealId]
-  );
+  // Append-only and idempotent, so a repeat render (React may discard and re-run one) is harmless.
+  const raised = useRef(new Set<string>());
+  const capped = useMemo(() => {
+    if (uncapped) return null;
+    const rows = capRows(
+      sessions,
+      limit,
+      session =>
+        raised.current.has(session.id) ||
+        session.id === activeId ||
+        session.pinned === true ||
+        isLive(statuses.get(session.id)) ||
+        session.id === revealId
+    );
+    for (const session of rows.visible.slice(limit)) raised.current.add(session.id);
+    return rows;
+  }, [sessions, uncapped, limit, activeId, revealId, statuses]);
 
   return (
     <>
