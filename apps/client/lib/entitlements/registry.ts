@@ -341,8 +341,9 @@ const rowList = (value: unknown): Record<string, unknown>[] =>
     : [];
 
 /**
- * Contributed signup credits per key may not exceed this. Matches the largest built-in amount;
- * must stay in sync with MAX_CONTRIBUTED_SIGNUP_CREDITS in apps/client/scripts/generate-premium-glue.mjs.
+ * Contributed signup credits per key may not exceed this. A literal rather than the largest built-in
+ * amount, so it survives those rows leaving; registry.test.ts holds the built-in amounts under it and
+ * premiumEntitlementGrants.test.ts holds the codegen copy in apps/client/scripts/generate-premium-glue.mjs equal.
  */
 export const MAX_CONTRIBUTED_SIGNUP_CREDITS = 250_000;
 

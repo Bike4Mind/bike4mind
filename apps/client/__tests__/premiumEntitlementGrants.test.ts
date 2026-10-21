@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { MAX_CONTRIBUTED_SIGNUP_CREDITS } from '@client/lib/entitlements/registry';
 
 /**
  * Guard for the entitlement grant contribution (see `PremiumEntitlementGrants`): the registry trusts
@@ -95,6 +96,16 @@ describe('premium entitlement grants', () => {
     });
   });
 
+  it('accepts signup credits at the registry cap', () => {
+    writeOverlay('alpha', {
+      entitlementGrants: { signupCredits: [{ key: 'example:pro', credits: MAX_CONTRIBUTED_SIGNUP_CREDITS }] },
+    });
+
+    expect(emitted(generate())).toEqual({
+      signupCredits: [{ key: 'example:pro', credits: MAX_CONTRIBUTED_SIGNUP_CREDITS }],
+    });
+  });
+
   it('merges rows across overlays and collapses an identical repeat', () => {
     writeOverlay('alpha', {
       entitlementGrants: {
@@ -173,7 +184,10 @@ describe('premium entitlement grants', () => {
     ['non-numeric signup credits', { signupCredits: [{ key: 'example:pro', credits: '100' }] }],
     ['NaN signup credits (null once serialized)', { signupCredits: [{ key: 'example:pro', credits: NaN }] }],
     ['fractional signup credits', { signupCredits: [{ key: 'example:pro', credits: 1.5 }] }],
-    ['oversized signup credits', { signupCredits: [{ key: 'example:pro', credits: 250_001 }] }],
+    [
+      'oversized signup credits',
+      { signupCredits: [{ key: 'example:pro', credits: MAX_CONTRIBUTED_SIGNUP_CREDITS + 1 }] },
+    ],
     [
       'an implication from the reserved base key',
       { impliedEntitlements: [{ ifHeld: 'base', alsoGrant: ['example:a'] }] },

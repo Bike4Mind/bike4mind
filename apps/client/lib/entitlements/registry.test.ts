@@ -1,11 +1,17 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 
+// Env domain grants feed the known keys at module load, so the fingerprint below must not see them.
+vi.hoisted(() => {
+  delete process.env.NEXT_PUBLIC_PREMIUM_DOMAIN_GRANTS;
+});
+
 // Hermetic against whatever overlay is mounted: this suite pins the built-in rows on their own.
 vi.mock('@client/app/premium-generated/premiumEntitlementGrants.generated', () => ({ premiumEntitlementGrants: {} }));
 
 import {
   __registryRows,
+  MAX_CONTRIBUTED_SIGNUP_CREDITS,
   mergeContributedRows,
   TAG_GRANTS,
   allKnownEntitlementKeys,
@@ -120,6 +126,9 @@ describe('registry invariants', () => {
     for (const row of builtIn.signupCreditRows) {
       expect(Number.isInteger(row.credits), `signup credit for '${row.key}' must be an integer`).toBe(true);
       expect(row.credits, `signup credit for '${row.key}' must be positive`).toBeGreaterThan(0);
+      expect(row.credits, `signup credit for '${row.key}' exceeds the contribution cap`).toBeLessThanOrEqual(
+        MAX_CONTRIBUTED_SIGNUP_CREDITS
+      );
     }
   });
 });
