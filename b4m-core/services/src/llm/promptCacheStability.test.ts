@@ -40,10 +40,21 @@ const tokenizer = {
   warmUpCache: async () => {},
 };
 
+// Alternating a bare query and a long analytical one: neither may move the history window or the prefix.
+// The only turn with a trigger is the blog request; the tool must outlive it.
+const messageFor = (priorQuestCount: number) =>
+  priorQuestCount === TOOL_TURN
+    ? 'Turn this into a blog post'
+    : priorQuestCount % 2 === 0
+      ? 'thanks'
+      : `Compare the trade-offs of approach ${priorQuestCount} against the alternatives we discussed, step by step, and recommend one.`;
+
+// The in-flight quest (n = priorQuestCount + 1) carries the message being sent, as it does in a real
+// session, so what a turn sent last time is what the next turn's history replays.
 const makeQuest = (n: number) => ({
   id: String(n).padStart(24, '0'),
   sessionId: 'session1',
-  prompt: `question ${n}`,
+  prompt: messageFor(n - 1),
   reply: `answer ${n}`,
   replies: [`answer ${n}`],
   timestamp: new Date(n * 1000),
@@ -108,7 +119,11 @@ interface SessionState {
   persistedTools: string[];
 }
 
-async function runTurn(priorQuestCount: number, state: SessionState, opts: { relocate: boolean; verbatimTokenBudget?: number }): Promise<Turn> {
+async function runTurn(
+  priorQuestCount: number,
+  state: SessionState,
+  opts: { relocate: boolean; verbatimTokenBudget?: number }
+): Promise<Turn> {
   const session = { id: 'session1' } as unknown as ISessionDocument;
   const [history, , meta] = await fetchAndProcessPreviousMessages(session, LIMIT, {
     db: { quests: repository(priorQuestCount) },
@@ -116,14 +131,7 @@ async function runTurn(priorQuestCount: number, state: SessionState, opts: { rel
   });
   const windowStart = Number(meta.oldestIncludedQuestId);
 
-  // Alternating a bare query and a long analytical one: neither may move the history window or the prefix.
-  const question =
-    priorQuestCount % 2 === 0
-      ? 'thanks'
-      : `Compare the trade-offs of approach ${priorQuestCount} against the alternatives we discussed, step by step, and recommend one.`;
-
-  // The only turn with a trigger is the blog request; the tool must outlive it.
-  const message = priorQuestCount === TOOL_TURN ? 'Turn this into a blog post' : question;
+  const message = messageFor(priorQuestCount);
   const blog = shouldOfferBlogTools({ isAdmin: true, hasBlogIntegration: false, message, priorToolNames: [] });
   const sticky = await resolveStickyAutoAddedTools({
     persisted: state.persistedTools,
@@ -179,9 +187,7 @@ async function runTurn(priorQuestCount: number, state: SessionState, opts: { rel
   );
   // Only the fixed path flags the history anchor; the control arm keeps the adapter's own
   // end-of-array anchor, which is what every turn did before.
-  const anchored = opts.relocate
-    ? markHistoryCacheAnchor(built.messages, built.currentTurnMessageCount)
-    : built.messages;
+  const anchored = opts.relocate ? markHistoryCacheAnchor(built.messages, history.at(-1)) : built.messages;
   const turnContext = relocatePerTurnContext(anchored, perTurn, prompt[0]);
   const cacheStrategy: ICacheStrategy = {
     enableCaching: true,

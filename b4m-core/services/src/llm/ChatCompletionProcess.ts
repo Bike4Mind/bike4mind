@@ -3789,7 +3789,9 @@ export class ChatCompletionProcess {
         buildOptions
       );
       let messages = firstBuild.messages;
-      let currentTurnMessageCount = firstBuild.currentTurnMessageCount;
+      // Where the cache breakpoint belongs: the last message the next turn will reproduce as history.
+      // Reassigned by the overflow-recovery rebuild below, which sheds turns and rebuilds `messages`.
+      let lastHistoryMessage = previousMessages.at(-1);
       const messageTruncationInfo = firstBuild.messageTruncation;
       // Unlike messageTruncationInfo, this DOES get refreshed by the overflow-recovery rebuild below -
       // that rebuild produces fresh message identities, so pinning to the first build would report
@@ -3949,15 +3951,12 @@ export class ChatCompletionProcess {
             const trimmed = dropOldestHistoryTurn(recoveryHistory);
             if (!trimmed) break; // only the most-recent turn left: system/tools/prompt itself is oversized
             recoveryHistory = trimmed;
+            lastHistoryMessage = recoveryHistory.at(-1);
             // messageTruncationInfo is deliberately not refreshed here - it stays pinned to the first build.
             // Reserve toolSchemaTokens up front: this loop recomputes inputTokens as effectiveTotalTokens
             // + toolSchemaTokens at the bottom of every iteration, so budgeting this rebuild on the raw
             // maxSafeInputTokens would let it report "fits" and still overflow once tools are added back.
-            const {
-              messages: rebuilt,
-              injectedBlocks: rebuiltBlocks,
-              currentTurnMessageCount: rebuiltTurnCount,
-            } = await buildAndSortMessages(
+            const { messages: rebuilt, injectedBlocks: rebuiltBlocks } = await buildAndSortMessages(
               recoveryHistory,
               contextAndSystemMessages,
               currentUserPromptMessages,
@@ -3976,7 +3975,6 @@ export class ChatCompletionProcess {
             // as an empty rebuild rather than accepting a completion missing its system-role content.
             if (hadSystemMessages && rebuilt.every(message => message.role !== 'system')) break;
             messages = rebuilt;
-            currentTurnMessageCount = rebuiltTurnCount;
             // Unlike messageTruncationInfo, refreshed here: the rebuild produces fresh message
             // identities, so the first build's injectedBlocks would misreport delivery against this
             // payload.
@@ -4652,7 +4650,7 @@ export class ChatCompletionProcess {
       // on the system-role form, and `messages` stays that form for everything persisted from it.
       // The history breakpoint is flagged on the message itself, before relocation, so both the
       // adapter's same-role merge and the tool rounds below see the same object.
-      const anchoredMessages = markHistoryCacheAnchor(messages, currentTurnMessageCount);
+      const anchoredMessages = markHistoryCacheAnchor(messages, lastHistoryMessage);
       const turnContext = relocatePerTurnContext(
         anchoredMessages,
         perTurnContextMessages,

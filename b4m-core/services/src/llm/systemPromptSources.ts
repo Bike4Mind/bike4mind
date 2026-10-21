@@ -147,6 +147,19 @@ export function isPerTurnContext(
 }
 
 /**
+ * Index of the first message belonging to the current turn, so a caller can find the history in
+ * front of it. The prompt is not always last (a tool_result continuation puts attachments after it),
+ * so find it by identity first and only then fall back to a trailing plain-text user message.
+ * -1 when the turn cannot be located at all.
+ */
+function findCurrentTurnIndex(messages: IMessage[], currentUserMessage: IMessage): number {
+  const identityIndex = messages.indexOf(currentUserMessage);
+  if (identityIndex >= 0) return identityIndex;
+  const lastIndex = messages.length - 1;
+  return messages[lastIndex]?.role === 'user' && typeof messages[lastIndex].content === 'string' ? lastIndex : -1;
+}
+
+/**
  * Move the per-turn system messages out of the leading system block and into the front of the
  * current user message, delimited so the model can tell supplied context from the user's own words.
  * Each message keeps the heading and wrapper its source gave it. Run on the FINAL payload, after
@@ -166,16 +179,7 @@ export function relocatePerTurnContext(
   const moved = messages.filter(m => perTurn.has(m));
   if (moved.length === 0) return { messages, relocatedCount: 0 };
 
-  // The prompt is not always last (a tool_result continuation puts attachments after it), so find
-  // it by identity first and only then fall back to a trailing plain-text user message.
-  const lastIndex = messages.length - 1;
-  const identityIndex = messages.indexOf(currentUserMessage);
-  const targetIndex =
-    identityIndex >= 0
-      ? identityIndex
-      : messages[lastIndex]?.role === 'user' && typeof messages[lastIndex].content === 'string'
-        ? lastIndex
-        : -1;
+  const targetIndex = findCurrentTurnIndex(messages, currentUserMessage);
   if (targetIndex < 0) return { messages, relocatedCount: 0 };
 
   const block = TURN_CONTEXT_HEADER + moved.map(m => m.content as string).join('\n\n') + TURN_CONTEXT_END;
@@ -201,13 +205,14 @@ export function relocatePerTurnContext(
  * same-role messages - so a count measured on this array lands on a different message there, and a
  * tool round re-sends the first round's count against a longer array.
  *
- * `currentTurnMessageCount` is what buildAndSortMessages reports; absent, the prompt alone is assumed.
- * Returns the input array unchanged when there is no history to anchor, or when the message ahead of
- * the turn cannot carry the flag safely - a system message, or a neighbour the stamp would turn into
- * an array and so stop the adapter merging with it.
+ * `lastHistoryMessage` is the message the caller loaded as the end of history; it is located in the
+ * final payload by reference. Returns the input array unchanged when history is empty, when that
+ * message did not survive the build, or when it cannot carry the flag safely - it is a system
+ * message, or its neighbour shares its role, which the stamp would stop the adapter merging with.
  */
-export function markHistoryCacheAnchor(messages: IMessage[], currentTurnMessageCount: number | undefined): IMessage[] {
-  const index = messages.length - (currentTurnMessageCount ?? 1) - 1;
+export function markHistoryCacheAnchor(messages: IMessage[], lastHistoryMessage: IMessage | undefined): IMessage[] {
+  if (!lastHistoryMessage) return messages;
+  const index = messages.indexOf(lastHistoryMessage);
   if (index < 0) return messages;
   const anchor = messages[index];
   const next = messages[index + 1];

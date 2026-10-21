@@ -615,7 +615,7 @@ describe('per-turn context placement', () => {
     const prompt = user('this turn');
 
     it('flags the last history message, not the volatile current turn', () => {
-      const marked = markHistoryCacheAnchor([head, answer, attachment, prompt], 2);
+      const marked = markHistoryCacheAnchor([head, answer, attachment, prompt], answer);
 
       expect(marked.map(m => m.cache)).toEqual([undefined, true, undefined, undefined]);
       // A copy, so the caller's array and the persisted message stay unmarked.
@@ -624,20 +624,31 @@ describe('per-turn context placement', () => {
     });
 
     it('anchors on the last message of history when the turn is a bare prompt', () => {
-      expect(markHistoryCacheAnchor([head, answer, prompt], 1).map(m => m.cache)).toEqual([undefined, true, undefined]);
+      expect(markHistoryCacheAnchor([head, answer, prompt], answer).map(m => m.cache)).toEqual([
+        undefined,
+        true,
+        undefined,
+      ]);
     });
 
     it('returns the input unchanged when there is no history to anchor', () => {
       const messages = [head, prompt];
 
-      expect(markHistoryCacheAnchor(messages, 1)).toBe(messages);
-      expect(markHistoryCacheAnchor(messages, 2)).toBe(messages);
+      expect(markHistoryCacheAnchor(messages, undefined)).toBe(messages);
+    });
+
+    // Identity, not position: a history message the build truncated or dropped is not in the payload,
+    // and flagging whatever now sits at its index would cache a message the next turn never repeats.
+    it('returns the input unchanged when the history message did not survive the build', () => {
+      const messages = [head, prompt];
+
+      expect(markHistoryCacheAnchor(messages, answer)).toBe(messages);
     });
 
     it('returns the input unchanged rather than flag a system message', () => {
       const messages = [head, sys('more context'), prompt];
 
-      expect(markHistoryCacheAnchor(messages, 1)).toBe(messages);
+      expect(markHistoryCacheAnchor(messages, messages[1])).toBe(messages);
     });
 
     it('returns the input unchanged when the next message shares the anchor role', () => {
@@ -645,7 +656,7 @@ describe('per-turn context placement', () => {
       // the same-role message after it - that message would be dropped instead of joined.
       const messages = [head, user('no answer yet'), prompt];
 
-      expect(markHistoryCacheAnchor(messages, 1)).toBe(messages);
+      expect(markHistoryCacheAnchor(messages, messages[1])).toBe(messages);
     });
   });
 });
