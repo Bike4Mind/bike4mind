@@ -32,12 +32,17 @@
  *   [FEDERATED_AUDIENCE="<this client_id>"] \
  *   FEDERATED_JWKS_URI="https://<b4m-app-url>/api/oauth/jwks"
  *
+ * OPT_IN_SCOPES (comma-separated, e.g. "federated:admin-status") adds scopes that are never
+ * in a registration's defaults. It applies to a new federated client and, on a rerun with the
+ * same CLIENT_NAME, to the existing one, so it is also how an operator grants a scope to a
+ * client registered earlier (no FEDERATED_* needed then). Rerunning is idempotent.
+ *
  * REDIRECT_URIS is comma-separated. Each URI must be an absolute https URL; http is
  * allowed only for localhost, 127.0.0.1 and [::1]. No fragment, userinfo or whitespace.
  */
 
-import { ConflictError, type OAuthFederatedIdpInput } from '@bike4mind/common';
-import { createOAuthClient, mongoose, OAuthClientModel } from '@bike4mind/database';
+import { ConflictError, OAUTH_OPT_IN_SCOPES, type OAuthFederatedIdpInput } from '@bike4mind/common';
+import { addOAuthClientOptInScopes, createOAuthClient, mongoose, OAuthClientModel } from '@bike4mind/database';
 import { ZodError } from 'zod';
 import { isDirectInvocation } from '../utils/isDirectInvocation.js';
 
@@ -76,9 +81,23 @@ export function resolveClientType(env: NodeJS.ProcessEnv = process.env): 'first-
   return raw;
 }
 
+/** Parsed before connecting, so a typo fails without creating a client whose secret would then go unprinted. */
+export function readOptInScopesEnv(env: NodeJS.ProcessEnv = process.env): string[] {
+  const scopes = (env.OPT_IN_SCOPES ?? '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+  const allowed: readonly string[] = OAUTH_OPT_IN_SCOPES;
+  const unknown = scopes.filter(s => !allowed.includes(s));
+  if (unknown.length) {
+    throw new Error(`OPT_IN_SCOPES has unknown scope(s): ${unknown.join(', ')} (allowed: ${allowed.join(', ')})`);
+  }
+  return scopes;
+}
+
 export type SeedResult =
   | { status: 'created'; client: Awaited<ReturnType<typeof createOAuthClient>>['client']; clientSecret: string }
-  | { status: 'exists'; name: string; clientId?: string };
+  | { status: 'exists'; name: string; clientId?: string; allowedScopes?: string[] };
 
 /** Registers the client described by env; a duplicate name resolves to 'exists', anything else rejects. */
 export async function runSeed(env: NodeJS.ProcessEnv = process.env): Promise<SeedResult> {
@@ -97,19 +116,39 @@ export async function runSeed(env: NodeJS.ProcessEnv = process.env): Promise<See
 
   const federatedIdpInput = readFederatedIdpEnv(env);
   const clientType = resolveClientType(env);
+  const optInScopes = readOptInScopesEnv(env);
 
   await mongoose.connect(mongoUri);
   try {
-    const { client, clientSecret } = await createOAuthClient({
+    // Without FEDERATED_* a new client would not be federated, so the scope grant would fail after
+    // creation and lose the one-time secret; only an existing client can be targeted that way.
+    if (optInScopes.length && !federatedIdpInput && !(await OAuthClientModel.exists({ name: clientName.trim() }))) {
+      throw new Error(
+        `OPT_IN_SCOPES needs FEDERATED_* to register a new client; no client named "${clientName.trim()}" exists`
+      );
+    }
+    const created = await createOAuthClient({
       name: clientName,
       redirectUris,
       clientType,
       federatedIdp: federatedIdpInput,
     });
-    return { status: 'created', client, clientSecret };
+    const client = optInScopes.length
+      ? await addOAuthClientOptInScopes(created.client.clientId, optInScopes)
+      : created.client;
+    return { status: 'created', client, clientSecret: created.clientSecret };
   } catch (error) {
     if (!(error instanceof ConflictError)) throw error;
     const existing = await OAuthClientModel.findOne({ name: clientName.trim() }).exec();
+    if (existing && optInScopes.length) {
+      const updated = await addOAuthClientOptInScopes(existing.clientId, optInScopes);
+      return {
+        status: 'exists',
+        name: clientName.trim(),
+        clientId: existing.clientId,
+        allowedScopes: updated.allowedScopes,
+      };
+    }
     return { status: 'exists', name: clientName.trim(), clientId: existing?.clientId };
   } finally {
     await mongoose.disconnect();
@@ -136,6 +175,7 @@ export async function main(): Promise<void> {
   if (result.status === 'exists') {
     console.log(`\nClient "${result.name}" already exists:`);
     console.log('  client_id:', result.clientId);
+    if (result.allowedScopes) console.log('  allowed scopes:', result.allowedScopes.join(' '));
     console.log('\nRotate its secret or edit it from the admin OAuth Clients page instead.\n');
     process.exit(0);
     return;
@@ -149,6 +189,7 @@ export async function main(): Promise<void> {
   // Surface the trust class explicitly - it defaults to relying-party and set CLIENT_TYPE=first-party
   // to opt in, so an operator can confirm which one this registration got.
   console.log('  client_type  :', client.clientType);
+  console.log('  scopes       :', client.allowedScopes.join(' '));
   if (federatedIdp) {
     console.log('  federated    : yes (may mint per-user ai:generate keys via /api/oauth/ai-token)');
     console.log('    issuer      :', federatedIdp.issuer);

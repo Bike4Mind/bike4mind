@@ -5,6 +5,7 @@ import {
   BadRequestError,
   ConflictError,
   NotFoundError,
+  OAUTH_OPT_IN_SCOPES,
   createOAuthClientSchema,
   oauthRedirectUriSchema,
   resolveOAuthFederatedIdp,
@@ -171,4 +172,31 @@ export async function updateOAuthClient(
   }
 
   return { before, after: toOAuthClientView(doc) };
+}
+
+/**
+ * Adds opt-in scopes to an existing federated client. Idempotent ($addToSet), so a rerun is a no-op.
+ * Throws BadRequestError on an empty list, a scope outside OAUTH_OPT_IN_SCOPES, or a non-federated
+ * client; NotFoundError when no client has that clientId.
+ */
+export async function addOAuthClientOptInScopes(clientId: string, scopes: readonly string[]): Promise<OAuthClientView> {
+  if (scopes.length === 0) throw new BadRequestError('No opt-in scopes given');
+  const allowed: readonly string[] = OAUTH_OPT_IN_SCOPES;
+  const unknown = scopes.filter(s => !allowed.includes(s));
+  if (unknown.length) {
+    throw new BadRequestError(`Not an opt-in scope: ${unknown.join(', ')} (allowed: ${allowed.join(', ')})`);
+  }
+
+  const doc = await OAuthClientModel.findOneAndUpdate(
+    { clientId, federatedIdp: { $exists: true } },
+    { $addToSet: { allowedScopes: { $each: [...scopes] } } },
+    { new: true }
+  ).exec();
+  if (!doc) {
+    if (await OAuthClientModel.exists({ clientId })) {
+      throw new BadRequestError('Opt-in scopes can only be granted to a federated client');
+    }
+    throw new NotFoundError('OAuth client not found');
+  }
+  return toOAuthClientView(doc);
 }
