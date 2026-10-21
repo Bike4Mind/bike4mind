@@ -859,17 +859,20 @@ describe('runModelDiscovery', () => {
             }),
             authoritativeFor: [ModelBackend.Bedrock],
           }),
-          stubSource({
-            name: 'litellm',
-            kind: 'aggregator',
-            records: [
-              {
-                modelId: profileId,
-                lifecycleEvidence: 'typed',
-                patch: { lifecycle: { status: 'deprecated', deprecationDate: '2026-07-01' } },
-              },
-            ],
-          }),
+          // Two agreeing aggregators, since a lone aggregator sunset of a held model is only a suggestion.
+          ...['litellm', 'models.dev'].map(name =>
+            stubSource({
+              name,
+              kind: 'aggregator',
+              records: [
+                {
+                  modelId: profileId,
+                  lifecycleEvidence: 'typed',
+                  patch: { lifecycle: { status: 'deprecated', deprecationDate: '2026-07-01' } },
+                },
+              ],
+            })
+          ),
         ]);
         await seedActive(bedrock, profileId, 'Claude Sonnet 4.6 (global)');
 
