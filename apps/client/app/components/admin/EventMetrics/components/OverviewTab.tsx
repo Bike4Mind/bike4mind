@@ -16,19 +16,17 @@ import {
   Line,
 } from 'recharts';
 import type { PieLabelRenderProps } from 'recharts';
-import type { EventMetric } from '../types';
 import type { ChartData } from '../utils/chartDataProcessor';
 import { UsageBySourceCard } from './UsageBySourceCard';
 
 interface OverviewTabProps {
-  metrics: EventMetric[];
-  chartData: ChartData;
+  chartData: Pick<ChartData, 'timeSeriesData' | 'categoryBreakdown' | 'topEvents'>;
   showUsageBySource?: boolean;
 }
 
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884D8', '#82CA9D', '#FFC658', '#FF6B6B'];
 
-export const OverviewTab: React.FC<OverviewTabProps> = ({ metrics, chartData, showUsageBySource = true }) => {
+export const OverviewTab: React.FC<OverviewTabProps> = ({ chartData, showUsageBySource = true }) => {
   return (
     <Box>
       <Grid container spacing={2}>

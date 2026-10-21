@@ -39,9 +39,13 @@ The admin panel opens on **Dashboard** by default. You can link directly to it w
 - **Client usage** shows a chart and table of users and events by source, including Web, Desktop, and CLI. Choose the last 24 hours, 7 days, or 30 days. Only events with source metadata are included. A user active on several clients is counted in each client's row, so adding the user counts does not give a distinct overall user count.
 - **More dashboards** appears when an installed extension contributes a dashboard entry. Each card opens that extension's registered route; the destination keeps its existing access rules.
 - **Explore admin** opens Feature activity (Event Metrics), User activity & reports (Analytics), Model performance (Model Metrics), Credits & costs (Credit Analytics), Users, and System health.
-- **Recent activity** shows events over time, categories, and the top tracked events for the last 7 calendar days, including today. This is a snapshot of up to the latest 1,000 matching events, not a complete measure of feature adoption. The client usage chart has its own time range and is not subject to that snapshot limit.
+- **Recent activity** shows events over time, categories, and the top tracked events across the last 7 UTC calendar days, including today. The server counts all matching events, so a busy day does not push earlier days out of the report. The time chart includes all seven dates, with zero for days without activity. Today is incomplete. These are event counts, not distinct users or a complete measure of feature adoption. The client usage chart has its own time range.
 
-Use **Refresh activity** to reload the activity snapshot. While activity loads or fails, client usage and the navigation shortcuts remain available. An empty snapshot means no matching events were returned; a request failure displays an error instead. If client usage is empty, check its selected time range: older events without source metadata do not appear there.
+Use **Refresh activity** to reload the activity summary. While activity loads or fails, client usage and the navigation shortcuts remain available. An empty summary means no matching events were recorded during the seven-day window; a request failure displays an error instead. If client usage is empty, check its selected time range: older events without source metadata do not appear there.
+
+This sample shows a busy day alongside earlier dates, including days with no events:
+
+![Seven UTC dates remain visible even when the latest day has more than 1,000 events](./admin-activity-full-window.png)
 
 ## Sidebar Navigation
 
