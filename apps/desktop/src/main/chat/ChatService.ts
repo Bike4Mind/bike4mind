@@ -30,6 +30,7 @@ import type {
   ChatUsage,
   CreateCodeSessionRequest,
   CreateCodeSessionResult,
+  CreationTool,
   ContextBoundaryResult,
   ReasoningEffortSetting,
   SendMessageResult,
@@ -131,7 +132,7 @@ import { QUESTION_CANCELLED, type ApprovalGate } from './tools/ApprovalGate';
 import { inspectDirectory, inspectDirectoryRequest } from './tools/requestDirectoryTool';
 import type { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import type { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
-import { findTool, isOfferedEditTool, toolsForRequest, usesApplyPatch } from './tools/registry';
+import { findTool, isOfferedEditTool, offeredMediaToolNames, toolsForRequest, usesApplyPatch } from './tools/registry';
 import { webContextFor } from './tools/webTools';
 import { DoomLoopTracker } from './tools/doomLoop';
 import { WEB_SEARCH_TURN_BUDGET, WebSearchLimiter } from './tools/webSearchLimits';
@@ -702,6 +703,17 @@ export class ChatService {
 
   listModels(force = false): Promise<ChatModelCatalog> {
     return this.deps.models?.list(force) ?? Promise.resolve({ models: [] });
+  }
+
+  /**
+   * What a turn would be offered to generate with: the same `media` and `video` conditions the
+   * turn's toolsForRequest call reads. The video list is the ModelCatalog's short cache, so a
+   * blank chat asking for this costs no more than the next turn will.
+   */
+  async listCreationTools(): Promise<CreationTool[]> {
+    if (!this.deps.media || !this.deps.getApiClient()) return [];
+    const video = (await this.deps.models?.listVideoModels().catch(() => [])) ?? [];
+    return offeredMediaToolNames({ media: true, video }).map(name => ({ name, spendsCredits: spendsCredits(name) }));
   }
 
   /** What Settings offers for the next-prompt hint; see suggestionModelChoices. */

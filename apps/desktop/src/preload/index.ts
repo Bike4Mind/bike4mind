@@ -90,6 +90,7 @@ const api: DesktopApi = {
   chat: {
     listModels: (force?: boolean) => ipcRenderer.invoke(IPC_CHANNELS.chatListModels, force ?? false),
     listSuggestionModels: () => ipcRenderer.invoke(IPC_CHANNELS.chatListSuggestionModels),
+    listCreationTools: () => ipcRenderer.invoke(IPC_CHANNELS.chatListCreationTools),
     setSessionModel: (sessionId: string, model: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionModel, sessionId, model),
     setSessionReasoningEffort: (sessionId: string, effort: ReasoningEffortSetting) =>

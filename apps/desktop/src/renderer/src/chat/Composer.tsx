@@ -1,4 +1,13 @@
-import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ClipboardEvent,
+  type KeyboardEvent,
+  type ReactNode,
+} from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import CircularProgress from '@mui/joy/CircularProgress';
@@ -73,6 +82,7 @@ export function Composer({
   onSendQueuedNow,
   returned,
   onReturnedConsumed,
+  fill,
   footer,
   leading,
   skills,
@@ -139,6 +149,11 @@ export function Composer({
    */
   returned?: { id: number; messages: ChatQueuedMessage[] } | null;
   onReturnedConsumed?: () => void;
+  /**
+   * Text to put in the box in place of the draft, focused with the caret at its end - a blank
+   * chat's suggestion. Taken once per id, like `returned`, so picking the same card twice works.
+   */
+  fill?: { id: number; text: string } | null;
   /** Controls that belong to the next turn rather than to the app - the model picker. */
   footer?: ReactNode;
   /**
@@ -246,6 +261,22 @@ export function Composer({
     setText(current => mergeIntoDraft(current, returned.messages));
     onReturnedConsumed?.();
   }, [returned, onReturnedConsumed]);
+
+  const consumedFill = useRef<number | null>(null);
+  const [caretRequest, setCaretRequest] = useState(0);
+  useEffect(() => {
+    if (!fill || consumedFill.current === fill.id) return;
+    consumedFill.current = fill.id;
+    setText(fill.text);
+    setCaretRequest(request => request + 1);
+  }, [fill]);
+  // After the commit that put the text in, so the caret lands past it and not at its old length.
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (!caretRequest || !el) return;
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
+  }, [caretRequest]);
 
   /**
    * The `/` menu.

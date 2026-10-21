@@ -20,6 +20,7 @@ import type {
   ChatArtifactPublishRequest,
   ChatAttachmentInput,
   ChatModelCatalog,
+  CreationTool,
   ChatMoveToBackgroundResult,
   ChatQueueEvent,
   ChatQueuedMessage,
@@ -111,6 +112,7 @@ export const IPC_CHANNELS = {
   fleetStateChanged: 'fleet:state-changed',
   chatListModels: 'chat:list-models',
   chatListSuggestionModels: 'chat:list-suggestion-models',
+  chatListCreationTools: 'chat:list-creation-tools',
   chatSetSessionModel: 'chat:set-session-model',
   chatSetSessionReasoningEffort: 'chat:set-session-reasoning-effort',
   chatSetSessionPinned: 'chat:set-session-pinned',
@@ -532,6 +534,8 @@ export interface DesktopApi {
     listModels(force?: boolean): Promise<ChatModelCatalog>;
     /** The models Settings may pin the next-prompt hint to: small hosted ones, then local ones. */
     listSuggestionModels(): Promise<ChatModelCatalog>;
+    /** The generation tools a Chat turn would be offered now; empty when signed out or unsupported. */
+    listCreationTools(): Promise<CreationTool[]>;
     /** Pin a conversation to a model. Null when the session is gone. */
     setSessionModel(sessionId: string, model: string): Promise<ChatSessionSummary | null>;
     /** How hard this conversation's model should think. Null when the session is gone. */

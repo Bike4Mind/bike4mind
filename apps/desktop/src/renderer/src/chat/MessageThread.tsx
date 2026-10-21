@@ -8,6 +8,7 @@ import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import { isTurnBudgetStop, lastBoundaryIndex, type ChatMessage, type ChatUsage } from '@shared/chat';
 import { ArtifactList } from './ArtifactCard';
+import { EmptyThread } from './BlankChat';
 import { presentReply } from './codeStream';
 import { ReasoningRow } from './ReasoningRow';
 import { AttachmentRow } from './Attachments';
@@ -113,12 +114,7 @@ const UserTurn = memo(function UserTurn({ message, sessionId }: { message: ChatM
                 /{skill.name}
                 {skill.args ? ` ${skill.args}` : ''}
               </Typography>
-              <Chip
-                size="sm"
-                variant="soft"
-                color={skillChipColor(skill.source)}
-                data-testid="chat-message-skill-chip"
-              >
+              <Chip size="sm" variant="soft" color={skillChipColor(skill.source)} data-testid="chat-message-skill-chip">
                 {skillSourceLabel(skill.source)} skill
               </Chip>
             </Stack>
@@ -598,6 +594,7 @@ export function MessageThread({
   messages,
   sessionId,
   noSession,
+  blank,
   streaming,
   onRespond,
   onMove,
@@ -614,6 +611,8 @@ export function MessageThread({
    * user to "send a message" while the composer refused to take one.
    */
   noSession?: ReactNode;
+  /** What a session with nothing said in it yet shows. Defaults to a one-line invitation. */
+  blank?: ReactNode;
   /**
    * A reply is in flight for this conversation, however this window came to know it - so there
    * is nothing to resume, and the live line belongs at the foot of the last turn.
@@ -699,15 +698,15 @@ export function MessageThread({
 
   if (empty) {
     return (
-      <Box sx={{ flex: 1, display: 'grid', placeItems: 'center', p: 3 }}>
-        {sessionId ? (
-          <Typography level="body-sm" textColor="text.tertiary" data-testid="chat-thread-empty">
-            Send a message to start this conversation.
-          </Typography>
-        ) : (
-          noSession
-        )}
-      </Box>
+      <EmptyThread>
+        {sessionId
+          ? (blank ?? (
+              <Typography level="body-sm" textColor="text.tertiary" data-testid="chat-thread-empty">
+                Send a message to start this conversation.
+              </Typography>
+            ))
+          : noSession}
+      </EmptyThread>
     );
   }
 
