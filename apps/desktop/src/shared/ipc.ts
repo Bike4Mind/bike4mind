@@ -19,6 +19,9 @@ import type {
   ChatArtifactPublishProgress,
   ChatArtifactPublishRequest,
   ChatAttachmentInput,
+  ChatImageAction,
+  ChatImageActionResult,
+  ChatImageRef,
   ChatModelCatalog,
   ChatMoveToBackgroundResult,
   ChatQueueEvent,
@@ -155,6 +158,8 @@ export const IPC_CHANNELS = {
   chatAddAttachments: 'chat:add-attachments',
   chatReadAttachment: 'chat:read-attachment',
   chatDiscardAttachment: 'chat:discard-attachment',
+  chatImageAction: 'chat:image-action',
+  chatAttachImage: 'chat:attach-image',
   chatListArtifacts: 'chat:list-artifacts',
   chatReadArtifact: 'chat:read-artifact',
   chatPublishArtifact: 'chat:publish-artifact',
@@ -647,6 +652,10 @@ export interface DesktopApi {
     readAttachment(sessionId: string, attachmentId: string, mediaType: string): Promise<string | null>;
     /** Throw away an attachment the user removed before sending. Unknown ids are ignored. */
     discardAttachment(sessionId: string, attachmentId: string): Promise<void>;
+    /** One image context menu item, run in main against a ref main resolves itself. Never rejects. */
+    imageAction(image: ChatImageRef, action: ChatImageAction): Promise<ChatImageActionResult>;
+    /** Add a thread image to this session's draft, through the same intake as a paste. */
+    attachImage(sessionId: string, image: ChatImageRef): Promise<AddAttachmentsResult>;
     /**
      * Answer a tool call sitting at 'awaiting-approval'. Unknown or already-answered ids are
      * ignored, so a double click cannot approve a second, different command.

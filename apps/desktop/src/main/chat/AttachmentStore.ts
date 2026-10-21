@@ -114,6 +114,16 @@ export class AttachmentStore {
     }
   }
 
+  /** The stored file's path, or null for a malformed id or a file that is gone. */
+  async locate(sessionId: string, attachmentId: string): Promise<string | null> {
+    try {
+      const path = this.filePath(sessionId, attachmentId);
+      return (await stat(path)).isFile() ? path : null;
+    } catch {
+      return null;
+    }
+  }
+
   async discard(sessionId: string, attachmentId: string): Promise<void> {
     await rm(this.filePath(sessionId, attachmentId), { force: true });
   }

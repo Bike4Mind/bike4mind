@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { ChatAttachment, ChatAttachmentInput } from '@shared/chat';
+import type { AddAttachmentsResult, ChatAttachment, ChatAttachmentInput, ChatImageRef } from '@shared/chat';
 
 export interface AttachmentDraft {
   /** Attached to the next turn, in the order they were added. */
@@ -13,6 +13,8 @@ export interface AttachmentDraft {
   add: (inputs: ChatAttachmentInput[]) => Promise<void>;
   /** The picker path; opens an OS dialog in main. */
   pick: () => Promise<void>;
+  /** An image already in the thread, read back by main from its own store. */
+  attachImage: (image: ChatImageRef) => Promise<void>;
   remove: (attachmentId: string) => void;
   /** Called once the turn is sent - the attachments now belong to the message, not the draft. */
   clear: () => void;
@@ -38,34 +40,38 @@ export function useAttachmentDraft(sessionId: string | null): AttachmentDraft {
     setRejected([]);
   }, [sessionId]);
 
-  const add = useCallback(
-    async (inputs: ChatAttachmentInput[]) => {
-      if (!sessionId || inputs.length === 0) return;
-      setBusy(true);
-      setRejected([]);
-      try {
-        const result = await window.b4m.chat.addAttachments(sessionId, inputs);
-        if (result.attachments.length > 0) setAttachments(current => [...current, ...result.attachments]);
-        if (result.rejected.length > 0) setRejected(result.rejected);
-      } finally {
-        setBusy(false);
-      }
-    },
-    [sessionId]
-  );
-
-  const pick = useCallback(async () => {
-    if (!sessionId) return;
+  const intake = useCallback(async (request: () => Promise<AddAttachmentsResult>) => {
     setBusy(true);
     setRejected([]);
     try {
-      const result = await window.b4m.chat.pickAttachments(sessionId);
+      const result = await request();
       if (result.attachments.length > 0) setAttachments(current => [...current, ...result.attachments]);
       if (result.rejected.length > 0) setRejected(result.rejected);
     } finally {
       setBusy(false);
     }
-  }, [sessionId]);
+  }, []);
+
+  const add = useCallback(
+    async (inputs: ChatAttachmentInput[]) => {
+      if (!sessionId || inputs.length === 0) return;
+      await intake(() => window.b4m.chat.addAttachments(sessionId, inputs));
+    },
+    [sessionId, intake]
+  );
+
+  const pick = useCallback(async () => {
+    if (!sessionId) return;
+    await intake(() => window.b4m.chat.pickAttachments(sessionId));
+  }, [sessionId, intake]);
+
+  const attachImage = useCallback(
+    async (image: ChatImageRef) => {
+      if (!sessionId) return;
+      await intake(() => window.b4m.chat.attachImage(sessionId, image));
+    },
+    [sessionId, intake]
+  );
 
   const remove = useCallback(
     (attachmentId: string) => {
@@ -82,7 +88,7 @@ export function useAttachmentDraft(sessionId: string | null): AttachmentDraft {
 
   const dismissRejected = useCallback(() => setRejected([]), []);
 
-  return { attachments, busy, rejected, dismissRejected, add, pick, remove, clear };
+  return { attachments, busy, rejected, dismissRejected, add, pick, attachImage, remove, clear };
 }
 
 /**
