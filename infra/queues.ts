@@ -1493,7 +1493,7 @@ const optihashiRunCompletionQueueSubscription = optihashiRunCompletionQueue.subs
   permissions: [
     { actions: ['cloudwatch:PutMetricData'], resources: ['*'] },
     { actions: ['execute-api:ManageConnections'], resources: ['*'] },
-    // Model calls follow the user's model choice, so any Bedrock provider, not just anthropic/amazon.
+    // Model calls follow the user's model choice, which can be a Bedrock provider outside the anthropic/amazon ARNs used elsewhere.
     { actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'], resources: ['*'] },
   ],
 });
