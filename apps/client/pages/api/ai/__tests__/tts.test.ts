@@ -578,10 +578,17 @@ describe('configured fallback holds', () => {
 
   it('drops an alternate whose key lookup fails and still holds and synthesizes', async () => {
     mocks.hasTtsProviderKey.mockRejectedValue(new Error('key lookup unavailable'));
-    const { res, promise } = run({ text: 'hello' });
+    mocks.estimateTtsCreditCost.mockImplementation((vendor: string) => (vendor === 'openai' ? 123 : 820));
+    const { res, logger, promise } = run({ text: 'hello' });
     await promise;
     expect(res._getStatusCode()).toBe(200);
-    expect(mocks.holdPreflightCredits).toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith('TTS fallback key lookup failed', {
+      vendor: 'elevenlabs',
+      error: 'key lookup unavailable',
+    });
+    expect(mocks.holdPreflightCredits).toHaveBeenCalledWith(expect.objectContaining({ requiredCredits: 123 }));
+    expect(mocks.estimateTtsCreditCost).not.toHaveBeenCalledWith('elevenlabs', expect.anything(), expect.anything());
     expect(mocks.synthesizeTts).toHaveBeenCalledWith(expect.objectContaining({ candidates: ['openai'] }));
+    expect(mocks.deductTtsCredits).toHaveBeenCalledWith(expect.objectContaining({ hold: heldCredits }));
   });
 });

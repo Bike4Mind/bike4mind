@@ -4529,6 +4529,38 @@ describe('ChatCompletionProcess', () => {
       ]);
     });
 
+    it('bills streamed text when the first tool call is refused for credits', async () => {
+      const { complete } = reservationOrgSetup();
+      const textCharge = 60;
+      mockedUsdToCreditsStochastic.mockReturnValue(textCharge);
+      complete.mockImplementation(
+        async (
+          _model: string,
+          _messages: unknown,
+          _options: unknown,
+          callback: (texts: string[], info: { inputTokens: number; outputTokens: number }) => Promise<void>
+        ) => {
+          await callback(['partial answer'], { inputTokens: 10, outputTokens: 1000 });
+          throw insufficientCreditsError('You do not have enough organization credits to complete this request.');
+        }
+      );
+      fundedOrg();
+      mockQuest.sessionId = 'session1';
+
+      await service.process({ body: reservationBody(), logger: mockLogger });
+
+      expect(mockDb.creditTransactions.createTransaction).toHaveBeenCalledTimes(1);
+      expect(mockDb.creditTransactions.createTransaction).toHaveBeenCalledWith(
+        'text_generation_usage',
+        expect.objectContaining({ credits: -textCharge, outputTokens: 1000 })
+      );
+      expect(mockDb.organizations.incrementCredits).toHaveBeenCalledTimes(2);
+      expect(mockDb.organizations.incrementCredits).toHaveBeenNthCalledWith(1, 'org1', -expectedHold);
+      expect(mockDb.organizations.incrementCredits).toHaveBeenNthCalledWith(2, 'org1', expectedHold - textCharge);
+      expect(mockQuest.creditsUsed).toBe(textCharge);
+      expect(mockQuest.promptMeta.functionCalls ?? []).toEqual([]);
+    });
+
     it('refunds the whole hold when a tool call is refused for credits before anything was spent', async () => {
       const { complete } = reservationOrgSetup();
       complete.mockImplementation(async () => {
