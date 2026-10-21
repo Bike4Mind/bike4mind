@@ -1,11 +1,11 @@
 import { stat } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, parse, resolve } from 'node:path';
 import type { Node } from 'web-tree-sitter';
 import { arityPrefix, commandTokens, directoryOptionValues, droppedOnlySafeOptions } from './bashArity';
 import { parseBash } from './bashParser';
 import { isEnvFile } from './envFiles';
-import { resolveWithinRootsPhysically } from './paths';
+import { realpathNearest, resolveWithinRootsPhysically } from './paths';
 
 export interface ShellCommand {
   /** The command's tokens with options before the subcommand dropped: what a remembered pattern is matched against. */
@@ -17,10 +17,19 @@ export interface ShellCommand {
    * or an option off the safe list - so `text` no longer says what the command does.
    */
   coverable: boolean;
+  /** The command as matched by rules, retaining assignments and redirects when it is not coverable. */
+  words: string;
+  /**
+   * Set when the command runs code the scan cannot read (`eval`, `node -e`, `bash -c`, a script on
+   * stdin): the leading words that name that form. A permission rule covers it only by naming them.
+   */
+  opaque?: string;
 }
 
 export interface ShellScan {
   commands: ShellCommand[];
+  /** Physical paths named by the script, including paths inside shared roots and its starting folder. */
+  paths?: string[];
   /** Directories the command reaches outside every granted root and the temp dirs. */
   directories: string[];
   /** `.env` files named as an argument or an input redirect, which auto mode must not read unasked. */
@@ -154,6 +163,25 @@ function globPrefix(text: string): string | null {
 // ponytail: a wrapper's own option values (`sudo -u bob`, `xargs -I {}`) are read as the program;
 // a full per-wrapper option table if that matters.
 const WRAPPERS = new Set(['sudo', 'env', 'command', 'exec', 'nohup', 'time', 'nice', 'timeout', 'xargs']);
+
+/** A wrapper can change the executable, and these clients can start sending data just by changing flags. */
+export function requiresExactShellRule(command: string): boolean {
+  const head = /^(?:"([^"]*)"|'([^']*)'|(\S+))(?:\s+|$)/.exec(command);
+  if (!head) return true;
+  const executable = head[1] ?? head[2] ?? head[3];
+  const program = basename(executable);
+  const argumentsText = command.slice(head[0].length);
+  return (
+    // Quoting or an absolute executable defeats arityPrefix's bare-program lookup.
+    head[1] !== undefined || head[2] !== undefined || executable !== program ||
+    WRAPPERS.has(program) ||
+    /^(curl|wget|rsync|aws|gsutil|gcloud|docker|podman)$/.test(program) ||
+    (program === 'gh' && (
+      /^(?:api|"api"|'api')(?:\s|$)/.test(argumentsText) ||
+      !/^[A-Za-z]+\s+[A-Za-z]+(?:\s|$)/.test(argumentsText)
+    ))
+  );
+}
 
 const ALWAYS_OUTBOUND = new Set(['scp', 'sftp', 'ftp', 'nc', 'ncat', 'netcat', 'socat', 'telnet', 'ssh']);
 
@@ -297,6 +325,33 @@ function interpreterOptions(program: string, args: readonly string[]): { options
  * `echo x | sh`, and the shell builtins that read one in-process: `source <(curl https://x)`.
  */
 const STDIN_SCRIPT = /^(python[\d.]*|node|ruby|perl|php|bun|osascript|sh|bash|zsh|dash|source|\.)$/;
+
+/**
+ * The leading words that name a command's opaque form, or null when the scan can read what it
+ * runs. A wrapper (`sudo`, `timeout 5`) is looked through, so `sudo bash -c ...` is `sudo bash -c`.
+ */
+export function opaqueForm(tokens: readonly string[]): string | null {
+  const normalised = tokens.map(unquote);
+  let start = 0;
+  while (start < normalised.length && WRAPPERS.has(basename(normalised[start]))) {
+    start++;
+    while (start < normalised.length && /^(-|\d|[A-Za-z_][A-Za-z0-9_]*=)/.test(normalised[start])) start++;
+  }
+  const executable = normalised[start];
+  if (executable === undefined) return null;
+  const program = basename(executable);
+  const args = normalised.slice(start + 1);
+  const head = (count: number) => tokens.slice(0, start + count).join(' ');
+  if (program === 'eval' || program === 'source' || program === '.') return head(1);
+  if (program === 'deno' && args[0] === 'eval') return head(2);
+  const inline = /^python[\d.]*$/.test(program) ? DASH_C : INLINE_SCRIPT[program];
+  if (!inline && !STDIN_SCRIPT.test(program)) return null;
+  const { options, operands } = interpreterOptions(program, args);
+  if (inline && options.some(option => inline.test(option))) {
+    return head(2 + args.findIndex(arg => inline.test(flagRun(arg, optionValueLetters(program)))));
+  }
+  return operands.length === 0 || operands[0] === '-' || STDIN_SCRIPT_ARG.test(operands[0]) ? head(1) : null;
+}
 
 /** Arguments that name the command's own standard input rather than a script file. */
 const STDIN_SCRIPT_ARG = /^(\/(dev|proc\/self)\/fd\/[\d]+|\/dev\/stdin|[<>]\()/;
@@ -660,6 +715,7 @@ export async function scanShell(
     const temp = [tmpdir(), '/tmp', '/private/tmp'];
     const allowed = [...roots, ...temp];
     const commands: ShellCommand[] = [];
+    const paths = new Set<string>([await realpathNearest(startDirectory)]);
     const directories = new Set<string>();
     const envFiles = new Set<string>();
     const outbound = new Set<string>();
@@ -676,9 +732,13 @@ export async function scanShell(
       const prefix = globPrefix(expandHome(unquote(raw)));
       if (!prefix || isDynamic(prefix)) return null;
       try {
-        return await resolveWithinRootsPhysically(prefix, allowed, cwd);
+        const physical = await resolveWithinRootsPhysically(prefix, allowed, cwd);
+        paths.add(physical);
+        return physical;
       } catch {
         const target = resolve(cwd, prefix);
+        paths.add(target);
+        paths.add(await realpathNearest(target));
         const isDirectory = (await stat(target).catch(() => null))?.isDirectory() === true;
         directories.add(isDirectory ? target : dirname(target));
         return target;
@@ -705,17 +765,37 @@ export async function scanShell(
       const assigns = node.namedChildren.some(child => child?.type === 'variable_assignment');
       const writes = writtenCommands.has(node.id) || hasWriteRedirect(node);
       const arithmetic = tokens.some(token => EVALUATES_ARITHMETIC.test(token));
+      const opaque = opaqueForm(tokens);
+      const coverable = !assigns && !writes && !arithmetic && droppedOnlySafeOptions(tokens);
+      // Exact rules must name the unsafe syntax too: dropping an assignment or output redirect
+      // would let `Bash(git status)` cover `GIT_CONFIG_PARAMETERS=... git status` or a file write.
+      const original = node.parent?.type === 'redirected_statement' ? node.parent.text : node.text;
       commands.push({
         text: normalised.join(' '),
         always: `${arityPrefix(normalised).join(' ')} *`,
-        coverable: !assigns && !writes && !arithmetic && droppedOnlySafeOptions(tokens),
+        coverable,
+        words: coverable ? tokens.join(' ') : original,
+        ...(opaque ? { opaque } : {}),
       });
       const sends = outboundReason(tokens, readsStdin(node));
       if (sends) outbound.add(sends);
       if (sends || assigns || arithmetic || !containedCommand(tokens)) contained = false;
       for (const arg of rest) if (!arg.startsWith('-')) noteEnvFile(arg);
       for (const directory of directoryOptionValues(tokens)) await check(directory, state.cwd);
-      if (!TOUCHES_FILES.has(program)) return;
+      if (!TOUCHES_FILES.has(program)) {
+        // Programs outside the folder-discovery list can still name permission files (sed,
+        // awk, dd, ...). Record static operands for the permission-file floor too, including
+        // option values, without treating every ordinary argument as an outside folder grant.
+        for (const arg of rest) {
+          const value = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : arg;
+          if (value.startsWith('-')) continue;
+          const prefix = globPrefix(expandHome(unquote(value)));
+          if (!prefix || isDynamic(prefix)) continue;
+          const filesystemRoot = parse(resolve(state.cwd, prefix)).root;
+          paths.add(await resolveWithinRootsPhysically(prefix, [filesystemRoot], state.cwd));
+        }
+        return;
+      }
       for (const arg of rest) {
         if (arg.startsWith('-') || (program === 'chmod' && arg.startsWith('+'))) continue;
         await check(arg, state.cwd);
@@ -758,7 +838,7 @@ export async function scanShell(
         node.type === 'variable_assignments' ||
         (node.type === 'variable_assignment' && !ASSIGNMENT_OWNERS.has(node.parent?.type ?? ''))
       ) {
-        commands.push({ text: node.text, always: node.text, coverable: false });
+        commands.push({ text: node.text, always: node.text, coverable: false, words: node.text });
         contained = false;
         for (const child of node.children) if (child) await visit(child);
         return;
@@ -768,7 +848,7 @@ export async function scanShell(
       if (node.type === 'for_statement') {
         const body = node.childForFieldName('body');
         const header = body ? node.text.slice(0, body.startIndex - node.startIndex).replace(/[\s;]+$/, '') : node.text;
-        commands.push({ text: header, always: header, coverable: false });
+        commands.push({ text: header, always: header, coverable: false, words: header });
         contained = false;
         for (const child of node.children) if (child) await visit(child);
         return;
@@ -778,7 +858,7 @@ export async function scanShell(
         if (body?.type === 'command') {
           writtenCommands.add(body.id);
         } else {
-          commands.push({ text: node.text, always: node.text, coverable: false });
+          commands.push({ text: node.text, always: node.text, coverable: false, words: node.text });
         }
       }
       if (node.type === 'file_redirect') {
@@ -802,6 +882,7 @@ export async function scanShell(
     await visit(tree.rootNode);
     return {
       commands,
+      paths: [...paths],
       directories: [...directories],
       envFiles: [...envFiles],
       outbound: [...outbound],

@@ -38,6 +38,18 @@ function withMove(calls: ChatToolCall[]): string {
 }
 
 describe('ToolCallList', () => {
+  it('shows a failed permission save outside the collapsed tool result', () => {
+    const html = markup([
+      bash({
+        status: 'done',
+        notice: { kind: 'permissions-save-failed', text: 'Rules could not be saved: disk full.' },
+      }),
+    ]);
+    expect(html).toContain('data-testid="chat-tool-permissions-notice"');
+    expect(html).toContain('Permission rule was not saved');
+    expect(html).toContain('disk full');
+  });
+
   it('draws the approval card for a call waiting in this conversation', () => {
     const html = markup([awaiting()]);
     expect(html).toContain('data-testid="chat-tool-approval"');
@@ -76,6 +88,21 @@ describe('ToolCallList', () => {
     expect(html).toContain('data-testid="chat-tool-approve-always"');
     expect(html).toContain('data-testid="chat-tool-approval-scope"');
     expect(html).toContain('applies for the rest of this conversation');
+  });
+
+  it('offers "Always, in every session" only when main derived a rule, and names the rule', () => {
+    expect(markup([awaiting()])).not.toContain('data-testid="chat-tool-approve-everywhere"');
+
+    const html = markup([awaiting({ approvalRules: ['Bash(gh pr create:*)'] })]);
+    expect(html).toContain('data-testid="chat-tool-approve-everywhere"');
+    expect(html).toContain('Always, in every session');
+    expect(html).toContain('data-testid="chat-tool-approval-rules"');
+    expect(html).toContain('saves Bash(gh pr create:*) to Settings &gt; Permissions');
+  });
+
+  it('never offers "Always, in every session" on a call that cannot be undone', () => {
+    const html = markup([awaiting({ approvalIrreversible: true, approvalRules: ['session_delete'] })]);
+    expect(html).not.toContain('data-testid="chat-tool-approve-everywhere"');
   });
 
   it('withholds "always" on a call that cannot be undone', () => {

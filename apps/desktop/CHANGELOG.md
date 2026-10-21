@@ -1,5 +1,10 @@
 # @bike4mind/desktop
 
+## Unreleased
+
+- Add persistent permission rules and optional sharing of Claude Code rules, with deny and ask precedence.
+- Enforce interactive tool denies and check symlink targets and shell file operands before applying standing allows.
+
 ## 0.1.9
 
 ### Patch Changes
