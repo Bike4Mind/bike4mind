@@ -17,7 +17,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => undefined }));
-vi.mock('@server/utils/config', () => ({ Config: { STAGE: 'pr123' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { STAGE: 'pr123' } }));
 import '../health';
 
 afterEach(() => vi.unstubAllEnvs());

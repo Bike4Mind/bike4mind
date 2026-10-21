@@ -8,7 +8,10 @@ const inserted = vi.hoisted(() => new Map<string, number>());
 // Per-test knobs: an existing sync marker, a collection whose insert fails, an empty preview
 // target, and an op log.
 const state = vi.hoisted(() => ({
-  marker: null as { syncedAt: Date; stage?: string } | null,
+  marker: null as { syncedAt?: Date; stage?: string } | null,
+  markerReadback: 'persisted' as 'persisted' | 'missing' | 'wrong-stage',
+  markerReads: [] as unknown[],
+  failConnect: false,
   failMarker: false,
   failInsertInto: undefined as string | undefined,
   emptyTarget: false,
@@ -16,6 +19,7 @@ const state = vi.hoisted(() => ({
   ops: [] as string[],
   emptySources: [] as string[],
   cursorEmptySources: [] as string[],
+  partialSource: undefined as string | undefined,
   failRollbackBulkWrite: false,
   markerWrites: [] as unknown[][],
   findFilters: [] as { name: string; filter: unknown }[],
@@ -31,8 +35,16 @@ vi.mock('mongodb', () => {
     // yield none (rows deleted in between).
     const cursorEmpty = !isTarget && state.cursorEmptySources.includes(name);
     return {
-      findOne: vi.fn(async () => state.marker),
-      countDocuments: vi.fn(async () => (cursorEmpty ? 1 : docs.length)),
+      findOne: vi.fn(async (filter: { stage?: string }) => {
+        state.markerReads.push(filter);
+        if (state.markerWrites.length > 0 && state.markerReadback === 'missing') return null;
+        if (state.markerWrites.length > 0 && state.markerReadback === 'wrong-stage') return { stage: 'pr999' };
+        if (filter.stage && state.marker?.stage !== filter.stage) return null;
+        return state.marker;
+      }),
+      countDocuments: vi.fn(async () =>
+        !isTarget && name === state.partialSource ? 2 : cursorEmpty ? 1 : docs.length
+      ),
       find: vi.fn((filter?: unknown) => {
         if (!isTarget) state.findFilters.push({ name, filter });
         const yielded = cursorEmpty ? [] : docs;
@@ -62,17 +74,26 @@ vi.mock('mongodb', () => {
         return {};
       }),
       drop: vi.fn(async () => true),
-      updateOne: vi.fn(async (...args: unknown[]) => {
-        if (state.failMarker) throw new Error('marker write failed');
-        state.markerWrites.push(args);
-        state.marker = { syncedAt: new Date(), stage: process.env.SEED_STAGE_NAME };
-        return {};
-      }),
+      updateOne: vi.fn(
+        async (filter: unknown, update: { $set: { stage?: string; syncedAt?: Date } }, options: unknown) => {
+          if (state.failMarker) throw new Error('marker write failed');
+          state.markerWrites.push([filter, update, options]);
+          state.marker = { ...update.$set };
+          return {};
+        }
+      ),
     };
   };
   class MongoClient {
     constructor(private uri: string) {}
-    connect = vi.fn(async () => this);
+    connect = vi.fn(async () => {
+      if (state.failConnect) {
+        const error = new Error('Cannot connect to mongodb://user:password@target/pr123');
+        error.name = 'MongoServerSelectionError';
+        throw error;
+      }
+      return this;
+    });
     close = vi.fn(async () => undefined);
     db = () => ({ collection: (name: string) => collection(name, this.uri.startsWith('mongodb://target/')) });
   }
@@ -89,26 +110,36 @@ const invoke = async () =>
     error?: string;
   };
 
+beforeEach(() => {
+  inserted.clear();
+  state.markerReadback = 'persisted';
+  state.markerReads = [];
+  state.failConnect = false;
+  state.marker = null;
+  state.failInsertInto = undefined;
+  state.emptyTarget = false;
+  state.failFirstDeleteOn = undefined;
+  state.ops = [];
+  state.emptySources = [];
+  state.cursorEmptySources = [];
+  state.partialSource = undefined;
+  state.failRollbackBulkWrite = false;
+  state.markerWrites = [];
+  state.failMarker = false;
+  state.findFilters = [];
+  vi.stubEnv('STAGING_MONGODB_URI', 'mongodb://staging/db');
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 describe('dataSyncerHandler', () => {
   const env = { ...process.env };
   const fetchSpy = vi.fn();
-
   beforeEach(() => {
-    inserted.clear();
-    state.marker = null;
-    state.failInsertInto = undefined;
-    state.emptyTarget = false;
-    state.failFirstDeleteOn = undefined;
-    state.ops = [];
-    state.emptySources = [];
-    state.cursorEmptySources = [];
-    state.failRollbackBulkWrite = false;
-    state.markerWrites = [];
-    state.failMarker = false;
-    state.findFilters = [];
     fetchSpy.mockReset();
     vi.stubGlobal('fetch', fetchSpy);
-    process.env.STAGING_MONGODB_URI = 'mongodb://staging/db';
   });
 
   afterEach(() => {
@@ -296,12 +327,6 @@ describe('strict seed result', () => {
   beforeEach(() => {
     vi.stubEnv('SEED_STAGE_NAME', 'pr123');
     vi.stubEnv('STAGING_MONGODB_URI', 'mongodb://staging/db');
-    state.marker = null;
-    state.emptySources = [];
-    state.cursorEmptySources = [];
-    state.failInsertInto = undefined;
-    state.failRollbackBulkWrite = false;
-    state.failMarker = false;
   });
   it('returns counts and a durable stage marker only after copying', async () => {
     expect(await strict()).toEqual({
@@ -311,6 +336,46 @@ describe('strict seed result', () => {
       copiedCount: 2,
       marker: { key: 'staging-config-sync', stage: 'pr123' },
     });
+  });
+  it.each(['missing', 'wrong-stage'] as const)('fails when marker read-back is %s', async markerReadback => {
+    state.markerReadback = markerReadback;
+    expect(await strict()).toEqual({ schemaVersion: 1, status: 'failed', stage: 'pr123', copiedCount: 0 });
+    expect(state.markerWrites).toEqual([
+      [
+        { key: 'staging-config-sync' },
+        { $set: { key: 'staging-config-sync', stage: 'pr123', syncedAt: expect.any(Date) } },
+        { upsert: true },
+      ],
+    ]);
+    expect(state.markerReads).toEqual([{ key: 'staging-config-sync' }, { key: 'staging-config-sync', stage: 'pr123' }]);
+  });
+  it.each([undefined, null, false, 'false', 'true', 0, 1, [], {}].map(value => ({ value })))(
+    'rejects non-true opt-in $value without touching the database',
+    async ({ value: syncPreviewSettings }) => {
+      const event = { syncPreviewSettings, resultVersion: 1 } as unknown as Parameters<typeof handler>[0];
+      expect(await handler(event, {} as Context, () => undefined)).toMatchObject({ status: 'misconfigured' });
+      expect(state.ops).toEqual([]);
+      expect(state.markerReads).toEqual([]);
+      expect(state.markerWrites).toEqual([]);
+      expect(inserted.size).toBe(0);
+    }
+  );
+  it('logs a safe connection failure category without exposing credentials', async () => {
+    state.failConnect = true;
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const response = await strict();
+      expect(response).toEqual({ schemaVersion: 1, status: 'failed', stage: 'pr123', copiedCount: 0 });
+      expect(errorSpy).toHaveBeenCalledWith('Preview seed failed', {
+        stage: 'pr123',
+        errorType: 'MongoServerSelectionError',
+        errorCode: undefined,
+        reason: undefined,
+      });
+      expect(JSON.stringify(errorSpy.mock.calls)).not.toContain('password');
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
   it('requires a marker for this stage for already-seeded success', async () => {
     state.marker = { syncedAt: new Date(), stage: 'pr123' };
@@ -356,6 +421,17 @@ describe('strict seed result', () => {
     state.cursorEmptySources = [];
     state.emptySources = ['rapidreplymappings'];
     expect(await strict()).toMatchObject({ status: 'seeded', copiedCount: 1 });
+  });
+  it('rolls back a positive but incomplete copy and withholds the marker', async () => {
+    state.partialSource = 'rapidreplymappings';
+    expect(await strict()).toEqual({ schemaVersion: 1, status: 'failed', stage: 'pr123', copiedCount: 0 });
+    expect(inserted.get('rapidreplymappings')).toBe(1);
+    expect(state.ops.filter(operation => operation.startsWith('rapidreplymappings.'))).toEqual([
+      'rapidreplymappings.deleteMany',
+      'rapidreplymappings.deleteMany',
+      'rapidreplymappings.bulkWrite',
+    ]);
+    expect(state.markerWrites).toEqual([]);
   });
   it.each(['copy', 'rollback', 'marker'])('reports %s failure without error text', async failure => {
     if (failure === 'marker') state.failMarker = true;

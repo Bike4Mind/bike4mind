@@ -331,7 +331,13 @@ async function strictSeed(event: DataSyncerEvent): Promise<StrictSeedResponse> {
   try {
     const uri = Resource.MONGODB_URI?.value;
     const stagingUri = process.env.STAGING_MONGODB_URI;
-    if (!stage || !uri || !stagingUri || !event.syncPreviewSettings || uri.replace('%STAGE%', stage) === stagingUri) {
+    if (
+      !stage ||
+      !uri ||
+      !stagingUri ||
+      event.syncPreviewSettings !== true ||
+      uri.replace('%STAGE%', stage) === stagingUri
+    ) {
       return result('misconfigured');
     }
     const synced = await syncPreviewSettingsFromStaging(true);
@@ -343,7 +349,18 @@ async function strictSeed(event: DataSyncerEvent): Promise<StrictSeedResponse> {
       copiedCount: synced.synced,
       marker: { key: SYNC_MARKER_KEY, stage },
     };
-  } catch {
+  } catch (error) {
+    // Driver messages can contain connection strings; log only safe diagnostic fields.
+    const errorType = error instanceof Error && /^Mongo[A-Za-z]+Error$/.test(error.name) ? error.name : 'Error';
+    const errorCode =
+      error instanceof Error && 'code' in error && typeof error.code === 'number' ? error.code : undefined;
+    const invariantFailures = [
+      'Sync marker stage does not match',
+      'Source copy was incomplete',
+      'Sync marker was not persisted',
+    ];
+    const reason = error instanceof Error && invariantFailures.includes(error.message) ? error.message : undefined;
+    console.error('Preview seed failed', { stage, errorType, errorCode, reason });
     return result('failed');
   }
 }
