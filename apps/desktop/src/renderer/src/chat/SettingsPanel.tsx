@@ -168,6 +168,9 @@ export function isSettingsSection(value: unknown): value is SettingsSection {
   return SETTINGS_SECTIONS.includes(value as SettingsSection);
 }
 
+/** px, border included; the header indents its column by this much. */
+const SETTINGS_NAV_WIDTH = 200;
+
 const SECTION_LABEL: Record<SettingsSection, string> = {
   general: 'General',
   permissions: 'Permissions',
@@ -267,9 +270,9 @@ export function SettingsScreen({
 
   return (
     <Stack sx={{ height: '100vh', bgcolor: 'background.body' }} data-testid="settings-panel">
-      {/* Same header as ProfileScreen's, gutter included, so the two pages reached from the
-          account menu put the back button and title in the same place. */}
-      <Box sx={{ borderBottom: '1px solid', borderColor: 'divider', ...columnStackSx }}>
+      {/* ProfileScreen's header, with its column set over the page beside the nav rather than the
+          whole window, so the back button and title line up with the page below them. */}
+      <Box sx={{ borderBottom: '1px solid', borderColor: 'divider', pl: `${SETTINGS_NAV_WIDTH}px`, ...columnStackSx }}>
         <Stack direction="row" alignItems="center" spacing={1} sx={{ ...contentColumnSx, py: 1.25 }}>
           <IconButton
             size="sm"
@@ -293,7 +296,8 @@ export function SettingsScreen({
           aria-label="Settings sections"
           sx={{
             flex: 'none',
-            width: 200,
+            boxSizing: 'border-box',
+            width: SETTINGS_NAV_WIDTH,
             p: 1,
             gap: 0.25,
             borderRight: '1px solid',
