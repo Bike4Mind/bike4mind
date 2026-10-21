@@ -573,6 +573,7 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger,
   const currentTitle = currentModal.title || '';
   const currentImageUrl = urlImages?.[currentModal._id || ''];
   const { displayDate, subtitle: subtitleText } = parseSubtitleForDisplay(currentModal.subtitle);
+  const metaLine = [displayDate, subtitleText].filter(Boolean).join(' \u00b7 ');
 
   // A video replaces the slide image. When it cannot play (URL withheld, or a playback error that
   // re-signing cannot fix) the slide shows its image, else the video's poster in the video slot.
@@ -692,8 +693,8 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger,
             justifyContent: 'space-between',
             columnGap: isMobile || stackVideo ? 0 : '60px',
             p: isMobile ? '16px' : '24px',
-            // keeps the close button off the video
-            ...(stackVideo && { pt: '52px' }),
+            // room for the close button beside the date line
+            ...(stackVideo && { pt: '32px' }),
           }}
         >
           {/* Image Section - Top on mobile */}
@@ -768,6 +769,32 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger,
                 },
               }}
             >
+              {metaLine && (
+                <Typography
+                  level="body-md"
+                  data-testid="whats-new-slide-meta"
+                  sx={{
+                    mb: 0.5,
+                    fontSize: '16px',
+                    color: 'text.tertiary',
+                  }}
+                >
+                  {metaLine}
+                </Typography>
+              )}
+              <Typography
+                id="whats-new-modal-title"
+                level="h2"
+                sx={{
+                  mb: 3,
+                  fontSize: '24px',
+                  fontWeight: 500,
+                  color: 'text.primary',
+                  pr: { xs: '32px', sm: 0 },
+                }}
+              >
+                {currentModal.title}
+              </Typography>
               {/* Inside the scroll area so the video scrolls away with the text */}
               {stackVideo && (
                 <Box
@@ -778,7 +805,7 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger,
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    mb: 2,
+                    mb: '16px',
                   }}
                 >
                   {renderVideo()}
@@ -863,43 +890,6 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger,
                   },
                 })}
               >
-                {displayDate && (
-                  <Typography
-                    level="body-md"
-                    sx={{
-                      mb: 0.5,
-                      fontSize: '16px',
-                      color: 'text.tertiary',
-                    }}
-                  >
-                    {displayDate}
-                  </Typography>
-                )}
-                <Typography
-                  id="whats-new-modal-title"
-                  level="h2"
-                  sx={{
-                    mb: subtitleText ? 1 : 3,
-                    fontSize: '24px',
-                    fontWeight: 500,
-                    color: 'primary.500',
-                    pr: { xs: '32px', sm: 0 },
-                  }}
-                >
-                  {currentModal.title}
-                </Typography>
-                {subtitleText && (
-                  <Typography
-                    level="body-lg"
-                    sx={{
-                      mb: 3,
-                      fontSize: '16px',
-                      color: 'text.tertiary',
-                    }}
-                  >
-                    {subtitleText}
-                  </Typography>
-                )}
                 <MarkdownViewer content={currentModal.description || ''} />
               </Box>
             </Box>
