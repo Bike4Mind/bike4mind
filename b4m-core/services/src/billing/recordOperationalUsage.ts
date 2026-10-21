@@ -113,7 +113,11 @@ export async function recordOperationalUsage(
 
   let creditsCharged = 0;
   try {
-    const shouldBill = !params.bypassCreditBilling && (await isOperationalBillingEnabled(db, logger));
+    // A narrowed db (the LLM-tool and knowledge-base callers) can only ever record, never debit,
+    // so the flags cannot change the outcome - read them only where the debit path is reachable.
+    // That keeps the fresh read off a path that issues one record per search/tool call.
+    const canDebit = Boolean(db.creditTransactions && db.users && db.organizations);
+    const shouldBill = !params.bypassCreditBilling && canDebit && (await isOperationalBillingEnabled(db, logger));
 
     if (shouldBill && db.creditTransactions && db.users && db.organizations) {
       const credits = usdToCreditsStochastic(params.costUsd);

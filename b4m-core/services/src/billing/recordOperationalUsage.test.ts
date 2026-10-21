@@ -102,6 +102,22 @@ describe('recordOperationalUsage', () => {
     expect(record.mock.calls[0][0]).toMatchObject({ creditsCharged: 0 });
   });
 
+  // The knowledge-base and LLM-tool callers record once per search/tool call, so a fresh flag
+  // read here would be a per-call round-trip on a path that can never reach the debit branch.
+  it('does not read the billing flags at all when billing repos are absent', async () => {
+    setToggles({ bill: true, enforce: true });
+    const record = vi.fn().mockResolvedValue(null);
+
+    await recordOperationalUsage(baseParams, {
+      db: { usageEvents: { record }, adminSettings: {} as never },
+      logger,
+    });
+
+    expect(record).toHaveBeenCalledTimes(1);
+    expect(getSettingsValueMock).not.toHaveBeenCalled();
+    expect(deductMock).not.toHaveBeenCalled();
+  });
+
   it('does not bill when enforceCredits is off even if billOperationalUsage is on', async () => {
     setToggles({ bill: true, enforce: false });
     const record = vi.fn().mockResolvedValue(null);
