@@ -260,8 +260,10 @@ function logHedgedProviderFailure(provider: WebSearchProvider, error: unknown): 
  * backup the lead keeps its own failure mode (SearXNG fail-soft, SerpAPI throws). Returns the
  * provider that answered so follow-up calls (images, places) go to a live provider. With a backup,
  * results are empty when neither provider has any (both empty, or one empty and the other failed),
- * and it throws only when both failed. `providerFailed` marks the empty-and-failed case: the empty
- * side may be a throttled SearXNG, so "no results" is not an answer the caller can trust.
+ * and it throws only when both failed. `providerFailed` marks an empty answer from SearXNG while
+ * the other provider failed: SearXNG fails soft, so a throttled instance answers 200 with nothing
+ * and "no results" is not an answer the caller can trust. An empty SerpAPI answer is a search that
+ * really found nothing, so it stays unflagged.
  */
 export async function searchWithHedge(
   lead: WebSearchProvider,
@@ -315,11 +317,15 @@ export async function searchWithHedge(
     // so this is the only error-level record of the failure (transient attempt failures log at warn).
     if (leadError instanceof EmptySearchAnswer) {
       logHedgedProviderFailure(backup, backupError);
-      return { results: [], servedBy: lead, providerFailed: !(backupError instanceof EmptySearchAnswer) };
+      return {
+        results: [],
+        servedBy: lead,
+        providerFailed: lead.name === 'searxng' && !(backupError instanceof EmptySearchAnswer),
+      };
     }
     if (backupError instanceof EmptySearchAnswer) {
       logHedgedProviderFailure(lead, leadError);
-      return { results: [], servedBy: backup, providerFailed: true };
+      return { results: [], servedBy: backup, providerFailed: backup.name === 'searxng' };
     }
     throw new Error(
       `Web search failed on both providers. ${lead.name}: ${errorMessage(leadError)}; ` +

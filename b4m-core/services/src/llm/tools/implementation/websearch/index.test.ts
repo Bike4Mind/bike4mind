@@ -14,7 +14,9 @@ import {
   shouldIncludeImages,
   formatImageResults,
   searchCacheClear,
+  searchWithHedge,
 } from './index';
+import type { WebSearchProvider } from './providers';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 
 const TEST_SECRET = 'websearch-index-test-secret';
@@ -800,6 +802,48 @@ describe('webSearchTool - hedged backup and cache', () => {
     expect(calls(fetchStub, isSerpOrganic)).toBe(1);
   });
 
+  // A SerpAPI answer of "no hits" is a search that ran and found nothing; only SearXNG's empty
+  // answer is suspect, since a throttled instance answers 200 with nothing.
+  it('returns no results when the SerpAPI lead answered empty and the SearXNG backup failed', async () => {
+    configure('auto');
+    stubProviders({
+      serpOrganic: [{ status: 200, body: { organic_results: [] } }],
+      searxng: { status: 503 },
+    });
+
+    const result = await performWebSearch(mockAdapters, { query: 'genuinely obscure query' });
+
+    expect(result).toEqual({ formattedResults: 'No results found from web search.', citables: [] });
+  });
+
+  it('returns no results when the SearXNG lead failed and the SerpAPI backup answered empty', async () => {
+    configure('searxng');
+    stubProviders({
+      searxng: { status: 502 },
+      serpOrganic: [{ status: 200, body: { organic_results: [] } }],
+    });
+
+    const result = await performWebSearch(mockAdapters, { query: 'another genuinely obscure query' });
+
+    expect(result).toEqual({ formattedResults: 'No results found from web search.', citables: [] });
+  });
+
+  it('does not cache an empty answer that came with a failed provider, so a retry searches again', async () => {
+    configure('auto');
+    const fetchStub = stubProviders({
+      serpOrganic: [
+        { status: 200, body: { organic_results: [] } },
+        { status: 200, body: { organic_results: [] } },
+      ],
+      searxng: { status: 503 },
+    });
+
+    await buildTool().toolFn({ query: 'no hits on either provider' });
+    await buildTool().toolFn({ query: 'no hits on either provider' });
+
+    expect(calls(fetchStub, isSerpOrganic)).toBe(2);
+  });
+
   it('sends the image search to the provider that answered, not the one that failed', async () => {
     configure('searxng');
     const fetchStub = stubProviders({ searxng: { status: 502 }, serpOrganic: [serpHit] });
@@ -957,6 +1001,60 @@ describe('webSearchTool - hedged backup and cache', () => {
     await expect(toolFn({ query: 'q' })).rejects.toThrow();
     await expect(toolFn({ query: 'q' })).resolves.toContain('serp.example');
     expect(calls(fetchStub, isSerpOrganic)).toBe(2);
+  });
+});
+
+describe('searchWithHedge - providerFailed', () => {
+  const hit = [{ url: 'https://example.com', title: 'T', content: 'c' }];
+  const empty = () => Promise.resolve([]);
+  const answers = () => Promise.resolve(hit);
+  const fails = () => Promise.reject(new Error('boom'));
+  const provider = (name: 'serpapi' | 'searxng', search: () => Promise<typeof hit>) =>
+    ({ name, search: vi.fn(search) }) as unknown as WebSearchProvider;
+
+  const hedge = (lead: WebSearchProvider, backup: WebSearchProvider) => searchWithHedge(lead, backup, 'q', 3);
+
+  it('flags an empty SearXNG answer when the other provider failed', async () => {
+    const outcome = await hedge(provider('searxng', empty), provider('serpapi', fails));
+
+    expect(outcome).toEqual({
+      results: [],
+      servedBy: expect.objectContaining({ name: 'searxng' }),
+      providerFailed: true,
+    });
+  });
+
+  it('flags an empty SearXNG backup when the lead failed', async () => {
+    const outcome = await hedge(provider('serpapi', fails), provider('searxng', empty));
+
+    expect(outcome).toEqual({
+      results: [],
+      servedBy: expect.objectContaining({ name: 'searxng' }),
+      providerFailed: true,
+    });
+  });
+
+  it('does not flag an empty SerpAPI answer, which a search that found nothing produces', async () => {
+    const leadEmpty = await hedge(provider('serpapi', empty), provider('searxng', fails));
+    const backupEmpty = await hedge(provider('searxng', fails), provider('serpapi', empty));
+
+    expect(leadEmpty.providerFailed).toBe(false);
+    expect(backupEmpty.providerFailed).toBe(false);
+  });
+
+  it('does not flag a both-empty outcome whichever provider leads', async () => {
+    const serpLead = await hedge(provider('serpapi', empty), provider('searxng', empty));
+    const searxngLead = await hedge(provider('searxng', empty), provider('serpapi', empty));
+
+    expect(serpLead.providerFailed).toBe(false);
+    expect(searxngLead.providerFailed).toBe(false);
+  });
+
+  it('leaves the flag off when a provider answered', async () => {
+    const outcome = await hedge(provider('serpapi', answers), provider('searxng', fails));
+
+    expect(outcome.results).toEqual(hit);
+    expect(outcome.providerFailed).toBeUndefined();
   });
 });
 
