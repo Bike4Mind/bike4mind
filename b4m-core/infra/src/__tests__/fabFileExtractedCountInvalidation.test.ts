@@ -55,7 +55,7 @@ const NOT_A_REWRITE = new Set([
   'apps/workers/src/queueHandlers/notebookCuration.ts',
   'apps/workers/src/emailIngestion/emailParser.ts',
   'apps/client/server/s3/notebookImportComplete.ts',
-  'apps/client/server/utils/saveGeneratedAssetToFiles.ts',
+  'packages/server-utils/src/utils/saveGeneratedAssetToFiles.ts',
   'apps/client/server/slack/dataLakeIngestDeps.ts',
   'apps/client/server/dataLakes/proposalAdmissionDeps.ts',
   'apps/client/server/files/createPresignedUpload.ts',

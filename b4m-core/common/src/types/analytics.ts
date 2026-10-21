@@ -96,7 +96,7 @@ export interface IApiKeyEndpointTraffic {
  * What the scope gate WOULD decide for one key if a set of `requiredScopes`
  * were declared on the routes it has been calling.
  *
- * `outcome` mirrors ScopeGateDecision (apps/client/server/middlewares/apiKeyScopeGate.ts)
+ * `outcome` mirrors ScopeGateDecision (packages/server-utils/src/middlewares/apiKeyScopeGate.ts)
  * and is produced by calling that module's `decideScopeGate` - never by
  * reimplementing its rules here. A preflight that drifts from the runtime gate
  * reports a confidently wrong re-mint list, which is worse than no preflight.
