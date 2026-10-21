@@ -206,6 +206,31 @@ describe('the image context menu', () => {
     expect(byTestId('image-context-menu')).toBeNull();
   });
 
+  it('enters the Copy submenu with ArrowRight and leaves it with ArrowLeft', async () => {
+    await render(
+      <ImageMenuProvider>
+        <MediaAttachments media={[SCREENSHOT]} />
+      </ImageMenuProvider>
+    );
+    await rightClick(byTestId('chat-media-view-btn')!);
+    const copy = byTestId('image-menu-copy-submenu-btn')!;
+    const press = async (target: Element, key: string) =>
+      act(async () => {
+        target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+      });
+
+    await press(copy, 'ArrowRight');
+    expect(document.activeElement).toBe(byTestId('image-menu-copy-image-btn'));
+
+    await press(document.activeElement!, 'ArrowDown');
+    expect(document.activeElement).toBe(byTestId('image-menu-copy-path-btn'));
+
+    await press(document.activeElement!, 'ArrowLeft');
+    expect(byTestId('image-menu-copy-submenu')).toBeNull();
+    expect(byTestId('image-context-menu')).not.toBeNull();
+    expect(document.activeElement).toBe(byTestId('image-menu-copy-submenu-btn'));
+  });
+
   it('opens no menu outside a provider', async () => {
     await render(<MediaAttachments media={[SCREENSHOT]} />);
     await rightClick(byTestId('chat-media-view-btn')!);

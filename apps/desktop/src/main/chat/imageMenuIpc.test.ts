@@ -100,6 +100,7 @@ describe('image menu IPC', () => {
         'a traversal as a session id',
         { source: 'attachment', sessionId: '..', attachmentId: 'a', mediaType: 'image/png', name: 'x' },
       ],
+      ['a malformed escape in a media URL', { source: 'media', url: 'b4m-media://media/session-1/%E0.png' }],
       ['a path field the ref does not have', { source: 'path', path: '/etc/passwd' }],
       ['a non-object', '/etc/passwd'],
       ['null', null],

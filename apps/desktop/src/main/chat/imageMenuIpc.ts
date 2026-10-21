@@ -45,12 +45,21 @@ interface ResolvedImage {
 const isText = (value: unknown, max: number): value is string =>
   typeof value === 'string' && value.length > 0 && value.length <= max;
 
+/** parseMediaUrl decodes each segment, and a malformed escape (`%E0`) throws rather than failing. */
+function parsesAsMedia(url: string): boolean {
+  try {
+    return parseMediaUrl(url) !== null;
+  } catch {
+    return false;
+  }
+}
+
 /** Checked field by field: the ref crosses IPC from a renderer that draws model output. */
 export function parseImageRef(value: unknown): ChatImageRef | null {
   if (!value || typeof value !== 'object') return null;
   const ref = value as Record<string, unknown>;
   if (ref.source === 'media') {
-    if (!isText(ref.url, URL_MAX) || !parseMediaUrl(ref.url)) return null;
+    if (!isText(ref.url, URL_MAX) || !parsesAsMedia(ref.url)) return null;
     const nameHint = ref.nameHint === 'screenshot' ? 'screenshot' : 'image';
     return { source: 'media', url: ref.url, nameHint };
   }

@@ -1,5 +1,6 @@
 import {
   createContext,
+  memo,
   useCallback,
   useContext,
   useEffect,
@@ -139,7 +140,12 @@ function CopySubmenu({
             .filter(entry => entry.show)
             .map(entry => (
               <ListItem key={entry.choice} role="none">
-                <ListItemButton role="menuitem" onClick={() => onPick(entry.choice)} data-testid={entry.testId}>
+                <ListItemButton
+                  role="menuitem"
+                  tabIndex={-1}
+                  onClick={() => onPick(entry.choice)}
+                  data-testid={entry.testId}
+                >
                   {entry.label}
                 </ListItemButton>
               </ListItem>
@@ -150,12 +156,104 @@ function CopySubmenu({
   );
 }
 
+interface MenuCallbacks {
+  onAction: (image: ChatImageRef, action: ChatImageAction) => void;
+  onAttach: (image: ChatImageRef) => void;
+}
+
+/** Mounted only while the menu is open, so the Copy submenu always starts closed. */
+function ImageMenuItems({
+  image,
+  canAttach,
+  onAction,
+  onAttach,
+}: { image: ChatImageRef; canAttach: boolean } & MenuCallbacks) {
+  const [copy, setCopy] = useState<{ top: number; flip: boolean; focusFirst: boolean } | null>(null);
+  const copyItem = useRef<HTMLDivElement>(null);
+  const onDisk = image.source !== 'remote';
+
+  const openCopy = useCallback((focusFirst: boolean) => {
+    const item = copyItem.current;
+    if (!item) return;
+    const flip = item.getBoundingClientRect().right + SUBMENU_WIDTH > window.innerWidth;
+    setCopy({ top: item.offsetTop - 4, flip, focusFirst });
+  }, []);
+
+  const closeCopy = useCallback(() => setCopy(null), []);
+
+  const run = (action: ChatImageAction) => onAction(image, action);
+
+  return (
+    <>
+      {onDisk && (
+        <MenuItem onClick={() => run('copy')} onMouseEnter={closeCopy} data-testid="image-menu-copy-btn">
+          Copy image
+        </MenuItem>
+      )}
+      {onDisk && (
+        <MenuItem onClick={() => run('save')} onMouseEnter={closeCopy} data-testid="image-menu-save-btn">
+          Save image...
+        </MenuItem>
+      )}
+      {onDisk && canAttach && <ListDivider />}
+      {onDisk && canAttach && (
+        <MenuItem onClick={() => onAttach(image)} onMouseEnter={closeCopy} data-testid="image-menu-attach-btn">
+          Attach as context
+        </MenuItem>
+      )}
+      <MenuItem
+        ref={copyItem}
+        aria-haspopup="menu"
+        aria-expanded={copy !== null}
+        onMouseEnter={() => openCopy(false)}
+        onClick={(event: MouseEvent<HTMLDivElement> & { defaultMuiPrevented?: boolean }) => {
+          // Opening the submenu must not count as choosing an item, which closes the menu.
+          event.defaultMuiPrevented = true;
+          openCopy(event.detail === 0);
+        }}
+        onKeyDown={event => {
+          if (event.key !== 'ArrowRight') return;
+          event.preventDefault();
+          openCopy(true);
+        }}
+        data-testid="image-menu-copy-submenu-btn"
+      >
+        Copy
+        <Box component="span" sx={{ ml: 'auto', display: 'flex' }}>
+          <ChevronIcon open={false} />
+        </Box>
+      </MenuItem>
+      {copy && (
+        <CopySubmenu
+          onDisk={onDisk}
+          top={copy.top}
+          flip={copy.flip}
+          focusFirst={copy.focusFirst}
+          onPick={run}
+          onBack={() => {
+            setCopy(null);
+            copyItem.current?.focus();
+          }}
+        />
+      )}
+      {onDisk && <ListDivider />}
+      {onDisk && (
+        <MenuItem onClick={() => run('reveal')} onMouseEnter={closeCopy} data-testid="image-menu-reveal-btn">
+          {REVEAL_LABEL}
+        </MenuItem>
+      )}
+    </>
+  );
+}
+
 /**
  * The menu itself: Copy image, Save image..., Attach as context, a Copy submenu and Show in
  * Finder. Items that cannot apply to the image are left out rather than shown and failing - a
  * remote image has no file, so it offers only its Markdown.
+ *
+ * Memoized because the shell above re-renders on every streamed token.
  */
-export function ImageContextMenu({
+export const ImageContextMenu = memo(function ImageContextMenu({
   image,
   at,
   canAttach,
@@ -167,36 +265,9 @@ export function ImageContextMenu({
   at: Point | null;
   canAttach: boolean;
   onClose: () => void;
-  onAction: (image: ChatImageRef, action: ChatImageAction) => void;
-  onAttach: (image: ChatImageRef) => void;
-}) {
-  const [copy, setCopy] = useState<{ top: number; flip: boolean; focusFirst: boolean } | null>(null);
-  const copyItem = useRef<HTMLDivElement>(null);
-  const onDisk = image !== null && image.source !== 'remote';
-
-  const openCopy = useCallback((focusFirst: boolean) => {
-    const item = copyItem.current;
-    if (!item) return;
-    const flip = item.getBoundingClientRect().right + SUBMENU_WIDTH > window.innerWidth;
-    setCopy({ top: item.offsetTop - 4, flip, focusFirst });
-  }, []);
-
-  const closeCopy = useCallback(() => setCopy(null), []);
-
-  const run = (action: ChatImageAction) => {
-    setCopy(null);
-    if (image) onAction(image, action);
-  };
-
+} & MenuCallbacks) {
   return (
-    <Dropdown
-      open={image !== null}
-      onOpenChange={(_event, open) => {
-        if (open) return;
-        setCopy(null);
-        onClose();
-      }}
-    >
+    <Dropdown open={image !== null} onOpenChange={(_event, open) => !open && onClose()}>
       {/* Anchored to a zero-size point at the cursor, since a Joy Menu has to hang off a button. */}
       <MenuButton
         slots={{ root: 'span' }}
@@ -222,74 +293,11 @@ export function ImageContextMenu({
         sx={{ overflow: 'visible', minWidth: 200 }}
         data-testid="image-context-menu"
       >
-        {onDisk && (
-          <MenuItem onClick={() => run('copy')} onMouseEnter={closeCopy} data-testid="image-menu-copy-btn">
-            Copy image
-          </MenuItem>
-        )}
-        {onDisk && (
-          <MenuItem onClick={() => run('save')} onMouseEnter={closeCopy} data-testid="image-menu-save-btn">
-            Save image...
-          </MenuItem>
-        )}
-        {onDisk && canAttach && <ListDivider />}
-        {onDisk && canAttach && (
-          <MenuItem
-            onClick={() => {
-              setCopy(null);
-              if (image) onAttach(image);
-            }}
-            onMouseEnter={closeCopy}
-            data-testid="image-menu-attach-btn"
-          >
-            Attach as context
-          </MenuItem>
-        )}
-        <MenuItem
-          ref={copyItem}
-          aria-haspopup="menu"
-          aria-expanded={copy !== null}
-          onMouseEnter={() => openCopy(false)}
-          onClick={(event: MouseEvent<HTMLDivElement> & { defaultMuiPrevented?: boolean }) => {
-            // Opening the submenu must not count as choosing an item, which closes the menu.
-            event.defaultMuiPrevented = true;
-            openCopy(event.detail === 0);
-          }}
-          onKeyDown={event => {
-            if (event.key !== 'ArrowRight') return;
-            event.preventDefault();
-            openCopy(true);
-          }}
-          data-testid="image-menu-copy-submenu-btn"
-        >
-          Copy
-          <Box component="span" sx={{ ml: 'auto', display: 'flex' }}>
-            <ChevronIcon open={false} />
-          </Box>
-        </MenuItem>
-        {copy && (
-          <CopySubmenu
-            onDisk={onDisk}
-            top={copy.top}
-            flip={copy.flip}
-            focusFirst={copy.focusFirst}
-            onPick={choice => run(choice)}
-            onBack={() => {
-              setCopy(null);
-              copyItem.current?.focus();
-            }}
-          />
-        )}
-        {onDisk && <ListDivider />}
-        {onDisk && (
-          <MenuItem onClick={() => run('reveal')} onMouseEnter={closeCopy} data-testid="image-menu-reveal-btn">
-            {REVEAL_LABEL}
-          </MenuItem>
-        )}
+        {image && <ImageMenuItems image={image} canAttach={canAttach} onAction={onAction} onAttach={onAttach} />}
       </Menu>
     </Dropdown>
   );
-}
+});
 
 /**
  * One image menu for a whole conversation view. Images reach it through `useImageMenu`, which
@@ -310,14 +318,25 @@ export function ImageMenuProvider({
   const open = useCallback<OpenImageMenu>((image, at) => setMenu({ image, at }), []);
   const close = useCallback(() => setMenu(null), []);
 
-  const report = (error: unknown) => setNotice(error instanceof Error ? error.message : String(error));
+  const report = useCallback((error: unknown) => setNotice(error instanceof Error ? error.message : String(error)), []);
 
-  const onAction = (image: ChatImageRef, action: ChatImageAction) => {
-    setMenu(null);
-    void window.b4m.chat.imageAction(image, action).then(result => {
-      if (!result.ok) setNotice(result.error);
-    }, report);
-  };
+  const onAction = useCallback(
+    (image: ChatImageRef, action: ChatImageAction) => {
+      setMenu(null);
+      void window.b4m.chat.imageAction(image, action).then(result => {
+        if (!result.ok) setNotice(result.error);
+      }, report);
+    },
+    [report]
+  );
+
+  const attach = useCallback(
+    (image: ChatImageRef) => {
+      setMenu(null);
+      onAttach?.(image).catch(report);
+    },
+    [onAttach, report]
+  );
 
   return (
     <ImageMenuContext.Provider value={open}>
@@ -328,10 +347,7 @@ export function ImageMenuProvider({
         canAttach={onAttach !== undefined}
         onClose={close}
         onAction={onAction}
-        onAttach={image => {
-          setMenu(null);
-          onAttach?.(image).catch(report);
-        }}
+        onAttach={attach}
       />
       <Snackbar
         open={notice !== null}
