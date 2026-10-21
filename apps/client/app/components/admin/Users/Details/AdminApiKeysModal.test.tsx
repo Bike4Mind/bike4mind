@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -35,6 +35,10 @@ vi.mock('sonner', () => ({
 const appTheme = extendTheme({ ...getThemeConfig() });
 const USER = { id: 'u1', username: 'target-user' } as never;
 
+// Pinned clock: the minute window formats in minutes, the day window in hours.
+const NOW_MS = new Date('2026-10-21T12:00:00Z').getTime();
+const NOW_S = Math.floor(NOW_MS / 1000);
+
 const renderModal = () =>
   render(
     <CssVarsProvider theme={appTheme}>
@@ -52,6 +56,8 @@ const KEY = {
 };
 
 beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(NOW_MS);
   h.keys = [];
   h.liveUsage = {};
   h.resetMutate.mockReset();
@@ -62,6 +68,10 @@ beforeEach(() => {
   // this file and is otherwise never reset.
   vi.mocked(toast.success).mockClear();
   vi.mocked(toast.error).mockClear();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('AdminApiKeysModal', () => {
@@ -79,18 +89,19 @@ describe('AdminApiKeysModal', () => {
   });
 
   it('shows the reset time for each open window', () => {
-    const nowSeconds = Math.floor(Date.now() / 1000);
     h.keys = [KEY];
-    h.liveUsage = { k1: { minute: 3, day: 42, minuteResetAt: nowSeconds + 600, dayResetAt: nowSeconds + 3600 } };
+    h.liveUsage = { k1: { minute: 3, day: 42, minuteResetAt: NOW_S + 600, dayResetAt: NOW_S + 3600 } };
     renderModal();
 
-    expect(screen.getByTestId('admin-api-key-usage-minute-k1').textContent).toContain('3/60 per min · resets in');
-    expect(screen.getByTestId('admin-api-key-usage-day-k1').textContent).toContain('42/1000 per day · resets in');
+    expect(screen.getByTestId('admin-api-key-usage-minute-k1').textContent).toContain('3/60 per min · resets in 10m');
+    expect(screen.getByTestId('admin-api-key-usage-day-k1').textContent).toContain('42/1000 per day · resets in 1h 0m');
   });
 
   it('omits the reset time while a window is empty', () => {
     h.keys = [KEY];
-    h.liveUsage = { k1: { minute: 0, day: 0, minuteResetAt: Math.floor(Date.now() / 1000) + 600 } };
+    h.liveUsage = {
+      k1: { minute: 0, day: 0, minuteResetAt: NOW_S + 600, dayResetAt: NOW_S + 3600 },
+    };
     renderModal();
 
     expect(screen.getByTestId('admin-api-key-usage-minute-k1').textContent).not.toContain('resets in');

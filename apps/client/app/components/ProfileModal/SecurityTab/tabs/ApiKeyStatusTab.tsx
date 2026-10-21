@@ -62,6 +62,10 @@ const ApiKeyStatusTab: React.FC = () => {
                 ? 'good'
                 : 'neutral';
             const securityTokenColor: 'good' | 'high' | 'critical' = hasAlerts ? 'high' : 'good';
+            // Formatted once per window: two calls could straddle a second boundary and leave
+            // "resets in " with no duration.
+            const minuteReset = formatRateLimitReset(key.liveUsage.minuteResetAt);
+            const dayReset = formatRateLimitReset(key.liveUsage.dayResetAt);
             return (
               <Sheet
                 key={key.id}
@@ -102,9 +106,7 @@ const ApiKeyStatusTab: React.FC = () => {
                 >
                   This minute: {key.liveUsage.minute.toLocaleString()} /{' '}
                   {key.rateLimit.requestsPerMinute.toLocaleString()} requests
-                  {key.liveUsage.minute > 0 && formatRateLimitReset(key.liveUsage.minuteResetAt)
-                    ? ` · resets in ${formatRateLimitReset(key.liveUsage.minuteResetAt)}`
-                    : ''}
+                  {key.liveUsage.minute > 0 && minuteReset ? ` · resets in ${minuteReset}` : ''}
                 </Typography>
                 <Typography
                   level="body-xs"
@@ -112,9 +114,7 @@ const ApiKeyStatusTab: React.FC = () => {
                   sx={{ color: theme.palette.text.secondary }}
                 >
                   Today: {key.liveUsage.day.toLocaleString()} / {key.rateLimit.requestsPerDay.toLocaleString()} requests
-                  {key.liveUsage.day > 0 && formatRateLimitReset(key.liveUsage.dayResetAt)
-                    ? ` · resets in ${formatRateLimitReset(key.liveUsage.dayResetAt)}`
-                    : ''}
+                  {key.liveUsage.day > 0 && dayReset ? ` · resets in ${dayReset}` : ''}
                 </Typography>
                 {hasAlerts && (
                   <Box sx={{ mt: 1, display: 'flex', flexDirection: 'column', gap: 0.5 }}>
