@@ -51,6 +51,7 @@ import {
   tokenEstimateMultiplier,
   pairDataLakeTools,
   isClaudeModelId,
+  REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS,
   questGenerationJobs,
   resolveWorkspaceDeniedTools,
   applyWorkspaceSessionSettings,
@@ -3384,6 +3385,16 @@ export class ChatCompletionProcess {
         allTools = allTools.filter(t => t.toolSchema.name !== 'current_model_details');
       }
 
+      // Alone, the tool would make a plain turn carry tools, and the OpenAI adapter then drops
+      // reasoning_effort for these models. Keep the effort and the identity line instead.
+      if (
+        REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS.has(modelInfo.id) &&
+        allTools?.length === 1 &&
+        allTools[0].toolSchema.name === 'current_model_details'
+      ) {
+        allTools = [];
+      }
+
       const offeredToolNames = allTools?.map(t => t.toolSchema.name) ?? [];
       turnOfferedToolNames = offeredToolNames;
       logger.info('🔧 [Tools] allTools:', {
@@ -4989,6 +5000,14 @@ export class ChatCompletionProcess {
               outboundMessages,
               {
                 ...options,
+                // A fallback hop onto a model that cannot call tools gets its identity line back
+                // rather than a tool it cannot call.
+                ...(options.identityViaTool && currentModel.supportsTools === false
+                  ? {
+                      tools: options.tools?.filter(t => t.toolSchema.name !== 'current_model_details'),
+                      identityViaTool: false,
+                    }
+                  : {}),
                 // The preference is set from a selector shown only for OpenAI-style reasoning models, so
                 // it must not retune Claude, whose adapters honour reasoningEffort for the completions API.
                 // Checked per attempt: a fallback can swap a GPT model for a Claude one (and back).
@@ -5360,7 +5379,8 @@ export class ChatCompletionProcess {
                   excludeModelIds: triedModelIds,
                   preferUntriedBackend: isFinalHop,
                   endUserId: this.user.id,
-                  requireTools: !!options.tools?.length,
+                  // the identity tool alone does not need a tool-capable fallback
+                  requireTools: !!options.tools?.some(t => t.toolSchema.name !== 'current_model_details'),
                 }
               );
 

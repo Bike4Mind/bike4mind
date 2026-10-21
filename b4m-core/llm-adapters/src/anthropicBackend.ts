@@ -1024,8 +1024,9 @@ export class AnthropicBackend implements ICompletionBackend {
     // append the model-identity reminder as a separate uncached block to keep
     // the cached prefix stable across requests (otherwise the suffix would
     // bust the cache key on every model identifier change).
-    // Omitted for callers whose contract is a bare completion (API promptMode raw) -
-    // with no system messages left either, the request then carries no system at all.
+    // Omitted for a bare completion (API promptMode raw) or while current_model_details is on the
+    // request (see shouldOmitIdentityReminder) - with no system messages left either, the request
+    // then carries no system at all.
     const identityReminder = shouldOmitIdentityReminder(options) ? null : buildIdentityReminder(model);
     let system: string | Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }> | undefined;
     if (anySystemCacheControlled) {

@@ -247,6 +247,9 @@ const baseOptions = {
   workspaceSessionSettings: {},
 };
 
+// The constant countTokens mock would also count the auto-offered tool schema.
+const NO_AUTO_OFFERS = { skipAutoOffers: true } as const;
+
 describe('ChatCompletionProcess', () => {
   let service: ChatCompletionProcess;
   let mockDb: any;
@@ -2712,7 +2715,7 @@ describe('ChatCompletionProcess', () => {
       });
     });
 
-    describe('Research Mode cancellation', () => {
+    describe('Research Mode', () => {
       const RESEARCH_MODEL = 'gpt-4-research';
 
       function availableModels() {
@@ -2807,28 +2810,6 @@ describe('ChatCompletionProcess', () => {
         ]);
       });
 
-      it('gives each configuration its own identity line, not the primary-bound tool', async () => {
-        const complete = vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
-          await cb(['Answer']);
-        });
-        mockedGetLlmByModel.mockReturnValue({ complete, getModelInfo: vi.fn().mockResolvedValue([]) } as any);
-        mockedGetAvailableModels.mockResolvedValue(availableModels().map(m => ({ ...m, supportsTools: true })) as any);
-        mockedBuildAndSortMessages.mockResolvedValue({
-          messages: [{ role: 'user', content: 'Hello' }],
-          messageTruncation: null,
-        });
-        mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
-        mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
-
-        await service.process({ body: researchBody() as any, logger: mockLogger });
-
-        const opts = complete.mock.calls[0][2];
-        const names = (opts.tools ?? []).map((t: { toolSchema: { name: string } }) => t.toolSchema.name);
-        expect(names).not.toContain('current_model_details');
-        expect(opts.identityViaTool).toBe(false);
-        expect(opts.omitIdentityReminder).toBe(false);
-      });
-
       it('sends the relocated per-turn context to each configuration', async () => {
         const complete = vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
           await cb(['Answer']);
@@ -2854,6 +2835,28 @@ describe('ChatCompletionProcess', () => {
           content: `${TURN_CONTEXT_HEADER}MEMENTO-FACT${TURN_CONTEXT_END}Hello`,
         });
         expect(JSON.stringify(messages.filter((m: IMessage) => m.role === 'system'))).not.toContain('MEMENTO-FACT');
+      });
+
+      it('gives each configuration its own identity line, not the primary-bound tool', async () => {
+        const complete = vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+          await cb(['Answer']);
+        });
+        mockedGetLlmByModel.mockReturnValue({ complete, getModelInfo: vi.fn().mockResolvedValue([]) } as any);
+        mockedGetAvailableModels.mockResolvedValue(availableModels().map(m => ({ ...m, supportsTools: true })) as any);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: 'Hello' }],
+          messageTruncation: null,
+        });
+        mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+        mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+        await service.process({ body: researchBody() as any, logger: mockLogger });
+
+        const opts = complete.mock.calls[0][2];
+        const names = (opts.tools ?? []).map((t: { toolSchema: { name: string } }) => t.toolSchema.name);
+        expect(names).not.toContain('current_model_details');
+        expect(opts.identityViaTool).toBe(false);
+        expect(opts.omitIdentityReminder).toBe(false);
       });
     });
 
@@ -3561,6 +3564,53 @@ describe('ChatCompletionProcess', () => {
           expect(offered()).not.toContain('current_model_details');
           expect(lastCompleteOpts().identityViaTool).toBe(false);
         });
+
+        it('does not cost a GPT-5.4 turn its reasoning effort when the tool would be the only one', async () => {
+          setModel({ id: ChatModels.GPT5_4, supportsTools: true });
+          await service.process({
+            body: turnBody({ params: { ...startQuestParams.params, model: ChatModels.GPT5_4 } }),
+            logger: mockLogger,
+          });
+          expect(offered()).toEqual([]);
+          expect(lastCompleteOpts().identityViaTool).toBe(false);
+        });
+
+        it('hands a fallback onto a model without tool support its identity line, and does not require tools for it', async () => {
+          setModel({ supportsTools: true });
+          mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };
+          mockedShouldTriggerFallback.mockReturnValue(true);
+          mockedIsOverloadedError.mockReturnValue(false);
+          mockedGetLlmByModel.mockReturnValue({
+            complete: vi.fn().mockRejectedValue(new Error('ServiceUnavailableException: primary down')),
+            getModelInfo: vi.fn().mockResolvedValue([]),
+          } as any);
+          const fallbackComplete = vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+            await cb(['Hello from fallback']);
+          });
+          mockedGetLlmWithFallback.mockResolvedValue({
+            model: {
+              id: 'fallback-no-tools',
+              type: 'text',
+              name: 'No Tools',
+              backend: ModelBackend.OpenAI,
+              max_tokens: 100,
+              contextWindow: 1000,
+              can_stream: false,
+              pricing: {},
+              supportsImageVariation: false,
+              supportsTools: false,
+            },
+            backend: { complete: fallbackComplete, getModelInfo: vi.fn().mockResolvedValue([]) },
+            attempt: 1,
+          } as any);
+
+          await service.process({ body: turnBody(), logger: mockLogger });
+
+          expect(mockedGetLlmWithFallback.mock.calls[0][5]).toMatchObject({ requireTools: false });
+          const hopOpts = fallbackComplete.mock.calls[0][2];
+          expect(hopOpts.identityViaTool).toBe(false);
+          expect(hopOpts.tools ?? []).toEqual([]);
+        });
       });
 
       // A session's first turn used to keep the in-flight quest in history, so the caller's message
@@ -4248,8 +4298,7 @@ describe('ChatCompletionProcess', () => {
       const body = {
         ...startQuestParams,
         tools: [],
-        // skipAutoOffers: the constant countTokens mock would also count the auto-offered tool schema.
-        skipAutoOffers: true,
+        ...NO_AUTO_OFFERS,
         projectId: undefined,
         organizationId: undefined,
       };
@@ -6285,8 +6334,7 @@ describe('ChatCompletionProcess', () => {
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
       await service.process({
-        // skipAutoOffers: the constant countTokens mock would also count the auto-offered tool schema.
-        body: { ...startQuestParams, tools: [], skipAutoOffers: true, projectId: undefined, organizationId: undefined },
+        body: { ...startQuestParams, tools: [], ...NO_AUTO_OFFERS, projectId: undefined, organizationId: undefined },
         logger: mockLogger,
       });
 
@@ -6331,8 +6379,7 @@ describe('ChatCompletionProcess', () => {
       ...startQuestParams,
       params: { ...startQuestParams.params, model: ChatModels.CLAUDE_5_SONNET_BEDROCK },
       tools: [],
-      // skipAutoOffers: the constant countTokens mock would also count the auto-offered tool schema.
-      skipAutoOffers: true,
+      ...NO_AUTO_OFFERS,
       projectId: undefined,
       organizationId: undefined,
     };
@@ -6448,8 +6495,7 @@ describe('ChatCompletionProcess', () => {
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
       await service.process({
-        // skipAutoOffers: the constant countTokens mock would also count the auto-offered tool schema.
-        body: { ...startQuestParams, tools: [], skipAutoOffers: true, projectId: undefined, organizationId: undefined },
+        body: { ...startQuestParams, tools: [], ...NO_AUTO_OFFERS, projectId: undefined, organizationId: undefined },
         logger: mockLogger,
       });
 
@@ -6501,8 +6547,7 @@ describe('ChatCompletionProcess', () => {
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
       await service.process({
-        // skipAutoOffers: the constant countTokens mock would also count the auto-offered tool schema.
-        body: { ...startQuestParams, tools: [], skipAutoOffers: true, projectId: undefined, organizationId: undefined },
+        body: { ...startQuestParams, tools: [], ...NO_AUTO_OFFERS, projectId: undefined, organizationId: undefined },
         logger: mockLogger,
       });
 
@@ -6717,8 +6762,7 @@ describe('ChatCompletionProcess', () => {
           body: {
             ...startQuestParams,
             tools: [],
-            // skipAutoOffers: the constant countTokens mock would also count the auto-offered tool schema.
-            skipAutoOffers: true,
+            ...NO_AUTO_OFFERS,
             projectId: undefined,
             organizationId: undefined,
           },

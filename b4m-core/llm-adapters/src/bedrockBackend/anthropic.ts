@@ -914,8 +914,8 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       .filter(block => block.text.trim() !== '');
 
     // Append model identity so the model correctly identifies itself when asked.
-    // Skipped for bare-completion callers (API promptMode raw) - must stay in sync
-    // with the same flag in anthropicBackend.
+    // Skipped for raw or while current_model_details is on the request (see
+    // shouldOmitIdentityReminder) - must stay in sync with anthropicBackend.
     const identityReminder = shouldOmitIdentityReminder(options) ? null : buildIdentityReminder(model);
 
     let systemMessage = systemBlocks.map(block => block.text).join('\n');

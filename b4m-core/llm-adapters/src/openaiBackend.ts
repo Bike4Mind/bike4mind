@@ -2045,7 +2045,8 @@ export class OpenAIBackend implements ICompletionBackend {
     // The only synthesized text is the shared identity reminder, placed last to mirror the
     // Anthropic adapters. Bare-completion contract (API promptMode raw): synthesize
     // nothing, so the lead message is exactly the caller's own system text, or absent
-    // entirely. Must stay in sync with the same flag in anthropicBackend / bedrockBackend.
+    // entirely. Also omitted while current_model_details is on the request (see
+    // shouldOmitIdentityReminder). Must stay in sync with anthropicBackend / bedrockBackend.
     const mergedContent = shouldOmitIdentityReminder(options)
       ? callerSystem
       : appendIdentityReminder(callerSystem, buildIdentityReminder(model));

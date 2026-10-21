@@ -577,7 +577,11 @@ export function buildSharedTools(
   // delegate tool's closure below, so it never appears in the array this function returns and a
   // denylist applied to that array cannot reach it. Without this, a session-forbidden tool stays
   // callable by a dispatched subagent - the same loophole the delegate gate exists to close.
-  const parentTools = [...tools, ...agentOnlyMcpTools].filter(tool => !deniedToolNames.has(tool.toolSchema.name));
+  // current_model_details is bound to the parent's serving model, so a subagent on another model
+  // must not inherit it (its adapter keeps its own identity line).
+  const parentTools = [...tools, ...agentOnlyMcpTools].filter(
+    tool => !deniedToolNames.has(tool.toolSchema.name) && tool.toolSchema.name !== 'current_model_details'
+  );
 
   const subagentModelInfo = deps.precomputed?.models.find(m => m.id === model);
   const subagentLlm = getLlmByModel(deps.apiKeyTable!, {
