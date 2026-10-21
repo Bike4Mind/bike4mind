@@ -6,11 +6,11 @@ import {
   claudeSkillNameFor,
   requireEnv,
   toAbsoluteUrl,
-  toSkillMd,
   type ClaudeMarketplace,
   type ISkillListing,
   type ISkillListingVersion,
 } from '@bike4mind/common';
+import { toSkillMd } from '@bike4mind/common/utils/skillMd';
 import { marketVisibilityFilter } from './market';
 
 /**
@@ -22,13 +22,16 @@ import { marketVisibilityFilter } from './market';
  * on nothing per-request or per-caller.
  */
 
-// Local-time constructor on purpose: zip stores local DOS date fields, so this encodes the same in any TZ.
-const ZIP_ENTRY_DATE = new Date(2000, 0, 1);
+// Archiver writes UTC DOS date fields by default; fix the instant across runtime timezones.
+const ZIP_ENTRY_DATE = new Date(Date.UTC(2000, 0, 1));
 
 const appUrl = () => requireEnv('APP_URL', process.env.APP_URL);
 
-const pluginZipUrl = (listingId: string): string =>
-  toAbsoluteUrl(appUrl(), `/api/v1/skills/market/${encodeURIComponent(listingId)}/claude-plugin.zip`);
+const pluginZipUrl = (listingId: string, version: number): string =>
+  toAbsoluteUrl(
+    appUrl(),
+    `/api/v1/skills/market/${encodeURIComponent(listingId)}/claude-plugin.zip?version=${version}`
+  );
 
 /** Same stamp as the listing page's SKILL.md export (ListingDetail), minus the export date. */
 function skillMdFor(listing: ISkillListing, version: ISkillListingVersion): string {
@@ -54,8 +57,8 @@ function buildPluginZip(skillName: string, skillMd: string): Promise<Buffer> {
 const sha256 = (buf: Buffer): string => createHash('sha256').update(buf).digest('hex');
 
 /** The listing's plugin zip, or null when it has no approved version to serve. */
-export async function pluginZipFor(listing: ISkillListing): Promise<Buffer | null> {
-  const version = await approvedVersionOf(listing);
+export async function pluginZipFor(listing: ISkillListing, versionNumber?: number): Promise<Buffer | null> {
+  const version = await approvedVersionOf(listing, versionNumber);
   return version ? zipOf(listing, version) : null;
 }
 
@@ -63,10 +66,13 @@ export async function pluginZipFor(listing: ISkillListing): Promise<Buffer | nul
 const zipOf = (listing: ISkillListing, version: ISkillListingVersion) =>
   buildPluginZip(skillDirName(version), skillMdFor(listing, version));
 
-/** Only `currentApprovedVersionId` content is served, and only while that version is still approved. */
-async function approvedVersionOf(listing: ISkillListing): Promise<ISkillListingVersion | null> {
+/** A pinned version must belong to this listing and remain approved; unpinned requests use the current version. */
+async function approvedVersionOf(listing: ISkillListing, versionNumber?: number): Promise<ISkillListingVersion | null> {
   if (!listing.currentApprovedVersionId) return null;
-  const doc = await SkillListingVersion.findById(listing.currentApprovedVersionId);
+  const doc =
+    versionNumber === undefined
+      ? await SkillListingVersion.findById(listing.currentApprovedVersionId)
+      : await SkillListingVersion.findOne({ listingId: String(listing.id), version: versionNumber });
   return servable(doc?.toJSON() as unknown as ISkillListingVersion | undefined);
 }
 
@@ -123,7 +129,11 @@ export async function buildClaudeMarketplace(
         name: listing.claudePluginName,
         description: version.snapshot.description,
         version: String(version.version),
-        source: { source: 'archive' as const, url: pluginZipUrl(String(listing.id)), sha256: sha256(zip) },
+        source: {
+          source: 'archive' as const,
+          url: pluginZipUrl(String(listing.id), version.version),
+          sha256: sha256(zip),
+        },
       };
     })
   );

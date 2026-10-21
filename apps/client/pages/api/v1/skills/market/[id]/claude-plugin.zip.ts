@@ -12,7 +12,7 @@ const handler = nextRouteForContract(getClaudePluginZipContract).get(async (req,
   const listing = await findListing(req.validatedParams.id);
   // Organization listings only, matching the feed; 404 either way so a listing's existence isn't confirmed.
   const visible = listing?.visibility === 'organization' && canSeeListing(listing, await memberOrgIdsFor(req.user.id));
-  const zip = visible ? await pluginZipFor(listing) : null;
+  const zip = visible ? await pluginZipFor(listing, req.validatedQuery.version) : null;
   if (!zip) throw new NotFoundError('Listing not found');
 
   res.setHeader('Content-Type', 'application/zip');

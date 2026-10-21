@@ -75,6 +75,25 @@ describe('claudePluginName', () => {
     expect(await pluginName(c)).toBe(`foo-${c.slice(-6)}`);
   });
 
+  it('assigns distinct stable names to concurrent approvals', async () => {
+    const first = await listing('Foo');
+    const second = await listing('Foo');
+    await Promise.all([approve(first, 'Foo', 1), approve(second, 'Foo', 1)]);
+    const names = await Promise.all([pluginName(first), pluginName(second)]);
+    expect(new Set(names).size).toBe(2);
+    expect(names).toContain('foo');
+    expect(names.every(name => typeof name === 'string')).toBe(true);
+  });
+
+  it('never reuses a soft-deleted listing name', async () => {
+    const removed = await listing('Foo');
+    await approve(removed, 'Foo', 1);
+    await SkillListing.deleteOne({ _id: removed });
+    const next = await listing('Foo');
+    await approve(next, 'Foo', 1);
+    expect(await pluginName(next)).toBe(`foo-${next.slice(-6)}`);
+  });
+
   it('is a no-op when the listing already has a name', async () => {
     const id = await listing('Foo');
     await assignClaudePluginName(id, 'Foo');
@@ -91,7 +110,7 @@ describe('claudePluginName', () => {
     expect(await pluginName(unlisted)).toBeUndefined();
   });
 
-  it('rejects when both the slug and the id-suffixed fallback are taken', async () => {
+  it('keeps naming when both the slug and the id-suffixed fallback are taken', async () => {
     const id = await listing('Foo');
     await SkillListing.create({
       sourceSkillId: 's-a',
@@ -111,8 +130,10 @@ describe('claudePluginName', () => {
       description: 'd',
       claudePluginName: `foo-${id.slice(-6)}`,
     });
-    await expect(assignClaudePluginName(id, 'Foo')).rejects.toMatchObject({ code: 11000 });
-    expect(await pluginName(id)).toBeUndefined();
+    await assignClaudePluginName(id, 'Foo');
+    expect(await pluginName(id)).toBe(`foo-${id}-2`);
+    await assignClaudePluginName(id, 'Renamed');
+    expect(await pluginName(id)).toBe(`foo-${id}-2`);
   });
 
   it('still approves when naming fails, and logs it', async () => {

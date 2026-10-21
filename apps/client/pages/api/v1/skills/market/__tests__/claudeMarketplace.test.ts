@@ -8,6 +8,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'crypto';
 import { createMocks } from 'node-mocks-http';
+import { ApiKeyScope, getClaudeMarketplaceContract, getClaudePluginZipContract } from '@bike4mind/common';
+import { decideScopeGate } from '@server/middlewares/apiKeyScopeGate';
 
 const {
   mockFind,
@@ -15,6 +17,7 @@ const {
   mockFindById,
   mockAssignName,
   mockFindVersion,
+  mockFindPinnedVersion,
   mockFindVersions,
   mockMemberOrgs,
   mockAdminOrgs,
@@ -25,6 +28,7 @@ const {
   mockFindById: vi.fn(),
   mockAssignName: vi.fn(),
   mockFindVersion: vi.fn(),
+  mockFindPinnedVersion: vi.fn(),
   mockFindVersions: vi.fn(),
   mockMemberOrgs: vi.fn(),
   mockAdminOrgs: vi.fn(),
@@ -56,7 +60,7 @@ vi.mock('@server/middlewares/rateLimit', () => ({
 vi.mock('@bike4mind/database', () => ({
   SkillListing: { find: mockFind, findOne: mockFindOne, findById: mockFindById },
   assignClaudePluginName: mockAssignName,
-  SkillListingVersion: { findById: mockFindVersion, find: mockFindVersions },
+  SkillListingVersion: { findById: mockFindVersion, findOne: mockFindPinnedVersion, find: mockFindVersions },
   adminSettingsRepository: {},
   inboxRepository: {},
 }));
@@ -108,9 +112,11 @@ const version = (id: string, name = 'review-pr') => ({
   },
 });
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- the contract router's param type carries prelude-only fields
-async function call(handler: any, query: Record<string, string>) {
-  const { req, res } = createMocks({ method: 'GET', query });
+type MarketplaceRequest = Parameters<typeof feedHandler>[0] & Parameters<typeof zipHandler>[0];
+type MarketplaceResponse = Parameters<typeof feedHandler>[1];
+
+async function call(handler: typeof feedHandler | typeof zipHandler, query: Record<string, string>) {
+  const { req, res } = createMocks<MarketplaceRequest, MarketplaceResponse>({ method: 'GET', query });
   Object.assign(req, { user: { id: 'u1' }, logger });
   try {
     await handler(req, res);
@@ -125,6 +131,7 @@ beforeEach(() => {
   mockMemberOrgs.mockResolvedValue([ORG_ID]);
   mockAdminOrgs.mockResolvedValue([]);
   mockFindOrg.mockResolvedValue({ id: ORG_ID, name: 'Acme Labs' });
+  mockFindPinnedVersion.mockImplementation(async () => doc(version(LISTING_A)));
   mockFindVersion.mockImplementation(async (versionId: string) => doc(version(versionId.slice(2))));
   mockFindVersions.mockImplementation(async ({ _id }: { _id: { $in: string[] } }) =>
     _id.$in.map(versionId => doc(version(versionId.slice(2))))
@@ -149,7 +156,7 @@ describe('GET /api/v1/skills/market/claude-marketplace.json', () => {
     expect(filter).toMatchObject({ status: 'approved', visibility: 'organization', organizationId: ORG_ID });
 
     const body = res._getJSONData();
-    expect(body.name).toBe('b4m-org-000000aa');
+    expect(body.name).toBe(`b4m-org-${ORG_ID}`);
     expect(body.forceRemoveDeletedPlugins).toBe(true);
     expect(body.plugins.map((p: { name: string }) => p.name)).toEqual(['review-pr', 'review-pr-000002']);
     expect(body.plugins[0]).toMatchObject({
@@ -157,7 +164,7 @@ describe('GET /api/v1/skills/market/claude-marketplace.json', () => {
       description: 'Review a PR',
       source: {
         source: 'archive',
-        url: `https://app.example.test/api/v1/skills/market/${LISTING_A}/claude-plugin.zip`,
+        url: `https://app.example.test/api/v1/skills/market/${LISTING_A}/claude-plugin.zip?version=3`,
       },
     });
   });
@@ -167,6 +174,28 @@ describe('GET /api/v1/skills/market/claude-marketplace.json', () => {
     const [plugin] = res._getJSONData().plugins;
     const zip = await zipOf(LISTING_A);
     expect(createHash('sha256').update(zip).digest('hex')).toBe(plugin.source.sha256);
+  });
+
+  it('fails closed when the membership lookup fails', async () => {
+    mockMemberOrgs.mockRejectedValueOnce(new Error('membership unavailable'));
+    const { error } = await call(feedHandler, { orgId: ORG_ID });
+    expect(error).toBeInstanceOf(Error);
+    expect(mockFind).not.toHaveBeenCalled();
+  });
+
+  it('retains the advertised bytes when a newer version is approved', async () => {
+    const { res } = await call(feedHandler, { orgId: ORG_ID });
+    const [plugin] = res._getJSONData().plugins;
+    mockFindOne.mockResolvedValue(doc(listing(LISTING_A, { currentVersion: 4, currentApprovedVersionId: 'new-v4' })));
+    mockFindVersion.mockResolvedValue(doc({ ...version(LISTING_A, 'New name'), version: 4 }));
+    const url = new URL(plugin.source.url);
+    const { error, res: archive } = await call(zipHandler, {
+      id: LISTING_A,
+      version: url.searchParams.get('version')!,
+    });
+    expect(error).toBeNull();
+    expect(mockFindPinnedVersion).toHaveBeenCalledWith({ listingId: LISTING_A, version: 3 });
+    expect(createHash('sha256').update(archive._getData()).digest('hex')).toBe(plugin.source.sha256);
   });
 
   it('refuses an org the caller is not a member of', async () => {
@@ -198,7 +227,7 @@ describe('GET /api/v1/skills/market/claude-marketplace.json', () => {
     mockFindOrg.mockResolvedValue({ id: ORG_ID, name: 'Acme Robotics' });
     const { res: after } = await call(feedHandler, { orgId: ORG_ID });
     expect(after._getJSONData().name).toBe(before._getJSONData().name);
-    expect(after._getJSONData().name).toBe(`b4m-org-${ORG_ID.slice(-8)}`);
+    expect(after._getJSONData().name).toBe(`b4m-org-${ORG_ID}`);
     expect(after._getJSONData().owner.name).toBe('Acme Robotics');
   });
 
@@ -234,6 +263,9 @@ describe('GET /api/v1/skills/market/{id}/claude-plugin.zip', () => {
     const first = await zipOf(LISTING_A);
     const second = await zipOf(LISTING_A);
     expect(first.equals(second)).toBe(true);
+    // ZIP local header time/date fields: midnight 2000-01-01 in every server timezone.
+    expect(first.readUInt16LE(10)).toBe(0);
+    expect(first.readUInt16LE(12)).toBe((20 << 9) | (1 << 5) | 1);
 
     // Stored (uncompressed), so the SKILL.md text is readable in the archive bytes.
     const text = first.toString('utf8');
@@ -243,6 +275,25 @@ describe('GET /api/v1/skills/market/{id}/claude-plugin.zip', () => {
     expect(text).toContain('Third-party skill from the Bike4Mind Skill Market');
     expect(text).not.toContain('allowed-tools');
     expect(text).not.toContain('# Exported:');
+  });
+
+  it('404s a pinned version that does not belong to the listing', async () => {
+    mockFindPinnedVersion.mockResolvedValueOnce(null);
+    const { error } = await call(zipHandler, { id: LISTING_A, version: '3' });
+    expect(error?.statusCode).toBe(404);
+    expect(mockFindPinnedVersion).toHaveBeenCalledWith({ listingId: LISTING_A, version: 3 });
+  });
+
+  it('404s a pinned version whose approval was revoked', async () => {
+    mockFindPinnedVersion.mockResolvedValueOnce(doc({ ...version(LISTING_A), reviewStatus: 'rejected' }));
+    const { error } = await call(zipHandler, { id: LISTING_A, version: '3' });
+    expect(error?.statusCode).toBe(404);
+  });
+
+  it.each(['0', '-1', '1.5', 'NaN', ''])('rejects invalid version %j', async version => {
+    const { error } = await call(zipHandler, { id: LISTING_A, version });
+    expect(error?.statusCode).toBe(400);
+    expect(mockFindPinnedVersion).not.toHaveBeenCalled();
   });
 
   it('404s a listing whose current version is no longer approved', async () => {
@@ -262,5 +313,23 @@ describe('GET /api/v1/skills/market/{id}/claude-plugin.zip', () => {
     mockFindOne.mockResolvedValue(doc(listing(LISTING_A, overrides)));
     const { error } = await call(zipHandler, { id: LISTING_A });
     expect(error?.statusCode).toBe(404);
+  });
+});
+
+describe('marketplace API key confinement', () => {
+  it.each([getClaudeMarketplaceContract, getClaudePluginZipContract])(
+    'requires skills:read on $operationId',
+    contract => {
+      expect(contract.scopes).toEqual([ApiKeyScope.SKILLS_READ]);
+      expect(decideScopeGate(contract.scopes, [ApiKeyScope.SKILLS_READ], new Set())).toEqual({ outcome: 'allow' });
+      expect(decideScopeGate(contract.scopes, [ApiKeyScope.READ_NOTEBOOKS], new Set())).toEqual({ outcome: 'deny' });
+    }
+  );
+
+  it('keeps the key off unrelated routes, including during scope staging', () => {
+    expect(decideScopeGate(undefined, [ApiKeyScope.SKILLS_READ], new Set())).toEqual({ outcome: 'deny' });
+    expect(decideScopeGate([ApiKeyScope.AI_CHAT], [ApiKeyScope.SKILLS_READ], new Set([ApiKeyScope.AI_CHAT]))).toEqual({
+      outcome: 'deny',
+    });
   });
 });

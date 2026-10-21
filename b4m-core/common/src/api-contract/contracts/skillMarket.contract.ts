@@ -6,6 +6,7 @@ import {
   ClaudeMarketplaceQuerySchema,
   ClaudeMarketplaceSchema,
   ClaudePluginZipParamSchema,
+  ClaudePluginZipQuerySchema,
 } from '../../schemas/claudeMarketplace';
 
 const AUTH_NOTE =
@@ -36,7 +37,7 @@ export const getClaudeMarketplaceContract = defineEndpoint({
       description: 'The marketplace.',
       schema: ClaudeMarketplaceSchema,
       example: {
-        name: 'b4m-acme',
+        name: `b4m-org-${EXAMPLE_RESOURCE_ID}`,
         owner: { name: 'Acme' },
         forceRemoveDeletedPlugins: true,
         plugins: [
@@ -46,7 +47,7 @@ export const getClaudeMarketplaceContract = defineEndpoint({
             version: '3',
             source: {
               source: 'archive',
-              url: `https://app.bike4mind.com/api/v1/skills/market/${EXAMPLE_RESOURCE_ID}/claude-plugin.zip`,
+              url: `https://app.bike4mind.com/api/v1/skills/market/${EXAMPLE_RESOURCE_ID}/claude-plugin.zip?version=3`,
               sha256: 'a3f1c0de9b8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a392817060f5e',
             },
           },
@@ -68,15 +69,19 @@ export const getClaudePluginZipContract = defineEndpoint({
   operationId: 'getClaudePluginZip',
   summary: 'Download a Skill Market listing as a Claude Code plugin',
   description:
-    "A zip holding the listing's current approved version as `skills/<name>/SKILL.md`. The bytes are the " +
-    `same on every call until a new version is approved, so they match the feed's \`sha256\`. ${AUTH_NOTE}`,
+    'A zip holding an approved version as `skills/<name>/SKILL.md`. The optional `version` query pins ' +
+    'the listing version advertised by the feed, so later approvals do not change its bytes or `sha256`. ' +
+    `Without it, returns the current approved version. ${AUTH_NOTE}`,
   tags: ['Skills'],
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.SKILLS_READ],
   pathParams: ClaudePluginZipParamSchema,
+  queryParams: ClaudePluginZipQuerySchema,
+  validationErrorStatus: 400,
   emitsRateLimitHeaders: true,
   responses: {
     200: { description: 'The plugin archive.', contentType: 'application/zip' },
+    400: { description: 'Invalid version query.', schema: ApiErrorSchema },
     403: { description: 'The API key lacks `skills:read`.', schema: ScopeForbiddenErrorSchema },
     404: {
       description:

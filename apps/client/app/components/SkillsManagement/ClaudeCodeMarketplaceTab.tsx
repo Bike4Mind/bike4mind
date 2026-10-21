@@ -4,6 +4,7 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import KeyIcon from '@mui/icons-material/Key';
 import { toast } from 'sonner';
 import { ApiKeyScope, claudeMarketplaceNameFor, toAbsoluteUrl } from '@bike4mind/common';
+import { usePublicConfig } from '@client/app/hooks/data/settings';
 import { useCreateUserApiKey } from '@client/app/hooks/data/userApiKeys';
 
 export interface ClaudeCodeMarketplaceTabProps {
@@ -20,12 +21,25 @@ const KEY_PLACEHOLDER = 'b4m_<your skills:read key>';
  * confined scope, so the New-Key modals don't offer it and the key is minted here instead.
  */
 const ClaudeCodeMarketplaceTab: FC<ClaudeCodeMarketplaceTabProps> = ({ org, pluginName }) => {
+  const { data: config, isPending, refetch } = usePublicConfig();
   const [key, setKey] = useState<string | null>(null);
   const createKey = useCreateUserApiKey({ onSuccess: result => setKey(result.key) });
 
+  if (isPending) return <Typography level="body-sm">Loading marketplace settings...</Typography>;
+  if (!config?.apiUrl) {
+    return (
+      <Stack spacing={1}>
+        <Typography color="danger">Could not load the marketplace address.</Typography>
+        <Button data-testid="skill-claude-code-marketplace-retry" onClick={() => void refetch()}>
+          Retry
+        </Button>
+      </Stack>
+    );
+  }
+
   const marketplace = claudeMarketplaceNameFor(org.id);
   const feedUrl = toAbsoluteUrl(
-    window.location.origin,
+    config.apiUrl,
     `/api/v1/skills/market/claude-marketplace.json?orgId=${encodeURIComponent(org.id)}`
   );
   const settings = JSON.stringify(
@@ -88,7 +102,8 @@ const ClaudeCodeMarketplaceTab: FC<ClaudeCodeMarketplaceTabProps> = ({ org, plug
           </Button>
         </Stack>
         <Typography level="body-xs" textColor="text.tertiary">
-          The key can only read this feed, but it is stored in plain text in your settings file.
+          The key can read Skill Market marketplace feeds and plugin archives for every organization you belong to. It
+          is stored in plain text in your settings file.
           {key
             ? ' It is shown only once; revoke it any time under API Keys.'
             : ' Each Create key mints a new key, so revoke any old marketplace keys under API Keys.'}

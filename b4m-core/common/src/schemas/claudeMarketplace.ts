@@ -13,6 +13,10 @@ export const ClaudePluginZipParamSchema = z.object({
   id: z.string().min(1),
 });
 
+export const ClaudePluginZipQuerySchema = z.object({
+  version: z.coerce.number().int().positive().optional(),
+});
+
 export const ClaudeMarketplacePluginSchema = z.object({
   name: z.string(),
   description: z.string(),

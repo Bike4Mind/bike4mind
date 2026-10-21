@@ -1097,7 +1097,7 @@ export interface paths {
     };
     /**
      * Download a Skill Market listing as a Claude Code plugin
-     * @description A zip holding the listing's current approved version as `skills/<name>/SKILL.md`. The bytes are the same on every call until a new version is approved, so they match the feed's `sha256`. Authenticate with an API key (`b4m_live_`) carrying `skills:read`, sent as `Authorization: Bearer`. Claude Code sends that header when it is set as the marketplace source's `headers` in its settings, and forwards it to the same-origin plugin archives.
+     * @description A zip holding an approved version as `skills/<name>/SKILL.md`. The optional `version` query pins the listing version advertised by the feed, so later approvals do not change its bytes or `sha256`. Without it, returns the current approved version. Authenticate with an API key (`b4m_live_`) carrying `skills:read`, sent as `Authorization: Bearer`. Claude Code sends that header when it is set as the marketplace source's `headers` in its settings, and forwards it to the same-origin plugin archives.
      */
     get: operations['getClaudePluginZip'];
     put?: never;
@@ -5267,7 +5267,7 @@ export interface components {
     };
     /**
      * @example {
-     *       "name": "b4m-acme",
+     *       "name": "b4m-org-664f1c2b9a1e4d0012ab34cd",
      *       "owner": {
      *         "name": "Acme"
      *       },
@@ -5279,7 +5279,7 @@ export interface components {
      *           "version": "3",
      *           "source": {
      *             "source": "archive",
-     *             "url": "https://app.bike4mind.com/api/v1/skills/market/664f1c2b9a1e4d0012ab34cd/claude-plugin.zip",
+     *             "url": "https://app.bike4mind.com/api/v1/skills/market/664f1c2b9a1e4d0012ab34cd/claude-plugin.zip?version=3",
      *             "sha256": "a3f1c0de9b8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a392817060f5e"
      *           }
      *         }
@@ -15955,7 +15955,9 @@ export interface operations {
   };
   getClaudePluginZip: {
     parameters: {
-      query?: never;
+      query?: {
+        version?: number;
+      };
       header?: never;
       path: {
         id: string;
@@ -15985,6 +15987,29 @@ export interface operations {
         };
         content: {
           'application/zip': string;
+        };
+      };
+      /** @description Invalid version query. */
+      400: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
         };
       };
       /** @description Missing or invalid credentials. */
@@ -16051,29 +16076,6 @@ export interface operations {
           'X-Request-ID'?: string;
           /** @description The methods this path serves. GET implies HEAD. */
           Allow?: string;
-          [name: string]: unknown;
-        };
-        content: {
-          'application/json': components['schemas']['ErrorResponse'];
-        };
-      };
-      /** @description Request failed validation. */
-      422: {
-        headers: {
-          /** @description Correlation id for this request; safe to log and quote in support requests. */
-          'X-Request-ID'?: string;
-          /** @description Request quota per minute. */
-          'X-RateLimit-Limit-Minute'?: number;
-          /** @description Requests remaining in the current minute. */
-          'X-RateLimit-Remaining-Minute'?: number;
-          /** @description Unix epoch (seconds) when the minute window resets. */
-          'X-RateLimit-Reset-Minute'?: number;
-          /** @description Request quota per day. */
-          'X-RateLimit-Limit-Day'?: number;
-          /** @description Requests remaining in the current day. */
-          'X-RateLimit-Remaining-Day'?: number;
-          /** @description Unix epoch (seconds) when the day window resets. */
-          'X-RateLimit-Reset-Day'?: number;
           [name: string]: unknown;
         };
         content: {

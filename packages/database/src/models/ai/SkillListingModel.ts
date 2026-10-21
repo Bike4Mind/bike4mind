@@ -195,8 +195,11 @@ export async function approvePendingListingVersion(
  */
 export async function assignClaudePluginName(listingId: string, skillName: string): Promise<void> {
   const base = claudeSkillNameFor(skillName);
-  const candidates = [base, `${base}-${listingId.slice(-6)}`];
-  for (const [i, claudePluginName] of candidates.entries()) {
+  // A skill can deliberately occupy an id-suffixed name too. Keep trying unique-index-backed
+  // candidates instead of permanently omitting an otherwise approved listing from the feed.
+  for (let attempt = 0; ; attempt += 1) {
+    const claudePluginName =
+      attempt === 0 ? base : attempt === 1 ? `${base}-${listingId.slice(-6)}` : `${base}-${listingId}-${attempt}`;
     try {
       await SkillListing.updateOne(
         { _id: listingId, visibility: 'organization', claudePluginName: { $exists: false } },
@@ -204,7 +207,7 @@ export async function assignClaudePluginName(listingId: string, skillName: strin
       );
       return;
     } catch (err) {
-      if ((err as { code?: number }).code !== 11000 || i === candidates.length - 1) throw err;
+      if (!(err instanceof Error) || !('code' in err) || err.code !== 11000) throw err;
     }
   }
 }

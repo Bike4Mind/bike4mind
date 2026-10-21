@@ -15,7 +15,7 @@ export const claudeNameSlug = (value: string): string =>
 export const claudeSkillNameFor = (skillName: string): string => claudeNameSlug(skillName) || 'skill';
 
 /**
- * `b4m-org-<org id tail>`. Id-based rather than name-based because an install is keyed
+ * `b4m-org-<org id>`. Id-based rather than name-based because an install is keyed
  * `<plugin>@<marketplace>`, so renaming the org must never rename the marketplace.
  */
-export const claudeMarketplaceNameFor = (orgId: string): string => `b4m-org-${orgId.slice(-8)}`;
+export const claudeMarketplaceNameFor = (orgId: string): string => `b4m-org-${orgId}`;
