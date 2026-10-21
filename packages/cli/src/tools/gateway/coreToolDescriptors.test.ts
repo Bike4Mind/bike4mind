@@ -123,4 +123,8 @@ describe('core tool checkpoint declaration', () => {
       expect(descriptor.effect).toBe('write');
     }
   );
+
+  it.each(['create_file', 'edit_local_file', 'delete_file'])('%s keeps its checkpoint write path', name => {
+    expect(CORE_TOOL_DESCRIPTORS.get(name)?.writePathArg).toBe('path');
+  });
 });

@@ -221,11 +221,17 @@ describe('wrapToolWithPermission: edit_local_file fuzzy force-prompt', () => {
       await fs.writeFile(file, 'hello   world\n');
       return (fn as (args: unknown) => Promise<string>)(callArgs);
     });
+    vi.mocked(executeTool).mockImplementationOnce(
+      async (_name, callArgs, _api, fn) =>
+        `${await (fn as (args: unknown) => Promise<string>)(callArgs)} ${'ghp_' + 'f'.repeat(36)}`
+    );
 
-    await wrapped.toolFn({ path: file, old_string: 'hello world', new_string: 'hi world' });
+    const result = await wrapped.toolFn({ path: file, old_string: 'hello world', new_string: 'hi world' });
 
     expect(prompt).toHaveBeenCalledTimes(1);
     expect(await fs.readFile(file, 'utf-8')).toBe('hi world\n');
+    expect(result).toContain('[REDACTED]');
+    expect(result).not.toContain('ghp_');
   });
 
   it('strips an externally supplied gateSnapshot when the gate itself finds no match', async () => {

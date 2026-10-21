@@ -6,8 +6,9 @@ import type { ToolArgs } from '../gatewayTypes.js';
 /**
  * Run the tool once and redact, then cap, what it produced. Every execution in the gateway
  * (the first attempt, the unsandboxed retry, the fuzzy-edit and directory-grant retries) goes
- * through here, so nothing the tool returns or throws reaches the sandbox-denial and path-denial
- * checks, the prompts or the model unsanitized.
+ * through here, so no returned result or thrown error message reaches the sandbox-denial and
+ * path-denial checks or the model unsanitized. A thrown error's other fields (the fuzzy-edit
+ * diffPreview shown to the local user) are not redacted.
  */
 export async function executeSanitized(
   toolName: string,
