@@ -365,15 +365,14 @@ describe('apiKeyAuth infrastructure failures', () => {
   });
 
   it('500s any other unexpected error without echoing its message to the caller', async () => {
-    const unexpected = Object.assign(new Error('Connection pool for db-host:27017 was cleared'), {
-      name: 'MongoServerError',
-    });
+    const unexpected = Object.assign(new Error('unexpected'), { name: 'MongoServerError' });
     validateUserApiKeyMock.mockRejectedValue(unexpected);
     const req = makeReq();
     const { error } = await run(undefined, req);
     expect(error).toBeInstanceOf(InternalServerError);
     expect(error?.message).toBe('Authentication failed');
-    expect(req.logger.error).toHaveBeenCalledWith('API key authentication error', unexpected);
+    expect(req.logger.warn).toHaveBeenCalledWith('API key authentication error', unexpected);
+    expect(req.logger.error).not.toHaveBeenCalled();
   });
 
   it('still 401s an unknown key', async () => {

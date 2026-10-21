@@ -280,7 +280,8 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScope[], alsoRequiredScopes?: 
 
       // Every credential miss above throws Unauthorized/Forbidden, so anything else is our fault.
       // A 401 here would tell a machine client its key is bad and stop it retrying an infra blip.
-      req.logger?.error('API key authentication error', error);
+      // warn: errorHandler logs the resulting 5xx at error, which is the one line that should alarm.
+      req.logger?.warn('API key authentication error', error);
       // Fixed messages: this runs before auth, so driver text (hosts, ports) must not reach the caller.
       if (isConnectionLostError(error)) {
         throw new ServiceUnavailableError('Authentication temporarily unavailable', {
