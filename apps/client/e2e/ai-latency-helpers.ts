@@ -147,9 +147,10 @@ export interface PromptResult {
   renderTimeMs: number;
   renderTimeSec: number;
   /**
-   * True for image/artifact prompts. Even measured stream-only their window runs for minutes, so
-   * they are excluded from the gated latency average, which must stay a text-streaming signal that
-   * still catches a real text regression. Absent (falsy) for text prompts.
+   * True when the stream window timed a deliverable: declared up front (image/artifact prompt) or
+   * detected afterwards (see unexpectedArtifact). Even measured stream-only their window runs for
+   * minutes, so they are excluded from the gated latency average, which must stay a text-streaming
+   * signal that still catches a real text regression. Absent (falsy) for chat replies.
    */
   measuresDeliverable?: boolean;
   /**
