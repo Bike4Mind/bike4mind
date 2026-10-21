@@ -1,6 +1,7 @@
 import mongoose, { Model, Schema } from 'mongoose';
 import {
   CreditHolderType,
+  GENERATION_JOB_DELIVERY_KINDS,
   GENERATION_JOB_ID_PATTERN,
   GENERATION_JOB_KINDS,
   GENERATION_JOB_SOURCES,
@@ -54,7 +55,7 @@ const GenerationJobSchema = new Schema<IGenerationJobDocument>(
     questId: { type: String },
     delivery: new Schema(
       {
-        kind: { type: String, enum: ['slack'], required: true },
+        kind: { type: String, enum: [...GENERATION_JOB_DELIVERY_KINDS], required: true },
         workspaceId: { type: String, required: true },
         channelId: { type: String, required: true },
         threadTs: { type: String, required: true },
