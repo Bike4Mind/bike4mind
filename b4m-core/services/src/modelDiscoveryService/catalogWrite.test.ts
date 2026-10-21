@@ -820,12 +820,20 @@ describe('planCatalogWrites', () => {
       expect(providerBack.rows).toEqual([]);
     });
 
+    it('keeps a held date the down provider supplied when an aggregator repeats a future date', () => {
+      const dated = run([openaiDated], seeded);
+      const next = run([litellmDate], dated);
+
+      expect(next.rows).toEqual([]);
+      expect(next.dropped.filter(d => d.reason.includes('earlier run'))).toEqual([]);
+    });
+
     const silent = { name: 'openai', kind: 'provider' as const, records: [] };
     it.each([
       {
         name: 'does not extend a down aggregator undated word to another aggregator with no provider this run',
         contributions: [litellmDate],
-        previous: creditedTo('litellm'),
+        previous: creditedTo('models.dev'),
         providerSourceNames: undefined,
       },
       {

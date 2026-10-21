@@ -117,8 +117,8 @@ export interface CatalogWriteInput {
   /** planLifecycleSignals' providerUndated: the provider that reports each model undated this run. */
   providerUndated?: ReadonlyMap<string, string>;
   /**
-   * Provider sources configured on this host, whether or not they ran. A provider with no
-   * credentials releases what it held.
+   * Every registered provider source except those skipped as not configured, whether or not they
+   * ran. A provider with no credentials releases what it held.
    */
   providerSourceNames: ReadonlySet<string>;
   operatorOwnedModelIds: ReadonlySet<string>;
@@ -769,9 +769,9 @@ function heldLifecycleProvider(input: CatalogWriteInput, modelId: string): strin
  * credited on the held row as having reported the model undated.
  *
  * Left alone: a date already reached (the model is hidden, and un-hiding is operator work), a
- * date under a sunset status, a date a provider supplied this run, a held date a different
- * provider supplied, and a held date the discovery row does not own (a seed's; operator rows
- * never reach `base`).
+ * date under a sunset status, a date a provider supplied this run, a held date whose
+ * lifecycle credit on the discovery row is a different provider, and a held date the discovery
+ * row does not own (a seed's; operator rows never reach `base`).
  */
 function dropsFutureDeprecation(
   draft: Record<string, unknown>,
