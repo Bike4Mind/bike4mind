@@ -563,6 +563,15 @@ describe('planCatalogWrites', () => {
         resolved: { status: 'deprecated', deprecationDate: '2026-05-01' },
       },
       {
+        name: 'clamps a held later deprecation with a typed earlier legacy date',
+        held: { status: 'deprecated', deprecationDate: '2027-03-30' },
+        contributions: typed({ status: 'legacy', deprecationDate: '2026-09-30', retirementDate: '2027-03-30' }),
+        source: 'openai',
+        appended: [{ status: 'deprecated', deprecationDate: '2026-09-30', retirementDate: '2027-03-30' }],
+        reasons: [statusDrop('step back', 'legacy', 'deprecated')],
+        resolved: { status: 'deprecated', deprecationDate: '2026-09-30', retirementDate: '2027-03-30' },
+      },
+      {
         name: 'keeps a held retired status over a typed deprecated claim',
         held: { status: 'retired', retirementDate: '2026-06-01' },
         contributions: typed({ status: 'deprecated' }),

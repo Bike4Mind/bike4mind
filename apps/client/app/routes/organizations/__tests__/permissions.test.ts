@@ -140,7 +140,6 @@ describe('Organization Permissions', () => {
     // (orgAccess.ts, verifyOrgAccess) - admin, org owner, or any manager.
     const org = {
       userId: 'owner123',
-      managerId: 'manager456',
       adminUserIds: ['orgManager789'],
       users: [{ userId: 'orgManager789' }],
     };
@@ -153,10 +152,6 @@ describe('Organization Permissions', () => {
       expect(canViewOrgAnalysis({ id: 'orgManager789' }, org)).toBe(true);
     });
 
-    it('allows the legacy team manager', () => {
-      expect(canViewOrgAnalysis({ id: 'manager456' }, org)).toBe(true);
-    });
-
     it('allows a platform admin who is neither owner nor manager', () => {
       expect(canViewOrgAnalysis({ id: 'someoneelse', isAdmin: true }, org)).toBe(true);
     });
@@ -164,7 +159,7 @@ describe('Organization Permissions', () => {
     it('denies a plain member with manage permissions but no owner/manager role', () => {
       // A member can hold share/update (canManageOrg true) yet not be owner/manager;
       // verifyOrgAccess would 404 them, so the tab must stay hidden.
-      expect(canViewOrgAnalysis({ id: 'member456' }, { userId: 'owner123', managerId: null })).toBe(false);
+      expect(canViewOrgAnalysis({ id: 'member456' }, { userId: 'owner123' })).toBe(false);
     });
 
     it('returns false when user or organization is missing', () => {
@@ -181,7 +176,6 @@ describe('Organization Permissions', () => {
   ])('%s', (_name, gate) => {
     const org = {
       userId: 'owner123',
-      managerId: 'manager456',
       adminUserIds: ['orgManager789'],
       users: [{ userId: 'orgManager789' }],
     };
@@ -194,9 +188,8 @@ describe('Organization Permissions', () => {
       expect(gate({ id: 'someoneelse', isAdmin: true }, org)).toBe(true);
     });
 
-    it('denies an org manager and the legacy team manager', () => {
+    it('denies an org manager', () => {
       expect(gate({ id: 'orgManager789' }, org)).toBe(false);
-      expect(gate({ id: 'manager456' }, org)).toBe(false);
     });
 
     it('denies a stranger', () => {
@@ -213,7 +206,7 @@ describe('Organization Permissions', () => {
     // The predicate $id.tsx runs, imported rather than re-declared. Gates the Billing tab, and must
     // match the three routes behind it - subscribe.ts, update-seats.ts and stripe/portal.ts - all
     // of which are owner-only.
-    const org = { userId: 'owner123', managerId: 'manager456' };
+    const org = { userId: 'owner123', adminUserIds: ['manager456'], users: [{ userId: 'manager456' }] };
 
     it('allows the billing owner', () => {
       expect(canViewOrgBilling({ id: 'owner123' }, org)).toBe(true);

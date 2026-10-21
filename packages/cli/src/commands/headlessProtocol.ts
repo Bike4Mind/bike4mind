@@ -11,6 +11,7 @@
  */
 
 import { classifyCommandRisk, type CommandRiskLevel } from '../config/commandRisk.js';
+import type { PermissionPromptKind } from '../tools/gateway/gatewayTypes.js';
 import type { ToolDescriptor } from '../tools/gateway/toolDescriptor.js';
 import { commandTextOf, toolCategory } from '../tools/gateway/toolPolicy.js';
 
@@ -20,7 +21,7 @@ import { commandTextOf, toolCategory } from '../tools/gateway/toolPolicy.js';
  * field or a new event type (backward-compatible). Consumers should reject a
  * MAJOR they do not understand.
  */
-export const HEADLESS_SCHEMA_VERSION = '1.0.0';
+export const HEADLESS_SCHEMA_VERSION = '1.1.0';
 
 /** Every event type the stream-json protocol can emit. */
 export type HeadlessEventType =
@@ -244,9 +245,21 @@ export function evaluatePermissionPolicy(
   return { action: policy.defaultAction, reason: `policy default (${policy.defaultAction})` };
 }
 
+/** The permission_request event for a gated tool call; `kind` tells a consumer what is being asked. */
+export function buildPermissionRequestEvent(
+  toolName: string,
+  risk: unknown,
+  kind: PermissionPromptKind = 'tool'
+): HeadlessEvent {
+  return { type: 'permission_request', toolName, risk, kind };
+}
+
 /**
  * Resolve a headless permission decision from the fixed precedence ladder:
  *   --dangerously-skip-permissions -> allow-once (explicit blanket override)
+ *   a sandbox-escalation request    -> deny (running outside the OS sandbox is its own
+ *                                       decision; no policy allow-list or risk threshold
+ *                                       approves it)
  *   a directory-grant request       -> deny (widening the filesystem allow-list is
  *                                       its own decision; headless has no human to
  *                                       grant it, so fail closed - never inherit the
@@ -258,13 +271,18 @@ export function evaluatePermissionPolicy(
 export function resolveHeadlessPermissionDecision(params: {
   dangerouslySkipPermissions: boolean;
   isDirectoryGrant: boolean;
+  isSandboxEscalation?: boolean;
   toolName: string;
   riskLevel: CommandRiskLevel;
   permissionPolicy: HeadlessPermissionPolicy | null;
 }): { action: 'allow-once' | 'deny'; reason: string } {
-  const { dangerouslySkipPermissions, isDirectoryGrant, toolName, riskLevel, permissionPolicy } = params;
+  const { dangerouslySkipPermissions, isDirectoryGrant, isSandboxEscalation, toolName, riskLevel, permissionPolicy } =
+    params;
   if (dangerouslySkipPermissions) {
     return { action: 'allow-once', reason: 'dangerously-skip-permissions' };
+  }
+  if (isSandboxEscalation) {
+    return { action: 'deny', reason: 'running outside the sandbox not approved in headless mode' };
   }
   if (isDirectoryGrant) {
     return { action: 'deny', reason: 'directory access not granted in headless mode' };

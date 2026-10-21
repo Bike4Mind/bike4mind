@@ -2,11 +2,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 
-const { mockRefs, mockRevoke, mockLogAuthAudit } = vi.hoisted(() => ({
+const { mockRefs, mockRevoke, mockRevokeAllForGrant, mockLogAuthAudit } = vi.hoisted(() => ({
   mockRefs: {
     deleteHandler: null as null | ((req: any, res: any) => unknown),
   },
   mockRevoke: vi.fn(),
+  mockRevokeAllForGrant: vi.fn(),
   mockLogAuthAudit: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -28,6 +29,9 @@ vi.mock('@bike4mind/database', () => ({
   oauthGrantRepository: {
     revoke: mockRevoke,
   },
+  oauthRefreshTokenRepository: {
+    revokeAllForGrant: mockRevokeAllForGrant,
+  },
 }));
 
 vi.mock('@server/utils/authAudit', () => ({
@@ -41,6 +45,23 @@ describe('DELETE /api/oauth/grants/[clientId]', () => {
     mockRevoke.mockResolvedValue({ clientId: 'client-a', userId: 'u1', revokedAt: new Date() });
     mockLogAuthAudit.mockClear();
     mockRevoke.mockClear();
+    mockRevokeAllForGrant.mockClear();
+  });
+
+  it('revokes the refresh-token families before the grant itself', async () => {
+    const { req, res } = createMocks({ method: 'DELETE', query: { clientId: 'client-a' } });
+    req.user = { id: 'u1' };
+    await mockRefs.deleteHandler!(req, res);
+    expect(mockRevokeAllForGrant).toHaveBeenCalledWith('u1', 'client-a');
+    expect(mockRevokeAllForGrant.mock.invocationCallOrder[0]).toBeLessThan(mockRevoke.mock.invocationCallOrder[0]);
+  });
+
+  it('leaves the grant live when the family revoke fails, so a retry repeats both', async () => {
+    mockRevokeAllForGrant.mockRejectedValueOnce(new Error('db down'));
+    const { req, res } = createMocks({ method: 'DELETE', query: { clientId: 'client-a' } });
+    req.user = { id: 'u1' };
+    await expect(mockRefs.deleteHandler!(req, res)).rejects.toThrow('db down');
+    expect(mockRevoke).not.toHaveBeenCalled();
   });
 
   it('returns 200 and revoked:true on a successful revoke', async () => {

@@ -42,6 +42,9 @@ export const b4mLLMTools = z.enum([
   'count_knowledge_base',
   // Corpus shape - topics, folders, pipeline health (#1292), alongside the cardinality tool above
   'describe_knowledge_base',
+  // Typed decision checks (predicate/choice/score) - the same normalized answers and billing as
+  // POST /api/v1/decisions, without spending a full generation turn
+  'decide',
   // Saving assistant-generated content into a data lake the caller can write to
   'list_my_data_lakes',
   'create_data_lake',

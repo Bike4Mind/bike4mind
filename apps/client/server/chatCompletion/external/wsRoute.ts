@@ -195,6 +195,7 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
         let finalCacheReadTokens = 0;
         let finalCacheWriteTokens = 0;
         let finalTurnUsage: TurnUsage[] | undefined;
+        let finalCreditsUsed: number | undefined;
         let hasToolCalls = false;
 
         try {
@@ -234,6 +235,7 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
               if (info?.cacheReadInputTokens) finalCacheReadTokens = info.cacheReadInputTokens;
               if (info?.cacheCreationInputTokens) finalCacheWriteTokens = info.cacheCreationInputTokens;
               if (info?.turnUsage?.length) finalTurnUsage = info.turnUsage;
+              if (typeof info?.creditsUsed === 'number') finalCreditsUsed = info.creditsUsed;
               if (info?.toolsUsed && info.toolsUsed.length > 0) hasToolCalls = true;
 
               const chunk = buildCompletionStreamEvent(text, info);
@@ -266,6 +268,7 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
             finalCacheReadTokens,
             finalCacheWriteTokens,
             finalTurnUsage,
+            finalCreditsUsed,
             hasToolCalls,
             db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
             logger,

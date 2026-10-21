@@ -1,7 +1,16 @@
 import { beforeEach, describe, it, expect, vi } from 'vitest';
-import { SettingScopeLevel, type IDataLakeDocument, type IScopedSetting, type ScopeRef } from '@bike4mind/common';
+import {
+  ConflictError,
+  SettingScopeLevel,
+  type IDataLakeDocument,
+  type IScopedSetting,
+  type ScopeRef,
+  MAX_TOGGLE_TAGS_FILE_IDS,
+} from '@bike4mind/common';
 import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mind/utils';
+import { ZodError } from 'zod';
 import { toggleTags } from './toggleTags';
+import { withStorageOwnerFakes } from '../__tests__/utils/storageOwnerTransferFakes';
 
 const lake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
   ({
@@ -42,7 +51,7 @@ const makeAdapters = (files: ReturnType<typeof file>[], lakeDoc: IDataLakeDocume
   const store = new Map(filesWithToJSON.map(f => [f.id, { ...f, tags: [...f.tags] }]));
 
   return {
-    db: {
+    db: withStorageOwnerFakes({
       fabFiles: {
         shareable: { findAllUpdateAccessByIds: vi.fn().mockResolvedValue(filesWithToJSON) },
         findById: vi.fn(async (id: string) => store.get(id) ?? null),
@@ -83,7 +92,7 @@ const makeAdapters = (files: ReturnType<typeof file>[], lakeDoc: IDataLakeDocume
       // Wired unconditionally so a test can assert on it without rebuilding the fixture; degrades
       // to "no event recorded" the same way an absent repo would if a caller genuinely omitted it.
       lakeConfigChangeEvents: { record: vi.fn().mockResolvedValue({}) },
-    },
+    }),
     store,
   };
 };
@@ -171,6 +180,14 @@ describe('toggleTags - ordinary tags', () => {
     await expect(run(adapters, { ids: ['f1', 'f2'], tags: ['x'] })).rejects.toThrow(/not accessible/i);
     expect(adapters.db.fabFiles.pushTagsByFabFileId).not.toHaveBeenCalled();
   });
+
+  it('refuses a batch over the per-request cap before reading anything', async () => {
+    const adapters = makeAdapters([file('f1')]);
+    const ids = Array.from({ length: MAX_TOGGLE_TAGS_FILE_IDS + 1 }, (_, i) => `f${i}`);
+
+    await expect(run(adapters, { ids, tags: ['x'] })).rejects.toBeInstanceOf(ZodError);
+    expect(adapters.db.users.findById).not.toHaveBeenCalled();
+  });
 });
 
 describe('toggleTags - data lake meta-tags', () => {
@@ -196,6 +213,122 @@ describe('toggleTags - data lake meta-tags', () => {
     await run(adapters, { ids: ['f1'], tags: ['datalake:lake'] });
 
     expect(adapters.db.fabFiles.pushTagReturningPriorState).toHaveBeenCalledWith('f1', 'datalake:lake', 1);
+  });
+
+  it('refuses a batch that only overflows the destination org together, before any file joins', async () => {
+    const adapters = makeAdapters([
+      { ...file('f1'), fileSize: 400, storageChargedAt: new Date() },
+      { ...file('f2'), fileSize: 400, storageChargedAt: new Date() },
+    ]);
+    const orgLake = lake({ organizationId: 'org1' });
+    adapters.db.dataLakes.findByDatalakeTag.mockResolvedValue(orgLake);
+    adapters.db.dataLakes.findByDatalakeTags.mockResolvedValue([{ ...orgLake, createdAt: new Date(0) }]);
+    // 1 MB pool with room for one 400-byte file but not for both.
+    adapters.db.organizations.findById.mockResolvedValue({ id: 'org1', currentStorageSize: 999_500, storageLimit: 1 });
+
+    await expect(run(adapters, { ids: ['f1', 'f2'], tags: ['datalake:lake'] })).rejects.toThrow(/storage limit/i);
+
+    expect(adapters.db.fabFiles.pushTagReturningPriorState).not.toHaveBeenCalled();
+    expect(adapters.store.get('f1')?.tags).toEqual([]);
+    expect(adapters.store.get('f2')?.tags).toEqual([]);
+  });
+
+  it('gates a multi-lake join on the final owner only, not an org the file passes through', async () => {
+    const adapters = makeAdapters([
+      { ...file('f1'), fileSize: 400, storageChargedAt: new Date() },
+      { ...file('f2'), fileSize: 400, storageChargedAt: new Date() },
+    ]);
+    // Applied in request order, so each file briefly belongs to the newer lake's full org before
+    // the older lake's org wins the pick.
+    const newer = lake({
+      id: 'lake-new',
+      datalakeTag: 'datalake:new',
+      organizationId: 'org-full',
+      createdAt: new Date(2),
+    });
+    const older = lake({
+      id: 'lake-old',
+      datalakeTag: 'datalake:old',
+      organizationId: 'org-room',
+      createdAt: new Date(1),
+    });
+    adapters.db.dataLakes.findByDatalakeTag.mockImplementation(
+      async (tag: string) => [newer, older].find(l => l.datalakeTag === tag) ?? null
+    );
+    adapters.db.dataLakes.findByDatalakeTags.mockImplementation(async (tags: string[]) =>
+      [newer, older].filter(l => tags.includes(l.datalakeTag))
+    );
+    adapters.db.organizations.findById.mockImplementation(async (id: string) =>
+      id === 'org-full'
+        ? { id, currentStorageSize: 1024 * 1024, storageLimit: 1 }
+        : { id, currentStorageSize: 0, storageLimit: 1 }
+    );
+
+    await run(adapters, { ids: ['f1', 'f2'], tags: ['datalake:new', 'datalake:old'] });
+
+    for (const id of ['f1', 'f2']) {
+      expect(adapters.store.get(id)?.tags.map(t => t.name)).toEqual(
+        expect.arrayContaining(['datalake:new', 'datalake:old'])
+      );
+    }
+    expect(adapters.db.organizations.findById).not.toHaveBeenCalledWith('org-full');
+  });
+
+  it('moves the bytes from org A to org B when one batch leaves lake A and joins lake B (no gate runs)', async () => {
+    // The join alone keeps the older lake A's org as owner, so the batch gate grades nothing; the
+    // leave then lands the bytes on B's org unchecked (see reassignStorageOwner's header).
+    const lakeA = lake({ id: 'lake-a', datalakeTag: 'datalake:a', organizationId: 'org-a', createdAt: new Date(1) });
+    const lakeB = lake({ id: 'lake-b', datalakeTag: 'datalake:b', organizationId: 'org-b', createdAt: new Date(2) });
+    const adapters = makeAdapters([
+      {
+        ...file('f1', [{ name: 'datalake:a', strength: 1 }]),
+        organizationId: 'org-a',
+        fileSize: 400,
+        storageChargedAt: new Date(),
+      },
+    ]);
+    adapters.db.dataLakes.findByDatalakeTag.mockImplementation(
+      async (tag: string) => [lakeA, lakeB].find(l => l.datalakeTag === tag) ?? null
+    );
+    adapters.db.dataLakes.findByDatalakeTags.mockImplementation(async (tags: string[]) =>
+      [lakeA, lakeB].filter(l => tags.includes(l.datalakeTag))
+    );
+    adapters.db.fabFiles.setOwnerOrganizationIfUnchanged.mockImplementation(
+      async (id: string, _expected: unknown, next: string | undefined) => {
+        Object.assign(adapters.store.get(id)!, { organizationId: next });
+        return true;
+      }
+    );
+
+    await run(adapters, { ids: ['f1'], tags: ['datalake:a', 'datalake:b'] });
+
+    expect((adapters.store.get('f1') as { organizationId?: string }).organizationId).toBe('org-b');
+    const moved = (mock: { mock: { calls: unknown[][] } }) =>
+      mock.mock.calls.reduce<Record<string, number>>((acc, [id, bytes]) => {
+        acc[id as string] = (acc[id as string] ?? 0) + (bytes as number);
+        return acc;
+      }, {});
+    expect(moved(adapters.db.organizations.incrementCurrentStorage)).toEqual({ 'org-a': -400, 'org-b': 400 });
+    // The leave passes through the uploader on its way to org B, netting zero.
+    expect(moved(adapters.db.users.incrementCurrentStorage)).toEqual({ owner: 0 });
+    expect(adapters.db.organizations.findById).not.toHaveBeenCalled();
+  });
+
+  it('leaves the tag written and the owner unmoved when the reassign throws after a join', async () => {
+    // Service-level behavior only: the toggle route's withTransaction is what rolls the tag back.
+    const orgLake = lake({ organizationId: 'org1', createdAt: new Date(0) });
+    const adapters = makeAdapters([{ ...file('f1'), fileSize: 400, storageChargedAt: new Date() }]);
+    adapters.db.dataLakes.findByDatalakeTag.mockResolvedValue(orgLake);
+    adapters.db.dataLakes.findByDatalakeTags.mockResolvedValue([orgLake]);
+    adapters.db.organizations.findById.mockResolvedValue({ id: 'org1', currentStorageSize: 0, storageLimit: 1 });
+    adapters.db.fabFiles.setOwnerOrganizationIfUnchanged.mockResolvedValue(false);
+
+    await expect(run(adapters, { ids: ['f1'], tags: ['datalake:lake'] })).rejects.toBeInstanceOf(ConflictError);
+
+    expect(adapters.store.get('f1')?.tags.map(t => t.name)).toContain('datalake:lake');
+    expect((adapters.store.get('f1') as { organizationId?: string }).organizationId).toBeUndefined();
+    expect(adapters.db.users.incrementCurrentStorage).not.toHaveBeenCalled();
+    expect(adapters.db.organizations.incrementCurrentStorage).not.toHaveBeenCalled();
   });
 
   it('recomputes the lake stats in both directions', async () => {
@@ -797,10 +930,10 @@ describe('toggleTags - admission contract', () => {
     base.db.dataLakes.find = vi.fn().mockResolvedValue([lakeDoc]);
     return {
       ...base,
-      db: {
+      db: withStorageOwnerFakes({
         ...base.db,
         ...settingsDb({ defaultEmbeddingModel: MODEL, DefaultChunkSize: '512' }, off ? [] : [enforcing]),
-      },
+      }),
     };
   };
 

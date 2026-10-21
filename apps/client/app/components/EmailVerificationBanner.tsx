@@ -12,6 +12,8 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { api } from '@client/app/contexts/ApiContext';
 import {
   shouldShowVerificationNag,
+  resendVerificationErrorMessage,
+  type ResendVerificationError,
   EMAIL_VERIFICATION_DISMISSED_KEY,
   EMAIL_VERIFICATION_PERMANENT_DISMISS_KEY,
 } from '@client/app/utils/onboarding';
@@ -101,19 +103,7 @@ const EmailVerificationBanner: React.FC = () => {
       // doesn't lock the user out of retrying with a different action (e.g. change email).
       setCooldownSeconds(RESEND_COOLDOWN_SECONDS);
     },
-    onError: (error: { response?: { status?: number; data?: { message?: string; isConfigError?: boolean } } }) => {
-      if (error.response?.status === 429) {
-        setErrorMessage(
-          "You've reached the limit for resending verification emails. Please wait 15 minutes before trying again."
-        );
-      } else if (error.response?.status === 503 && error.response?.data?.isConfigError) {
-        setErrorMessage(error.response.data.message ?? 'Email service is not configured.');
-      } else if (error.response?.data?.message) {
-        setErrorMessage(error.response.data.message);
-      } else {
-        setErrorMessage('Failed to send verification email. Please try again later.');
-      }
-    },
+    onError: (error: ResendVerificationError) => setErrorMessage(resendVerificationErrorMessage(error)),
   });
 
   const handleRemindLater = () => {

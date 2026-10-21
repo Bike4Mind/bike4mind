@@ -10,7 +10,7 @@ import {
 import { resolveDeprecatedModelId } from '@bike4mind/llm-adapters';
 import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
-import { usdToCredits } from '@bike4mind/utils';
+import { usdToCreditsStochastic } from '@bike4mind/utils';
 import { MemberCreditCapError } from '../../creditService';
 import { confirmingServerOf, withoutConfirmPrompt } from '../mcpPendingAction';
 import type { ModelAdmission } from '../modelAdmission';
@@ -735,7 +735,8 @@ export class ServerSubagentOrchestrator {
                 totalCacheWriteTokens ?? 0,
                 totalInputTokens + (totalCacheReadTokens ?? 0) + (totalCacheWriteTokens ?? 0)
               );
-          result.completionInfo.totalCredits = usdToCredits(usdCost);
+          // Unbiased final charge: a cheap delegation may settle at 0.
+          result.completionInfo.totalCredits = usdToCreditsStochastic(usdCost);
         } else {
           // Model absent from availableModels: credits stay unset and the delegation's
           // cost is lost from the usage events. Warn so the miss rate is observable (#152).
@@ -1083,7 +1084,13 @@ export class ServerSubagentOrchestrator {
         totalOutputTokens: 0,
         iterations: result?.iterations ?? 0,
         toolCalls: 0,
-        totalCredits: result?.totalCredits,
+        // The dispatched child persists a coerced 0 when it reports nothing, so 0 here is
+        // indistinguishable from "not reported". Forward only a positive value to keep
+        // zero-credit usage events out of analytics.
+        totalCredits:
+          typeof result?.totalCredits === 'number' && Number.isFinite(result.totalCredits) && result.totalCredits > 0
+            ? result.totalCredits
+            : undefined,
         reachedMaxIterations: false,
       },
     };

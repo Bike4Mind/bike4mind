@@ -11,9 +11,21 @@ export type AdminAuditCatalogueEntry = {
 export const ADMIN_AUDIT_CATALOGUE = {
   'org.credits.granted': { category: 'credits', severity: 'notice', write: 'strict' },
   'org.credits.topped_up': { category: 'credits', severity: 'notice', write: 'strict' },
+  'org.credits.adjusted': { category: 'credits', severity: 'notice', write: 'strict' },
   'user.subscription.granted': { category: 'credits', severity: 'notice', write: 'strict' },
-  // Only written by the backfill in the first release; the live writer lands later.
   'user.credits.adjusted': { category: 'credits', severity: 'notice', write: 'strict' },
+  'user.credits.denied': { category: 'credits', severity: 'critical', write: 'bestEffort' },
+  'user.subscription.denied': { category: 'credits', severity: 'critical', write: 'bestEffort' },
+
+  'user.role.admin_granted': { category: 'access', severity: 'critical', write: 'strict' },
+  'user.role.admin_revoked': { category: 'access', severity: 'critical', write: 'strict' },
+  'user.role.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
+  'user.impersonation.started': { category: 'access', severity: 'critical', write: 'strict' },
+  'user.impersonation.ended': { category: 'access', severity: 'info', write: 'bestEffort' },
+  'user.impersonation.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
+
+  'user.deleted': { category: 'account', severity: 'critical', write: 'strict' },
+  'user.deletion.denied': { category: 'account', severity: 'critical', write: 'bestEffort' },
 
   'org.seats.changed': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.seats.ceiling_raised': { category: 'org', severity: 'info', write: 'bestEffort' },
@@ -26,6 +38,7 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'org.invite.created': { category: 'org', severity: 'info', write: 'bestEffort' },
   'org.member_budget.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
 
+  'settings.admin_settings.updated': { category: 'settings', severity: 'notice', write: 'strict' },
   'settings.whats_new.updated': { category: 'settings', severity: 'info', write: 'bestEffort' },
   'settings.whats_new.synced': { category: 'settings', severity: 'info', write: 'bestEffort' },
   'settings.security_scan.enabled': { category: 'settings', severity: 'notice', write: 'bestEffort' },
@@ -44,10 +57,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.email.verification_resent': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.email.change_resent': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.email.change_cancelled': { category: 'identity', severity: 'info', write: 'bestEffort' },
-
-  // Reserved for the impersonation writers; recorded here so the summary facets can type their keys.
-  'user.impersonation.started': { category: 'access', severity: 'notice', write: 'bestEffort' },
-  'user.impersonation.ended': { category: 'access', severity: 'notice', write: 'bestEffort' },
+  'user.mfa.reset': { category: 'identity', severity: 'notice', write: 'strict' },
+  'user.mfa.denied': { category: 'identity', severity: 'critical', write: 'bestEffort' },
 
   'audit.exported': { category: 'support', severity: 'info', write: 'bestEffort' },
 } as const satisfies Record<string, AdminAuditCatalogueEntry>;

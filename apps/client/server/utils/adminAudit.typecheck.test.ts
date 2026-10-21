@@ -45,6 +45,15 @@ declare module '@bike4mind/common' {
     source: 'api_key' | 'admin_ui';
   };
   export type AuditEntry = { id: string };
+  export type AdminAuditAction = 'user.role.admin_granted' | 'user.role.denied';
+  export type AuditTarget = { kind: string; id: string; displayName: string };
+  export const AdminActionReasonSchema: {
+    safeParse(
+      value: unknown
+    ): { success: true; data: string } | { success: false; error: { issues: { message: string }[] } };
+  };
+  export class BadRequestError extends Error {}
+  export class ForbiddenError extends Error {}
 }
 declare module '@bike4mind/database' {
   export const adminAuditLogRepository: unknown;
@@ -57,8 +66,12 @@ declare module '@bike4mind/database/auth' {
 declare module '@bike4mind/services' {
   export namespace adminAuditService {
     export type RecordAdminActionInput = {
+      action: import('@bike4mind/common').AdminAuditAction;
       actor: import('@bike4mind/common').AuditActor;
       context: import('@bike4mind/common').AuditContext;
+      target: import('@bike4mind/common').AuditTarget;
+      summary: string;
+      details?: Record<string, unknown>;
     };
     export function recordAdminAction(
       input: RecordAdminActionInput,

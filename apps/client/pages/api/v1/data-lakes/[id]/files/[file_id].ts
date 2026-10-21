@@ -46,6 +46,7 @@ import { toMemberAccessContext } from '@server/dataLakes/toAccessContext';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { lakeMembershipAuditDb } from '@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
+import { storageOwnerTransferDb } from '@server/files/storageOwnerTransferDb';
 
 // Required: the raw pathname embeds `id`/`file_id`, so without a stable bucket each file gets its
 // own counter instead of one budget per caller.
@@ -92,6 +93,7 @@ async function assertLakeMembershipWritable(
 }
 
 const membershipWriteDb = {
+  ...storageOwnerTransferDb,
   dataLakes: dataLakeRepository,
   dataLakeAccessGrants: dataLakeAccessGrantRepository,
   fabFiles: fabFileRepository,

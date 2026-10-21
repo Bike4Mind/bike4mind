@@ -189,6 +189,7 @@ describe('cliCompletion websocket handler', () => {
           cacheReadInputTokens: 301_000,
           cacheCreationInputTokens: 500,
           turnUsage,
+          creditsUsed: 7,
         });
         // A trailing frame without the breakdown must not clear the latched one.
         await onChunk([''], { stopReason: 'end_turn' });
@@ -204,6 +205,7 @@ describe('cliCompletion websocket handler', () => {
         finalCacheReadTokens: 301_000,
         finalCacheWriteTokens: 500,
         finalTurnUsage: turnUsage,
+        finalCreditsUsed: 7,
       })
     );
   });

@@ -20,13 +20,15 @@ import { lakeMembershipScope } from './lakeMembershipScope';
 import { lakeMembershipSignals } from './lakeMembership';
 import { warnOnPrefixCollision } from './tagPrefixCollision';
 import { strictIndexRemove, type RetrievalIndexPort } from './ports';
+import { reassignStorageOwner, type StorageOwnerTransferDb } from '../fabFileService/reassignStorageOwner';
 
 interface CleanupDeletedDataLakeAdapters {
   purgeClaimId?: string;
   // Optional for existing callers of the published service. Queue consumers must supply both adapters.
   beginPurge?: () => Promise<boolean>;
   deleteFileAndChunks?: (id: string) => Promise<void>;
-  db: {
+  // StorageOwnerTransferDb: a spared survivor leaving an org lake moves its bytes to its next owner.
+  db: StorageOwnerTransferDb & {
     dataLakes: Pick<IDataLakeRepository, 'findById' | 'delete' | 'find'>;
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'removeAllForLake'>;
     /**
@@ -355,7 +357,12 @@ export const cleanupDeletedDataLake = async (
   await inChunks(survivors, chunkSize, async id => {
     const file = await db.fabFiles.findById(id);
     const { inLake, tagsToPull } = lakeMembershipSignals(existing, file);
-    if (file && inLake) await db.fabFiles.pullTagsByFabFileId(file.id, tagsToPull);
+    if (!file || !inLake) return;
+    // Restamped before the pull as well as after: a redelivery no longer lists this file once the pull
+    // lands, and this lake (deleted or purging) is already ignored by the owner resolution.
+    await reassignStorageOwner(file.id, db);
+    await db.fabFiles.pullTagsByFabFileId(file.id, tagsToPull);
+    await reassignStorageOwner(file.id, db);
   });
 
   // 4. Delete the lake's batches (chunked, same rationale as the chunk sweep above).

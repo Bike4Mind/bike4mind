@@ -139,14 +139,19 @@ export const OverwatchProduct: IOverwatchProductModel =
 
 /**
  * Schema defaults do not apply to `.lean()` reads - those return the raw driver document,
- * so a product stored before `postingChannels` existed comes back without the key. Every
- * read goes through here so the non-optional field on IOverwatchProductDoc stays true and
- * callers can iterate unconditionally without a migration.
+ * so a product stored without one of these keys (written before the field existed, or
+ * outside Mongoose) comes back without it. Every read goes through here so the
+ * non-optional array fields on IOverwatchProductDoc stay true and callers can iterate
+ * unconditionally without a migration. Must stay in sync with the array defaults on
+ * OverwatchProductSchema.
  *
  * Mutates in place, which is safe: lean results are fresh POJOs owned by the caller.
  */
-function withPostingChannels(doc: IOverwatchProductDoc): IOverwatchProductDoc {
-  if (!doc.postingChannels) doc.postingChannels = [];
+function withArrayDefaults(doc: IOverwatchProductDoc): IOverwatchProductDoc {
+  doc.socialLinks ??= [];
+  doc.customEvents ??= [];
+  doc.campaignLinks ??= [];
+  doc.postingChannels ??= [];
   return doc;
 }
 
@@ -155,17 +160,17 @@ export const overwatchProductRepository = {
     const filter: Record<string, unknown> = { status: 'active' };
     if (organizationId) filter.organizationId = organizationId;
     const products = await OverwatchProduct.find(filter).sort({ name: 1 }).lean();
-    return products.map(withPostingChannels);
+    return products.map(withArrayDefaults);
   },
 
   async getAllProducts(): Promise<IOverwatchProductDoc[]> {
     const products = await OverwatchProduct.find().sort({ name: 1 }).lean();
-    return products.map(withPostingChannels);
+    return products.map(withArrayDefaults);
   },
 
   async getByProductId(productId: string): Promise<IOverwatchProductDoc | null> {
     const product = await OverwatchProduct.findOne({ productId }).lean();
-    return product ? withPostingChannels(product) : null;
+    return product ? withArrayDefaults(product) : null;
   },
 
   /**
@@ -186,8 +191,8 @@ export const overwatchProductRepository = {
    *
    * Safe on insert: the schema defaults all five (`[]` for the four array fields,
    * `'active'` for `status`), and those defaults apply on the upsert-insert. Reads
-   * normalize `postingChannels` for documents written before that field existed, since
-   * schema defaults never run on them - see withPostingChannels.
+   * normalize the four array fields for documents stored without them, since schema
+   * defaults never run on them - see withArrayDefaults.
    *
    * Adding any of these back as required would break every existing caller at compile
    * time - the same drift that left downstream callers uncompilable when core last made
@@ -219,7 +224,7 @@ export const overwatchProductRepository = {
       { $set: data },
       { upsert: true, new: true, lean: true }
     );
-    return withPostingChannels(result as IOverwatchProductDoc);
+    return withArrayDefaults(result as IOverwatchProductDoc);
   },
 
   async deleteByProductId(productId: string): Promise<boolean> {

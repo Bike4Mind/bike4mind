@@ -1,7 +1,6 @@
 import { useCallback, useState } from 'react';
 import { Box, Button, IconButton, Link, Sheet, Stack, Typography } from '@mui/joy';
 import CloseIcon from '@mui/icons-material/Close';
-import { PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useGetOwnSessions } from '@client/app/hooks/data/sessions';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
@@ -12,7 +11,8 @@ import useChatActions from '@client/app/hooks/useChatActions';
 import { useChatInput } from '@client/app/hooks/useChatInput';
 import { APP_NAME, getBrandName } from '@client/config/general';
 import { ExternalLinks } from '@client/app/utils/externalLinks';
-import { STARTER_PROMPTS, shouldShowNewUserWelcome, welcomeCreditsLine } from './newUserWelcomeModel';
+import { STARTER_PROMPTS, shouldShowNewUserWelcome, welcomeCanStart, welcomeCreditsLine } from './newUserWelcomeModel';
+import { isAwaitingEmailVerification } from '@client/app/utils/onboarding';
 
 const dismissKey = (userId: string) => `newUserWelcomeDismissed:${userId}`;
 
@@ -37,6 +37,7 @@ const NewUserWelcome = () => {
   const enforceCredits = !!useGetSettingsValue('enforceCredits');
   const defaultFreeCredits = Number(useGetSettingsValue('defaultFreeCredits')) || 0;
   const balance = useEffectiveCredits();
+  const liveBalance = useEffectiveCredits({ live: true });
   const answerCost = useSelectedModelAnswerCost();
   const sendPrompt = useChatActions(s => s.sendPrompt);
   const setChatInputValue = useChatInput(s => s.setChatInputValue);
@@ -80,15 +81,15 @@ const NewUserWelcome = () => {
   });
   if (!show) return null;
 
-  const awaitingVerification =
-    currentUser?.emailVerified === false && (currentUser?.tags ?? []).includes(PENDING_FREE_CREDITS_TAG);
+  const awaitingVerification = isAwaitingEmailVerification(currentUser);
+  const canStart = welcomeCanStart({ enforceCredits, balance: liveBalance });
   const creditsLine = welcomeCreditsLine({
     enforceCredits,
     balance,
     awaitingVerification,
     pendingGrant: currentUser?.pendingCreditGrant ?? defaultFreeCredits,
   });
-  // Same credits the line above quotes: the pending grant before verification, else the live balance.
+  // Same credits the line above quotes: the pending grant before verification, else the displayed balance.
   const estimateCredits = awaitingVerification ? (currentUser?.pendingCreditGrant ?? defaultFreeCredits) : balance;
   const answersEstimate = creditsLine ? formatAnswersEstimate(estimateCredits, answerCost) : null;
 
@@ -133,38 +134,47 @@ const NewUserWelcome = () => {
           {answersEstimate}
         </Typography>
       )}
-      <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
-        Pick a prompt to start your first chat, or type your own below.
-      </Typography>
-      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
-        {STARTER_PROMPTS.map((p, i) => (
-          <Button
-            key={p.title}
-            variant="outlined"
-            color="neutral"
-            disabled={sending}
-            data-testid={`new-user-welcome-prompt-${i}`}
-            onClick={() => void start(p.prompt)}
-            sx={{
-              flex: 1,
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'flex-start',
-              justifyContent: 'flex-start',
-              gap: 0.5,
-              py: 1.25,
-              textAlign: 'left',
-              whiteSpace: 'normal',
-              fontWeight: 400,
-            }}
-          >
-            <Typography level="title-sm">{p.title}</Typography>
-            <Box component="span" sx={{ fontSize: '13px', lineHeight: 1.4, color: 'text.secondary' }}>
-              {p.prompt}
-            </Box>
-          </Button>
-        ))}
-      </Stack>
+      {!canStart && !creditsLine && (
+        <Typography level="body-sm" data-testid="new-user-welcome-out-of-credits">
+          You&apos;re out of credits.
+        </Typography>
+      )}
+      {canStart && (
+        <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
+          Pick a prompt to start your first chat, or type your own below.
+        </Typography>
+      )}
+      {canStart && (
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+          {STARTER_PROMPTS.map((p, i) => (
+            <Button
+              key={p.title}
+              variant="outlined"
+              color="neutral"
+              disabled={sending}
+              data-testid={`new-user-welcome-prompt-${i}`}
+              onClick={() => void start(p.prompt)}
+              sx={{
+                flex: 1,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'flex-start',
+                justifyContent: 'flex-start',
+                gap: 0.5,
+                py: 1.25,
+                textAlign: 'left',
+                whiteSpace: 'normal',
+                fontWeight: 400,
+              }}
+            >
+              <Typography level="title-sm">{p.title}</Typography>
+              <Box component="span" sx={{ fontSize: '13px', lineHeight: 1.4, color: 'text.secondary' }}>
+                {p.prompt}
+              </Box>
+            </Button>
+          ))}
+        </Stack>
+      )}
       <Link
         level="body-xs"
         href={ExternalLinks.privacy}

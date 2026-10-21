@@ -20,6 +20,7 @@ import {
   presentationOwnedOutsideDiscovery,
   runModelDiscovery,
 } from './runModelDiscovery';
+import { normalizeBedrockModels } from './sources/bedrock';
 import type {
   DiscoveredModel,
   DiscoveryLogger,
@@ -813,6 +814,71 @@ describe('runModelDiscovery', () => {
         expect(controlRows.some(row => row.patch.lifecycle?.status === 'deprecated')).toBe(true);
       });
 
+      it('writes the base lifecycle onto a catalogued profile row and surfaces source gaps', async () => {
+        const legacy = { status: 'legacy' as const, deprecationDate: '2026-07-08', retirementDate: '2027-01-08' };
+        const gap = { source: 'bedrock', modelId: 'meta.llama3-70b-instruct-v1:0', reason: 'no lifecycle' };
+        const bedrock = harness([
+          stubSource({
+            name: 'bedrock',
+            kind: 'provider',
+            result: {
+              ok: true,
+              authoritativeFor: [ModelBackend.Bedrock],
+              records: [
+                { ...bareFoundation, patch: { ...bareFoundation.patch, lifecycle: legacy } },
+                {
+                  modelId: 'global.anthropic.claude-sonnet-4-6',
+                  patch: { lifecycle: legacy },
+                  lifecycleEvidence: 'typed',
+                },
+              ],
+              dropped: [gap],
+            },
+          }),
+        ]);
+        await seedActive(bedrock, 'global.anthropic.claude-sonnet-4-6', 'Claude Sonnet 4.6 (global)');
+
+        await runModelDiscovery(bedrock.adapters, bedrock.options);
+
+        const profileRow = bedrock.catalog.rows.find(
+          row => row.modelId === 'global.anthropic.claude-sonnet-4-6' && row.source === 'discovery'
+        );
+        expect(profileRow?.patch.lifecycle).toMatchObject(legacy);
+        expect(bedrock.runs.docs.at(-1)?.droppedRecords).toContainEqual(gap);
+      });
+
+      it('keeps an aggregator deprecation for a profile id whose foundation is still active', async () => {
+        const profileId = 'global.anthropic.claude-sonnet-4-6';
+        const bedrock = harness([
+          stubSource({
+            name: 'bedrock',
+            kind: 'provider',
+            records: normalizeBedrockModels({
+              summaries: [{ modelId: 'anthropic.claude-sonnet-4-6', modelLifecycle: { status: 'ACTIVE' } }],
+              catalogModelIds: [profileId],
+            }),
+            authoritativeFor: [ModelBackend.Bedrock],
+          }),
+          stubSource({
+            name: 'litellm',
+            kind: 'aggregator',
+            records: [
+              {
+                modelId: profileId,
+                lifecycleEvidence: 'typed',
+                patch: { lifecycle: { status: 'deprecated', deprecationDate: '2026-07-01' } },
+              },
+            ],
+          }),
+        ]);
+        await seedActive(bedrock, profileId, 'Claude Sonnet 4.6 (global)');
+
+        await runModelDiscovery(bedrock.adapters, bedrock.options);
+
+        const profileRow = bedrock.catalog.rows.find(row => row.modelId === profileId && row.source === 'discovery');
+        expect(profileRow?.patch.lifecycle).toMatchObject({ status: 'deprecated', deprecationDate: '2026-07-01' });
+      });
+
       describe('frozen profile ids', () => {
         it('persists and warns on a profile id whose foundation id the listing omitted', async () => {
           const bedrock = harness([
@@ -996,7 +1062,9 @@ describe('runModelDiscovery', () => {
           stubSource({
             name: 'litellm',
             kind: 'aggregator',
-            records: [{ modelId: 'gpt-4o', patch: { lifecycle: { status: 'deprecated' } }, lifecycleEvidence: 'typed' }],
+            records: [
+              { modelId: 'gpt-4o', patch: { lifecycle: { status: 'deprecated' } }, lifecycleEvidence: 'typed' },
+            ],
           }),
         ]);
 
@@ -1443,6 +1511,21 @@ describe('runModelDiscovery', () => {
       expect(second.diff).toEqual([]);
       expect(bench.catalog.rows).toHaveLength(2);
       expect(bench.prices.rows).toHaveLength(1);
+    });
+
+    it('persists a source gap reported on every pass once', async () => {
+      const gap = { source: 'openai', modelId: 'gpt-7', reason: 'unusable lifecycle' };
+      const { bench } = convergent([gpt7], enriched);
+      bench.adapters.sources[0] = stubSource({
+        name: 'openai',
+        kind: 'provider',
+        result: { ok: true, records: [gpt7], authoritativeFor: [ModelBackend.OpenAI], dropped: [gap] },
+      });
+
+      const result = await runModelDiscovery(bench.adapters, bench.options);
+
+      expect(result.passes).toBeGreaterThanOrEqual(2);
+      expect(bench.runs.docs.at(-1)?.droppedRecords.filter(record => record.reason === gap.reason)).toHaveLength(1);
     });
 
     it('adds a model the openai source can only half describe, then completes it', async () => {

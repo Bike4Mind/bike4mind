@@ -10,6 +10,7 @@ import {
   materializePromptMetaSession,
   type GenerationJobRef,
   type CitableSource,
+  usdToCreditsStochastic,
 } from '@bike4mind/common';
 import type { SoundGenerationVendor, VoiceGenerationVendor } from '@bike4mind/common';
 import { type ApiKeyTable, type ICompletionBackend, type ICompletionOptionTools } from '@bike4mind/llm-adapters';
@@ -181,6 +182,8 @@ export interface ToolBuilderConfig {
   onToolPreamble?: (preamble: string, toolName: string) => void;
   /** The turn's model admission, forwarded to the delegation tools (see ToolBuilderDeps.modelAdmission). */
   modelAdmission?: Pick<ModelAdmission, 'assert'>;
+  /** The `decide` tool's execution seam, forwarded to the tool context (see ToolContext.decide). */
+  decide?: ToolContext['decide'];
 }
 
 // Short spoken preambles for tools whose latency would otherwise leave the
@@ -573,7 +576,9 @@ export class ToolBuilder {
               model: data.model,
               characters: data.characters ?? 0,
             };
-      const { requiredCredits: creditsUsed, usdCost, units } = estimateAudioCredits(costInput);
+      // The gate prices the round-up; the charge is the unbiased draw on the exact cost (may be 0).
+      const { usdCost, units } = estimateAudioCredits(costInput);
+      const creditsUsed = usdToCreditsStochastic(usdCost);
       // Speech always resolves a real model id; a sound effect has none, so qualify it by
       // provider (e.g. "elevenlabs-sound_effect") instead of the bare kind so per-model
       // COGS analytics stays clean.
@@ -680,11 +685,9 @@ export class ToolBuilder {
     const modelInfo = this.resolveBilledImageModel(data, enforceCredits, availableModels);
     if (modelInfo) {
       const units = data.n || 1;
-      const { requiredCredits: creditsUsed, usdCost } = estimateImageCredits(
-        modelInfo,
-        units,
-        toImageCostInput(toolName, data)
-      );
+      // The gate prices the round-up; the charge is the unbiased draw on the exact cost (may be 0).
+      const { usdCost } = estimateImageCredits(modelInfo, units, toImageCostInput(toolName, data));
+      const creditsUsed = usdToCreditsStochastic(usdCost);
       this.deps.logger.info(`Credits used for tool ${toolName}: ${creditsUsed}`);
       this.reserveToolCredits(toolName, creditsUsed, modelInfo.id);
       quest.creditsUsed = (quest.creditsUsed ?? 0) + creditsUsed;
@@ -890,6 +893,7 @@ export class ToolBuilder {
         organizationId: organization?.id,
         authOrigin: this.deps.authOrigin,
         apiKeyId: this.deps.apiKeyId,
+        decide: this.deps.decide,
         sessionRepository: this.deps.db.sessions,
         storage: this.deps.storage,
         imageGenerateStorage: this.deps.imageGenerateStorage,

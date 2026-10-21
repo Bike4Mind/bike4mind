@@ -101,6 +101,7 @@ vi.mock('@aws-sdk/client-apigatewaymanagementapi', () => ({
 import { ApiKeyScope, PROMPT_TEXT_MAX } from '@bike4mind/common';
 import { verifyApiKey, verifyJwtToken, checkApiKeyRateLimitOrThrow, checkRateLimit } from '@server/cli/auth';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
+import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
 import { func, handlePermissionResponse, handleGateResponse } from './agentExecute';
 
 const noopLogger = { info: vi.fn(), error: vi.fn(), warn: vi.fn(), updateMetadata: vi.fn() };
@@ -201,12 +202,45 @@ describe('handlePermissionResponse', () => {
       deniedTool: 'web_search',
       errorMessage: 'Execution stopped: you denied "web_search".',
     });
+    expect(persistRunAsQuest).toHaveBeenCalledWith('exec-1', 'Execution stopped: you denied "web_search".', noopLogger);
     expect(mockMarkFailed).not.toHaveBeenCalled();
     expect(mockApiGwSend).toHaveBeenCalled();
     const [sentCommand] = mockApiGwSend.mock.calls[0];
     expect(sentCommand.input.Data.toString()).toContain('"action":"failed"');
     expect(mockUpdateStatus).not.toHaveBeenCalled();
     expect(noopLogger.warn).not.toHaveBeenCalled();
+  });
+
+  it('builds the deny reply from the paused tool name, not the client-supplied one', async () => {
+    await handlePermissionResponse(
+      baseCmd({ approved: false, rememberForSession: true, toolName: 'forged' }),
+      'user-1',
+      'conn-1',
+      'https://endpoint',
+      noopLogger as any
+    );
+
+    expect(persistRunAsQuest).toHaveBeenCalledWith('exec-1', 'Execution stopped: you denied "web_search".', noopLogger);
+    expect(mockDenyPendingPermission).toHaveBeenCalledWith('exec-1', {
+      toolCallId: 'call-1',
+      deniedTool: 'web_search',
+      errorMessage: 'Execution stopped: you denied "web_search".',
+    });
+    expect(mockRememberDecision).toHaveBeenCalledWith('user-1', baseExecution.sessionId, 'web_search', 'denied');
+  });
+
+  it('still persists the denial when the failed frame cannot be delivered', async () => {
+    mockApiGwSend.mockRejectedValueOnce(new Error('GoneException'));
+
+    await handlePermissionResponse(
+      baseCmd({ approved: false, rememberForSession: false }),
+      'user-1',
+      'conn-1',
+      'https://endpoint',
+      noopLogger as any
+    ).catch(() => undefined);
+
+    expect(persistRunAsQuest).toHaveBeenCalledWith('exec-1', 'Execution stopped: you denied "web_search".', noopLogger);
   });
 
   it('marks the pause approved instead of clearing it, so the executor can still replay the withheld call', async () => {
@@ -463,6 +497,7 @@ describe('handlePermissionResponse', () => {
     );
 
     expect(mockMarkFailed).not.toHaveBeenCalled();
+    expect(persistRunAsQuest).not.toHaveBeenCalled();
     expect(mockRememberDecision).not.toHaveBeenCalled();
     expect(noopLogger.warn).toHaveBeenCalled();
     expect(mockApiGwSend).toHaveBeenCalled();
@@ -635,6 +670,26 @@ describe('start command credential threading', () => {
     expect(input.apiKeyInfo).toBe(key);
   });
 
+  it('reports a billing refusal as a message-only error frame', async () => {
+    mockApiGwSend.mockClear();
+    vi.mocked(verifyApiKey).mockRejectedValueOnce(new Error('not a key'));
+    vi.mocked(verifyJwtToken).mockResolvedValueOnce({ id: 'user-1' } as never);
+    vi.mocked(startAgentExecution).mockResolvedValueOnce({
+      ok: false,
+      reason: 'billing_organization_mismatch',
+      message: "This API key bills its own organization; omit the billing organization or set it to the key's.",
+    } as never);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (func as any)(startEvent('jwt'), {}, noopLogger);
+
+    const [sent] = mockApiGwSend.mock.calls[0];
+    const frame = JSON.parse(sent.input.Data.toString());
+    expect(frame).toMatchObject({ action: 'agent_error' });
+    expect(frame.message).toContain('bills its own organization');
+    expect(frame).not.toHaveProperty('reason');
+  });
+
   it('drops the key credential when its rate-limit check throws, so the JWT fallback runs unscoped', async () => {
     vi.mocked(verifyApiKey).mockResolvedValueOnce({
       keyId: 'key-1',
@@ -736,7 +791,7 @@ describe('start command system context', () => {
 });
 
 describe('reconnect command', () => {
-  const reconnectEvent = (target: { executionId?: string; sessionId?: string }) => ({
+  const reconnectEvent = (target: { executionId?: string; sessionId?: string; requestId?: string }) => ({
     requestContext: { connectionId: 'conn-1', domainName: 'example.com', stage: 'dev' },
     body: JSON.stringify({ accessToken: 'jwt', action: 'agent_execute', command: 'reconnect', ...target }),
   });
@@ -749,6 +804,15 @@ describe('reconnect command', () => {
     mockApiGwSend.mockResolvedValue(undefined);
     vi.mocked(verifyApiKey).mockRejectedValue(new Error('not a key'));
     vi.mocked(verifyJwtToken).mockResolvedValue({ id: 'user-1' } as never);
+  });
+
+  it.each([true, false])('echoes the requestId when found is %s', async found => {
+    mockFindActiveBySessionId.mockResolvedValueOnce(found ? { ...baseExecution, status: 'paused' } : null);
+    const invoke = func as unknown as (...arguments_: unknown[]) => Promise<unknown>;
+
+    await invoke(reconnectEvent({ sessionId: 'session-1', requestId: 'request-123' }), {}, noopLogger);
+
+    expect(sentPayloads()[0]).toMatchObject({ requestId: 'request-123', found });
   });
 
   it('echoes the execution sessionId on a found run, so the client never has to correlate', async () => {

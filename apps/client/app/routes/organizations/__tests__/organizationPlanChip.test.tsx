@@ -27,7 +27,6 @@ vi.mock('@client/app/hooks/data/teamPlanSettings', () => ({ useTeamPlanAvailable
 
 vi.mock('@client/app/hooks/data/organizations', () => ({
   useGetUserOrganizations: () => ({ data: [ORG], isLoading: false, isFetching: false }),
-  useGetManagedOrganizations: () => ({ data: [], isLoading: false, isFetching: false, refetch: vi.fn() }),
   useOrganizationSeats: () => ({ currentSeats: 1 }),
 }));
 

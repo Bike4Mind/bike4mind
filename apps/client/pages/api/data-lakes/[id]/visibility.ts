@@ -12,8 +12,10 @@ import {
 import { Request } from 'express';
 import { z } from 'zod';
 import { resolveActiveOrg } from '@bike4mind/server-utils/utils/resolveActiveOrg';
+import { dataLakeResponseSchema } from '@bike4mind/common';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
+import { respond } from '@server/utils/respond';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 
 // The active account-switcher org (client-supplied) is the org a promotion targets. It is
@@ -77,7 +79,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_SHARE_SCOPES })
       );
     });
 
-    return res.json(result);
+    return respond(res, dataLakeResponseSchema, result);
   });
 
 export const config = {

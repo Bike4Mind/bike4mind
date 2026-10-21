@@ -3,10 +3,9 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import {
+  withTransaction,
   dataLakeRepository,
   dataLakeAccessGrantRepository,
-  fabFileRepository,
-  userRepository,
   adminSettingsRepository,
   scopedSettingsRepository,
 } from '@bike4mind/database';
@@ -17,6 +16,7 @@ import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrinc
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { assertDataLakeTagWriteScope, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
+import { storageOwnerTransferDb } from '@server/files/storageOwnerTransferDb';
 
 const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(
   asyncHandler<{}, unknown, unknown>(async (req, res) => {
@@ -57,30 +57,32 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(
       },
     });
 
-    const result = await fabFilesService.toggleTags(req.user.id, req.body, {
-      db: {
-        fabFiles: fabFileRepository,
-        fileTags: fileTagRepository,
-        dataLakes: dataLakeRepository,
-        dataLakeAccessGrants: dataLakeAccessGrantRepository,
-        users: userRepository,
-        ...lakeConfigAuditDb,
-        ...lakeMembershipAuditDb,
-        ...settingsStores,
-      },
-      // The service re-gates every lake this toggle joins or leaves, so its actor has to stay as
-      // wide as the prologue gate above - the org rungs of `canManageLake` cannot be derived from
-      // the user document the service is handed.
-      administeredOrgIds: ctx.administeredOrgIds,
-      // Covers the fileTagPrefix membership arm the prologue gate above cannot see (it has no
-      // resolved file list) - called only when the service actually finds a prefix-arm join/leave.
-      assertWriteScope: () => assertDataLakeWriteScope(req),
-      // Matches every other audited config-write door (#1917): undefined for a session caller,
-      // the key's principal for a `b4m_live_` caller - so a toggle that auto-activates a draft
-      // lake attributes the History row to the key, not the human.
-      auditPrincipal: lakeConfigAuditPrincipal(req.user, req.apiKeyInfo),
-      logger: req.logger,
-    });
+    // A membership change restamps the file's storage owner after the tag write, so both must commit
+    // together: a retried toggle flips the tag back rather than repairing a half-applied owner move.
+    const result = await withTransaction(() =>
+      fabFilesService.toggleTags(req.user.id, req.body, {
+        db: {
+          ...storageOwnerTransferDb,
+          fileTags: fileTagRepository,
+          dataLakeAccessGrants: dataLakeAccessGrantRepository,
+          ...lakeConfigAuditDb,
+          ...lakeMembershipAuditDb,
+          ...settingsStores,
+        },
+        // The service re-gates every lake this toggle joins or leaves, so its actor has to stay as
+        // wide as the prologue gate above - the org rungs of `canManageLake` cannot be derived from
+        // the user document the service is handed.
+        administeredOrgIds: ctx.administeredOrgIds,
+        // Covers the fileTagPrefix membership arm the prologue gate above cannot see (it has no
+        // resolved file list) - called only when the service actually finds a prefix-arm join/leave.
+        assertWriteScope: () => assertDataLakeWriteScope(req),
+        // Matches every other audited config-write door (#1917): undefined for a session caller,
+        // the key's principal for a `b4m_live_` caller - so a toggle that auto-activates a draft
+        // lake attributes the History row to the key, not the human.
+        auditPrincipal: lakeConfigAuditPrincipal(req.user, req.apiKeyInfo),
+        logger: req.logger,
+      })
+    );
 
     return res.json(result);
   })

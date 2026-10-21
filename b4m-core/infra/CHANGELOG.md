@@ -1,5 +1,11 @@
 # @bike4mind/infra
 
+## 4.2.0
+
+### Minor Changes
+
+- [#5078](https://github.com/Bike4Mind/bike4mind/pull/5078) [`db1a07e`](https://github.com/Bike4Mind/bike4mind/commit/db1a07e9762528e01405d608bcc79ad3a62de014) Thanks [@onoya](https://github.com/onoya)! - alarm when the stale voice hold sweep settles or fails a hold
+
 ## 4.1.0
 
 ### Minor Changes

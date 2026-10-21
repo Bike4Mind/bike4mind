@@ -11,6 +11,10 @@ export type MimeType =
 
 export const MimeTypes: MimeType[] = ['text/plain', 'text/markdown', 'application/pdf', 'application/json'];
 
+// Per-request cap on /api/files/tags/toggle. The route runs the whole batch in one transaction, one file
+// at a time, so an unbounded selection can outlive Mongo's 60s transaction lifetime; clients chunk.
+export const MAX_TOGGLE_TAGS_FILE_IDS = 100;
+
 // The Files type filter. getMimeTypeFilter (packages/database/src/queries/fabFileSearchQuery.ts) maps every value
 // to a query and FILE_TYPE_OPTIONS (apps/client/app/components/Files/Browser/constants.ts) labels every value.
 export const FAB_FILE_TYPE_FILTERS = [
@@ -1551,6 +1555,20 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * trail does, to tell a real removal from the losing half of two concurrent ones.
    */
   pullTagsByFabFileId(fabFileId: string, tagNames: string[]): Promise<number>;
+
+  /**
+   * Restamps a live file's owning org (unset when `nextOrganizationId` is undefined, so the file
+   * bills its uploader again), but only while the stamp, the fields `chargedBytes` reads, and the set
+   * of stored tag names the owner was derived from still equal `expected`. Returns false when a
+   * concurrent write moved any of them, so the caller can re-read instead of moving a stale byte
+   * count between counters or stamping an owner a concurrent tag write already changed. See
+   * reassignStorageOwner in b4m-core/services/src/fabFileService/reassignStorageOwner.ts.
+   */
+  setOwnerOrganizationIfUnchanged(
+    fabFileId: string,
+    expected: Pick<IFabFileDocument, 'organizationId' | 'fileSize' | 'storageChargedAt' | 'status' | 'tags'>,
+    nextOrganizationId: string | undefined
+  ): Promise<boolean>;
 
   /**
    * Atomically add each of `tagNames` to one file's tags array, skipping any already present.

@@ -1,6 +1,7 @@
 import { allSecrets } from './secrets';
 import { lambdaVpc } from './vpc';
 import { eventBus } from './bus';
+import { runsScheduledJobs } from './constants';
 
 /**
  * SNS Topic for Security Alerts (optional - can be used for admin notifications)
@@ -13,19 +14,20 @@ export const SecurityAlertsTopic = new sst.aws.SnsTopic('SecurityAlerts', {});
  * Runs every 5 minutes to check for suspicious patterns
  * Sends emails directly to users via EventBridge + mailer (same as rest of codebase)
  */
-export const SecurityAlertsSchedule = new sst.aws.Cron('SecurityAlertsSchedule', {
-  schedule: 'rate(5 minutes)', // Check every 5 minutes
-  job: {
-    vpc: lambdaVpc,
-    handler: 'apps/workers/src/security/alertProcessor.handler',
-    runtime: 'nodejs24.x',
-    link: [eventBus, ...allSecrets],
-    permissions: [
-      {
-        actions: ['events:PutEvents'],
-        resources: [eventBus.arn],
+export const SecurityAlertsSchedule = runsScheduledJobs
+  ? new sst.aws.Cron('SecurityAlertsSchedule', {
+      schedule: 'rate(5 minutes)', // Check every 5 minutes
+      job: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/security/alertProcessor.handler',
+        runtime: 'nodejs24.x',
+        link: [eventBus, ...allSecrets],
+        permissions: [
+          {
+            actions: ['events:PutEvents'],
+            resources: [eventBus.arn],
+          },
+        ],
       },
-    ],
-  },
-  enabled: ['production', 'dev'].includes($app.stage),
-});
+    })
+  : undefined;

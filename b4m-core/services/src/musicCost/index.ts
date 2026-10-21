@@ -33,9 +33,10 @@ export function computeMusicUsdCost(vendor: MusicGenerationVendor, input: MusicC
 
 /**
  * Estimates the credit cost of a music generation: provider USD cost converted
- * to internal credits (deterministic round-up, min 1). `usdCost` and
- * `billedSeconds` are carried through for usage-event analytics (COGS + units);
- * billing uses `requiredCredits`.
+ * to internal credits (deterministic round-up, min 1). `requiredCredits` is the
+ * reservation/gate figure only: the final charge settles `usdCost` with
+ * usdToCreditsStochastic. `usdCost` and `billedSeconds` also feed usage-event
+ * analytics (COGS + units).
  */
 export function estimateMusicCredits(
   vendor: MusicGenerationVendor,

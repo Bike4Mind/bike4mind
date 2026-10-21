@@ -1,7 +1,12 @@
 import type { CreateVideoGenerationBody, VideoModel } from '@bike4mind/common';
 import ImageBrowserModal from '@client/app/components/Agent/ImageBrowserModal';
+import GenerationPayerNote from '@client/app/components/Credits/GenerationPayerNote';
 import CapabilityForm from '@client/app/components/Studio/CapabilityForm';
-import { useCapabilityFormState, type NonEmptyList, type StudioFormRules } from '@client/app/components/Studio/useCapabilityFormState';
+import {
+  useCapabilityFormState,
+  type NonEmptyList,
+  type StudioFormRules,
+} from '@client/app/components/Studio/useCapabilityFormState';
 import { useImageBrowser } from '@client/app/hooks/agent/useImageBrowser';
 import { videoCapabilityFields } from './videoFields';
 import {
@@ -42,6 +47,7 @@ const VideoStudioForm = ({ models, isSubmitting, onSubmit }: VideoStudioFormProp
       isSubmitting={isSubmitting}
       onSubmit={() => onSubmit(toCreateBody(form))}
     >
+      <GenerationPayerNote data-testid="video-form-payer-note" />
       <ImageBrowserModal
         isOpen={imageBrowser.isImageBrowserOpen}
         onClose={imageBrowser.closeImageBrowser}

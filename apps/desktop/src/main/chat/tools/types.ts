@@ -501,6 +501,8 @@ export interface ApprovalPrompt {
    * covered by a prefix pattern, and each directory outside the project by the directory.
    */
   always?: ApprovalAlways;
+  /** For an MCP tool: the server's slug and the tool's own name, which an `mcp__server__tool` rule names. */
+  mcp?: { server: string; tool: string };
 }
 
 export interface ApprovalAlways {
@@ -510,9 +512,11 @@ export interface ApprovalAlways {
    * One per sub-command, as written; matched against remembered `patterns`. Never covered when
    * not `coverable` (see ShellCommand.coverable).
    */
-  commands: readonly { text: string; pattern: string; coverable: boolean }[];
+  commands: readonly { text: string; pattern: string; coverable: boolean; words?: string; opaque?: string }[];
   /** Directories outside every granted root that the command reaches. */
   directories: readonly string[];
+  /** Physical paths named by a shell command, used to protect permission files even through aliases. */
+  paths?: readonly string[];
 }
 
 /** See ChatApprovalOption: this is that, plus what main does with the answer. */

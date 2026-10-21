@@ -360,7 +360,8 @@ export function createDelegateToAgentTool(deps: DelegateToAgentToolDeps): ICompl
 
         const durationMs = Date.now() - startTime;
 
-        if (result.completionInfo.totalCredits && deps.onCredits) {
+        // 0 is a real settled charge (stochastic rounding of a cheap delegation); only undefined means none.
+        if (result.completionInfo.totalCredits !== undefined && deps.onCredits) {
           const modelInfo = deps.availableModels?.find(m => m.id === result.model);
           const inputTokens = result.completionInfo.totalInputTokens ?? 0;
           const outputTokens = result.completionInfo.totalOutputTokens ?? 0;

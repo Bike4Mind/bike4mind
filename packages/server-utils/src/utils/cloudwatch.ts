@@ -752,8 +752,9 @@ export async function recordFeedbackDeliverySkipped(
 }
 
 // Auth Security Metrics - Namespace: Lumina5/AuthSecurity
-// SessionReuseRevoked: a refresh token was presented after its rotation window, indicating
-// a possible stolen token (the session is revoked and both parties are logged out).
+// SessionReuseRevoked: a refresh token two or more generations stale (or forged) was presented,
+// so the session was revoked. Usually a second client holding a stale cookie, sometimes theft;
+// only bursts alarm (infra/alarms.ts).
 // SessionRecovered: a stale token was accepted under the benign-recovery allowance
 // (lost response on a transient network failure).
 
@@ -764,7 +765,7 @@ export const AuthSecurityMetrics = {
   SESSION_RECOVERED: 'SessionRecovered',
 } as const;
 
-/** Emits one count when a refresh token reuse revokes a session (presumed theft). */
+/** Emits one count when refresh-token reuse revokes a session. */
 export async function recordSessionReuseRevoked(): Promise<void> {
   return emitMetric(AUTH_SECURITY_NAMESPACE, AuthSecurityMetrics.SESSION_REUSE_REVOKED, 1, {}, StandardUnit.Count);
 }

@@ -40,7 +40,7 @@ import { logEvent } from '@server/utils/analyticsLog';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { readConsentedAcquisitionTouches } from '@server/analytics/acquisition';
 import { emitSignupForSourceProducts } from '@server/analytics/signupEvents';
-import { emitFunnelEvent, recordSignupAcquisition } from '@server/analytics/funnel';
+import { emitEmailVerifiedFunnelEvents, emitFunnelEvent, recordSignupAcquisition } from '@server/analytics/funnel';
 import jwt from 'jsonwebtoken';
 import { randomUUID } from 'crypto';
 import * as z from 'zod';
@@ -212,6 +212,11 @@ const handler = baseApi({ auth: false })
           }
           if (grants.currentCredits !== null) existingUser.currentCredits = grants.currentCredits;
           if (grants.joinedOrganizationId) existingUser.organizationId = grants.joinedOrganizationId;
+          await emitEmailVerifiedFunnelEvents({
+            user: existingUser,
+            method: 'otc',
+            creditsGranted: grants.creditsGranted + grants.subscriptionCreditsGranted,
+          });
         } catch (err) {
           req.logger.error('OTC login emailVerified update failed', err);
         }
@@ -443,13 +448,12 @@ const handler = baseApi({ auth: false })
     }
     const funnelUser = { id: newUser.id, ...signupFunnel };
     await emitFunnelEvent({ user: funnelUser, event: 'email_verified', metadata: { method: 'otc' } });
-    if ((newUser.currentCredits ?? 0) > 0) {
-      await emitFunnelEvent({
-        user: funnelUser,
-        event: 'credits_granted',
-        metadata: { amount: newUser.currentCredits, source: 'signup', method: 'otc' },
-      });
-    }
+    await emitFunnelEvent({
+      user: funnelUser,
+      event: 'credits_granted',
+      metadata: { amount: newUser.currentCredits ?? 0, source: 'signup', method: 'otc' },
+    });
+    await emitFunnelEvent({ user: funnelUser, event: 'signup_completed', metadata: { method: 'otc' } });
 
     const registrationSession = await authSessionService.issueSession(
       newUser.id,

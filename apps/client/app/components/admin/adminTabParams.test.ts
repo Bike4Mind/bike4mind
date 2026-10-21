@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { ADMIN_AUDIT_LOG_TAB_SLUG, FEEDBACK_ID_PARAM } from '@bike4mind/common';
-import { ADMIN_GLOBAL_PARAMS, ADMIN_TAB_PARAMS, adminSearchForTab } from './adminTabParams';
+import { ADMIN_GLOBAL_PARAMS, ADMIN_TAB_PARAMS, adminSearchForTab, parseAdminSearch } from './adminTabParams';
 import { adminTabFromSlug } from './adminTabSlugs';
 
 describe('ADMIN_TAB_PARAMS', () => {
@@ -37,5 +37,53 @@ describe('adminSearchForTab', () => {
     expect(search).toMatchObject({ tab: 'admin-settings', section: 'aiConfiguration', q: 'slack' });
     expect(search[FEEDBACK_ID_PARAM]).toBeUndefined();
     expect(search.category).toBeUndefined();
+  });
+});
+
+describe('Users tab params', () => {
+  const usersSearch = {
+    tab: 'users',
+    page: 2,
+    limit: 20,
+    sort: 'name',
+    order: 'asc',
+    org: ['Acme'],
+    tags: ['Admin'],
+    userId: 'aaaaaaaaaaaaaaaaaaaaaaaa',
+  };
+
+  it('coerces each param in validateSearch and drops invalid ones', () => {
+    expect(
+      parseAdminSearch({
+        page: '2',
+        limit: 7,
+        sort: 'password',
+        order: 'asc',
+        org: 'Acme',
+        tags: [],
+        userId: 'aaaaaaaaaaaaaaaaaaaaaaaa',
+      })
+    ).toMatchObject({
+      page: 2,
+      limit: undefined,
+      sort: undefined,
+      order: 'asc',
+      org: ['Acme'],
+      tags: undefined,
+      userId: 'aaaaaaaaaaaaaaaaaaaaaaaa',
+    });
+  });
+
+  it('never accepts the free-text search', () => {
+    expect(parseAdminSearch({ search: 'someone@example.com' })).not.toHaveProperty('search');
+  });
+
+  it('keeps them on the users tab and drops them on a switch away', () => {
+    expect(adminSearchForTab(usersSearch, 'users')).toMatchObject(usersSearch);
+
+    const switched = adminSearchForTab(usersSearch, 'admin-settings');
+    for (const key of ['page', 'limit', 'sort', 'order', 'org', 'tags', 'userId'] as const) {
+      expect(switched[key], key).toBeUndefined();
+    }
   });
 });

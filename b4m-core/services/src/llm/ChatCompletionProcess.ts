@@ -132,6 +132,7 @@ import { buildToolEchoSources } from './toolEchoSources';
 import { appendStreamedChunk, shouldStampFirstVisibleToken } from './streamedReplyAccumulator';
 import { buildSystemPromptSourceFiles } from './buildSystemPromptSourceFiles';
 import { resolveCorrectionContext } from './buildCorrectionContext';
+import { resolveDataSourceStatus } from './dataSourceStatus';
 import { scrubMissingKnowledgeIds } from '../sessionService/scrubMissingKnowledgeIds';
 import { LATTICE_TOOL_NAMES } from './tools';
 import { createWebSearchBudget, MAX_WEB_SEARCHES_PER_TURN } from './tools/implementation/websearch';
@@ -250,6 +251,7 @@ import {
 } from './systemPromptFloorTelemetry';
 import { buildArtifactEmissionMessages, resolveArtifactsEnabled } from './artifactGating';
 import {
+  resolveStickyAutoAddedTools,
   shouldOfferBlogTools,
   shouldOfferDataLakeTools,
   shouldOfferDelegation,
@@ -389,16 +391,11 @@ export function dropOldestHistoryTurn(history: IMessage[]): IMessage[] | null {
 }
 
 /**
- * Conservative fallback for simple query max history.
- * Used before model info is available.
+ * Conservative cap on a requested history count, applied before model info is available. The same for
+ * every query: a count that varied with per-turn complexity moved the history window's start each
+ * turn, which re-writes the provider's prompt cache (see HISTORY_WINDOW_STEP).
  */
-const SIMPLE_QUERY_FALLBACK_MAX = 25;
-
-/**
- * Conservative fallback for complex query max history.
- * Used before model info is available.
- */
-const COMPLEX_QUERY_FALLBACK_MAX = 60;
+const HISTORY_COUNT_FALLBACK_MAX = 60;
 
 /**
  * Calculate optimal history count based on model context window.
@@ -430,31 +427,6 @@ function calculateOptimalHistoryCount(contextWindow: number): number {
 }
 
 /**
- * Get maximum history for simple queries.
- * Simple queries need less context but should still scale with model capacity.
- *
- * @param contextWindow - Model's context window size in tokens
- * @returns Maximum history messages for simple queries
- */
-function getSimpleQueryMaxHistory(contextWindow: number): number {
-  // Simple queries get 40% of the optimal history count
-  const optimal = calculateOptimalHistoryCount(contextWindow);
-  return Math.max(MIN_HISTORY_COUNT, Math.floor(optimal * 0.4));
-}
-
-/**
- * Get maximum history for complex queries.
- * Complex queries benefit from more context.
- *
- * @param contextWindow - Model's context window size in tokens
- * @returns Maximum history messages for complex queries
- */
-function getComplexQueryMaxHistory(contextWindow: number): number {
-  // Complex queries get the full optimal history count
-  return calculateOptimalHistoryCount(contextWindow);
-}
-
-/**
  * Narrow a requested history count to what the model's context window supports.
  *
  * Unlimited is an intent rather than a count, so it returns before any arithmetic. The marker is
@@ -467,19 +439,15 @@ function getComplexQueryMaxHistory(contextWindow: number): number {
 export function resolveModelAwareHistoryCount({
   historyCount,
   contextWindow,
-  isSimpleQuery,
 }: {
   historyCount: number;
   contextWindow: number;
-  isSimpleQuery: boolean;
 }): number {
   if (isUnlimitedHistory(historyCount)) return historyCount;
 
-  const modelAwareMax = isSimpleQuery
-    ? getSimpleQueryMaxHistory(contextWindow)
-    : getComplexQueryMaxHistory(contextWindow);
-
-  return Math.min(historyCount, modelAwareMax);
+  // Per model, never per query: it has to hold still across a session's turns (see
+  // HISTORY_COUNT_FALLBACK_MAX).
+  return Math.min(historyCount, calculateOptimalHistoryCount(contextWindow));
 }
 
 /**
@@ -1084,6 +1052,7 @@ export class ChatCompletionProcess {
   private _bedrockSvc: Map<string, BedrockGuardrailsService> = new Map();
   private onReplyStream?: IChatCompletionServiceOptions['onReplyStream'];
   private onToolPreamble?: IChatCompletionServiceOptions['onToolPreamble'];
+  private decide?: IChatCompletionServiceOptions['decide'];
   private verbose: boolean = false;
   // Per-name queue of each tool call's reserved credits, in call order (see
   // ToolBuilder.reserveToolCredits). Settled per-call below so a tool invoked more
@@ -1150,6 +1119,7 @@ export class ChatCompletionProcess {
     this.gpcSignalDetected = options.gpcSignalDetected ?? false;
     this.onReplyStream = options.onReplyStream;
     this.onToolPreamble = options.onToolPreamble;
+    this.decide = options.decide;
     this.statusManager = null;
     this.userAbility = null;
     this.systemFilesCache = null;
@@ -2034,41 +2004,22 @@ export class ChatCompletionProcess {
         enableAgents = false;
       }
 
-      // Reduce history for simple queries to optimize cost and performance
-      // Use conservative fallback here; dynamic adjustment happens after modelInfo is available
-      // Unlimited carries no count to cap, so leave it for buildAndSortMessages to interpret.
-      if (!isUnlimitedHistory(historyCount)) {
-        const originalHistoryCount = historyCount;
-        historyCount = Math.min(historyCount, SIMPLE_QUERY_FALLBACK_MAX);
-
-        if (originalHistoryCount > historyCount) {
-          logger.info(`📉 [SIMPLE_QUERY] History pruned for simple query optimization`, {
-            original: originalHistoryCount,
-            reduced: historyCount,
-            sessionId,
-          });
-        }
-      }
-
+      // History is deliberately NOT reduced for simple queries: the count sets where the history
+      // window starts, and one that changed with each turn's complexity rewrote the prompt cache.
       logger.info(
-        `🚀 [SIMPLE_QUERY] Optimizations: QuestMaster=${enableQuestMaster ? 'ON (explicit)' : 'OFF'}, Mementos=OFF, Agents=${enableAgents ? 'ON' : 'OFF'}, History=${
-          isUnlimitedHistory(historyCount) ? 'unlimited' : historyCount
-        }`
+        `[SIMPLE_QUERY] Optimizations: QuestMaster=${enableQuestMaster ? 'ON (explicit)' : 'OFF'}, Mementos=OFF, Agents=${enableAgents ? 'ON' : 'OFF'}`
       );
-    } else {
-      // For complex queries, apply conservative cap before model info is available
-      // Dynamic model-aware adjustment happens after modelInfo is fetched
-      if (!isUnlimitedHistory(historyCount) && historyCount > COMPLEX_QUERY_FALLBACK_MAX) {
-        logger.info(
-          `📊 [COMPLEX_QUERY] Initial cap at ${COMPLEX_QUERY_FALLBACK_MAX} messages (will adjust based on model)`,
-          {
-            original: historyCount,
-            capped: COMPLEX_QUERY_FALLBACK_MAX,
-            sessionId,
-          }
-        );
-        historyCount = COMPLEX_QUERY_FALLBACK_MAX;
-      }
+    }
+
+    // Conservative cap before model info is available; the model-aware adjustment happens after
+    // modelInfo is fetched. Same for every query, whatever its complexity.
+    if (!isUnlimitedHistory(historyCount) && historyCount > HISTORY_COUNT_FALLBACK_MAX) {
+      logger.info(`[HISTORY_CAP] Initial cap at ${HISTORY_COUNT_FALLBACK_MAX} messages (will adjust based on model)`, {
+        original: historyCount,
+        capped: HISTORY_COUNT_FALLBACK_MAX,
+        sessionId,
+      });
+      historyCount = HISTORY_COUNT_FALLBACK_MAX;
     }
 
     logger.info(`⏱️ [${Date.now() - processStartTime}ms] === PROGRESSIVE LOADING PHASE START ===`);
@@ -2514,10 +2465,8 @@ export class ChatCompletionProcess {
           historyFetchLimit: resolveHistoryFetchLimit(historyCount),
         });
       } else {
-        const modelAwareMax = isSimpleQuery
-          ? getSimpleQueryMaxHistory(contextWindow)
-          : getComplexQueryMaxHistory(contextWindow);
-        const adjustedHistoryCount = resolveModelAwareHistoryCount({ historyCount, contextWindow, isSimpleQuery });
+        const modelAwareMax = calculateOptimalHistoryCount(contextWindow);
+        const adjustedHistoryCount = resolveModelAwareHistoryCount({ historyCount, contextWindow });
 
         if (adjustedHistoryCount < historyCount) {
           logger.info(`📊 [DYNAMIC_HISTORY] Adjusting history based on model context window`, {
@@ -2906,28 +2855,27 @@ export class ChatCompletionProcess {
       // of when it was added to enabledTools.
       let hasContentTransform = false;
       if (!skipAutoOffers) {
+        // Tools this turn's signals call for that the request did not already name. They join the
+        // session's persisted set below, so the tool list never shrinks again once a tool appears.
+        const triggered: string[] = [];
+        const trigger = (tool: string) => {
+          if (!enabledTools.includes(tool)) triggered.push(tool);
+        };
+
         const blogGates = shouldOfferBlogTools({
           isAdmin: this.user.isAdmin,
           hasBlogIntegration: Boolean(this.user.blogIntegration),
           message,
           priorToolNames,
         });
-        if (blogGates.publish && !enabledTools.includes('blog_publish')) {
-          enabledTools.push('blog_publish');
-        }
-        if (blogGates.edit && !enabledTools.includes('blog_edit')) {
-          enabledTools.push('blog_edit');
-        }
-        if (blogGates.draft && !enabledTools.includes('blog_draft')) {
-          enabledTools.push('blog_draft');
-        }
-        hasContentTransform = blogGates.draft;
+        if (blogGates.publish) trigger('blog_publish');
+        if (blogGates.edit) trigger('blog_edit');
+        if (blogGates.draft) trigger('blog_draft');
 
         // The only honest gate for `skill` is whether this user has a model-invocable skill - a
         // user with zero skills used to pay ~161 tokens for a tool whose every call returns "you
         // have no LLM-invocable skills defined", with no catalog in the prompt to name one.
         if (
-          !enabledTools.includes('skill') &&
           shouldOfferSkillTool({
             hasSkillRepository: Boolean(this.db.skills),
             invocableSkillCount: (quest as QuestWithSkillCatalog)._skillCatalog?.length ?? 0,
@@ -2935,19 +2883,42 @@ export class ChatCompletionProcess {
             priorToolNames,
           })
         ) {
-          enabledTools.push('skill');
+          trigger('skill');
         }
 
-        if (
-          await shouldOfferDataLakeTools({
-            message,
-            priorToolNames,
-            dataLakesEnabled: async () => Boolean(await this.db.adminSettings.getSettingsValue('EnableDataLakes')),
-          })
-        ) {
-          for (const tool of DATA_LAKE_TOOL_NAMES) {
-            if (!enabledTools.includes(tool)) enabledTools.push(tool);
-          }
+        const dataLakesEnabled = async () => Boolean(await this.db.adminSettings.getSettingsValue('EnableDataLakes'));
+        if (await shouldOfferDataLakeTools({ message, priorToolNames, dataLakesEnabled })) {
+          DATA_LAKE_TOOL_NAMES.forEach(trigger);
+        }
+
+        const sticky = await resolveStickyAutoAddedTools({
+          persisted: session.autoAddedTools,
+          triggered,
+          eligibility: {
+            isAdmin: Boolean(this.user.isAdmin),
+            hasBlogIntegration: Boolean(this.user.blogIntegration),
+            hasSkillRepository: Boolean(this.db.skills),
+            dataLakesEnabled,
+          },
+        });
+        // Sorted, so a given set always reaches the provider in the same order.
+        for (const tool of sticky.tools) {
+          if (!enabledTools.includes(tool)) enabledTools.push(tool);
+        }
+        // Read off the final set, not this turn's regex: a blog_draft carried over from an earlier
+        // turn needs its tool-prompt section just as much as the turn that triggered it.
+        hasContentTransform = blogGates.draft || sticky.tools.includes('blog_draft');
+
+        if (sticky.newlyTriggered.length > 0) {
+          session.autoAddedTools = [...new Set([...(session.autoAddedTools ?? []), ...sticky.newlyTriggered])];
+          // A failed write costs stickiness on the next turn, never this one.
+          await this.db.sessions.addAutoAddedTools?.(session.id, sticky.newlyTriggered).catch(error => {
+            logger.warn('[AutoAddedTools] Failed to persist auto-added tools on the session', {
+              sessionId: session.id,
+              tools: sticky.newlyTriggered,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
         }
       }
 
@@ -3012,7 +2983,17 @@ export class ChatCompletionProcess {
 
       // Step 3: Fetching and Converting Fab Files (Feature contexts already loaded above)
       timer.phase('data_sources');
-      this.sendStatusUpdate(quest, 'Gathering data sources...', { statusAt: new Date() });
+      this.sendStatusUpdate(
+        quest,
+        resolveDataSourceStatus({
+          message,
+          sessionFabFileIds,
+          messageFileIds,
+          knowledgeIds: session.knowledgeIds,
+          forceKnowledgeRetrieval: forcedRetrievalEnabled,
+        }),
+        { statusAt: new Date() }
+      );
       // Input-window limits, needed BEFORE building messages because the amount of
       // attached-file content we extract has to be derived from them.
       const contextLimit = effectiveContextWindow(modelInfo);
@@ -3186,6 +3167,7 @@ export class ChatCompletionProcess {
         sendStatusUpdate: (q, status, options) => this.sendStatusUpdate(q, status, options),
         onToolPreamble: this.onToolPreamble,
         modelAdmission: this.modelAdmission,
+        decide: this.decide,
       });
 
       const { mcpToolsByServer, serverAgentConfig } = await toolBuilder.buildMcpTools({

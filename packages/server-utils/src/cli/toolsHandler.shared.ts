@@ -1,4 +1,5 @@
 import { cliTools } from '@bike4mind/services';
+import type { ServerToolExecutors } from '@bike4mind/services';
 import { adminSettingsRepository, apiKeyRepository, toolExecutionLogRepository } from '@bike4mind/database';
 
 /**
@@ -15,6 +16,12 @@ export interface ToolExecutionContext {
     info: (message: string) => void;
     error: (message: string, error?: any) => void;
   };
+  /**
+   * Host-supplied implementations for server tools whose code lives in the app tier (today:
+   * `decide`, whose credit hold and provider retry are the decisions runner's). Each entry point
+   * builds them, so a missing one fails that tool rather than running it un-billed.
+   */
+  executors?: ServerToolExecutors;
 }
 
 export interface ToolExecutionInput {
@@ -22,7 +29,7 @@ export interface ToolExecutionInput {
   input: Record<string, any>;
 }
 
-export const SUPPORTED_TOOLS = ['weather_info', 'web_search', 'web_fetch'] as const;
+export const SUPPORTED_TOOLS = ['weather_info', 'web_search', 'web_fetch', 'decide'] as const;
 export type SupportedTool = (typeof SUPPORTED_TOOLS)[number];
 
 /** Validates a tool request; single source of truth for validation logic. */
@@ -55,7 +62,7 @@ export function validateToolRequest(
 /** Executes a tool and logs results; single source of truth for execution and audit logging. */
 export async function executeToolWithLogging(request: ToolExecutionInput, context: ToolExecutionContext) {
   const { toolName, input } = request;
-  const { userId, userEmail, logger } = context;
+  const { userId, userEmail, logger, executors } = context;
 
   logger.info(`Executing tool ${toolName} for user ${userEmail || userId}`);
 
@@ -74,7 +81,9 @@ export async function executeToolWithLogging(request: ToolExecutionInput, contex
         adminSettings: adminSettingsRepository,
         apiKeys: apiKeyRepository,
       },
-    }
+    },
+    undefined,
+    executors
   );
 
   logger.info(`Tool ${toolName} ${result.success ? 'succeeded' : 'failed'} in ${result.executionTimeMs}ms`);

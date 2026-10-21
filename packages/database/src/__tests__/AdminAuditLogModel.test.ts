@@ -254,6 +254,26 @@ describe('AdminAuditLogModel', () => {
       expect(summary.deniedAttempts).toBe(1);
     });
 
+    it('summarize totals the signed credits stamp and skips denied attempts', async () => {
+      const credits = (action: string, amount?: unknown) => ({
+        category: 'credits' as const,
+        action,
+        ...(amount === undefined ? {} : { details: { credits: amount } }),
+      });
+      await seed([
+        credits('user.credits.adjusted', 500),
+        credits('org.credits.topped_up', 1500),
+        credits('user.credits.adjusted', -200),
+        credits('user.subscription.granted'),
+        credits('user.credits.adjusted', 'not-a-number'),
+        credits('user.credits.denied', 9999),
+      ]);
+
+      const summary = await adminAuditLogRepository.summarize(new Date('2026-10-01T00:00:00Z'));
+
+      expect(summary.creditGrants).toMatchObject({ count: 5, grantedCredits: 2000, deductedCredits: 200 });
+    });
+
     it('summarize bounds the aggregation time', async () => {
       const optionSpy = vi.spyOn(mongoose.Aggregate.prototype, 'option');
       try {

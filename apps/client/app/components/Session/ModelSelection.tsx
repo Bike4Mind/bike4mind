@@ -1432,7 +1432,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
 
       {/* No models found for search query */}
       {!hasVisibleModels && debouncedSearchQuery && (
-        <Box sx={{ padding: '32px', textAlign: 'center' }}>
+        <Box data-testid="model-selection-no-results" sx={{ padding: '32px', textAlign: 'center' }}>
           <Typography level="body-sm" sx={{ color: 'neutral.500' }}>
             No models found for &quot;{searchQuery}&quot;
           </Typography>
