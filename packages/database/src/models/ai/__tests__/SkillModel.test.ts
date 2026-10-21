@@ -26,6 +26,22 @@ function makeOrgSkillInput(overrides: Record<string, unknown> = {}): Record<stri
 describe('SkillRepository', () => {
   setupMongoTest();
 
+  describe('argument hint updates', () => {
+    it.each(['update', 'updateGuarded'] as const)(
+      '%s persists clearing and preserves an omitted hint',
+      async method => {
+        const created = await Skill.create(makeUserSkillInput({ argumentHint: '<previous>' }));
+        const id = created._id.toString();
+
+        await skillRepository[method]({ id, description: 'Updated description' }, { new: true });
+        expect((await skillRepository.findById(id))?.argumentHint).toBe('<previous>');
+
+        await skillRepository[method]({ id, argumentHint: '' }, { new: true });
+        expect((await skillRepository.findById(id))?.argumentHint).toBe('');
+      }
+    );
+  });
+
   describe('scope discriminator', () => {
     it('accepts a user-scoped skill', async () => {
       const created = await Skill.create(makeUserSkillInput());

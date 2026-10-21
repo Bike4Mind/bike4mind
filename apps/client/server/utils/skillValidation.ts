@@ -54,7 +54,7 @@ export function validateSkillBody(value: unknown): string {
 }
 
 export function validateSkillArgumentHint(value: unknown): string | undefined {
-  if (value === undefined || value === null || value === '') return undefined;
+  if (value === undefined || value === null) return undefined;
   if (typeof value !== 'string') {
     throw new BadRequestError('argumentHint must be a string');
   }

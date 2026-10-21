@@ -80,10 +80,13 @@ describe('skillValidation', () => {
   });
 
   describe('validateSkillArgumentHint', () => {
-    it('returns undefined for empty / null / undefined input', () => {
+    it('returns undefined for null / undefined input', () => {
       expect(validateSkillArgumentHint(undefined)).toBeUndefined();
       expect(validateSkillArgumentHint(null)).toBeUndefined();
-      expect(validateSkillArgumentHint('')).toBeUndefined();
+    });
+
+    it('preserves an explicit empty string so an update can clear a saved hint', () => {
+      expect(validateSkillArgumentHint('')).toBe('');
     });
 
     it('accepts strings within the 200-character cap', () => {
