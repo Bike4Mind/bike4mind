@@ -42,7 +42,10 @@ const STATUS_CHIP: Record<ApiKeyStatus, { color: 'success' | 'neutral' | 'warnin
 };
 
 export default function AdminApiKeysModal({ open, onClose, user }: AdminApiKeysModalProps) {
-  const { data, isLoading, error, refetch } = useAdminGetUserApiKeys(open ? user.id : undefined);
+  // The minute window lives at most 60s, so a fetch-time snapshot goes stale within seconds.
+  const { data, isLoading, error, refetch } = useAdminGetUserApiKeys(open ? user.id : undefined, {
+    refetchInterval: 15_000,
+  });
   const resetMutation = useAdminResetApiKeyRateLimit();
   const confirm = useConfirmation();
   const [resettingKeyId, setResettingKeyId] = useState<string | null>(null);

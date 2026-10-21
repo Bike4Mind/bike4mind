@@ -7,10 +7,14 @@ import ApiKeyStatusTab from './ApiKeyStatusTab';
 
 const h = vi.hoisted(() => ({
   keys: [] as Record<string, unknown>[],
+  hookArgs: [] as unknown[],
 }));
 
 vi.mock('@client/app/hooks/data/admin', () => ({
-  useGetApiUsage: () => ({ data: h.keys, isLoading: false }),
+  useGetApiUsage: (...args: unknown[]) => {
+    h.hookArgs = args;
+    return { data: h.keys, isLoading: false };
+  },
 }));
 
 // The tab reads theme.palette.security.* but getThemeConfig() does not carry
@@ -71,6 +75,17 @@ describe('ApiKeyStatusTab', () => {
     const day = screen.getByTestId('api-key-usage-day-0').textContent ?? '';
     expect(day).toContain('42 / 800');
     expect(day).toContain('resets in 6h 12m');
+  });
+
+  it('polls while mounted so the minute window does not freeze at fetch time', () => {
+    h.keys = [KEY];
+    render(
+      <Wrapper>
+        <ApiKeyStatusTab />
+      </Wrapper>
+    );
+
+    expect(h.hookArgs).toEqual([{ refetchInterval: 15_000 }]);
   });
 
   it('gates each reset on its own window', () => {

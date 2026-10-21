@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 
 const h = vi.hoisted(() => ({
   keys: [] as Record<string, unknown>[],
+  hookArgs: [] as unknown[],
   liveUsage: {} as Record<string, { minute: number; day: number; minuteResetAt?: number; dayResetAt?: number }>,
   resetMutate: vi.fn(),
   // Auto-invokes onOk so the confirm-then-mutate flow runs synchronously;
@@ -15,12 +16,15 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@client/app/hooks/data/userApiKeys', () => ({
-  useAdminGetUserApiKeys: () => ({
-    data: { apiKeys: h.keys, liveUsage: h.liveUsage },
-    isLoading: false,
-    error: null,
-    refetch: vi.fn(),
-  }),
+  useAdminGetUserApiKeys: (...args: unknown[]) => {
+    h.hookArgs = args;
+    return {
+      data: { apiKeys: h.keys, liveUsage: h.liveUsage },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    };
+  },
   useAdminResetApiKeyRateLimit: () => ({ mutate: h.resetMutate, isPending: false }),
 }));
 
@@ -95,6 +99,13 @@ describe('AdminApiKeysModal', () => {
 
     expect(screen.getByTestId('admin-api-key-usage-minute-k1').textContent).toContain('3/60 per min · resets in 42s');
     expect(screen.getByTestId('admin-api-key-usage-day-k1').textContent).toContain('42/1000 per day · resets in 1h 0m');
+  });
+
+  it('polls while open so the minute window does not freeze at fetch time', () => {
+    h.keys = [KEY];
+    renderModal();
+
+    expect(h.hookArgs[1]).toEqual({ refetchInterval: 15_000 });
   });
 
   it('gates each reset on its own window', () => {

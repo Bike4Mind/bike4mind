@@ -7,7 +7,8 @@ import { formatRateLimitReset } from '@client/app/utils/formatRateLimitReset';
 
 const ApiKeyStatusTab: React.FC = () => {
   const theme = useTheme();
-  const apiUsage = useGetApiUsage();
+  // The minute window lives at most 60s, so a fetch-time snapshot goes stale within seconds.
+  const apiUsage = useGetApiUsage({ refetchInterval: 15_000 });
 
   const keys: ApiKeyUsageItem[] = apiUsage.data ?? [];
   const keysWithAlerts = keys.filter(k => k.alerts && k.alerts.length > 0);

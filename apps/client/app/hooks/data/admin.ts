@@ -176,13 +176,14 @@ export interface ApiKeyUsageItem {
   }>;
 }
 
-export const useGetApiUsage = () => {
+export const useGetApiUsage = (options?: { refetchInterval?: number }) => {
   return useQuery<ApiKeyUsageItem[]>({
     queryKey: ['admin', 'security', 'api-usage'],
     queryFn: async () => {
       const res = await api.get<{ items: ApiKeyUsageItem[] }>('/api/security/api-usage');
       return res.data.items;
     },
+    refetchInterval: options?.refetchInterval,
   });
 };
 

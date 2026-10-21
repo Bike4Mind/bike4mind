@@ -231,7 +231,7 @@ export interface AdminUserApiKeysResponse {
   liveUsage: Record<string, { minute: number; day: number; minuteResetAt?: number; dayResetAt?: number }>;
 }
 
-export function useAdminGetUserApiKeys(userId: string | undefined) {
+export function useAdminGetUserApiKeys(userId: string | undefined, options?: { refetchInterval?: number }) {
   return useQuery<AdminUserApiKeysResponse>({
     queryKey: ['admin', 'user-api-keys', userId],
     queryFn: async () => {
@@ -239,6 +239,7 @@ export function useAdminGetUserApiKeys(userId: string | undefined) {
       return response.data;
     },
     enabled: typeof userId === 'string' && userId.length > 0,
+    refetchInterval: options?.refetchInterval,
   });
 }
 
