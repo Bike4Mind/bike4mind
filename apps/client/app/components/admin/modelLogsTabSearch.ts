@@ -97,18 +97,18 @@ export const MODEL_LOGS_SEARCH_PARSERS: {
 
 /**
  * The view a URL describes; a missing or invalid param means its default. A missing date falls back
- * to its end of the default range, and a range that ends before it starts is the default range.
+ * to its end of the default range. A range that ends before it starts is kept as written: the date
+ * inputs write on every keystroke, so a partly typed year is briefly inverted and must survive.
  */
 export function modelLogsViewFromSearch(search: Record<string, unknown>): ModelLogsView {
   const defaults = defaultModelLogsView();
   const startDate = parseDate(search[MODEL_LOGS_FROM_PARAM]) ?? defaults.startDate;
   const endDate = parseDate(search[MODEL_LOGS_TO_PARAM]) ?? defaults.endDate;
-  // Same-format calendar dates compare correctly as strings.
-  const range = startDate <= endDate ? { startDate, endDate } : defaultModelLogsDateRange();
   return {
     page: parsePage(search[MODEL_LOGS_PAGE_PARAM]) ?? defaults.page,
     limit: parseLimit(search[MODEL_LOGS_LIMIT_PARAM]) ?? defaults.limit,
-    ...range,
+    startDate,
+    endDate,
     model: MODEL_LOGS_SEARCH_PARSERS[MODEL_LOGS_MODEL_PARAM](search[MODEL_LOGS_MODEL_PARAM]),
   };
 }

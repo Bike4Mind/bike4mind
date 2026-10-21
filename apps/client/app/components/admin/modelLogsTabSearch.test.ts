@@ -75,10 +75,10 @@ describe('model logs params', () => {
       });
     });
 
-    it('falls back to the default range when it ends before it starts', () => {
-      expect(modelLogsViewFromSearch({ modelLogsFrom: '2026-09-30', modelLogsTo: '2026-09-01' })).toMatchObject({
-        startDate: '2026-10-14',
-        endDate: '2026-10-21',
+    it('keeps a range that ends before it starts, so a partly typed end year survives', () => {
+      expect(modelLogsViewFromSearch({ modelLogsFrom: '2026-09-30', modelLogsTo: '0002-10-21' })).toMatchObject({
+        startDate: '2026-09-30',
+        endDate: '0002-10-21',
       });
     });
 
