@@ -101,6 +101,25 @@ describe('recordMembershipTransitions', () => {
     expect(record).not.toHaveBeenCalled();
   });
 
+  it('propagates a shred failure instead of recording an unshredded removal', async () => {
+    // The shred is required, not best-effort: a removal recorded while its beliefs stayed readable
+    // would tell a reader the content is gone when it is not.
+    const { record, adapters } = audit();
+    adapters.db.memoryLedger.markSourceShredded.mockRejectedValue(new Error('ledger unavailable'));
+
+    await expect(
+      recordMembershipTransitions(
+        actor,
+        [lake()],
+        [file({ beforeTagNames: ['lk:reports'], afterTagNames: [] })],
+        adapters,
+        { origin: 'person' }
+      )
+    ).rejects.toThrow('ledger unavailable');
+
+    expect(record).not.toHaveBeenCalled();
+  });
+
   // The prefix arm is anchored to the LAKE's creator owning the file, so a file owned by anyone
   // else was never reachable through it and never moves.
   it('records nothing for a file the lake creator does not own', async () => {
