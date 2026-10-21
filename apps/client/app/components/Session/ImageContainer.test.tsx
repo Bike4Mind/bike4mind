@@ -70,6 +70,25 @@ describe('ImageContainer (upload moderation gating)', () => {
   });
 });
 
+describe('ImageContainer (alt text)', () => {
+  const renderWith = (alt?: string) =>
+    render(
+      <TestWrapper>
+        <ImageContainer {...baseProps} src="https://example.com/image.png" alt={alt} />
+      </TestWrapper>
+    );
+
+  it('uses the provided alt on the inline image', () => {
+    renderWith('sales chart');
+    expect(screen.getByTestId('ai-response-image')).toHaveAttribute('alt', 'sales chart');
+  });
+
+  it.each([undefined, '', '   '])('falls back to the generated label when alt is %j', alt => {
+    renderWith(alt);
+    expect(screen.getByTestId('ai-response-image')).toHaveAttribute('alt', 'Generated image 1 of 1');
+  });
+});
+
 describe('ImageContainer (missing image)', () => {
   it('shows a no-longer-available state instead of a broken image when the image fails to load', () => {
     render(
