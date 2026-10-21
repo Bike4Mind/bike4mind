@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import {
   Card,
   Grid,
@@ -59,7 +59,7 @@ const FeedbackTab: React.FC = () => {
   // Declaration order is the data flow: the page cursor and the filters are INPUTS to the server
   // query, not results of it. Filtering and paging both moved server-side, so nothing here slices
   // a local array any more.
-  const { currentPage, handlePageChange, itemsPerPage, handleItemsPerPageChange, resetPage } = useFeedbackPagination();
+  const { currentPage, handlePageChange, itemsPerPage, handleItemsPerPageChange } = useFeedbackPagination();
 
   const {
     filters,
@@ -69,12 +69,13 @@ const FeedbackTab: React.FC = () => {
     setSubject,
     toggleSortDirection,
     filterParams,
-  } = useFeedbackFilters(resetPage);
+  } = useFeedbackFilters();
 
   const {
     feedback: currentFeedback,
     organizations,
     total,
+    totalSettled,
     loading,
     refreshFeedback,
     handleStatusChange,
@@ -85,6 +86,12 @@ const FeedbackTab: React.FC = () => {
   } = useFeedbackOperations({ ...filterParams, page: currentPage, limit: itemsPerPage });
 
   const totalPages = Math.max(1, Math.ceil(total / itemsPerPage));
+
+  // A shared or stale link can name a page the result set no longer reaches; land on the last real
+  // one. Gated on a settled total so a URL page is never clamped against a count still loading.
+  useEffect(() => {
+    if (totalSettled && currentPage > totalPages) handlePageChange(totalPages);
+  }, [totalSettled, currentPage, totalPages, handlePageChange]);
 
   // A deep link names one report. It is pinned above the list rather than highlighted in place:
   // with server-side paging and filtering the linked report is usually not on the current page.

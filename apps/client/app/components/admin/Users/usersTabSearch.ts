@@ -1,4 +1,5 @@
 import type { IGetUsersParams } from '@client/app/utils/userAPICalls';
+import { oneOf, parsePage, parseStringList, toNumber } from '../adminSearchValues';
 
 /**
  * The Users tab's `/admin` search params and their coercion. Pure and React-free: adminTabParams.ts
@@ -60,34 +61,9 @@ export type UsersSearch = {
 
 type UsersView = Pick<IGetUsersParams, 'page' | 'limit' | 'sortField' | 'sortOrder' | 'orgSearch' | 'tags'>;
 
-// TanStack's JSON search parser hands numbers back as numbers, but a hand-typed link may quote them.
-const toNumber = (value: unknown): number => {
-  if (typeof value === 'number') return value;
-  if (typeof value === 'string' && value.trim() !== '') return Number(value);
-  return Number.NaN;
-};
-
-const oneOf =
-  <T extends string>(allowed: readonly T[]) =>
-  (value: unknown): T | undefined =>
-    allowed.find(option => option === value);
-
-const parsePage = (value: unknown): number | undefined => {
-  const page = toNumber(value);
-  // Safe integers only: a huge page serializes in exponent form, which the users API rejects.
-  return Number.isSafeInteger(page) && page >= 1 ? page : undefined;
-};
-
 const parseLimit = (value: unknown): number | undefined => {
   const limit = toNumber(value);
   return PAGE_LIMIT_OPTIONS.includes(limit) ? limit : undefined;
-};
-
-// A lone string is accepted as a one-item list, so `?tags=Admin` works as well as `?tags=["Admin"]`.
-const parseStringList = (value: unknown): string[] | undefined => {
-  const items = Array.isArray(value) ? value : [value];
-  const strings = items.filter((item): item is string => typeof item === 'string' && item !== '');
-  return strings.length > 0 ? strings : undefined;
 };
 
 // The id is interpolated into `/api/users/<id>`, so only an ObjectId may come in from a link.
