@@ -52,6 +52,15 @@ const GenerationJobSchema = new Schema<IGenerationJobDocument>(
     terminalHandlingClaimedAt: { type: Date, default: null },
     terminalHandledAt: { type: Date, default: null },
     questId: { type: String },
+    delivery: new Schema(
+      {
+        kind: { type: String, enum: ['slack'], required: true },
+        workspaceId: { type: String, required: true },
+        channelId: { type: String, required: true },
+        threadTs: { type: String, required: true },
+      },
+      { _id: false }
+    ),
   },
   { timestamps: true, versionKey: false, minimize: false, toJSON: { virtuals: true }, toObject: { virtuals: true } }
 );
