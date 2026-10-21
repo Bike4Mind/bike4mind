@@ -215,6 +215,49 @@ describe('billIteration (#657 context-window guard)', () => {
     expect(counters).toMatchObject({ cumulativeCost: 100, inputTokens: 100 });
   });
 
+  it('zero-priced model: records a zero-cost usage event and billing record, and advances counters', async () => {
+    const counters = makeCounters();
+    const { effects, spies } = makeEffects();
+
+    await billIteration({
+      iterationIndex: 1,
+      checkpoint: checkpoint(100, { output: 20 }),
+      counters,
+      modelInfo: makeModelInfo(1000, 0),
+      model: 'test-model',
+      startTime: 0,
+      effects,
+    });
+
+    expect(spies.deductCredits).not.toHaveBeenCalled();
+    expect(spies.recordUsageEvent).toHaveBeenCalledTimes(1);
+    expect(spies.recordUsageEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'ok', costUsd: 0, creditsCharged: 0, inputTokens: 100, outputTokens: 20 })
+    );
+    expect(spies.addIterationBilling).toHaveBeenCalledWith(
+      expect.objectContaining({ iteration: 1, inputTokens: 100, outputTokens: 20, credits: 0 })
+    );
+    expect(spies.sendProgress).toHaveBeenCalledWith(0, 1);
+    expect(counters).toMatchObject({ cumulativeCost: 0, inputTokens: 100, outputTokens: 20 });
+  });
+
+  it('zero-priced model: the next iteration records only its own tokens', async () => {
+    const counters = makeCounters({ inputTokens: 100, outputTokens: 20 });
+    const { effects, spies } = makeEffects();
+
+    await billIteration({
+      iterationIndex: 2,
+      checkpoint: checkpoint(150, { output: 30 }),
+      counters,
+      modelInfo: makeModelInfo(1000, 0),
+      model: 'test-model',
+      startTime: 0,
+      effects,
+    });
+
+    expect(spies.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({ inputTokens: 50, outputTokens: 10 }));
+  });
+
   it('sub-credit settlement: skips the ledger deduction but still records COGS + billing', async () => {
     const counters = makeCounters();
     // usdToCredits rounds a small delta to 0 credits.

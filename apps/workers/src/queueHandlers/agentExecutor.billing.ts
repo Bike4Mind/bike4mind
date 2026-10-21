@@ -324,7 +324,8 @@ export function reseedCounters(
 /**
  * Bill one completed iteration against the model's cumulative cost, advancing
  * `counters` in place. No-op unless the cost has grown since the last billed
- * iteration; a shrinking agent cost is surfaced with a warn (`logNegativeDelta`).
+ * iteration or new tokens were spent at zero cost (recorded with zero credits);
+ * a shrinking agent cost is surfaced with a warn (`logNegativeDelta`).
  */
 export async function billIteration(params: BillIterationParams): Promise<void> {
   const { iterationIndex, checkpoint, counters, modelInfo, model, startTime, effects } = params;
@@ -361,7 +362,16 @@ export async function billIteration(params: BillIterationParams): Promise<void> 
       previousCumulativeCost: counters.cumulativeCost,
     });
   }
-  if (costDelta <= 0) return;
+  // A zero-priced model still made real provider calls: settle it as a zero-credit iteration so
+  // the usage event (one row per call, which usage analytics count) and the billing record are
+  // written, rather than skipping it and carrying its tokens into the next iteration's delta.
+  const agentDeltas = [deltas.inputTokens, deltas.outputTokens, deltas.cacheReadTokens, deltas.cacheWriteTokens];
+  const zeroCostWork =
+    costDelta === 0 &&
+    agentCostDelta === 0 &&
+    agentDeltas.every(tokens => tokens >= 0) &&
+    [...agentDeltas, toolUsage.inputTokens, toolUsage.outputTokens].some(tokens => tokens > 0);
+  if (costDelta <= 0 && !zeroCostWork) return;
 
   // Sanity backstop (#657): one provider request's input tokens can never exceed the
   // model's context window (totalInputTokens excludes cache-read/write, so this compares
