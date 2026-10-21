@@ -150,6 +150,10 @@ describe('SkillCatalog cache', () => {
     await store.setTrusted(project, true);
   });
 
+  // FSEvents starts a new watch asynchronously, so a write in the same few milliseconds can be
+  // missed. A user edits a skill long after the scan that set the watch up; the tests wait as well.
+  const watchSettled = () => new Promise(resolve => setTimeout(resolve, 500));
+
   afterEach(() => {
     store.dispose();
     vi.useRealTimers();
@@ -170,6 +174,7 @@ describe('SkillCatalog cache', () => {
   it('rescans once a skill file changes, without moving the revision', async () => {
     await store.state(project);
     const revision = store.revision;
+    await watchSettled();
 
     await writeSkill('review', 'Look it over');
 
@@ -178,6 +183,24 @@ describe('SkillCatalog cache', () => {
       interval: 50,
     });
     expect(store.revision).toBe(revision);
+  });
+
+  it("notices a project's first skill, written where no skill folder existed yet", async () => {
+    const fresh = join(project, '..', 'fresh-repo');
+    await mkdir(fresh, { recursive: true });
+    await store.setTrusted(fresh, true);
+    expect((await store.state(fresh)).skills.some(skill => skill.name === 'first')).toBe(false);
+    await watchSettled();
+
+    const dir = join(fresh, '.claude', 'skills', 'first');
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'SKILL.md'), ['---', 'description: The first', '---', '', 'Body.'].join('\n'), 'utf8');
+
+    // Well inside the 60s TTL, so only the watch on the folder above can have caught it.
+    await vi.waitUntil(async () => (await store.state(fresh)).skills.some(skill => skill.name === 'first'), {
+      timeout: 5000,
+      interval: 50,
+    });
   });
 
   it('rescans past the safety TTL even when no change was seen', async () => {

@@ -1,6 +1,6 @@
 import { watch, type FSWatcher } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, resolve, sep } from 'node:path';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import {
   CustomCommandStore,
   type CachedCommandFile,
@@ -223,7 +223,12 @@ export class SkillCatalog {
     if (!this.watchingGlobal) {
       this.watchingGlobal = true;
       const home = homedir();
-      for (const parts of COMMAND_DIRS) this.watchDirectory(join(home, ...parts), this.globalWatchers);
+      const rearm = () => {
+        for (const watcher of this.globalWatchers) watcher.close();
+        this.globalWatchers.length = 0;
+        this.watchingGlobal = false;
+      };
+      for (const parts of COMMAND_DIRS) this.watchDirectory(join(home, ...parts), home, this.globalWatchers, rearm);
     }
     if (!root || !trusted) return;
     const existing = this.projectWatchers.get(root);
@@ -233,7 +238,12 @@ export class SkillCatalog {
       return;
     }
     const watchers: FSWatcher[] = [];
-    for (const parts of COMMAND_DIRS) this.watchDirectory(join(root, ...parts), watchers);
+    const rearm = () => {
+      if (this.projectWatchers.get(root) !== watchers) return;
+      for (const watcher of watchers) watcher.close();
+      this.projectWatchers.delete(root);
+    };
+    for (const parts of COMMAND_DIRS) this.watchDirectory(join(root, ...parts), root, watchers, rearm);
     this.projectWatchers.set(root, watchers);
     for (const [oldest, stale] of this.projectWatchers) {
       if (this.projectWatchers.size <= MAX_WATCHED_PROJECTS) break;
@@ -243,14 +253,42 @@ export class SkillCatalog {
     }
   }
 
-  private watchDirectory(directory: string, into: FSWatcher[]): void {
-    let watcher: FSWatcher;
+  /** `rearm` drops this root's watchers so the next scan watches it afresh. */
+  private watchDirectory(directory: string, stopAt: string, into: FSWatcher[], rearm: () => void): void {
     try {
-      watcher = watch(directory, { recursive: true, persistent: false }, () => this.changed());
+      this.track(
+        watch(directory, { recursive: true, persistent: false }, () => this.changed()),
+        into
+      );
     } catch {
-      // Absent, or not watchable here: the TTL covers it.
-      return;
+      this.watchForCreation(directory, stopAt, into, rearm);
     }
+  }
+
+  /**
+   * A root that does not exist yet, as in a project with no skills so far: the nearest folder that
+   * does is watched for the one entry leading to it, and its creation re-arms the root. Without
+   * this a first skill would wait out the TTL.
+   */
+  private watchForCreation(directory: string, stopAt: string, into: FSWatcher[], rearm: () => void): void {
+    for (let missing = directory; missing !== stopAt && dirname(missing) !== missing; missing = dirname(missing)) {
+      const leading = basename(missing);
+      try {
+        const watcher = watch(dirname(missing), { persistent: false }, (_event, name) => {
+          // No name, or the deeper path, when the platform coalesces a `mkdir -p` into one event.
+          if (name && name !== leading && !name.startsWith(leading + sep)) return;
+          rearm();
+          this.changed();
+        });
+        this.track(watcher, into);
+        return;
+      } catch {
+        // That one is missing too; try its parent. Past `stopAt` the TTL covers it.
+      }
+    }
+  }
+
+  private track(watcher: FSWatcher, into: FSWatcher[]): void {
     watcher.on('error', () => {
       watcher.close();
       const index = into.indexOf(watcher);
