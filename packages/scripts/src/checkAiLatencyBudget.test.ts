@@ -15,6 +15,7 @@ import {
   msToSec,
   StreamingTimeoutError,
   textStreamBudgetMs,
+  unexpectedArtifactIds,
 } from '../../../apps/client/e2e/ai-latency-budget';
 import type { PromptScenario, PromptResult } from '../../../apps/client/e2e/ai-latency-helpers';
 
@@ -431,5 +432,72 @@ describe('ChatPage reply reader', () => {
     // The reader falls back to the whole root when the body id is absent, so renaming the test id
     // would silently put reasoning text back into the returned string.
     expect(fs.readFileSync(PROMPT_REPLIES, 'utf8')).toMatch(/data-testid="ai-response-body"/);
+  });
+});
+
+describe('unexpected artifact on a chat prompt', () => {
+  const chat = (id: string, sec: number, artifactRendered = false): PromptResult =>
+    completedResult(scenario({ id }), { response: 'x', responseTimeMs: sec * 1000, renderTimeMs: 0, artifactRendered });
+
+  it('marks an unflagged prompt that rendered an artifact as a deliverable and flags it', () => {
+    const result = chat('gpu', 70, true);
+    expect(result.measuresDeliverable).toBe(true);
+    expect(result.unexpectedArtifact).toBe(true);
+  });
+
+  it('leaves a chat-mode reply and the flagged-artifact behaviour unchanged', () => {
+    const plain = chat('reuters', 20);
+    expect(plain.measuresDeliverable).toBe(false);
+    expect(plain.unexpectedArtifact).toBeUndefined();
+
+    // A prompt that declares generatesArtifact is expected to render one: deliverable, not "unexpected".
+    const flagged = completedResult(scenario({ id: 'storybook', generatesArtifact: true }), {
+      response: 'x',
+      responseTimeMs: 1000,
+      renderTimeMs: 0,
+      artifactRendered: true,
+    });
+    expect(flagged.measuresDeliverable).toBe(true);
+    expect(flagged.unexpectedArtifact).toBeUndefined();
+  });
+
+  it('drops the artifact-mode result from the gated average and the breach check', () => {
+    const results = [chat('reuters', 20), chat('smartphone', 30), chat('gpu', 70, true)];
+    expect(gatedAverageSec(results)).toBe(25);
+    expect(latencyBreach(results, 30)).toBeNull();
+    // Without the exclusion the mean (40s) would have breached the same threshold.
+    expect(gatedAverageSec([chat('reuters', 20), chat('smartphone', 30), chat('gpu', 70)])).toBe(40);
+  });
+
+  it('reads as No Data (average 0, no breach) when every gated prompt switched to an artifact', () => {
+    const results = [chat('gpu', 70, true), chat('reuters', 65, true)];
+    expect(gatedAverageSec(results)).toBe(0);
+    expect(latencyBreach(results, 30)).toBeNull();
+    expect(results.every(r => r.measuresDeliverable)).toBe(true);
+  });
+
+  it('lists the switched prompts so the summary can report them', () => {
+    expect(unexpectedArtifactIds([chat('a', 1), chat('gpu', 70, true), chat('b', 2, true)])).toEqual(['gpu', 'b']);
+    expect(unexpectedArtifactIds([chat('a', 1)])).toEqual([]);
+  });
+
+  it('keeps an abandoned chat prompt gated, since an artifact cannot be told from a hang', () => {
+    const results = [chat('a', 1), incompleteResult(scenario({ id: 'gpu' }), 300_000)];
+    expect(latencyBreach(results, 30)).toContain('never finished: gpu');
+  });
+});
+
+describe('ChatPage artifact detector', () => {
+  it('matches the renderer test id and both placeholders the app mounts', () => {
+    const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+    const chatPage = fs.readFileSync(path.join(REPO, 'apps/client/e2e/pages/ChatPage.ts'), 'utf8');
+    const renderer = fs.readFileSync(
+      path.join(REPO, 'apps/client/app/components/Session/artifacts/ArtifactRenderer.tsx'),
+      'utf8'
+    );
+    expect(chatPage).toContain('[data-testid^="artifact-renderer-"]');
+    expect(renderer).toContain('data-testid={`artifact-renderer-${artifact.type}`}');
+    expect(chatPage).toContain('[data-testid="generating-artifact-indicator"]');
+    expect(chatPage).toContain('[data-testid="artifact-loading"]');
   });
 });

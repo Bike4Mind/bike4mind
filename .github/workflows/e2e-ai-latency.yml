@@ -703,6 +703,9 @@ jobs:
                 # the cell: two fast prompts drag the mean back under thresholdSec and the breach
                 # disappears into it. Count any abandoned gated prompt as a breach in its own right.
                 ABANDONED="$(jq -r '[.results[]? | select(.incomplete == true) | select(.measuresDeliverable != true)] | length' "$LATENCY_JSON")"
+                # An unflagged prompt that answered with an artifact is excluded from AVG; show it so the
+                # mode switch is noticed rather than hidden.
+                SWITCHED="$(jq -r '[.results[]? | select(.unexpectedArtifact == true)] | length' "$LATENCY_JSON")"
 
                 if [ -z "$THRESHOLD" ] || [ "$THRESHOLD" = "null" ]; then
                   LATENCY_STR="$(printf '%.2fs' "$AVG") / <=N/A FAIL"
@@ -713,10 +716,12 @@ jobs:
                   IS_OVER="$(echo "$AVG > $THRESHOLD" | bc -l 2>/dev/null || echo 0)"
                   if [ "$IS_ZERO" = "1" ]; then
                     LATENCY_STR="No Data"
+                    [ "${SWITCHED:-0}" -gt 0 ] && LATENCY_STR="No Data (${SWITCHED} artifact-mode excluded)"
                     LATENCY_NO_DATA=$((LATENCY_NO_DATA + 1))
                     HAS_NO_DATA=true
                   elif [ "$IS_OVER" = "1" ] || [ "${ABANDONED:-0}" -gt 0 ]; then
                     REASON="$(printf '%.2fs' "$AVG") / <=${THRESHOLD}s FAIL"
+                    [ "${SWITCHED:-0}" -gt 0 ] && REASON="${REASON} (${SWITCHED} artifact-mode excluded)"
                     [ "${ABANDONED:-0}" -gt 0 ] && REASON="${REASON} (${ABANDONED} prompt(s) never finished)"
                     LATENCY_STR="$REASON"
                     echo "::error title=AI latency breach::${SPEC} on ${AI_MODEL}: ${REASON}"
@@ -725,6 +730,7 @@ jobs:
                   else
                     LATENCY_STR="$(printf '%.2fs' "$AVG") / <=${THRESHOLD}s"
                     LATENCY_WITHIN=$((LATENCY_WITHIN + 1))
+                    [ "${SWITCHED:-0}" -gt 0 ] && LATENCY_STR="${LATENCY_STR} (${SWITCHED} artifact-mode excluded)"
                   fi
                 fi
               else

@@ -284,6 +284,19 @@ export class ChatPage extends BasePage {
    * count is already 0 and this returns at once. Fine for these prompts, which do stream an
    * artifact - revisit if a prompt relies on this as proof one mounted.
    */
+  /**
+   * Whether the newest reply carries an artifact: a mounted renderer (`artifact-renderer-<type>`,
+   * ArtifactRenderer) or either pending placeholder. Counting the placeholders catches a reply
+   * whose stream ended before the renderer mounted.
+   */
+  async hasArtifact(): Promise<boolean> {
+    const root = this.aiResponseRoot.last();
+    const artifact = root.locator(
+      '[data-testid^="artifact-renderer-"], [data-testid="generating-artifact-indicator"], [data-testid="artifact-loading"]'
+    );
+    return (await artifact.count()) > 0;
+  }
+
   async waitForArtifactSettled(timeout: number = TIMEOUTS.IMAGE_GENERATION) {
     const root = this.aiResponseRoot.last();
     const generating = root.getByTestId('generating-artifact-indicator');

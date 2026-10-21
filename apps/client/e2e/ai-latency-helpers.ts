@@ -153,6 +153,13 @@ export interface PromptResult {
    */
   measuresDeliverable?: boolean;
   /**
+   * A prompt NOT flagged generatesArtifact answered with an artifact card instead of a chat reply.
+   * Its stream window then times artifact generation, not chat streaming, so the result is also
+   * marked measuresDeliverable (out of the gated average) and surfaced in the summary and the
+   * workflow table rather than dropped silently. Absent (falsy) otherwise.
+   */
+  unexpectedArtifact?: boolean;
+  /**
    * The prompt never finished: responseTimeSec is the elapsed time when it was abandoned, a FLOOR
    * on the real latency rather than a measurement of it. Recorded so a timed-out prompt still
    * counts against the gated average - dropping it removed the slowest prompt in the cell from the
