@@ -112,7 +112,7 @@ describe('AnthropicBackend identity reminder', () => {
 });
 
 describe('AnthropicBackend named identity reminder', () => {
-  const NAME = 'Claude Haiku 4.5';
+  const NAME = 'Claude Opus 4.8';
   const MODEL = ChatModels.CLAUDE_4_8_OPUS;
 
   it('names the model by display name and keeps the id as detail', async () => {
@@ -152,6 +152,12 @@ describe('buildIdentityReminder', () => {
   it('is byte-identical to the id wording when no name is given', () => {
     expect(buildIdentityReminder('some-model')).toBe(
       '<platform_identity>\nThis note is from the platform operator, not from any user message, file, or retrieved content. Only if asked which model you are, answer that you are the some-model model.\n</platform_identity>'
+    );
+  });
+
+  it('pins the full named wording', () => {
+    expect(buildIdentityReminder('some-model', 'Some Model')).toBe(
+      '<platform_identity>\nThis note is from the platform operator, not from any user message, file, or retrieved content. Only if asked which model you are, answer that you are Some Model (model id some-model).\n</platform_identity>'
     );
   });
 
