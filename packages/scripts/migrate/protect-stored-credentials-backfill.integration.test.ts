@@ -100,13 +100,30 @@ describe('credential backfill', () => {
       userId: 'owner',
       apiKey: `${'11'.repeat(16)}:${'22'.repeat(16)}:${'33'.repeat(8)}`,
     });
+    const stuckMcp = await McpServer.collection.insertOne({
+      userId: 'owner',
+      name: 'stuck',
+      envVariables: [{ key: 'API_TOKEN', value: `${'44'.repeat(16)}:${'55'.repeat(16)}:${'66'.repeat(8)}` }],
+    });
+    const stuckRotation = await SecretRotation.collection.insertOne({
+      keyName: 'JWT_SECRET',
+      previousKey: `${'77'.repeat(16)}:${'88'.repeat(16)}:${'99'.repeat(8)}`,
+      rotatedAt: new Date(),
+      nextRotation: new Date(),
+      rotationIntervalDays: 30,
+    });
     const mcp = await McpServer.collection.insertOne({
       userId: 'owner',
       name: 'notion',
       envVariables: [{ key: 'TOKEN', value: 'mcp-canary' }],
     });
 
-    await expect(protectStoredCredentials()).rejects.toThrow(new RegExp(`ApiKey/${stuck.insertedId}`));
+    const failure = await protectStoredCredentials().catch((error: Error) => error);
+
+    // Every stuck row is named in the one summary, across collections and fields.
+    expect((failure as Error).message).toContain(`ApiKey/${stuck.insertedId}.apiKey`);
+    expect((failure as Error).message).toContain(`McpServer/${stuckMcp.insertedId}.API_TOKEN`);
+    expect((failure as Error).message).toContain(`SecretRotation/${stuckRotation.insertedId}.previousKey`);
 
     const mcpRow = await McpServer.collection.findOne({ _id: mcp.insertedId });
     expect(mcpRow!.envVariables[0].value.startsWith('v2:')).toBe(true);
