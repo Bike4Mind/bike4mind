@@ -124,7 +124,8 @@ vi.mock('@bike4mind/services', async () => {
   const actual = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
   return {
     fabFilesService: {
-      referenceHolderIds: actual.fabFilesService.referenceHolderIds,
+      deletedFileReferences: actual.fabFilesService.deletedFileReferences,
+      groupDeletedFileReferences: actual.fabFilesService.groupDeletedFileReferences,
       cleanUpDeletedFileReferences: actual.fabFilesService.cleanUpDeletedFileReferences,
       search: (...args: unknown[]) => {
         mockRefs.searchArgs = args;
@@ -393,11 +394,14 @@ describe('DELETE /api/files', () => {
 
     await mockRefs.deleteHandler!(req, res);
 
-    const deletedIds = fabFileDocs.map((_doc, i) => `file-${i}`);
-    const holders = ['user-1', 'recipient-1'];
-    expect(mockRefs.pullKnowledgeIdsForUsers).toHaveBeenCalledWith(holders, deletedIds);
-    expect(mockRefs.pullSystemFilesForUsers).toHaveBeenCalledWith(holders, deletedIds);
-    expect(mockRefs.pullFileReferences).toHaveBeenCalledWith(deletedIds, { userIds: holders });
+    // Each file is cleaned against ITS OWN holders: the recipient of file-0 must never be asked to
+    // let go of file-1, which was never shared with them.
+    expect(mockRefs.pullKnowledgeIdsForUsers).toHaveBeenCalledWith(['user-1', 'recipient-1'], ['file-0']);
+    expect(mockRefs.pullKnowledgeIdsForUsers).toHaveBeenCalledWith(['user-1'], ['file-1']);
+    expect(mockRefs.pullSystemFilesForUsers).toHaveBeenCalledWith(['user-1', 'recipient-1'], ['file-0']);
+    expect(mockRefs.pullSystemFilesForUsers).toHaveBeenCalledWith(['user-1'], ['file-1']);
+    expect(mockRefs.pullFileReferences).toHaveBeenCalledWith(['file-0'], { userIds: ['user-1', 'recipient-1'] });
+    expect(mockRefs.pullFileReferences).toHaveBeenCalledWith(['file-1'], { userIds: ['user-1'] });
   });
 
   it('still completes when dropping references fails', async () => {

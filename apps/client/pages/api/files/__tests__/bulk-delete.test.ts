@@ -73,7 +73,6 @@ vi.mock('@bike4mind/database', async importOriginal => ({
   sessionRepository: { findAllWithKnowledgeId: h.findAllWithKnowledgeId, update: h.sessionUpdate },
   userRepository: {
     findById: h.userFindById,
-    pullSystemFiles: vi.fn(),
     pullSystemFilesForUsers: h.pullSystemFilesForUsers,
   },
   projectRepository: { pullFileReferences: h.pullFileReferences },
@@ -147,7 +146,7 @@ describe('bulk-delete - data-lake stats', () => {
     expect(h.setStats).toHaveBeenCalledTimes(1);
   });
 
-  it("unlinks system files and projects once for the batch, over every deleted file's owner and recipients", async () => {
+  it('unlinks each deleted file against its own owner and recipients, never a batch-wide union', async () => {
     const files = new Map([
       ['507f1f77bcf86cd799439011', { ...memberFile('507f1f77bcf86cd799439011'), users: [{ userId: 'recipient-1' }] }],
       ['507f1f77bcf86cd799439012', { ...memberFile('507f1f77bcf86cd799439012'), users: [{ userId: 'recipient-2' }] }],
@@ -158,12 +157,29 @@ describe('bulk-delete - data-lake stats', () => {
 
     await run([...files.keys()], res);
 
-    const fileIds = [...files.keys()];
-    const holders = [OWNER, 'recipient-1', 'recipient-2'];
-    expect(h.pullSystemFilesForUsers).toHaveBeenCalledTimes(1);
-    expect(h.pullSystemFilesForUsers).toHaveBeenCalledWith(holders, fileIds);
-    expect(h.pullFileReferences).toHaveBeenCalledTimes(1);
-    expect(h.pullFileReferences).toHaveBeenCalledWith(fileIds, { userIds: holders });
+    const [first, second] = [...files.keys()];
+    expect(h.pullSystemFilesForUsers).toHaveBeenCalledWith([OWNER, 'recipient-1'], [first]);
+    expect(h.pullSystemFilesForUsers).toHaveBeenCalledWith([OWNER, 'recipient-2'], [second]);
+    expect(h.pullFileReferences).toHaveBeenCalledWith([first], { userIds: [OWNER, 'recipient-1'] });
+    expect(h.pullFileReferences).toHaveBeenCalledWith([second], { userIds: [OWNER, 'recipient-2'] });
+  });
+
+  it('never pulls a merely unshared file from a holder who still has it, even when the same batch deletes another file', async () => {
+    const owned = { ...memberFile('507f1f77bcf86cd799439021'), users: [{ userId: 'recipient-1' }] };
+    // Owned by Carol, shared directly with the caller: the caller's delete is an unshare.
+    const shared = { ...memberFile('507f1f77bcf86cd799439022', 'carol'), users: [{ userId: OWNER }] };
+    h.findById.mockImplementation(async (id: string) => (id === owned.id ? owned : shared));
+    h.findByIdAndUserId.mockImplementation(async (id: string) => (id === owned.id ? owned : null));
+    const { res } = makeRes();
+
+    await run([owned.id, shared.id], res);
+
+    // The unshared file keeps its place in Carol's project; only the caller's own system files let go.
+    expect(h.pullFileReferences).toHaveBeenCalledWith([owned.id], { userIds: [OWNER, 'recipient-1'] });
+    for (const [fileIds] of h.pullFileReferences.mock.calls) {
+      expect(fileIds).not.toContain(shared.id);
+    }
+    expect(h.pullSystemFilesForUsers).toHaveBeenCalledWith([OWNER], [shared.id]);
   });
 
   it('never unlinks the references of a file whose delete rolled back - that file is still live', async () => {

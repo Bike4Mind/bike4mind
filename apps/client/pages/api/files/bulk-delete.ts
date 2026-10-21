@@ -140,15 +140,19 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
       }
     }
 
-    // One system-file/project unlink for the whole batch, after every transaction has resolved and
-    // outside all of them (see cleanUpDeletedFileReferences). Best-effort: the files are already
-    // deleted, so nothing here may change the response.
+    // One system-file/project unlink per group of files with the SAME holders, after every
+    // transaction has resolved and outside all of them (see cleanUpDeletedFileReferences). Grouped
+    // rather than folded across the batch: a batch can mix a deleted file with a merely unshared
+    // one, and folding them would pull the unshared file from its other recipients. Best-effort:
+    // the files are already deleted, so nothing here may change the response.
     try {
-      await fabFilesService.cleanUpDeletedFileReferences(
-        fabFilesService.mergeDeletedFileReferences(committedReferences),
-        { users: userRepository, projects: projectRepository },
-        req.logger
-      );
+      for (const references of fabFilesService.groupDeletedFileReferences(committedReferences)) {
+        await fabFilesService.cleanUpDeletedFileReferences(
+          references,
+          { users: userRepository, projects: projectRepository },
+          req.logger
+        );
+      }
     } catch (error) {
       req.logger.warn('Bulk delete: failed to unlink references to deleted files', { error });
     }

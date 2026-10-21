@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   cleanUpDeletedFileReferences,
-  mergeDeletedFileReferences,
+  deletedFileReferences,
+  groupDeletedFileReferences,
   referenceHolderIds,
 } from './cleanUpDeletedFileReferences';
 
@@ -22,6 +23,7 @@ const makeDb = () => {
   return {
     users: { pullSystemFilesForUsers: track('users') },
     projects: { pullFileReferences: track('projects') },
+    sessions: { pullKnowledgeIdsForUsers: track('sessions') },
     order,
     overlapped: () => overlapped,
   };
@@ -33,7 +35,7 @@ describe('cleanUpDeletedFileReferences', () => {
 
     await cleanUpDeletedFileReferences(
       { fileIds: ['f1'], systemFileUserIds: ['u1'], projectUserIds: ['u1'] },
-      db,
+      { users: db.users, projects: db.projects },
       logger
     );
 
@@ -50,6 +52,52 @@ describe('cleanUpDeletedFileReferences', () => {
     await expect(
       cleanUpDeletedFileReferences({ fileIds: ['f1'], systemFileUserIds: ['u1'], projectUserIds: ['u1'] }, db, logger)
     ).resolves.toBeUndefined();
+    expect(db.projects.pullFileReferences).toHaveBeenCalled();
+  });
+
+  it('still unlinks system files when the project write fails, and never throws', async () => {
+    const db = makeDb();
+    db.projects.pullFileReferences.mockRejectedValueOnce(new Error('write failed'));
+
+    await expect(
+      cleanUpDeletedFileReferences({ fileIds: ['f1'], systemFileUserIds: ['u1'], projectUserIds: ['u1'] }, db, logger)
+    ).resolves.toBeUndefined();
+    expect(db.users.pullSystemFilesForUsers).toHaveBeenCalledWith(['u1'], ['f1']);
+  });
+
+  it('unlinks session knowledge ids when the caller wires the sessions arm, before the other writes', async () => {
+    const db = makeDb();
+
+    await cleanUpDeletedFileReferences(
+      { fileIds: ['f1'], systemFileUserIds: ['u1'], projectUserIds: ['u1'] },
+      db,
+      logger
+    );
+
+    expect(db.order).toEqual(['sessions', 'users', 'projects']);
+    expect(db.sessions.pullKnowledgeIdsForUsers).toHaveBeenCalledWith(['u1'], ['f1']);
+  });
+
+  it('leaves sessions alone when the caller does not wire them', async () => {
+    const db = makeDb();
+
+    await cleanUpDeletedFileReferences(
+      { fileIds: ['f1'], systemFileUserIds: ['u1'], projectUserIds: ['u1'] },
+      { users: db.users, projects: db.projects },
+      logger
+    );
+
+    expect(db.sessions.pullKnowledgeIdsForUsers).not.toHaveBeenCalled();
+  });
+
+  it('keeps unlinking system files and projects when the session write fails', async () => {
+    const db = makeDb();
+    db.sessions.pullKnowledgeIdsForUsers.mockRejectedValueOnce(new Error('write failed'));
+
+    await expect(
+      cleanUpDeletedFileReferences({ fileIds: ['f1'], systemFileUserIds: ['u1'], projectUserIds: ['u1'] }, db, logger)
+    ).resolves.toBeUndefined();
+    expect(db.users.pullSystemFilesForUsers).toHaveBeenCalled();
     expect(db.projects.pullFileReferences).toHaveBeenCalled();
   });
 
@@ -72,14 +120,38 @@ describe('cleanUpDeletedFileReferences', () => {
   });
 });
 
-describe('mergeDeletedFileReferences', () => {
-  it('unions each list across a batch without duplicates', () => {
+describe('groupDeletedFileReferences', () => {
+  it('keeps rows with different holders apart instead of pairing one file with another file recipients', () => {
     expect(
-      mergeDeletedFileReferences([
-        { fileIds: ['f1'], systemFileUserIds: ['owner', 'r1'], projectUserIds: ['owner', 'r1'] },
-        { fileIds: ['f2'], systemFileUserIds: ['owner'], projectUserIds: [] },
+      groupDeletedFileReferences([
+        { fileIds: ['deleted'], systemFileUserIds: ['owner', 'r1'], projectUserIds: ['owner', 'r1'] },
+        { fileIds: ['unshared'], systemFileUserIds: ['owner'], projectUserIds: [] },
       ])
-    ).toEqual({ fileIds: ['f1', 'f2'], systemFileUserIds: ['owner', 'r1'], projectUserIds: ['owner', 'r1'] });
+    ).toEqual([
+      { fileIds: ['deleted'], systemFileUserIds: ['owner', 'r1'], projectUserIds: ['owner', 'r1'] },
+      { fileIds: ['unshared'], systemFileUserIds: ['owner'], projectUserIds: [] },
+    ]);
+  });
+
+  it('merges files that share the exact holder set, regardless of the order their holders arrived in', () => {
+    expect(
+      groupDeletedFileReferences([
+        { fileIds: ['f1'], systemFileUserIds: ['owner', 'r1'], projectUserIds: ['owner'] },
+        { fileIds: ['f2'], systemFileUserIds: ['r1', 'owner'], projectUserIds: ['owner'] },
+      ])
+    ).toEqual([{ fileIds: ['f1', 'f2'], systemFileUserIds: ['owner', 'r1'], projectUserIds: ['owner'] }]);
+  });
+
+  it('returns nothing for an empty batch', () => {
+    expect(groupDeletedFileReferences([])).toEqual([]);
+  });
+});
+
+describe('deletedFileReferences', () => {
+  it('scopes one deleted file to every holder, deduped', () => {
+    expect(
+      deletedFileReferences({ id: 'f1', userId: 'owner', users: [{ userId: 'r1' }, { userId: 'owner' }, {}] })
+    ).toEqual({ fileIds: ['f1'], systemFileUserIds: ['owner', 'r1'], projectUserIds: ['owner', 'r1'] });
   });
 });
 

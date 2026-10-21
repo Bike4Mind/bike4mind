@@ -169,20 +169,15 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
       // and projects are cleaned; group- or lake-held references are left to the turn-time scrub.
       if (deleted.length > 0) {
         try {
-          const deletedIds = deleted.map(file => file.id);
-          const holders = Array.from(
-            new Set([userId, ...deleted.flatMap(file => fabFilesService.referenceHolderIds(file))])
-          );
-          try {
-            await sessionRepository.pullKnowledgeIdsForUsers(holders, deletedIds);
-          } catch (error) {
-            req.logger.warn('DELETE /api/files: failed to unlink sessions from deleted files', { error, userId });
+          for (const references of fabFilesService.groupDeletedFileReferences(
+            deleted.map(fabFilesService.deletedFileReferences)
+          )) {
+            await fabFilesService.cleanUpDeletedFileReferences(
+              references,
+              { sessions: sessionRepository, users: userRepository, projects: projectRepository },
+              req.logger
+            );
           }
-          await fabFilesService.cleanUpDeletedFileReferences(
-            { fileIds: deletedIds, systemFileUserIds: holders, projectUserIds: holders },
-            { users: userRepository, projects: projectRepository },
-            req.logger
-          );
         } catch (error) {
           req.logger.warn('DELETE /api/files: failed to unlink references to deleted files', { error, userId });
         }

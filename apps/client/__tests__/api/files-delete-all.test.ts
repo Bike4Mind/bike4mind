@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const captured = vi.hoisted(() => ({ handlers: {} as Record<string, any> }));
 const cleanup = vi.hoisted(() => ({
-  referenceHolderIds: vi.fn(),
+  groupDeletedFileReferences: vi.fn(),
   cleanUpDeletedFileReferences: vi.fn(),
   pullKnowledgeIdsForUsers: vi.fn(),
   pullSystemFilesForUsers: vi.fn(),
@@ -24,12 +24,13 @@ vi.mock('@bike4mind/database', () => ({
 // projection; the real reference cleanup too, behind spies a test can make fail.
 vi.mock('@bike4mind/services', async importOriginal => {
   const { fabFilesService } = await importOriginal<typeof import('@bike4mind/services')>();
-  cleanup.referenceHolderIds.mockImplementation(fabFilesService.referenceHolderIds);
+  cleanup.groupDeletedFileReferences.mockImplementation(fabFilesService.groupDeletedFileReferences);
   cleanup.cleanUpDeletedFileReferences.mockImplementation(fabFilesService.cleanUpDeletedFileReferences);
   return {
     fabFilesService: {
       deleteStoredObjects: fabFilesService.deleteStoredObjects,
-      referenceHolderIds: cleanup.referenceHolderIds,
+      deletedFileReferences: fabFilesService.deletedFileReferences,
+      groupDeletedFileReferences: cleanup.groupDeletedFileReferences,
       cleanUpDeletedFileReferences: cleanup.cleanUpDeletedFileReferences,
     },
   };
@@ -123,7 +124,7 @@ describe('DELETE /api/files scoping', () => {
     cleanup.pullKnowledgeIdsForUsers.mockReset().mockResolvedValue(0);
     cleanup.pullSystemFilesForUsers.mockReset().mockResolvedValue(undefined);
     cleanup.pullFileReferences.mockReset().mockResolvedValue(undefined);
-    cleanup.referenceHolderIds.mockClear();
+    cleanup.groupDeletedFileReferences.mockClear();
     cleanup.cleanUpDeletedFileReferences.mockClear();
     storageDelete.mockReset().mockResolvedValue(undefined);
     generatedDelete.mockReset().mockResolvedValue(undefined);
@@ -247,7 +248,7 @@ describe('DELETE /api/files scoping', () => {
   });
 
   it('still returns its normal success response when the reference cleanup throws', async () => {
-    cleanup.referenceHolderIds.mockImplementationOnce(() => {
+    cleanup.groupDeletedFileReferences.mockImplementationOnce(() => {
       throw new Error('cleanup failed');
     });
     const logger = { error: vi.fn(), warn: vi.fn() };

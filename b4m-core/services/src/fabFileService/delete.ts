@@ -17,7 +17,7 @@ import { registryMembershipScope } from '../dataLakeService/lakeMembershipScope'
 import type { ManageActor } from '../dataLakeService/manageRule';
 import { registryCandidateLakes } from '../dataLakeService/registryCandidateLakes';
 import { deleteStoredObjects, type GeneratedCopyStore, type ObjectStorage } from './deleteStoredObjects';
-import { referenceHolderIds, type DeletedFileReferences } from './cleanUpDeletedFileReferences';
+import { deletedFileReferences, type DeletedFileReferences } from './cleanUpDeletedFileReferences';
 import {
   recordLakeMembershipChange,
   type LakeMembershipAuditAdapters,
@@ -38,6 +38,11 @@ export interface DeleteFabFileResult {
    * The system-file/project references this delete or unshare leaves behind, set for 'deleted' and
    * 'unshared'. deleteFabFile does not write them: the caller passes them to
    * cleanUpDeletedFileReferences once its transaction has committed (see that helper for why).
+   *
+   * Optional only for the connector and generated-asset callers that delete a file they themselves
+   * created and hold no project or system-file reference to; the turn-time scrub covers those if a
+   * reference ever exists. The user-facing doors (deleteFileForUser, bulk-delete, delete-all) must
+   * pass it on.
    */
   references?: DeletedFileReferences;
 }
@@ -192,11 +197,10 @@ export const deleteFabFile = async (
     // The file is gone for everyone: its owner's and direct-share recipients' system files and
     // projects are unlinked by the caller after commit. Group- or lake-held references are left to
     // the turn-time scrub.
-    const holders = referenceHolderIds(ownedFile);
     return {
       action: 'deleted',
       fabFile: ownedFile,
-      references: { fileIds: [ownedFile.id], systemFileUserIds: holders, projectUserIds: holders },
+      references: deletedFileReferences(ownedFile),
     };
   }
 
