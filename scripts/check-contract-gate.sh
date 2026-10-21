@@ -78,18 +78,36 @@ read_allowlist() {
 # Diff violators ($2) against an allowlist ($1); print INFO for stale entries and, if any
 # violator is new, the error block ($3 = summary, $4 = fix hint). Returns 1 on new violators.
 report() {
-  local allowed violators stale fresh count
+  local allowed violators stale fresh count missing p rc=0
   allowed=$(read_allowlist "$1")
   violators=$2
   stale=$(comm -23 <(echo "$allowed") <(echo "$violators") | grep -v '^$' || true)
   fresh=$(comm -23 <(echo "$violators") <(echo "$allowed") | grep -v '^$' || true)
+
+  missing=""
+  if [ -n "$stale" ]; then
+    while IFS= read -r p; do
+      [ -e "$p" ] || missing+="${p}"$'\n'
+    done <<< "$stale"
+    missing=$(printf '%s' "$missing" | grep -v '^$' || true)
+    stale=$(comm -23 <(echo "$stale") <(echo "$missing") | grep -v '^$' || true)
+  fi
+
+  if [ -n "$missing" ]; then
+    echo "::error::allowlist entries in $1 name files that no longer exist -- see job log"
+    echo ""
+    echo "ERROR: these allowlist entries in $1 name files that no longer exist -- remove them (a new file at that path must not inherit the exemption):"
+    echo "$missing" | sed 's/^/  /'
+    echo ""
+    rc=1
+  fi
 
   if [ -n "$stale" ]; then
     echo "INFO: These allowlist entries in $1 no longer need exemption -- remove them:"
     echo "$stale" | sed 's/^/  /'
     echo ""
   fi
-  [ -z "$fresh" ] && return 0
+  [ -z "$fresh" ] && return "$rc"
 
   count=$(echo "$fresh" | grep -c '.' || true)
   echo "::error::${count} file(s) ${3} -- see job log"
@@ -118,10 +136,11 @@ report "$ALLOWLIST" "$v1_violators" \
 Do NOT add to the allowlist -- this file is for permanent exceptions, not new handlers." || failed=1
 
 # Scan 2: files outside v1 that do not declare auth: 'jwtOnly'. Same known limit as scan 1:
-# the literal inside a comment or string also satisfies it. Contract-routed jwtOnly handlers
+# a literal on a line starting with a comment marker (//, /*, *) does not count; a trailing
+# comment or a string literal still does. Contract-routed jwtOnly handlers
 # have no literal in the handler file and live on the baseline.
 list_files "$API_ROOT" -path "$API_DIR" -prune -o
-outside_violators=$(files_missing "auth:[[:space:]]*['\"]jwtOnly['\"]")
+outside_violators=$(files_missing "^[[:space:]]*([^/*[:space:]].*)?auth:[[:space:]]*['\"]jwtOnly['\"]")
 report "$ALLOWLIST_API_KEY" "$outside_violators" \
   "outside pages/api/v1 do not declare auth: 'jwtOnly' (so may accept API keys)" \
   "Fix: add auth: 'jwtOnly' to the handler, or, if it is a genuinely public endpoint, expose it

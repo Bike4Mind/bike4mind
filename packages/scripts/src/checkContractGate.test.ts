@@ -70,7 +70,7 @@ export default nextRouteForContract(contract, async (req) => ({ data: null }));
 
 /**
  * Critical regression fixture: has BOTH nextRouteForContract AND baseApi({ requiredScopes }).
- * Removing the exemption branch (grep -rLZ "nextRouteForContract") must break this test.
+ * Removing the exemption branch (the files_missing check in scripts/check-contract-gate.sh) must break this test.
  */
 const EXEMPT_DUAL = `
 import { nextRouteForContract } from '@server/middlewares/nextRouteForContract';
@@ -146,7 +146,7 @@ describe('check-contract-gate.sh', () => {
   });
 
   describe('contract-adapter exemption (critical regression)', () => {
-    // Removing the grep -rLZ "nextRouteForContract" branch from the script must break this.
+    // Removing the files_missing check in scripts/check-contract-gate.sh must break this.
     it('does NOT flag a file that contains nextRouteForContract, even if it also imports baseApi', () => {
       const { dir, v1Dir } = makeTree();
       const rel = writeHandler(v1Dir, 'dual.ts', EXEMPT_DUAL);
@@ -197,6 +197,24 @@ describe('check-contract-gate.sh', () => {
       }
     });
 
+    it.skipIf(process.getuid?.() === 0)(
+      'exits 1 instead of reporting OK when a directory outside v1 is unreadable',
+      () => {
+        const { dir } = makeTree();
+        writeApiHandler(dir, 'locked/bad.ts', API_KEY);
+        const locked = path.join(dir, 'apps/client/pages/api/locked');
+        fs.chmodSync(locked, 0o000);
+        try {
+          const r = runGuard(dir);
+          expect(r.status).toBe(1);
+          expect(r.stdout).toContain('find failed');
+          expect(r.stdout).not.toContain('OK');
+        } finally {
+          fs.chmodSync(locked, 0o755);
+        }
+      }
+    );
+
     // A single unreadable file makes grep (not find) fail, which must fail closed too.
     it.skipIf(process.getuid?.() === 0).each([
       ['under v1', true],
@@ -235,6 +253,14 @@ describe('check-contract-gate.sh', () => {
     it('still flags a top-level premium-* file (only directories are stubs)', () => {
       const { dir } = makeTree();
       const rel = writeApiHandler(dir, 'premium-foo.ts', API_KEY);
+      const r = runGuard(dir);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain(rel);
+    });
+
+    it('still flags a premium-* directory nested outside v1', () => {
+      const { dir } = makeTree();
+      const rel = writeApiHandler(dir, 'foo/premium-x/a.ts', API_KEY);
       const r = runGuard(dir);
       expect(r.status).toBe(1);
       expect(r.stdout).toContain(rel);
@@ -281,6 +307,18 @@ describe('check-contract-gate.sh', () => {
         expect(runGuard(dir).status).toBe(0);
       }
     );
+
+    it('does not accept an auth: jwtOnly literal inside a doc comment', () => {
+      const { dir } = makeTree();
+      const rel = writeApiHandler(
+        dir,
+        'foo.ts',
+        `/**\n * Not \`auth: 'jwtOnly'\`: this route accepts API keys\n */\n${API_KEY}`
+      );
+      const r = runGuard(dir);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain(rel);
+    });
 
     it('does not accept the bare word jwtOnly in a comment', () => {
       const { dir } = makeTree();
@@ -346,6 +384,16 @@ describe('check-contract-gate.sh', () => {
       expect(r.stdout).toContain('INFO');
       expect(r.stdout).toContain('contract-gate-api-key-allowlist.txt');
       expect(r.stdout).toContain(rel);
+    });
+
+    it('fails when an api-key allowlist entry names a file that no longer exists', () => {
+      const { dir, apiKeyAllowlist } = makeTree();
+      const gone = 'apps/client/pages/api/deleted.ts';
+      fs.writeFileSync(apiKeyAllowlist, `# header\n${gone}\n`, 'utf8');
+      const r = runGuard(dir);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain('no longer exist');
+      expect(r.stdout).toContain(gone);
     });
 
     it('fails on both scans in one run', () => {
