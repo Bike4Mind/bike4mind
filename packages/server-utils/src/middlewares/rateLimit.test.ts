@@ -16,7 +16,7 @@ vi.mock('../utils/ip', () => ({ getClientIp: () => '203.0.113.7' }));
 
 import { rateLimit } from './rateLimit';
 
-const makeReq = (overrides: Partial<Request> = {}): Request =>
+const makeReq = (overrides: Partial<Request> & { user?: { id: string } } = {}): Request =>
   ({ url: '/api/chat', user: { id: 'user-1' }, ...overrides }) as unknown as Request;
 
 const makeRes = () => {

@@ -27,7 +27,7 @@ import {
 import { BadRequestError, NotFoundError, UnprocessableEntityError } from '@bike4mind/utils';
 import { isValidObjectId } from './objectId';
 import { resolveActiveOrg } from './resolveActiveOrg';
-import type { Request } from 'express';
+import type { Logger } from '@bike4mind/observability';
 
 /**
  * The one owner / manager / platform-admin predicate behind `verifyOrgAccess` (the write gate) and
@@ -236,9 +236,9 @@ export async function verifyOrgMemberOrManager(user: IUserDocument, orgId: strin
  * org is never billed; the fallback just bills personally instead of failing the request.
  */
 export async function resolveBillingOrgId(
-  // Accept any authenticated request shape: the LLM/media routes type `req` with a narrowed `Params`
-  // generic that a bare `Request` would reject, and only `req.user`/`req.logger` are needed here.
-  req: Pick<Request, 'user' | 'logger'>,
+  // Structural, not `Request`: the LLM/media routes type `req` with a narrowed `Params` generic, and
+  // the augmentation that adds `user`/`logger` lives in apps/client/global.d.ts, outside this package.
+  req: { user?: IUserDocument; logger?: Pick<Logger, 'warn'> },
   requestedOrgId: string | null | undefined
 ): Promise<string | null> {
   // Explicit personal (null) carries no cross-tenant risk and skips org billing entirely.
@@ -246,13 +246,9 @@ export async function resolveBillingOrgId(
     return null;
   }
 
-  // The caller always hands us a full express request (these are authenticated routes); the cast
-  // just bridges `Pick<Request, ...>` back to the `Request` the shared gate is typed against.
-  const reqAsExpress = req as Request;
-
   // A client-supplied target is a hard trust boundary: validate strictly and let a rejection surface.
   if (requestedOrgId !== undefined) {
-    return (await resolveActiveOrg(reqAsExpress, requestedOrgId)) ?? null;
+    return (await resolveActiveOrg(req, requestedOrgId)) ?? null;
   }
 
   // Implicit own-org fallback: validate, but degrade to personal scope on a stale pointer.
@@ -261,7 +257,7 @@ export async function resolveBillingOrgId(
     return null;
   }
   try {
-    return (await resolveActiveOrg(reqAsExpress, ownOrgId)) ?? null;
+    return (await resolveActiveOrg(req, ownOrgId)) ?? null;
   } catch (err) {
     // Match by name, not instanceof: resolveActiveOrg throws @bike4mind/common's error classes,
     // which are not identity-equal to this file's @bike4mind/utils imports.

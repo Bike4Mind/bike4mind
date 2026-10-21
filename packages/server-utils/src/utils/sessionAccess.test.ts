@@ -24,7 +24,9 @@ describe('sessionAccess', () => {
 
   describe('canAccessSession', () => {
     it('grants the owner', () => {
-      expect(canAccessSession({ userId: userA, users: [] }, userA)).toBe(true);
+      expect(
+        canAccessSession({ userId: userA, users: [] } as unknown as Parameters<typeof canAccessSession>[0], userA)
+      ).toBe(true);
     });
 
     it('grants a shared user', () => {
@@ -32,7 +34,9 @@ describe('sessionAccess', () => {
     });
 
     it('denies a user who is neither owner nor shared', () => {
-      expect(canAccessSession({ userId: userB, users: [] }, userA)).toBe(false);
+      expect(
+        canAccessSession({ userId: userB, users: [] } as unknown as Parameters<typeof canAccessSession>[0], userA)
+      ).toBe(false);
     });
 
     it('denies when users is undefined', () => {
