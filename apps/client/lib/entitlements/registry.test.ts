@@ -158,6 +158,14 @@ describe('implied-entitlement invariants', () => {
     }
   });
 
+  it('only implies between known keys over the merged rows too', () => {
+    const known = new Set(KNOWN_ENTITLEMENT_KEYS);
+    for (const row of __registryRows.impliedRows) {
+      expect(known.has(row.ifHeld), `'${row.ifHeld}' is not a known key`).toBe(true);
+      for (const key of row.alsoGrant) expect(known.has(key), `'${key}' is not a known key`).toBe(true);
+    }
+  });
+
   // `signupCreditsForKeys` zeroes a key another held key implies, so an implying
   // key must be worth at least as much as anything it implies - otherwise a
   // bundle would under-pay versus holding the implied key directly. Checked over

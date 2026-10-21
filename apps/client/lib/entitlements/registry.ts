@@ -348,11 +348,14 @@ const rowList = (value: unknown): Record<string, unknown>[] =>
 export const MAX_CONTRIBUTED_SIGNUP_CREDITS = 250_000;
 
 /**
- * Keys and ids a contribution may never name: `base` is held by every user, and `datalake:` and
- * `embed:` keys need a literal owner grant. Must stay in sync with the codegen check.
+ * Keys and ids a contribution may never name: `base` is held by every user, `datalake:` and
+ * `embed:` keys need a literal owner grant, and `source:` tags are self-assertable OAuth
+ * attribution. Must stay in sync with the codegen check.
  */
 export function isReservedContributionKey(key: string): boolean {
-  return key === BASE_ENTITLEMENT_KEY || key.startsWith('datalake:') || key.startsWith('embed:');
+  return (
+    key === BASE_ENTITLEMENT_KEY || key.startsWith('datalake:') || key.startsWith('embed:') || isOAuthSourceTag(key)
+  );
 }
 
 export interface MergeContributedRowsOptions {
@@ -365,9 +368,12 @@ export interface MergeContributedRowsOptions {
 /**
  * `builtIn` with `contributed` added, strictly in new territory: a contributed row that names a
  * built-in tag, implying key or priced key must repeat the built-in value (a no-op), and a
- * contributed tag, implication, credit or staff key may not grant a key core already grants. Every
- * other conflict, reserved key and out-of-range amount is dropped and reported through `onReject`.
- * Codegen rejects the same shapes it can see; this runs at module load, so it never throws.
+ * contributed tag, implication, credit or staff key may not grant a key core already grants (built-in
+ * tag names count, since user tags pass through as keys). An implication must start from a key a
+ * contributed row grants, and a credit row must sit on a contributed staff key. Every other
+ * conflict, reserved key and out-of-range amount is dropped and reported through `onReject`;
+ * malformed shapes (non-strings, empty lists) are dropped silently, as codegen already rejects them.
+ * This runs at module load, so it never throws.
  */
 export function mergeContributedRows(
   builtIn: ExtensibleRegistryRows,
@@ -392,6 +398,7 @@ export function mergeContributedRows(
     ...[...coreImplied.values()].flatMap(keys => [...keys]),
     ...coreCredits.keys(),
     ...coreStaff,
+    ...coreTags.keys(),
     ...[...(options.otherCoreKeys ?? [])].map(normalizeTag),
   ]);
   const isSubset = (keys: readonly string[], of: ReadonlySet<string>) => keys.every(key => of.has(key));
@@ -433,11 +440,20 @@ export function mergeContributedRows(
   }
   for (const [tag, entitlements] of contributedTags) tagGrantRows.push({ tag, entitlements });
 
+  const internalStaffEntitlements = [...coreStaff];
+  const contributedStaff = new Set<string>();
+  for (const key of keyList(source.internalStaffEntitlements)) {
+    if (coreStaff.has(key) || rejectsKeys(`internal staff key "${key}"`, [key])) continue;
+    internalStaffEntitlements.push(key);
+    contributedStaff.add(key);
+  }
+
   const impliedRows: ImpliedEntitlementRow[] = builtIn.impliedRows.map(row => ({
     ifHeld: normalizeTag(row.ifHeld),
     alsoGrant: row.alsoGrant.map(normalizeTag),
   }));
   const contributedImplied = new Map<string, EntitlementKey[]>();
+  const keptImplied = new Set<string>();
   for (const row of rowList(source.impliedEntitlements)) {
     const ifHeld = typeof row.ifHeld === 'string' ? normalizeTag(row.ifHeld) : '';
     const keys = keyList(row.alsoGrant);
@@ -451,7 +467,20 @@ export function mergeContributedRows(
     if (rejectsKeys(`ifHeld "${ifHeld}"`, [ifHeld]) || rejectsKeys(`implication from "${ifHeld}"`, keys)) continue;
     contributedImplied.set(ifHeld, [...new Set([...(contributedImplied.get(ifHeld) ?? []), ...keys])]);
   }
-  for (const [ifHeld, alsoGrant] of contributedImplied) impliedRows.push({ ifHeld, alsoGrant });
+  const granted = new Set<string>([...contributedTagOf.keys(), ...contributedStaff]);
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const [ifHeld, alsoGrant] of contributedImplied) {
+      if (!granted.has(ifHeld) || keptImplied.has(ifHeld)) continue;
+      keptImplied.add(ifHeld);
+      impliedRows.push({ ifHeld, alsoGrant });
+      for (const key of alsoGrant) granted.add(key);
+      grew = true;
+    }
+  }
+  for (const ifHeld of contributedImplied.keys()) {
+    if (!keptImplied.has(ifHeld)) reject(`ifHeld "${ifHeld}" is not granted by any contributed row`);
+  }
 
   const credits = new Map<EntitlementKey, number>(coreCredits);
   for (const row of rowList(source.signupCredits)) {
@@ -468,15 +497,13 @@ export function mergeContributedRows(
       continue;
     }
     if (rejectsKeys(`signup credits for "${key}"`, [key]) || credits.has(key)) continue;
+    if (!contributedStaff.has(key)) {
+      reject(`signup credits for "${key}" must sit on a contributed internal staff key`);
+      continue;
+    }
     credits.set(key, row.credits);
   }
   const signupCreditRows = [...credits].map(([key, amount]) => ({ key, credits: amount }));
-
-  const internalStaffEntitlements = [...coreStaff];
-  for (const key of keyList(source.internalStaffEntitlements)) {
-    if (coreStaff.has(key) || rejectsKeys(`internal staff key "${key}"`, [key])) continue;
-    internalStaffEntitlements.push(key);
-  }
 
   return { tagGrantRows, impliedRows, signupCreditRows, internalStaffEntitlements };
 }

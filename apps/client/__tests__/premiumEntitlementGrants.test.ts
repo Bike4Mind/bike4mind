@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { MAX_CONTRIBUTED_SIGNUP_CREDITS } from '@client/lib/entitlements/registry';
+import { MAX_CONTRIBUTED_SIGNUP_CREDITS, isReservedContributionKey } from '@client/lib/entitlements/registry';
 
 /**
  * Guard for the entitlement grant contribution (see `PremiumEntitlementGrants`): the registry trusts
@@ -98,11 +98,15 @@ describe('premium entitlement grants', () => {
 
   it('accepts signup credits at the registry cap', () => {
     writeOverlay('alpha', {
-      entitlementGrants: { signupCredits: [{ key: 'example:pro', credits: MAX_CONTRIBUTED_SIGNUP_CREDITS }] },
+      entitlementGrants: {
+        signupCredits: [{ key: 'example:staff', credits: MAX_CONTRIBUTED_SIGNUP_CREDITS }],
+        internalStaffEntitlements: ['example:staff'],
+      },
     });
 
     expect(emitted(generate())).toEqual({
-      signupCredits: [{ key: 'example:pro', credits: MAX_CONTRIBUTED_SIGNUP_CREDITS }],
+      signupCredits: [{ key: 'example:staff', credits: MAX_CONTRIBUTED_SIGNUP_CREDITS }],
+      internalStaffEntitlements: ['example:staff'],
     });
   });
 
@@ -159,6 +163,37 @@ describe('premium entitlement grants', () => {
     );
   });
 
+  it('accepts an implication chained from a staff key or another overlay', () => {
+    writeOverlay('alpha', {
+      entitlementGrants: {
+        internalStaffEntitlements: ['example:staff'],
+        impliedEntitlements: [{ ifHeld: 'example:staff', alsoGrant: ['example:b'] }],
+      },
+    });
+    writeOverlay('beta', {
+      entitlementGrants: { impliedEntitlements: [{ ifHeld: 'example:b', alsoGrant: ['example:c'] }] },
+    });
+
+    expect(generate()).toContain('example:c');
+  });
+
+  it('names the package whose implication or credit row has no contributed grant', () => {
+    writeOverlay('bad', {
+      entitlementGrants: { impliedEntitlements: [{ ifHeld: 'example:a', alsoGrant: ['example:b'] }] },
+    });
+    expectRejected(/package "@bike4mind\/premium-bad".*ifHeld "example:a"/);
+
+    writeOverlay('bad', { entitlementGrants: { signupCredits: [{ key: 'example:a', credits: 5 }] } });
+    expectRejected(/package "@bike4mind\/premium-bad".*signupCredits key "example:a"/);
+  });
+
+  it.each(['base', 'datalake:x', 'embed:x', 'source:x'])('rejects reserved tag %s as the registry does', sample => {
+    expect(isReservedContributionKey(sample)).toBe(true);
+    writeOverlay('bad', { entitlementGrants: { tagGrants: [{ tag: sample, entitlements: ['example:pro'] }] } });
+
+    expectRejected(/invalid entitlementGrants from package "@bike4mind\/premium-bad".*reserved/);
+  });
+
   it('fails when two tags grant one key, naming both', () => {
     writeOverlay('alpha', {
       entitlementGrants: { tagGrants: [{ tag: 'example-one', entitlements: ['example:pro'] }] },
@@ -196,6 +231,21 @@ describe('premium entitlement grants', () => {
     ['a datalake grant', { tagGrants: [{ tag: 'example-pro', entitlements: ['datalake:some-lake'] }] }],
     ['an embed grant', { impliedEntitlements: [{ ifHeld: 'example:pro', alsoGrant: ['embed:whitelabel'] }] }],
     ['a reserved staff key', { internalStaffEntitlements: ['embed:whitelabel'] }],
+    ['a source tag', { tagGrants: [{ tag: 'source:x', entitlements: ['example:pro'] }] }],
+    ['a signup-credit key no contributed staff key holds', { signupCredits: [{ key: 'example:pro', credits: 10 }] }],
+    [
+      'an implication from a key no contribution grants',
+      { impliedEntitlements: [{ ifHeld: 'example:a', alsoGrant: ['example:b'] }] },
+    ],
+    [
+      'an implication cycle no contribution grants',
+      {
+        impliedEntitlements: [
+          { ifHeld: 'example:a', alsoGrant: ['example:b'] },
+          { ifHeld: 'example:b', alsoGrant: ['example:a'] },
+        ],
+      },
+    ],
     ['a reserved signup-credit key', { signupCredits: [{ key: 'datalake:some-lake', credits: 10 }] }],
   ])('rejects %s', (_case, entitlementGrants) => {
     writeOverlay('bad', { entitlementGrants });

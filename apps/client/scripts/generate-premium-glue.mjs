@@ -809,7 +809,8 @@ function generateToolDisplayLabels(packages) {
 // cannot load, so a collision with them is dropped by mergeContributedRows instead of failing here.
 const GRANT_KEY_RE = /^[a-z0-9][a-z0-9:_-]*$/;
 // Must stay in sync with isReservedContributionKey and MAX_CONTRIBUTED_SIGNUP_CREDITS in the registry.
-const isReservedGrantKey = key => key === 'base' || key.startsWith('datalake:') || key.startsWith('embed:');
+const isReservedGrantKey = key =>
+  key === 'base' || key.startsWith('datalake:') || key.startsWith('embed:') || key.startsWith('source:');
 const MAX_CONTRIBUTED_SIGNUP_CREDITS = 250_000;
 const ENTITLEMENT_GRANT_FIELDS = ['tagGrants', 'impliedEntitlements', 'signupCredits', 'internalStaffEntitlements'];
 
@@ -903,6 +904,29 @@ function generateEntitlementGrants(packages) {
       for (const key of readKeyList(pkg, 'internalStaffEntitlements', declared.internalStaffEntitlements)) {
         internalStaff.add(key);
       }
+    }
+  }
+
+  // Built-in grants are invisible here, so an implication may only start from a key a contribution grants.
+  const granted = new Set([...tagOfKey.keys(), ...internalStaff]);
+  const grounded = new Set();
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const [ifHeld, { value }] of implied) {
+      if (grounded.has(ifHeld) || !granted.has(ifHeld)) continue;
+      grounded.add(ifHeld);
+      for (const key of value) granted.add(key);
+      grew = true;
+    }
+  }
+  for (const [ifHeld, { from }] of implied) {
+    if (!grounded.has(ifHeld)) {
+      fail({ name: from }, `impliedEntitlements ifHeld "${ifHeld}" is not granted by any contributed row`);
+    }
+  }
+  for (const [key, { from }] of signupCredits) {
+    if (!internalStaff.has(key)) {
+      fail({ name: from }, `signupCredits key "${key}" must be a contributed internalStaffEntitlements key`);
     }
   }
 
