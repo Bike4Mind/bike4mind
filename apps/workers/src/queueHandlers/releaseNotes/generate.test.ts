@@ -286,10 +286,35 @@ describe('copy accuracy', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('over 160 chars'));
   });
 
+  it('drops a stray sourcePr from the kept first draft, warning once', async () => {
+    const warn = vi.fn();
+    const strayReply = JSON.stringify({
+      headline: 'Storage usage by uploader',
+      summary: 'Organizations can see storage usage.',
+      items: [{ category: 'new', text: 'x'.repeat(161), importance: 1, sourcePrs: [4938, 9999] }],
+    });
+    const complete = vi.fn().mockResolvedValueOnce(strayReply).mockResolvedValueOnce('not json');
+
+    const { draft } = await writeReleaseNotes(overstatedRelease, new Map([[4938, 'n']]), complete, {
+      logger: { warn },
+    });
+
+    expect(draft.items[0].sourcePrs).toEqual([4938]);
+    expect(warn.mock.calls.filter(([message]) => String(message).includes('9999'))).toHaveLength(1);
+  });
+
   it.each([
-    ['is malformed', (c: ReturnType<typeof vi.fn>) => c.mockResolvedValueOnce('sorry, here you go: {')],
-    ['times out', (c: ReturnType<typeof vi.fn>) => c.mockRejectedValueOnce(new Error('timed out'))],
-  ])('keeps the over-long first draft when the repair %s', async (_, secondReply) => {
+    [
+      'is malformed',
+      (c: ReturnType<typeof vi.fn>) => c.mockResolvedValueOnce('sorry, here you go: {'),
+      'repair invalid',
+    ],
+    [
+      'times out',
+      (c: ReturnType<typeof vi.fn>) => c.mockRejectedValueOnce(new Error('timed out')),
+      'repair call failed (timed out)',
+    ],
+  ])('keeps the over-long first draft when the repair %s', async (_, secondReply, warning) => {
     const warn = vi.fn();
     const complete = secondReply(vi.fn().mockResolvedValueOnce(overLongReply));
 
@@ -299,7 +324,26 @@ describe('copy accuracy', () => {
 
     expect(complete).toHaveBeenCalledTimes(2);
     expect(draft.items[0].text).toHaveLength(161);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('keeping the first draft'));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(warning));
+    // The over-length warning fires once, on the draft that is kept.
+    expect(warn).toHaveBeenCalledTimes(2);
+  });
+
+  it('rethrows when the first reply fails and there is no draft to keep', async () => {
+    const complete = vi.fn().mockRejectedValueOnce(new Error('boom'));
+
+    await expect(writeReleaseNotes(overstatedRelease, new Map([[4938, 'n']]), complete)).rejects.toThrow(/boom/);
+    expect(complete).toHaveBeenCalledTimes(1);
+  });
+
+  it('rethrows when a schema-invalid first reply is followed by a failed repair', async () => {
+    const complete = vi
+      .fn()
+      .mockResolvedValueOnce(JSON.stringify({ headline: 'x', summary: 'y', items: [{ category: 'bogus' }] }))
+      .mockRejectedValueOnce(new Error('timed out'));
+
+    await expect(writeReleaseNotes(overstatedRelease, new Map([[4938, 'n']]), complete)).rejects.toThrow(/timed out/);
+    expect(complete).toHaveBeenCalledTimes(2);
   });
 });
 
