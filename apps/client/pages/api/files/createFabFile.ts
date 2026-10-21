@@ -43,10 +43,20 @@ const createFabFileSchema = fabFilesService.createFabFileSchema
   .omit({ prefix: true })
   .extend({ purpose: z.literal('modal-media').optional() });
 
+// The What's New media a release-notes key may upload, each type with the extensions that store as it.
+// The stored type and key extension come from the file name, so checking the claim alone admits page.html.
+const RELEASE_NOTES_MEDIA_EXTENSIONS: ReadonlyMap<string, readonly string[]> = new Map([
+  ['video/mp4', ['mp4']],
+  ['image/jpeg', ['jpg', 'jpeg']],
+  ['image/png', ['png']],
+  ['image/webp', ['webp']],
+]);
+const isReleaseNotesMedia = (params: { mimeType: string; fileName: string }) =>
+  RELEASE_NOTES_MEDIA_EXTENSIONS.get(params.mimeType)?.includes(getFileExtension(params.fileName)) ?? false;
+
 // The admin What's New media upload (AdminModalVideoFields) lands under the shared modal prefix, chosen
 // here, not by the caller. mp4 stays off the global allowlist (non-image uploads skip the content
 // scan), so only that admin upload admits it.
-const RELEASE_NOTES_MEDIA_TYPES: ReadonlySet<string> = new Set(['video/mp4', 'image/jpeg', 'image/png', 'image/webp']);
 const isModalVideo = (params: { mimeType?: string | null; fileName: string }) =>
   params.mimeType === 'video/mp4' && getFileExtension(params.fileName) === 'mp4';
 
@@ -69,8 +79,10 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_OR_RELEASE_NOTES_SCOPES })
           required_scopes: FILES_WRITE_SCOPES,
         });
       }
-      if (releaseNotesOnly && !RELEASE_NOTES_MEDIA_TYPES.has(parsed.mimeType)) {
-        throw new ForbiddenError(`This API key may only upload ${[...RELEASE_NOTES_MEDIA_TYPES].join(', ')}`);
+      if (releaseNotesOnly && !isReleaseNotesMedia(parsed)) {
+        throw new ForbiddenError(
+          `This API key may only upload ${[...RELEASE_NOTES_MEDIA_EXTENSIONS.keys()].join(', ')}, named with a matching extension`
+        );
       }
       // A release-notes key gets only the fields a What's New video or poster needs.
       const base = releaseNotesOnly

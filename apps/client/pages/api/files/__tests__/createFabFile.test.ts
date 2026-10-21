@@ -551,6 +551,40 @@ describe('POST /api/files/createFabFile - release-notes:write key', () => {
     expect(h.fabFileCreate).not.toHaveBeenCalled();
   });
 
+  // The service stores the type and key extension it resolves from the file name, so an allowed claim
+  // on another name would land as that other type under the public modals prefix.
+  it.each([
+    ['page.html', 'image/png'],
+    ['x.png.html', 'image/png'],
+    ['icon.svg', 'image/png'],
+    ['doc.pdf', 'video/mp4'],
+    ['notes.txt', 'image/jpeg'],
+    ['poster.png', 'image/jpeg'],
+    ['noext', 'image/png'],
+    ['payload.', 'image/png'],
+    ['demo.mp4', 'constructor'],
+  ])('refuses %s claimed as %s with a 403', async (fileName, mimeType) => {
+    const { res } = makeRes();
+    await expect(
+      run(mp4({ fileName, mimeType }), res, { ...releaseKey, user: { id: 'u1', isAdmin: true } })
+    ).rejects.toMatchObject({ statusCode: 403 });
+    expect(h.fabFileCreate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['demo.mp4', 'video/mp4'],
+    ['poster.jpg', 'image/jpeg'],
+    ['poster.jpeg', 'image/jpeg'],
+    ['POSTER.PNG', 'image/png'],
+    ['poster.webp', 'image/webp'],
+  ])('stores %s claimed as %s as that type', async (fileName, mimeType) => {
+    const { res } = makeRes();
+    await run(mp4({ fileName, mimeType }), res, { ...releaseKey, user: { id: 'u1', isAdmin: true } });
+    const persisted = h.fabFileCreate.mock.calls[0][0] as { mimeType: string; filePath: string };
+    expect(persisted.mimeType).toBe(mimeType);
+    expect(persisted.filePath).toMatch(/^modals\//);
+  });
+
   it("persists none of the fields a What's New upload has no use for", async () => {
     const { res } = makeRes();
     await run(
