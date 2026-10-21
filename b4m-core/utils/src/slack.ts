@@ -109,6 +109,8 @@ export async function postMessageToSlack(slackWebhookUrl: string, message: strin
       { text: message },
       {
         headers: { 'Content-Type': 'application/json' },
+        // ms; a stalled webhook must fail as false rather than hold a cron run until its Lambda timeout.
+        timeout: 10_000,
       }
     );
     return true;

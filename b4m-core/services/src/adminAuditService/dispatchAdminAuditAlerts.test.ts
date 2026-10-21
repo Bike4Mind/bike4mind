@@ -123,6 +123,19 @@ describe('dispatchAdminAuditAlerts', () => {
     expect(save.mock.calls[0][0].cursor).toEqual({ occurredAt: first.occurredAt, id: first.id });
   });
 
+  it('keeps an accepted post when a later entry throws, so the next run does not re-send it', async () => {
+    const critical = entry();
+    const { adapters, save, postMessage } = setup({ entries: [critical, grant(minutesAgo(4))] });
+    vi.mocked(adapters.db.adminAuditLog.countCreditGrants).mockRejectedValueOnce(
+      new Error('operation exceeded time limit')
+    );
+
+    await expect(dispatchAdminAuditAlerts(adapters)).rejects.toThrow('operation exceeded time limit');
+    expect(postMessage).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save.mock.calls[0][0].cursor).toEqual({ occurredAt: critical.occurredAt, id: critical.id });
+  });
+
   it('does not save when nothing moved', async () => {
     const { adapters, save } = setup({ entries: [entry()], postResults: [false] });
     await dispatchAdminAuditAlerts(adapters);
@@ -137,7 +150,7 @@ describe('dispatchAdminAuditAlerts', () => {
     expect(postMessage).toHaveBeenCalledTimes(1);
     expect(postMessage.mock.calls[0][1]).toContain('Credit grant burst');
     expect(postMessage.mock.calls[0][1]).toContain('actorUserId=admin1');
-    expect(save.mock.calls[0][0].openBursts).toEqual([{ actorUserId: 'admin1', lastGrantAt: grants[2].occurredAt }]);
+    expect(save.mock.lastCall?.[0].openBursts).toEqual([{ actorUserId: 'admin1', lastGrantAt: grants[2].occurredAt }]);
   });
 
   it('keeps a burst open across runs and opens a new one after a quiet window', async () => {

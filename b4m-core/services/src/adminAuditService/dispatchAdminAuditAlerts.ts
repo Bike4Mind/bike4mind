@@ -165,6 +165,7 @@ export const dispatchAdminAuditAlerts = async (
 
   const entries = await db.adminAuditLog.listAscending({ after: state.cursor, until, limit: BATCH_LIMIT });
   let committed: Omit<AdminAuditAlertState, 'updatedAt'> = { cursor: state.cursor, openBursts: state.openBursts };
+  let persisted = committed;
   let alerted = 0;
   let blocked = false;
 
@@ -194,11 +195,16 @@ export const dispatchAdminAuditAlerts = async (
       alerted += 1;
     }
     committed = { cursor: cursorOf(entry), openBursts: burst?.openBursts ?? committed.openBursts };
+    // Saved per accepted post so a later throw or Lambda timeout in this run does not re-send it.
+    if (messages.length > 0) {
+      await db.alertState.save(committed);
+      persisted = committed;
+    }
   }
 
   const pruneBefore = until.getTime() - BURST_WINDOW_MS;
   const openBursts = committed.openBursts.filter(burst => burst.lastGrantAt.getTime() >= pruneBefore);
-  if (committed.cursor !== state.cursor || openBursts.length !== state.openBursts.length) {
+  if (committed.cursor !== persisted.cursor || openBursts.length !== persisted.openBursts.length) {
     await db.alertState.save({ cursor: committed.cursor, openBursts });
   }
   return { status: 'ran', scanned: entries.length, alerted, blocked };
