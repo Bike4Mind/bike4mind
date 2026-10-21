@@ -27,7 +27,7 @@ import { applyReplyDone } from './replyDone';
 import { applyStatusEvents } from './sessionStatus';
 import { EVENT_STAMP_RESOLUTION_MS, REASONING_TAIL_CHARS, totalTokens, type TurnProgress } from './statusLine';
 import { applyWorkspaceEvent, preparingOnSend, type WorkspaceProgress } from './workspaceProgress';
-import { startsInWorktree, worktreeByDefault } from './worktreeDefault';
+import { canHoldWorktree, worktreeByDefault } from './worktreeDefault';
 import { parseDirectoryOutcome, REQUEST_DIRECTORY_TOOL_NAME } from '@shared/directoryRequest';
 
 const LIVE_FLUSH_FALLBACK_MS = 100;
@@ -1035,7 +1035,7 @@ export function useConversation(
       const moved = await changeProject({
         directory,
         branch: inspected.currentBranch ?? '',
-        workspace: startsInWorktree(worktreeByDefault(), inspected),
+        workspace: worktreeByDefault() && canHoldWorktree(inspected),
       });
       // The folder is still usable when git could not be read - it just has no branches to offer -
       // so this is reported after the move rather than instead of it.

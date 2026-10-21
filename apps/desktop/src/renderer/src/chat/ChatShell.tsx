@@ -47,11 +47,11 @@ import { useSpawnSuggestions } from './useSpawnSuggestions';
 import { TurnDot, turnState } from './TurnDot';
 import { TurnStatus } from './TurnStatus';
 import { workspacePhrase } from './workspaceProgress';
+import { canHoldWorktree, worktreeByDefault } from './worktreeDefault';
 import { presentReply } from './codeStream';
 import { seedOnArrival } from './firstRunSeed';
 import { readLastSession, useLastSession } from './lastSession';
 import { newSessionInProject } from './newSessionInProject';
-import { startsInWorktree, worktreeByDefault } from './worktreeDefault';
 import { roundsOf } from './replyRounds';
 import { contextTokens, describeActivity, latestReply, writingProse, type ComposerUsage } from './statusLine';
 import { useAccountCredits } from './useAccountCredits';
@@ -514,10 +514,12 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
     async (directory: string) => {
       const sibling = projectForGroup(sessions, directory);
       if (!sibling) return;
-      setScreen('conversation');
       clearCodeError();
+      // Before the screen switches, so the git calls never leave the previous session's
+      // composer live under the new one's id.
       const inWorktree =
-        worktreeByDefault() && startsInWorktree(true, await window.b4m.chat.inspectProject(sibling.directory));
+        worktreeByDefault() && canHoldWorktree(await window.b4m.chat.inspectProject(sibling.directory));
+      setScreen('conversation');
       const created = await createCode(newSessionInProject(sibling, inWorktree));
       if (created) setActiveId(created);
     },

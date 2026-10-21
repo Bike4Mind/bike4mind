@@ -25,17 +25,21 @@ export function worktreeDefaultSummary(enabled: boolean): string {
 }
 
 /**
- * Whether a session bound to this folder should start with the toggle on.
+ * Whether this folder can hold a worktree: a repository with a branch to cut one from.
  *
- * A folder with no branches cannot hold a worktree, and main refuses the request outright there
- * (ChatService.resolveWorkspaceBase), so the preference quietly stands down rather than turning
- * a folder pick into an error the user did not ask for.
+ * Mirrors the local branches main's `defaultBaseBranch` will base on - `main`, `master`, or the
+ * checked-out branch. The remote default is not visible from here, so a repo checked out
+ * detached whose only local branch is, say, `develop` stands down: that skips the default for
+ * the folder, never fails the pick. Main refuses a worktree with no base outright (see
+ * ChatService.resolveWorkspaceBase), so the two rules must stay in sync.
  */
-export function startsInWorktree(
-  preferred: boolean,
-  inspected: Pick<ProjectInspection, 'isRepository' | 'branches'>
+export function canHoldWorktree(
+  inspected: Pick<ProjectInspection, 'isRepository' | 'branches' | 'currentBranch'>
 ): boolean {
-  return preferred && inspected.isRepository && inspected.branches.length > 0;
+  if (!inspected.isRepository) return false;
+  return (
+    inspected.branches.includes('main') || inspected.branches.includes('master') || inspected.currentBranch !== null
+  );
 }
 
 let enabled = readStored();
@@ -72,6 +76,9 @@ export function setWorktreeByDefault(next: boolean): void {
 
 /** The setting and its toggle; re-renders every reader when either changes it. */
 export function useWorktreeByDefault(): [boolean, () => void] {
+  // The third argument is the same reader, for the reason given at usePromptSuggestions: the
+  // value is a module global rather than anything React renders around, so a string render sees
+  // what a live one would; without it React refuses to render this hook outside the browser.
   const value = useSyncExternalStore(subscribe, worktreeByDefault, worktreeByDefault);
   const toggle = useCallback(() => setWorktreeByDefault(!worktreeByDefault()), []);
   return [value, toggle];
