@@ -10480,6 +10480,64 @@ describe('ChatCompletionProcess', () => {
       expect(turnTiming.retries).toEqual([expect.objectContaining({ model: ChatModels.GPT4, delayMs: 0 })]);
     });
 
+    it('keeps totalMs and the retries on a turn that fails outright', async () => {
+      setupStreamIdleTimeoutMocks();
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi
+          .fn()
+          .mockRejectedValue(
+            new Error(
+              'Anthropic API stream timeout - no response received within 90 seconds. The model may be overloaded.'
+            )
+          ),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await runWithFakeTimers(service.process({ body, logger: mockLogger }));
+
+      // The failure path must still persist what the turn spent: a diagnostic record with no total
+      // reads as "still running", and the retries are the whole point of keeping it on an error.
+      const saved = mockDb.quests.update.mock.calls.map((call: any[]) => call[0]?.turnTiming).filter(Boolean);
+      const turnTiming = saved[saved.length - 1];
+      expect(turnTiming.totalMs).toEqual(expect.any(Number));
+      expect(turnTiming.retries.length).toBeGreaterThan(0);
+    });
+
+    it('keeps totalMs when post-stream processing throws after the reply', async () => {
+      setupStreamIdleTimeoutMocks();
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi
+          .fn()
+          .mockImplementation(
+            async (_model: unknown, _messages: unknown, _opts: unknown, cb: (chunks: string[]) => Promise<void>) => {
+              await cb(['done']);
+            }
+          ),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      // Failing the first done-status save (the critical post-stream save) sends the turn down the
+      // post-process catch; the catch's own save must carry the finished timing.
+      let failed = false;
+      mockDb.quests.update.mockImplementation(async (quest: { status?: string }) => {
+        if (!failed && quest.status === 'done') {
+          failed = true;
+          throw new Error('mongo blip');
+        }
+      });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await runWithFakeTimers(service.process({ body, logger: mockLogger }));
+
+      expect(mockLogger.error).toHaveBeenCalledWith(expect.stringContaining('[POST_PROCESS]'), expect.any(Error));
+      const saved = mockDb.quests.update.mock.calls
+        .map((call: any[]) => call[0])
+        .filter((quest: any) => quest?.status === 'done' && quest.turnTiming);
+      expect(saved[saved.length - 1].turnTiming.totalMs).toEqual(expect.any(Number));
+    });
+
     it('should send status update during stream idle timeout retry', async () => {
       setupStreamIdleTimeoutMocks();
 

@@ -247,7 +247,7 @@ describe('PromptMetaInspector turn timing', () => {
     render(<PromptMetaInspector />, { wrapper: TestWrapper });
 
     const details = screen.getByTestId('turn-timing-details');
-    expect(details.textContent).toContain('Total: 415s');
+    expect(details.textContent).toContain('Total: 6m 55s');
     expect(details.textContent).toContain('Fallback hops: 1');
     const retries = screen.getAllByTestId('turn-timing-retry');
     expect(retries[0].textContent).toContain('response stalled on model-a');

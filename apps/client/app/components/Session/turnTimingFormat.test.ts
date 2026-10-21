@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { ITurnRetry, ITurnTiming } from '@bike4mind/common';
-import { formatDurationMs, isNotableTurn, summarizeTurnTiming, turnTimingMarkdown } from './turnTimingFormat';
+import { MAX_RECORDED_TURN_RETRIES, type ITurnRetry, type ITurnTiming } from '@bike4mind/common';
+import { formatDuration } from './formatDuration';
+import { isNotableTurn, summarizeTurnTiming, turnTimingMarkdown } from './turnTimingFormat';
 
 const retry = (overrides: Partial<ITurnRetry> = {}): ITurnRetry => ({
   reason: 'stream_idle_timeout',
@@ -31,15 +32,15 @@ describe('isNotableTurn', () => {
   });
 });
 
-describe('formatDurationMs', () => {
+describe('formatDuration', () => {
+  // Shared with the Status Timeline in the same panel, so one turn reads the same in both.
   it.each([
-    [999.6, '1.0s'],
     [999, '999ms'],
     [1240, '1.2s'],
-    [9999, '10s'],
-    [415_000, '415s'],
+    [9999, '10.0s'],
+    [415_000, '6m 55s'],
   ])('formats %s as %s', (ms, expected) => {
-    expect(formatDurationMs(ms)).toBe(expected);
+    expect(formatDuration(ms)).toBe(expected);
   });
 });
 
@@ -49,7 +50,13 @@ describe('summarizeTurnTiming', () => {
       timing({ totalMs: 415_000, retries: [retry(), retry(), retry({ reason: 'overloaded' })] })
     );
 
-    expect(summary).toBe('Took 415s - 3 retries (response stalled, provider busy)');
+    expect(summary).toBe('Took 6m 55s - 3 retries (response stalled, provider busy)');
+  });
+
+  it('reads a full retry list as a lower bound, since the recorder stops at the cap', () => {
+    const retries = Array.from({ length: MAX_RECORDED_TURN_RETRIES }, () => retry());
+
+    expect(summarizeTurnTiming(timing({ retries }))).toContain(`${MAX_RECORDED_TURN_RETRIES}+ retries`);
   });
 
   it('names fallback hops and omits the total while the turn is still running', () => {

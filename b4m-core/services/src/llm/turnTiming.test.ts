@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ITurnTiming } from '@bike4mind/common';
+import type { Logger } from '@bike4mind/observability';
 
 const send = vi.fn();
 vi.mock('@aws-sdk/client-cloudwatch', () => ({
@@ -162,6 +164,17 @@ describe('TurnTimingRecorder', () => {
     expect(recorder.snapshot().totalMs).toBe(415_000);
   });
 
+  it('reports every change so the quest mirrors backend-reported retries and slot waits', () => {
+    const seen: ITurnTiming[] = [];
+    const recorder = new TurnTimingRecorder(createdAt, processStartedAt, undefined, timing => seen.push(timing));
+
+    recorder.sink.onSemaphoreWait(120);
+    recorder.sink.onRetry({ error: withStatus('Overloaded', 529), delayMs: 500, model: 'model-a' });
+
+    expect(seen[seen.length - 1].semaphoreWaitMs).toBe(120);
+    expect(seen[seen.length - 1].retries).toHaveLength(1);
+  });
+
   it('hands out snapshots a later record cannot mutate', () => {
     const recorder = new TurnTimingRecorder(createdAt, processStartedAt);
     const before = recorder.snapshot();
@@ -194,6 +207,19 @@ describe('TurnTimingRecorder', () => {
     new TurnTimingRecorder(createdAt, processStartedAt).recordRetry(IDLE_TIMEOUT_ERROR, 0, 'model-a');
 
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it('warns and never throws when the metric call fails', async () => {
+    process.env.SEED_STAGE_NAME = 'production';
+    send.mockRejectedValue(new Error('throttled'));
+    const logger = { info: vi.fn(), warn: vi.fn() } as unknown as Logger;
+    const recorder = new TurnTimingRecorder(createdAt, processStartedAt, logger);
+
+    // A metric is diagnostics: losing it must not fail the turn it is measuring.
+    expect(() => recorder.recordRetry(IDLE_TIMEOUT_ERROR, 0, 'model-a')).not.toThrow();
+    await vi.waitFor(() =>
+      expect(logger.warn).toHaveBeenCalledWith(`Failed to emit ${CHAT_RETRY_METRIC} metric`, { error: 'throttled' })
+    );
   });
 
   it('pins the metric names', () => {
