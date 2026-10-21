@@ -184,7 +184,7 @@ describe('frontmatterHasSourceStamp', () => {
     ['an empty marker', '# Bike4Mind-Source:'],
     ['a whitespace-only marker', '# Bike4Mind-Source:   '],
   ])('does not mistake %s for an export stamp', (_label, frontmatter) => {
-    const text = `---\nname: local\n${frontmatter}\n---\nbody`;
+    const text = `---\n${frontmatter}\nname: local\n---\nbody`;
     expect(frontmatterHasSourceStamp(text)).toBe(false);
     const result = parseSkillMd(text);
     expect(result.ok).toBe(true);
@@ -214,8 +214,8 @@ describe('frontmatterHasSourceStamp', () => {
     ).toBe(true);
   });
 
-  it('still identifies an empty source stamp but not a comment header without one', () => {
-    expect(frontmatterHasSourceStamp('---\n# Bike4Mind-Source:\nname: a\n---\nbody')).toBe(true);
+  it('rejects an empty source stamp and a comment header without one', () => {
+    expect(frontmatterHasSourceStamp('---\n# Bike4Mind-Source:\nname: a\n---\nbody')).toBe(false);
     expect(frontmatterHasSourceStamp('---\n# Header\n\nname: a\n---\nbody')).toBe(false);
   });
 

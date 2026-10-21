@@ -1,6 +1,6 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { basename, dirname, extname, join } from 'node:path';
-import { parseSkillMd } from '@bike4mind/common';
+import { parseSkillMd } from '@bike4mind/common/utils/skillMd';
 import type { SkillUploadPreview } from '@shared/skillMarket';
 
 /** Well above the server's 50,000-character body plus frontmatter; refused before parsing. */
