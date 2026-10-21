@@ -98,11 +98,11 @@ const ENFORCING_SITE = new RegExp(
   'g'
 );
 
-/**
- * Every gate `code` enforces: each enforcing site (literals, shared lists and lists declared in the
- * same file resolved) plus each call to a derived helper.
- */
-function gatesIn(code: string, helpers: ReadonlyMap<string, Gate>): Gate[] {
+// A route's door: the scopes `baseApi` refuses a key without, before any in-handler check runs.
+const DOOR_SITE = new RegExp(String.raw`\bbaseApi\(\s*\{[^{}]*?\brequiredScopes\s*:\s*${GATE_EXPR}`, 'g');
+
+/** Resolves a gate expression to its scopes: literals, shared lists and lists declared in `code`. */
+function listResolver(code: string) {
   const localLists = new Map<string, string>();
   for (const [, name, literal] of code.matchAll(/\bconst ([A-Za-z_$][\w$]*)(?:\s*:[^=]+)?\s*=\s*(\[[^[\]]*\])/g)) {
     localLists.set(name, literal);
@@ -122,6 +122,12 @@ function gatesIn(code: string, helpers: ReadonlyMap<string, Gate>): Gate[] {
     for (const [, name] of expr.matchAll(/\.\.\.([A-Za-z_$][\w$]*)/g)) resolve(name, seen).forEach(s => scopes.add(s));
     return scopes;
   };
+  return resolve;
+}
+
+/** Every gate `code` enforces: each enforcing site plus each call to a derived helper. */
+function gatesIn(code: string, helpers: ReadonlyMap<string, Gate>): Gate[] {
+  const resolve = listResolver(code);
   const gates: Gate[] = [];
   for (const [, routeExpr, assertExpr] of code.matchAll(ENFORCING_SITE)) {
     const scopes = resolve(routeExpr ?? assertExpr);
@@ -131,6 +137,12 @@ function gatesIn(code: string, helpers: ReadonlyMap<string, Gate>): Gate[] {
     if (new RegExp(`\\b${name}\\(`).test(code)) gates.push(gate);
   }
   return gates;
+}
+
+/** The `baseApi` doors in `code`. A file may hold several (one per handler), so any one may admit. */
+function doorsIn(code: string): Gate[] {
+  const resolve = listResolver(code);
+  return [...code.matchAll(DOOR_SITE)].map(([, expr]) => resolve(expr)).filter(door => door.size > 0);
 }
 
 /**
@@ -214,7 +226,7 @@ function resolvePageFile(routePath: string): string | undefined {
 type Claim = { scope: ApiKeyScope; endpoint: string; method: string; path: string };
 
 /** Where a claim is checked: one contract (one method), or one source file (every method it serves). */
-type Route = { key: string; gates: Gate[] } | { key?: undefined; problem: string };
+type Route = { key: string; doors: Gate[]; gates: Gate[] } | { key?: undefined; problem: string };
 
 function routeOf(claim: Claim): Route {
   const contract = CONTRACTS.find(
@@ -227,19 +239,27 @@ function routeOf(claim: Claim): Route {
   // A contract's scopes are the door; the handler behind it may add an enforcing check of its own,
   // which counts too. (A `holdsApiKeyScope` probe plus a hand-thrown 403 does not.)
   if (contract) {
-    return { key: `contract ${contract.operationId}`, gates: [new Set(contract.scopes ?? []), ...fileGates] };
+    const door = new Set(contract.scopes ?? []);
+    return { key: `contract ${contract.operationId}`, doors: door.size ? [door] : [], gates: [door, ...fileGates] };
   }
   if (!file) return { problem: 'no contract or pages/ route serves this path' };
   if (!offPages && !servesVerb(source, claim.method))
     return { problem: `${path.relative(CLIENT_DIR, file)} does not serve this method` };
-  return { key: path.relative(CLIENT_DIR, file), gates: fileGates };
+  return { key: path.relative(CLIENT_DIR, file), doors: doorsIn(source), gates: fileGates };
 }
 
 /**
  * Why `scope` claiming the route is false, or undefined when it holds. `claimants` are the scopes
- * whose catalogue entries claim the same route.
+ * whose catalogue entries claim the same route. A door runs before every in-handler check, so a
+ * helper admitting the scope cannot vouch for it past a door that refuses it.
  */
-function verifyGates(scope: ApiKeyScope, gates: Gate[], claimants: ReadonlySet<ApiKeyScope>): string | undefined {
+function verifyGates(
+  scope: ApiKeyScope,
+  doors: Gate[],
+  gates: Gate[],
+  claimants: ReadonlySet<ApiKeyScope>
+): string | undefined {
+  if (doors.length > 0 && !doors.some(d => d.has(scope))) return 'the route door refuses the scope';
   const fits = (other: ApiKeyScope) =>
     other === scope || other === ApiKeyScope.ADMIN || claimants.has(other) || !!IMPLIED_BY[scope]?.includes(other);
   const admitting = gates.filter(g => g.has(scope));
@@ -310,7 +330,7 @@ describe('apiKeyScopes endpoint claims', () => {
       const problem =
         route.key === undefined
           ? route.problem
-          : verifyGates(claim.scope, route.gates, CLAIMANTS.get(claimantsKey(claim, route.key))!);
+          : verifyGates(claim.scope, route.doors, route.gates, CLAIMANTS.get(claimantsKey(claim, route.key))!);
       expect(problem, `${claim.scope} claims "${claim.endpoint}"`).toBeUndefined();
     }
   );
@@ -378,11 +398,13 @@ describe('the gate rule itself', () => {
   });
 
   it('accepts a broad door backed by the narrow check', () => {
-    expect(verifyGates(share, gatesIn(`${door}\n${narrow}`, HELPERS), new Set([share]))).toBeUndefined();
+    expect(
+      verifyGates(share, doorsIn(`${door}\n${narrow}`), gatesIn(`${door}\n${narrow}`, HELPERS), new Set([share]))
+    ).toBeUndefined();
   });
 
   it('rejects the broad door alone when no other scope claims the same verb', () => {
-    expect(verifyGates(share, gatesIn(door, HELPERS), new Set([share]))).toMatch(/also admits/);
+    expect(verifyGates(share, doorsIn(door), gatesIn(door, HELPERS), new Set([share]))).toMatch(/also admits/);
   });
 
   it('counts claimants per verb, so a read claim on GET cannot vouch for a write claim on POST', () => {
@@ -390,7 +412,16 @@ describe('the gate rule itself', () => {
     expect(post).toContain(ApiKeyScope.WRITE_PROJECTS);
     expect(post).not.toContain(ApiKeyScope.READ_PROJECTS);
     const door = 'requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES';
-    expect(verifyGates(ApiKeyScope.WRITE_PROJECTS, gatesIn(door, HELPERS), post!)).toMatch(/also admits/);
+    expect(verifyGates(ApiKeyScope.WRITE_PROJECTS, doorsIn(door), gatesIn(door, HELPERS), post!)).toMatch(
+      /also admits/
+    );
+  });
+
+  it('rejects a claim the door refuses, even when an in-handler check admits it', () => {
+    // The shape of pages/api/files/createFabFile.ts: a files:write door, then a lake-tag write check.
+    const code = 'baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(\nassertDataLakeTagWriteScope(req);';
+    const lakeWrite = ApiKeyScope.DATALAKE_WRITE;
+    expect(verifyGates(lakeWrite, doorsIn(code), gatesIn(code, HELPERS), new Set([lakeWrite]))).toMatch(/door refuses/);
   });
 
   it.each(Object.entries(HAND_HELPERS))('%s throws and checks exactly the scopes it is credited with', (name, h) => {
@@ -417,10 +448,15 @@ describe('the gate rule itself', () => {
   it('accepts a door every member of which claims the route or implies the scope', () => {
     const both = new Set([ApiKeyScope.READ_NOTEBOOKS, ApiKeyScope.WRITE_NOTEBOOKS]);
     const literal = 'requiredScopes: [ApiKeyScope.READ_NOTEBOOKS, ApiKeyScope.WRITE_NOTEBOOKS, ApiKeyScope.ADMIN]';
-    expect(verifyGates(ApiKeyScope.READ_NOTEBOOKS, gatesIn(literal, HELPERS), both)).toBeUndefined();
+    expect(verifyGates(ApiKeyScope.READ_NOTEBOOKS, doorsIn(literal), gatesIn(literal, HELPERS), both)).toBeUndefined();
     const lakeRead = 'requiredScopes: DATA_LAKE_READ_SCOPES';
     expect(
-      verifyGates(ApiKeyScope.DATALAKE_READ, gatesIn(lakeRead, HELPERS), new Set([ApiKeyScope.DATALAKE_READ]))
+      verifyGates(
+        ApiKeyScope.DATALAKE_READ,
+        doorsIn(lakeRead),
+        gatesIn(lakeRead, HELPERS),
+        new Set([ApiKeyScope.DATALAKE_READ])
+      )
     ).toBeUndefined();
   });
 });
