@@ -104,7 +104,7 @@ describe('/api/skills/[id] PUT — edit permission', () => {
     mockFindById.mockResolvedValue(skillDoc({ argumentHint: '<previous>' }));
     const { req, res } = makeReqRes('PUT', OWNER, { argumentHint: null });
     await handler(req, res);
-    expect(mockUpdate).toHaveBeenCalledWith(
+    expect(mockUpdateIfNonGlobal).toHaveBeenCalledWith(
       { id: 'skill-1', argumentHint: undefined },
       { new: true, unset: ['argumentHint'] }
     );
