@@ -91,10 +91,10 @@ const scopeOf = (member: string) => SCOPE_BY_MEMBER.get(member);
 // The scope set a check enforces: a `[...]` literal or a list name.
 const GATE_EXPR = String.raw`(\[[^[\]]*\]|[A-Za-z_$][\w$]*)`;
 
-// Only sites that can deny: a route's or verifier's `requiredScopes`/`alsoRequiredScopes`, and the
-// list handed to `assertApiKeyScope`. A scope array elsewhere (a payload, a filter) is not a gate.
+// Only sites that can deny: a route's or verifier's `requiredScopes`, and the list handed to
+// `assertApiKeyScope`. A scope array elsewhere (a payload, a filter) is not a gate.
 const ENFORCING_SITE = new RegExp(
-  String.raw`\b(?:requiredScopes|alsoRequiredScopes)\s*:\s*${GATE_EXPR}|\bassertApiKeyScope\(\s*[\w.]+\s*,\s*${GATE_EXPR}`,
+  String.raw`\brequiredScopes\s*:\s*${GATE_EXPR}|\bassertApiKeyScope\(\s*[\w.]+\s*,\s*${GATE_EXPR}`,
   'g'
 );
 
@@ -127,6 +127,9 @@ function listResolver(code: string) {
 
 /** Every gate `code` enforces: each enforcing site plus each call to a derived helper. */
 function gatesIn(code: string, helpers: ReadonlyMap<string, Gate>): Gate[] {
+  if (/\balsoRequiredScopes\b/.test(code)) {
+    throw new Error('alsoRequiredScopes is an all-of gate, which this check does not model; teach gatesIn it');
+  }
   const resolve = listResolver(code);
   const gates: Gate[] = [];
   for (const [, routeExpr, assertExpr] of code.matchAll(ENFORCING_SITE)) {
@@ -380,6 +383,11 @@ describe('the gate rule itself', () => {
     const payload =
       'res.json({ grants: [ApiKeyScope.DATALAKE_SHARE] }); keys.filter(k => k.includes(ApiKeyScope.ADMIN));';
     expect(gatesIn(payload, HELPERS)).toEqual([]);
+  });
+
+  it('refuses to read an all-of alsoRequiredScopes gate as an any-of one', () => {
+    const code = 'baseApi({ requiredScopes: [ApiKeyScope.ADMIN], alsoRequiredScopes: [ApiKeyScope.READ_FILES] })';
+    expect(() => gatesIn(code, HELPERS)).toThrow(/all-of/);
   });
 
   it('resolves a scope list declared in the route file itself', () => {
