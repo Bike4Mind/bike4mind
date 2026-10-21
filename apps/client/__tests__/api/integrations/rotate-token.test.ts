@@ -292,6 +292,27 @@ describe('/api/integrations/[integration]/rotate-token', () => {
       expect(recordTokenRotationInitiated).toHaveBeenCalledWith('github', 'manual_rotation');
     });
 
+    // The response ends the Lambda invocation, so the metric emit must finish before it is sent.
+    it('should await the success metric before sending the response', async () => {
+      let release!: () => void;
+      vi.mocked(recordTokenRotationInitiated).mockReturnValueOnce(
+        new Promise<void>(resolve => {
+          release = resolve;
+        })
+      );
+      const { req, res } = createReq();
+      const pending = handler(req as any, res as any);
+
+      await vi.waitFor(() => expect(recordTokenRotationInitiated).toHaveBeenCalled());
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(res._isEndCalled()).toBe(false);
+
+      release();
+      await pending;
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData().authUrl).toContain('github.com');
+    });
+
     it('should log audit success', async () => {
       const { req, res } = createReq();
       await handler(req as any, res as any);
@@ -319,6 +340,27 @@ describe('/api/integrations/[integration]/rotate-token', () => {
       expect(res._getStatusCode()).toBe(500);
       expect(recordTokenRotationFailed).toHaveBeenCalledWith('github', 'misconfiguration');
       expect(mockAuditFailure).toHaveBeenCalledWith('rotation_failed');
+    });
+
+    // The response ends the Lambda invocation, so the failure metric emit must finish before it is sent.
+    it('should await the failure metric before sending the 500', async () => {
+      let release!: () => void;
+      vi.mocked(recordTokenRotationFailed).mockReturnValueOnce(
+        new Promise<void>(resolve => {
+          release = resolve;
+        })
+      );
+      vi.mocked(getSettingsValue).mockReturnValueOnce(null);
+      const { req, res } = createReq({ query: { integration: 'github' } });
+      const pending = handler(req as any, res as any);
+
+      await vi.waitFor(() => expect(recordTokenRotationFailed).toHaveBeenCalled());
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(res._isEndCalled()).toBe(false);
+
+      release();
+      await pending;
+      expect(res._getStatusCode()).toBe(500);
     });
 
     it('should use APP_URL for base URL when available', async () => {

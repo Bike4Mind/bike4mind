@@ -115,7 +115,8 @@ const handler = baseApi().post(async (req, res) => {
     }
 
     auditLogger.success({ reason });
-    void recordTokenRotationInitiated(integration, reason);
+    // Awaited: the response ends the invocation, and a frozen Lambda loses a pending emit.
+    await recordTokenRotationInitiated(integration, reason);
     return res.status(200).json({ authUrl });
   } catch (error) {
     req.logger.error('Token rotation failed', { error, integration, userId });
@@ -126,7 +127,7 @@ const handler = baseApi().post(async (req, res) => {
         : error instanceof Error && error.message.includes('JWT_SECRET')
           ? 'configuration_error'
           : 'unexpected_error';
-    void recordTokenRotationFailed(integration, errorType);
+    await recordTokenRotationFailed(integration, errorType);
     return res.status(500).json({ error: 'Failed to initiate token rotation' });
   }
 });
