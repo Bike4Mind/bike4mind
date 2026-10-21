@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import { FeedbackStatus } from '@bike4mind/common';
+
+vi.mock('@tanstack/react-router', async () => (await import('../../../__tests__/fakeAdminRouter')).fakeRouterModule);
+
+import { fakeAdminRouter } from '../../../__tests__/fakeAdminRouter';
 import { useFeedbackFilters } from '../useFeedbackFilters';
 
 /**
@@ -9,14 +13,14 @@ import { useFeedbackFilters } from '../useFeedbackFilters';
  * now happens server-side, because the list is paginated and a client predicate can only filter
  * the page on screen.
  */
-describe('useFeedbackFilters', () => {
-  let onFilterChange: ReturnType<typeof vi.fn>;
+type FilterHook = ReturnType<typeof useFeedbackFilters>;
 
+describe('useFeedbackFilters', () => {
   beforeEach(() => {
-    onFilterChange = vi.fn();
+    act(() => fakeAdminRouter.reset({ tab: 'feedback' }));
   });
 
-  const setup = () => renderHook(() => useFeedbackFilters(onFilterChange));
+  const setup = () => renderHook(() => useFeedbackFilters());
 
   it('queries only New feedback by default, newest first', () => {
     const { result } = setup();
@@ -185,16 +189,61 @@ describe('useFeedbackFilters', () => {
 
   // Every filter edit must reset the page cursor, or narrowing the filters can leave the caller
   // on a page number the new, shorter result set does not reach - which renders as an empty list.
-  it('notifies the caller on every filter change so the page cursor resets', () => {
+  it.each([
+    ['status', (filters: FilterHook) => filters.setStatusFilters(previous => ({ ...previous, Closed: true }))],
+    ['organization', (filters: FilterHook) => filters.setSelectedOrganizations(['acme'])],
+    ['subject', (filters: FilterHook) => filters.setSubject('turn')],
+    ['sort', (filters: FilterHook) => filters.toggleSortDirection()],
+    ['search', (filters: FilterHook) => filters.setSearchTerm('a')],
+  ])('resets the page to 1 when the %s filter changes, in one URL write', (_, change) => {
+    act(() => fakeAdminRouter.reset({ tab: 'feedback', feedbackPage: 4 }));
     const { result } = setup();
 
-    act(() => result.current.setSearchTerm('a'));
-    act(() => result.current.setStatusFilters(previous => previous));
-    act(() => result.current.setSelectedOrganizations(['acme']));
-    act(() => result.current.setSubject('turn'));
-    act(() => result.current.toggleSortDirection());
+    act(() => change(result.current));
 
-    expect(onFilterChange).toHaveBeenCalledTimes(5);
+    expect(fakeAdminRouter.search).not.toHaveProperty('feedbackPage');
+    expect(fakeAdminRouter.navigate).toHaveBeenCalledTimes(1);
+    expect(fakeAdminRouter.navigate).toHaveBeenLastCalledWith(expect.objectContaining({ replace: true }));
+  });
+
+  it('leaves a page loaded from the URL alone on mount', () => {
+    act(() => fakeAdminRouter.reset({ tab: 'feedback', feedbackPage: 4, status: 'Closed' }));
+    setup();
+
+    expect(fakeAdminRouter.navigate).not.toHaveBeenCalled();
+    expect(fakeAdminRouter.search).toMatchObject({ feedbackPage: 4, status: 'Closed' });
+  });
+
+  it('reads the filters from the URL and writes them back to it', () => {
+    act(() =>
+      fakeAdminRouter.reset({ tab: 'feedback', status: 'InProgress,Closed', subject: 'help', feedbackOrg: ['Acme'] })
+    );
+    const { result } = setup();
+
+    expect(result.current.filterParams).toEqual({
+      status: [FeedbackStatus.Closed, FeedbackStatus.InProgress],
+      organization: ['Acme'],
+      subject: 'help',
+      sort: 'desc',
+    });
+
+    act(() => result.current.toggleSortDirection());
+    act(() => result.current.setSubject(undefined));
+
+    expect(fakeAdminRouter.search).toEqual({
+      tab: 'feedback',
+      status: 'InProgress,Closed',
+      feedbackOrg: ['Acme'],
+      asc: true,
+    });
+  });
+
+  it('keeps the free-text search out of the URL', () => {
+    const { result } = setup();
+
+    act(() => result.current.setSearchTerm('someone@example.com'));
+
+    expect(JSON.stringify(fakeAdminRouter.search)).not.toContain('someone');
   });
 
   describe('search', () => {
