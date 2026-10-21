@@ -4,9 +4,11 @@
  * Tells a federated app's *server* whether its signed-in user is a B4M admin
  * (`User.isAdmin`), so the app can admit B4M admins to its own ops console
  * without keeping a separate admin list. Same client auth and ID-token trust as
- * /api/oauth/ai-token (see that file and server/auth/verifyFederatedIdToken.ts),
- * but nothing is minted and nothing is released beyond the boolean, so there is
- * no scope or consent gate. The grant gate still applies (enforced): without it a
+ * /api/oauth/ai-token (see that file and server/auth/verifyFederatedIdToken.ts).
+ * Nothing is minted and nothing is released beyond the boolean, but the answer is
+ * still gated on the opt-in `federated:admin-status` scope: the client must be
+ * registered for it (allowedScopes), and for a relying-party client the user's grant
+ * must cover it (federatedGrantGate.ts, enforced). Without the grant gate a
  * relying-party client's pool could name any B4M user in `identities[]` and learn
  * whether they are an admin. The grant gate does not cover first-party clients
  * (the default clientType): on the 'identities' path they can ask about any user
@@ -17,6 +19,7 @@
  */
 
 import { z } from 'zod';
+import { FEDERATED_ADMIN_STATUS_SCOPE } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { cacheRepository } from '@bike4mind/database';
@@ -71,6 +74,15 @@ const handler = baseApi({ auth: false })
       });
     }
 
+    // 2.5. Client scope gate - the scope is opt-in and never part of a registration's defaults.
+    if (!(client.allowedScopes ?? []).includes(FEDERATED_ADMIN_STATUS_SCOPE)) {
+      logError('invalid_scope', 403);
+      return res.status(403).json({
+        error: 'invalid_scope',
+        error_description: `Client is not registered for ${FEDERATED_ADMIN_STATUS_SCOPE}`,
+      });
+    }
+
     // 3. Per-client_id rate limit, after client auth so failed-secret probes can't burn it.
     const rl = await cacheRepository.tryIncrementWithinLimitFixedWindow(
       `rate-limit:oauth-federated-admin:${client_id}`,
@@ -107,12 +119,12 @@ const handler = baseApi({ auth: false })
     }
 
     // 4.5. Grant gate - relying-party clients only; see federatedGrantGate.ts. Enforced from the
-    //      start: this surface has no pre-grant callers to migrate.
+    //      start: this surface has no pre-grant callers to migrate. The grant must cover the scope.
     const grantRejection = await checkFederatedGrant({
       client,
       clientId: client_id,
       userId: b4mUserId,
-      scopes: [],
+      scopes: [FEDERATED_ADMIN_STATUS_SCOPE],
       logger: req.logger,
       logTag: 'OAUTH_FEDERATED_ADMIN',
       enforce: true,

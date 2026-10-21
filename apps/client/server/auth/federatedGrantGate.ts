@@ -11,9 +11,10 @@ interface GrantGateLogger {
 }
 
 /**
- * Grant gate (SECURITY) for the federated user-pays surfaces - the AI-token exchange
- * (pages/api/oauth/ai-token.ts) and the identified embed session mint
- * (pages/api/embed/session.ts). Shared so both surfaces enforce one rule.
+ * Grant gate (SECURITY) for the federated surfaces - the AI-token exchange
+ * (pages/api/oauth/ai-token.ts), the identified embed session mint
+ * (pages/api/embed/session.ts) and the admin-status check (pages/api/oauth/federated-admin.ts).
+ * Shared so every surface enforces one rule.
  *
  * Relying-party clients only. Requires the durable (user, client) authorization grant
  * recorded by the authorize flow (code.ts), AND that the grant covers every scope being

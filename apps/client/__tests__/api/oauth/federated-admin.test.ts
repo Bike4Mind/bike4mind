@@ -51,9 +51,11 @@ vi.mock('@server/auth/federatedGrantGate', () => ({
 
 import handler from '../../../pages/api/oauth/federated-admin';
 import { FederatedIdTokenError } from '@server/auth/verifyFederatedIdToken';
+import { FEDERATED_ADMIN_STATUS_SCOPE } from '@bike4mind/common';
 
 const FEDERATED_CLIENT = {
   name: 'K2',
+  allowedScopes: ['openid', FEDERATED_ADMIN_STATUS_SCOPE],
   federatedIdp: {
     issuer: 'https://cognito-idp.us-east-2.amazonaws.com/us-east-2_pool',
     audience: 'app-client-id',
@@ -116,7 +118,12 @@ describe('POST /api/oauth/federated-admin', () => {
     expect(status).toBe(403);
     expect(body.error).toBe('access_denied');
     expect(mockCheckGrant).toHaveBeenCalledWith(
-      expect.objectContaining({ clientId: 'client-1', userId: 'b4m-user-1', scopes: [], enforce: true })
+      expect.objectContaining({
+        clientId: 'client-1',
+        userId: 'b4m-user-1',
+        scopes: [FEDERATED_ADMIN_STATUS_SCOPE],
+        enforce: true,
+      })
     );
     // The gate keys its relying-party exemption off clientType, so it must see the authenticated client.
     expect(mockCheckGrant.mock.calls[0][0].client).toBe(FEDERATED_CLIENT);
@@ -141,6 +148,22 @@ describe('POST /api/oauth/federated-admin', () => {
     mockVerifyClientSecret.mockResolvedValue({ name: 'Plain' });
     expect((await call()).status).toBe(403);
     expect(mockVerifyIdToken).not.toHaveBeenCalled();
+  });
+
+  it.each<[string, string[] | undefined]>([
+    ['lacks the scope', ['openid', 'email', 'profile', 'ai:generate', 'me:read']],
+    ['has no allowedScopes field', undefined],
+    ['has an empty allowedScopes list', []],
+  ])('rejects a client that %s with 403 invalid_scope', async (_name, allowedScopes) => {
+    mockVerifyClientSecret.mockResolvedValue({ ...FEDERATED_CLIENT, allowedScopes });
+    const { status, body } = await call();
+    expect(status).toBe(403);
+    expect(body.error).toBe('invalid_scope');
+    expect(body.error_description).toContain(FEDERATED_ADMIN_STATUS_SCOPE);
+    expect(mockTryIncrement).not.toHaveBeenCalled();
+    expect(mockVerifyIdToken).not.toHaveBeenCalled();
+    expect(mockCheckGrant).not.toHaveBeenCalled();
+    expect(mockUserFindById).not.toHaveBeenCalled();
   });
 
   it('rejects an invalid ID token with 401', async () => {
@@ -179,6 +202,13 @@ describe('POST /api/oauth/federated-admin error logging', () => {
       () => mockVerifyClientSecret.mockResolvedValue({ ...FEDERATED_CLIENT, federatedIdp: undefined }),
       SECRET_BODY,
       'access_denied',
+      403,
+    ],
+    [
+      'client not registered for the scope',
+      () => mockVerifyClientSecret.mockResolvedValue({ ...FEDERATED_CLIENT, allowedScopes: ['openid'] }),
+      SECRET_BODY,
+      'invalid_scope',
       403,
     ],
     [

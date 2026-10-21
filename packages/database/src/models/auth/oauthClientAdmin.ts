@@ -28,6 +28,7 @@ export const OAUTH_CLIENT_SECRET_BCRYPT_ROUNDS = 10;
 const IDENTITY_SCOPES = ['openid', 'email', 'profile'];
 // A federated client mints per-user ai:generate keys via /api/oauth/ai-token, which requires the
 // user to have approved ai:generate at /authorize, so the scope must be requestable there.
+// Opt-in scopes (OAUTH_OPT_IN_SCOPES in b4m-core/common) are deliberately left out of this default.
 const FEDERATED_SCOPES = [...IDENTITY_SCOPES, 'ai:generate', 'me:read'];
 
 // The b4m_<slug>_<8 hex> shape is parsed back by oauthClientSourceSlug (b4m-core/common/src/constants/oauthClients.ts).

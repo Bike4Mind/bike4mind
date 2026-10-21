@@ -1,6 +1,12 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import mongoose from 'mongoose';
-import { ConflictError, NotFoundError, BadRequestError, isOAuthClientIdShape } from '@bike4mind/common';
+import {
+  ConflictError,
+  NotFoundError,
+  BadRequestError,
+  isOAuthClientIdShape,
+  FEDERATED_ADMIN_STATUS_SCOPE,
+} from '@bike4mind/common';
 import { createMongoServer } from '../../__test__/createMongoServer';
 import { OAuthClientModel, oauthClientRepository } from './OAuthClientModel';
 import {
@@ -123,6 +129,7 @@ describe('createOAuthClient', () => {
       audience: client.clientId,
     });
     expect(client.allowedScopes).toEqual(['openid', 'email', 'profile', 'ai:generate', 'me:read']);
+    expect(client.allowedScopes).not.toContain(FEDERATED_ADMIN_STATUS_SCOPE);
   });
 
   it('applies the same federated shape rules as the seed script', async () => {
