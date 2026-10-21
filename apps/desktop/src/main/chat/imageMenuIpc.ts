@@ -3,18 +3,11 @@ import type { IpcMain, SaveDialogOptions, WebContents } from 'electron';
 import type { AddAttachmentsResult, ChatImageAction, ChatImageActionResult, ChatImageRef } from '@shared/chat';
 import { IPC_CHANNELS } from '@shared/ipc';
 import type { AttachmentStore } from './AttachmentStore';
-import { isImageMediaType, sanitizeName } from './attachments';
+import { extensionForImageType, isImageMediaType, sanitizeName, type ImageMediaType } from './attachments';
 import { parseMediaUrl, type MediaStore } from './media/MediaStore';
 import { isValidSessionId } from './SessionStore';
 
 const ACTIONS: ReadonlySet<string> = new Set<ChatImageAction>(['copy', 'save', 'copy-path', 'copy-markdown', 'reveal']);
-
-const EXTENSION_BY_IMAGE_TYPE: Record<string, string> = {
-  'image/png': 'png',
-  'image/jpeg': 'jpg',
-  'image/gif': 'gif',
-  'image/webp': 'webp',
-};
 
 const URL_MAX = 2048;
 const NAME_MAX = 255;
@@ -38,7 +31,7 @@ export interface ImageMenuDeps {
 
 interface ResolvedImage {
   path: string;
-  mediaType: string;
+  mediaType: ImageMediaType;
   fileName: string;
 }
 
@@ -100,9 +93,14 @@ function stemOf(name: string): string {
   return stem || 'image';
 }
 
-/** Angle brackets keep a destination with spaces (Application Support) one link. */
+/**
+ * Angle brackets keep a destination with spaces (Application Support) one link. Elsewhere a
+ * backslash is CommonMark's escape character, so a destination that ends in one would escape
+ * the closing paren and leave the link unclosed.
+ */
 export function markdownImage(destination: string): string {
-  return /[\s()]/.test(destination) ? `![](<${destination}>)` : `![](${destination})`;
+  if (/[\s()]/.test(destination)) return `![](<${destination}>)`;
+  return `![](${destination.replace(/[\\<>]/g, char => `\\${char}`)})`;
 }
 
 /**
@@ -120,20 +118,19 @@ export function registerImageMenuIpc(ipc: Pick<IpcMain, 'handle'>, deps: ImageMe
       const parsed = parseMediaUrl(ref.url);
       const file = parsed && (await deps.media.locate(parsed.sessionId, parsed.name));
       if (!file || !isImageMediaType(file.mimeType)) return null;
-      const extension = EXTENSION_BY_IMAGE_TYPE[file.mimeType];
       return {
         path: file.path,
         mediaType: file.mimeType,
-        fileName: `${ref.nameHint ?? 'image'}-${stamp(now())}.${extension}`,
+        fileName: `${ref.nameHint ?? 'image'}-${stamp(now())}.${extensionForImageType(file.mimeType)}`,
       };
     }
     if (ref.source === 'attachment') {
       const path = await deps.attachments.locate(ref.sessionId, ref.attachmentId);
-      if (!path) return null;
+      if (!path || !isImageMediaType(ref.mediaType)) return null;
       return {
         path,
         mediaType: ref.mediaType,
-        fileName: `${stemOf(ref.name)}.${EXTENSION_BY_IMAGE_TYPE[ref.mediaType]}`,
+        fileName: `${stemOf(ref.name)}.${extensionForImageType(ref.mediaType)}`,
       };
     }
     return null;
@@ -161,7 +158,7 @@ export function registerImageMenuIpc(ipc: Pick<IpcMain, 'handle'>, deps: ImageMe
         return { ok: true, done: true };
       }
       case 'save': {
-        const extension = EXTENSION_BY_IMAGE_TYPE[image.mediaType];
+        const extension = extensionForImageType(image.mediaType);
         const target = await deps.pickSavePath(sender, {
           defaultPath: join(deps.downloadsDirectory(), image.fileName),
           filters: [{ name: 'Image', extensions: [extension] }],
@@ -200,13 +197,19 @@ export function registerImageMenuIpc(ipc: Pick<IpcMain, 'handle'>, deps: ImageMe
     async (_event, sessionId: unknown, value: unknown): Promise<AddAttachmentsResult> => {
       const gone: AddAttachmentsResult = { attachments: [], rejected: [{ name: 'image', reason: GONE }] };
       if (typeof sessionId !== 'string' || !isValidSessionId(sessionId)) return gone;
-      const ref = parseImageRef(value);
-      const image = ref && (await resolve(ref));
-      if (!image) return gone;
-      const data = await deps.readFile(image.path);
-      return deps.attachments.add(sessionId, [
-        { source: 'bytes', name: image.fileName, mediaType: image.mediaType, data },
-      ]);
+      try {
+        const ref = parseImageRef(value);
+        const image = ref && (await resolve(ref));
+        if (!image) return gone;
+        const data = await deps.readFile(image.path);
+        return await deps.attachments.add(sessionId, [
+          { source: 'bytes', name: image.fileName, mediaType: image.mediaType, data },
+        ]);
+      } catch {
+        // The file can vanish between locate and read, or the write can fail; either way the
+        // renderer already knows how to show a rejected batch, so answer with one.
+        return { attachments: [], rejected: [{ name: 'image', reason: 'That image could not be attached.' }] };
+      }
     }
   );
 }
