@@ -70,8 +70,8 @@ function solveInputShape(catalog: SolverCatalog) {
 export async function registerSolverTools(server: McpServer, client: B4mApiClient): Promise<void> {
   let catalog: SolverCatalog;
   try {
-    // Concurrent so the pair shares one startup budget. The route itself accepts either scope, so the
-    // key's own scopes are checked here: an API key holding only one is never offered the tools.
+    // Concurrent so the pair shares one startup budget. The key's own scopes are checked here: an API
+    // key holding only one of the two is never offered the tools.
     const [rawCatalog, scopes] = await Promise.all([client.getSolverCatalog(), client.getOwnKeyScopes()]);
     if (scopes && !REQUIRED_SCOPES.every(scope => scopes.includes(scope))) {
       logger.debug(`mcp: solver tools not offered: key lacks ${SOLVER_SCOPES}`);
