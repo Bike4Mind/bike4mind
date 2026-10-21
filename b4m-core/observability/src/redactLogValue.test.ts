@@ -14,6 +14,18 @@ describe('redactLogValue', () => {
     expect(redactLogValue({ s: new Set(['x']) })).toEqual({ s: ['x'] });
   });
 
+  it('redacts Map entries whose keys name a credential', () => {
+    const creds = new Map([
+      ['apiKey', 'sk-live-123'],
+      ['password', 'hunter2'],
+      ['baseURL', 'https://example.test'],
+    ]);
+
+    expect(redactLogValue({ creds })).toEqual({
+      creds: { apiKey: '[REDACTED]', password: '[REDACTED]', baseURL: 'https://example.test' },
+    });
+  });
+
   it('summarizes a Buffer rather than dumping its bytes', () => {
     expect(redactLogValue({ b: Buffer.alloc(4) })).toEqual({ b: '<Buffer 4 bytes>' });
   });

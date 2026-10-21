@@ -70,6 +70,16 @@ function isProviderError(value: Error): boolean {
   );
 }
 
+/** Normalize the key once so `api_key`, `apiKey` and `api-key` all reach the same tests. */
+function isSensitiveKey(key: string): boolean {
+  const normalized = key.replace(/[-_]/g, '');
+  return sensitiveField.test(normalized) || sensitiveSuffix.test(normalized);
+}
+
+function redactEntry(key: string, value: unknown, state: WalkState, depth: number): unknown {
+  return isSensitiveKey(key) ? REDACTED : walk(value, state, depth + 1);
+}
+
 function walk(value: unknown, state: WalkState, depth: number): unknown {
   if (++state.nodes > MAX_NODES) return TRUNCATED;
   if (typeof value === 'string') return redactString(value);
@@ -81,8 +91,9 @@ function walk(value: unknown, state: WalkState, depth: number): unknown {
     if (value instanceof Date) return value.toISOString();
     if (typeof Buffer !== 'undefined' && value instanceof Buffer) return `<Buffer ${value.length} bytes>`;
     if (value instanceof Map) {
+      // Map keys are field names exactly as object keys are, so they go through the same test.
       const entries: Record<string, unknown> = {};
-      for (const [key, entry] of value) entries[String(key)] = walk(entry, state, depth + 1);
+      for (const [key, entry] of value) entries[String(key)] = redactEntry(String(key), entry, state, depth);
       return entries;
     }
     if (value instanceof Set) return [...value].map(entry => walk(entry, state, depth + 1));
@@ -107,10 +118,7 @@ function walk(value: unknown, state: WalkState, depth: number): unknown {
     const sanitized: Record<string, unknown> = {};
     for (const [key, field] of Object.entries(value)) {
       if (typeof field === 'function') continue;
-      sanitized[key] =
-        sensitiveField.test(key.replace(/[-_]/g, '')) || sensitiveSuffix.test(key.replace(/[-_]/g, ''))
-          ? REDACTED
-          : walk(field, state, depth + 1);
+      sanitized[key] = redactEntry(key, field, state, depth);
     }
     return sanitized;
   } catch {
