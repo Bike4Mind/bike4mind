@@ -855,8 +855,9 @@ describe('billIteration (long-context tiers)', () => {
     expect(charged).toBeCloseTo(100_000 * perM(2) + 1_000 * perM(12), 10);
   });
 
+  // Pins the real Gemini catalog, not the tier algorithm (the two-tier stubs below cover that).
   it('bills two gemini-3.1-pro-preview iterations each under 200K at the <=200K rate when their sum crosses it', async () => {
-    const gemini = new GeminiBackend('static-price-table');
+    const gemini = new GeminiBackend('test-key');
     const modelInfo = (await gemini.getModelInfo()).find(m => m.id === ChatModels.GEMINI_3_1_PRO_PREVIEW);
     if (!modelInfo) throw new Error('gemini-3.1-pro-preview missing from the Gemini catalog');
 
@@ -865,7 +866,10 @@ describe('billIteration (long-context tiers)', () => {
 
     await billIteration({
       iterationIndex: 1,
-      checkpoint: checkpoint(150_000, { output: 1_000 }),
+      checkpoint: {
+        ...checkpoint(150_000, { output: 1_000 }),
+        turnUsage: [{ inputTokens: 150_000, outputTokens: 1_000 }],
+      },
       counters,
       modelInfo,
       model: ChatModels.GEMINI_3_1_PRO_PREVIEW,
@@ -888,6 +892,8 @@ describe('billIteration (long-context tiers)', () => {
       effects,
     });
 
+    // The delta fallback would charge the same 150K, so only this proves the per-request path ran.
+    expect(spies.logTurnsFallback).not.toHaveBeenCalled();
     const charged = spies.recordUsageEvent.mock.calls.map(([e]) => e.costUsd as number);
     const shortTier = (150_000 * 2 + 1_000 * 12) / 1_000_000;
     expect(charged).toHaveLength(2);
