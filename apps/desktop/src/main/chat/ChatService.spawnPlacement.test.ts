@@ -7,8 +7,11 @@ import { awaitsWorktree, type ChatSessionSummary, type ChatSpawnSuggestion, type
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import { SessionStore } from './SessionStore';
+import { MessageQueue } from './MessageQueue';
 import { git, listWorktrees } from './project/git';
-import { appWorktreeRoot } from './project/workspace';
+import { appWorktreeRoot, prefetchBase } from './project/workspace';
+import { DependencyInstaller } from './project/dependencyInstall';
+import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
 
@@ -19,6 +22,7 @@ vi.mock('./project/workspace', async importOriginal => {
   const actual = await importOriginal<typeof import('./project/workspace')>();
   return {
     ...actual,
+    prefetchBase: vi.fn(actual.prefetchBase),
     resolveWorkspace: async (...args: Parameters<typeof actual.resolveWorkspace>) => {
       await gate.hold;
       return actual.resolveWorkspace(...args);
@@ -50,6 +54,8 @@ describe('ChatService spawn placement', () => {
   let streams: PassThrough[];
   let container: string;
   let main: string;
+  let queue: MessageQueue;
+  let dependencies: DependencyInstaller;
 
   /** A repository in the user's layout: a bare dir plus one folder per branch beside it. */
   async function repository(): Promise<void> {
@@ -72,6 +78,7 @@ describe('ChatService spawn placement', () => {
   }
 
   beforeEach(async () => {
+    vi.mocked(prefetchBase).mockClear();
     gate.hold = Promise.resolve();
     await repository();
     store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-place-sessions-')), 'test-model');
@@ -86,9 +93,14 @@ describe('ChatService spawn placement', () => {
       return Promise.resolve({ data: stream, status: 200 });
     });
     post = boundPost;
+    queue = new MessageQueue(() => {});
+    dependencies = new DependencyInstaller(new BackgroundProcessRegistry({ output: () => {}, status: () => {} }));
+    vi.spyOn(dependencies, 'maybeStart').mockResolvedValue(undefined);
 
     service = new ChatService({
       store,
+      queue,
+      dependencies,
       approvals: new ApprovalGate(),
       access: { list: async () => [] } as unknown as AccessStore,
       logger: { debug: vi.fn(), warn: vi.fn() },
@@ -258,6 +270,7 @@ describe('ChatService spawn placement', () => {
     await suggest();
 
     expect(await child()).toBeUndefined();
+    expect(prefetchBase).toHaveBeenCalledWith(main, 'main');
     expect(await listWorktrees(main)).toHaveLength(1);
     expect(settled()[0]?.status).toBe('done');
     expect(settled()[0]?.preview).toMatch(/Nothing has started/);
@@ -366,7 +379,7 @@ describe('ChatService spawn placement', () => {
 
     // Busy while preparing, so neither the seed nor anything the user types can run in the
     // repository folder the session is parked on.
-    expect(await service.send(early!.id, 'run ls')).toMatchObject({ ok: false });
+    expect(await service.send(early!.id, 'run ls')).toMatchObject({ ok: true, queued: true });
     expect(seedPosted('do the thing')).toBe(false);
 
     release();
@@ -374,6 +387,105 @@ describe('ChatService spawn placement', () => {
     await vi.waitUntil(() => seedPosted(worktree), { timeout: 5000, interval: 5 });
     expect((await service.getSession(early!.id))?.preparingWorkspace).toBeUndefined();
     expect((await store.get(parent.id))?.project?.workingDirectory).toBe(main);
+  });
+
+  it('does not launch or install after a preparing child is deleted', async () => {
+    const release = holdWorktrees();
+    await spawnWith({ placement: 'worktree', branch: 'agent/deleted' });
+    const spawned = await child();
+    if (!spawned) throw new Error('Child missing');
+    await service.deleteSession(spawned.id);
+
+    release();
+    await vi.waitUntil(
+      () => events.some(event => event.type === 'workspace' && event.sessionId === spawned.id && !event.running),
+      { timeout: 10000, interval: 5 }
+    );
+    await vi.waitUntil(() => !service.isSessionBusy(spawned.id), { timeout: 5000, interval: 5 });
+
+    expect(await store.get(spawned.id)).toBeNull();
+    expect(dependencies.maybeStart).not.toHaveBeenCalled();
+    expect(seedPosted('do the thing')).toBe(false);
+    expect(events.some(event => event.type === 'spawn-failed')).toBe(false);
+  });
+
+  it('keeps other turns blocked until a failed spawn has been removed', async () => {
+    await mkdir(join(appWorktreeRoot(container), 'agent+cleanup'), { recursive: true });
+    await writeFile(join(appWorktreeRoot(container), 'agent+cleanup', 'stray.txt'), 'not mine\n', 'utf8');
+    let releaseDelete = () => {};
+    const deletion = new Promise<void>(resolve => {
+      releaseDelete = resolve;
+    });
+    let deletingId: string | undefined;
+    const originalDelete = store.delete.bind(store);
+    vi.spyOn(store, 'delete').mockImplementation(async sessionId => {
+      deletingId = sessionId;
+      await deletion;
+      return originalDelete(sessionId);
+    });
+
+    await spawnWith({ placement: 'worktree', branch: 'agent/cleanup' });
+    await vi.waitUntil(() => deletingId, { timeout: 10000, interval: 5 });
+    if (!deletingId) throw new Error('Deletion did not start');
+
+    expect(service.isSessionBusy(deletingId)).toBe(true);
+    expect(await service.send(deletingId, 'must not run')).toMatchObject({ ok: true, queued: true });
+    expect(seedPosted('must not run')).toBe(false);
+    releaseDelete();
+    await vi.waitUntil(() => events.some(event => event.type === 'spawn-failed'), { timeout: 5000, interval: 5 });
+    expect(await store.get(deletingId)).toBeNull();
+    expect(queue.list(deletingId)).toEqual([]);
+  });
+
+  it.each(['local', 'worktree'] as const)('reserves the seed ahead of other turns for a %s spawn', async placement => {
+    const parent = await parentSession();
+    await service.send(parent.id, 'go');
+    await vi.waitUntil(() => streams.length > 0, { timeout: 5000, interval: 5 });
+    const suggestion = await suggest();
+    const originalGet = store.get.bind(store);
+    let releaseSeed = () => {};
+    const seedGate = new Promise<void>(resolve => {
+      releaseSeed = resolve;
+    });
+    let seedReading = false;
+    vi.spyOn(store, 'get').mockImplementation(async sessionId => {
+      const session = await originalGet(sessionId);
+      const workspaceReady =
+        placement === 'local' ||
+        events.some(event => event.type === 'workspace' && event.sessionId === sessionId && !event.running);
+      if (session?.origin && workspaceReady && !seedReading) {
+        seedReading = true;
+        await seedGate;
+      }
+      return session;
+    });
+
+    const result = await start(
+      parent,
+      suggestion,
+      placement === 'worktree' ? { placement, branch: 'agent/seed-first' } : { placement }
+    );
+    expect(result.ok).toBe(true);
+    await vi.waitUntil(() => seedReading, { timeout: 10000, interval: 5 });
+    const spawned = (await store.list()).find(session => session.origin);
+    if (!spawned) throw new Error('Child missing');
+
+    expect(service.isSessionBusy(spawned.id)).toBe(true);
+    expect(await service.send(spawned.id, 'user follow-up')).toMatchObject({ ok: true, queued: true });
+    expect(
+      await service.startAutomaticTurn(spawned.id, 'automatic follow-up', {
+        kind: 'auto-fix',
+        prUrl: 'https://github.com/example/project/pull/1',
+        prNumber: 1,
+        summary: 'check failed',
+      })
+    ).toMatchObject({ ok: false, busy: true });
+    expect(seedPosted('user follow-up')).toBe(false);
+
+    releaseSeed();
+    await vi.waitUntil(() => seedPosted('do the thing'), { timeout: 10000, interval: 5 });
+    expect((await store.get(spawned.id))?.messages[0]?.content).toContain('do the thing');
+    expect(queue.list(spawned.id)[0]?.text).toBe('user follow-up');
   });
 
   it('holds the concurrency cap while its sessions are still preparing', async () => {

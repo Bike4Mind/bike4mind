@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { mkdir, realpath, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { PhaseTimer } from '../PhaseTimer';
 import { slugify } from './branchName';
@@ -218,15 +218,15 @@ interface Spare {
  *
  * Bounded on every side: a repository gets one only after a worktree was cut in it this run,
  * at most MAX_SPARES exist, each goes after SPARE_IDLE_MS unused, and `dispose` removes them
- * all on quit. A spare left behind by a run that did not quit cleanly is recognised by its path
- * and replaced. Nothing here touches a checkout the app did not make: a path git does not know
- * as a detached worktree is left alone, and the spare is simply not made.
+ * all on quit. A spare left after a crash is recognised by its git metadata and original HEAD.
+ * Changed or unowned checkouts are left alone, and the spare is simply not made.
  */
 export class SpareWorktrees {
   /** By container, in order of last use. */
   private readonly ready = new Map<string, Spare>();
   private readonly refills = new Map<string, NodeJS.Timeout>();
   private readonly chains = new Map<string, Promise<unknown>>();
+  private readonly generations = new Map<string, number>();
   private disposed = false;
 
   constructor(private readonly refillDelayMs = SPARE_REFILL_DELAY_MS) {}
@@ -243,6 +243,7 @@ export class SpareWorktrees {
     this.ready.delete(container);
     clearTimeout(spare.idle);
     return this.serial(container, async () => {
+      if (!(await isOwnedSpare(spare.path)) || !(await cleanDetachedWorktree(spare.path))) return false;
       try {
         await git(projectDirectory, ['worktree', 'move', spare.path, path]);
       } catch {
@@ -263,9 +264,10 @@ export class SpareWorktrees {
   refill(projectDirectory: string, container: string, from: string): void {
     if (this.disposed) return;
     clearTimeout(this.refills.get(container));
+    const generation = this.generations.get(container) ?? 0;
     const timer = setTimeout(() => {
       this.refills.delete(container);
-      void this.serial(container, () => this.fill(projectDirectory, container, from));
+      void this.serial(container, () => this.fill(projectDirectory, container, from, generation));
     }, this.refillDelayMs);
     timer.unref();
     this.refills.set(container, timer);
@@ -274,7 +276,12 @@ export class SpareWorktrees {
   /** Drop the spare of the repository at `projectDirectory`, if it has one. */
   async forget(projectDirectory: string): Promise<void> {
     const container = await containerDirectory(projectDirectory).catch(() => null);
-    if (container) await this.discard(container);
+    if (!container) return;
+    clearTimeout(this.refills.get(container));
+    this.refills.delete(container);
+    this.generations.set(container, (this.generations.get(container) ?? 0) + 1);
+    await this.chains.get(container);
+    await this.discard(container);
   }
 
   async dispose(): Promise<void> {
@@ -286,22 +293,26 @@ export class SpareWorktrees {
     await Promise.all(this.chains.values());
   }
 
-  private async fill(projectDirectory: string, container: string, from: string): Promise<void> {
-    if (this.disposed || this.ready.has(container)) return;
+  private async fill(projectDirectory: string, container: string, from: string, generation: number): Promise<void> {
+    const cancelled = () => this.disposed || generation !== (this.generations.get(container) ?? 0);
+    if (cancelled() || this.ready.has(container)) return;
     const path = sparePath(container);
     const occupant = await registeredAt(await listWorktrees(projectDirectory), path);
     if (occupant) {
-      if (occupant.branch) return;
+      if (occupant.branch || !(await isOwnedSpare(path))) return;
       await removeWorktree(projectDirectory, path);
     } else if (await directoryExists(path)) {
       return;
     }
     try {
-      await git(projectDirectory, ['worktree', 'add', '--quiet', '--detach', path, from]);
+      const head = (await git(projectDirectory, ['rev-parse', '--verify', `${from}^{commit}`])).trim();
+      await git(projectDirectory, ['worktree', 'add', '--quiet', '--detach', path, head]);
+      const gitDirectory = (await git(path, ['rev-parse', '--absolute-git-dir'])).trim();
+      await writeFile(join(gitDirectory, 'b4m-spare'), `bike4mind-spare:${head}\n`, 'utf8');
     } catch {
       return;
     }
-    if (this.disposed) {
+    if (cancelled()) {
       await removeWorktree(projectDirectory, path);
       return;
     }
@@ -333,10 +344,32 @@ export class SpareWorktrees {
   }
 }
 
-/** Best effort: a spare that cannot be removed now is replaced the next time one is made. */
+async function isOwnedSpare(path: string): Promise<boolean> {
+  try {
+    const gitDirectory = (await git(path, ['rev-parse', '--absolute-git-dir'])).trim();
+    const head = (await git(path, ['rev-parse', 'HEAD'])).trim();
+    return (await readFile(join(gitDirectory, 'b4m-spare'), 'utf8')) === `bike4mind-spare:${head}\n`;
+  } catch {
+    return false;
+  }
+}
+
+async function cleanDetachedWorktree(path: string): Promise<boolean> {
+  try {
+    return (
+      (await git(path, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim() === 'HEAD' &&
+      (await git(path, ['status', '--porcelain', '--untracked-files=normal', '--ignored=matching'])).trim() === ''
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Refuse changed checkouts, including a spare someone has started using after a crash. */
 async function removeWorktree(projectDirectory: string, path: string): Promise<void> {
   try {
-    await git(projectDirectory, ['worktree', 'remove', '--force', path]);
+    if (!(await isOwnedSpare(path)) || !(await cleanDetachedWorktree(path))) return;
+    await git(projectDirectory, ['worktree', 'remove', path]);
   } catch {
     // Already gone, or held open; see above.
   }

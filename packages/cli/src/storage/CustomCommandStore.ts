@@ -31,6 +31,7 @@ export interface CachedCommandFile {
   mtimeMs: number;
   size: number;
   command: CustomCommand | null;
+  pending?: Promise<CustomCommand | null>;
 }
 
 export class CustomCommandStore {
@@ -298,12 +299,19 @@ export class CustomCommandStore {
     const stats = await fs.stat(filePath);
     const cached = cache.get(filePath);
     if (cached && cached.source === source && cached.mtimeMs === stats.mtimeMs && cached.size === stats.size) {
-      return cached.command;
+      return cached.pending ?? cached.command;
     }
     const entry: CachedCommandFile = { source, mtimeMs: stats.mtimeMs, size: stats.size, command: null };
+    const parsing = this.parseFile(filePath, commandName, source, isSkillFile);
+    // Other stores share this cache; an unfinished parse is not a skipped file.
+    entry.pending = parsing.catch(() => null);
     cache.set(filePath, entry);
     // Rethrown once for the caller's warning; the null entry keeps later scans quiet until the file changes.
-    entry.command = await this.parseFile(filePath, commandName, source, isSkillFile);
+    try {
+      entry.command = await parsing;
+    } finally {
+      delete entry.pending;
+    }
     return entry.command;
   }
 

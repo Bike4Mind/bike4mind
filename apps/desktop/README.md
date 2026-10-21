@@ -477,6 +477,19 @@ Three cases it handles rather than failing:
 deleting a conversation must not be a way to lose code. Removing one stays a git operation the
 user performs themselves (`rmworktree <branch>`).
 
+### Starting a session in a worktree
+
+A suggested task or approved `session_spawn` appears in the sidebar before git finishes,
+with "Preparing worktree..." in its row and chips. Its first turn waits for the checkout;
+messages sent while it prepares queue behind the initial task. New Code sessions with the
+worktree toggle on also wait for their checkout before running tools.
+
+If a spawned session cannot prepare its worktree, the app removes the session, shows a
+failure toast and reports the failure to the parent conversation. A suggested task returns
+to pending: start the card again after correcting the git or filesystem error. For a tool
+spawn, ask the parent to try `session_spawn` again. Deleting a session while it prepares
+cancels its launch without reporting a startup failure.
+
 ### Tools run in the session's working directory
 
 `ChatService.resolveToolScope` puts the session's working directory and its context
@@ -506,7 +519,7 @@ not a hand-written approximation.
 
 Adapted from Claude Code desktop's layout: primary nav, a **Pinned** section, then project
 groups with per-group actions (new session, search, settings) and a leading status dot per row
-- filled while a reply streams, hollow when idle. The dot is driven by a global subscription to
+- filled while a reply streams or its worktree prepares, hollow when idle. The dot is driven by a global subscription to
 main's stream events, not the open conversation, so a session replying in the background shows
 as running.
 

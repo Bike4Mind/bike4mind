@@ -379,7 +379,9 @@ export function fetchRemoteFor(directory: string, baseRef: string): Promise<void
     () => undefined,
     // Offline, no such remote, or a base that only exists locally. Branching from the stale
     // ref beats refusing to start.
-    () => undefined
+    () => {
+      if (recentFetches.get(key)?.done === done) recentFetches.delete(key);
+    }
   );
   recentFetches.set(key, { at: Date.now(), done });
   return done;

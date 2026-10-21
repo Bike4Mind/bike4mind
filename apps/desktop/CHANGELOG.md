@@ -10,6 +10,9 @@
 
 ## Unreleased
 
+- Show spawned sessions immediately while their worktrees prepare, with queued messages and visible startup failures.
+- Reuse base-branch fetches and spare checkouts, and invalidate the skill catalog when its files change.
+
 - Add account-scoped Claude Code sync and claude.ai export import, with continued sessions protected from later imports and removal.
 - Move Settings to a dedicated page with General, Permissions and Import sections.
 - Add persistent permission rules and optional sharing of Claude Code rules, with deny and ask precedence.

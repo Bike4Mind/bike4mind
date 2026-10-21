@@ -80,6 +80,22 @@ afterEach(async () => {
   host.remove();
 });
 describe('open imported transcripts', () => {
+  it('does not restore preparation from a read overtaken by workspace completion', async () => {
+    const pending = deferred<ChatSession | null>();
+    getSession.mockReturnValueOnce(pending.promise);
+    await show();
+
+    await act(async () => {
+      for (const listener of streamed) {
+        listener({ type: 'workspace', sessionId: 'cc-import', running: false, base: 'main' });
+      }
+      pending.resolve({ ...imported('old'), preparingWorkspace: { since: 1, base: 'main' } });
+    });
+
+    expect(conversation.preparing).toBeNull();
+    expect(getSession).toHaveBeenCalledTimes(2);
+  });
+
   it('refreshes after source sync without replacing the user-selected model', async () => {
     await show();
     getSession.mockResolvedValue({

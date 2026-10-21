@@ -3,9 +3,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PhaseTimer } from '../PhaseTimer';
+import * as projectGit from './git';
 import {
   containerDirectory,
   currentBranch,
+  fetchRemoteFor,
   git,
   isGitRepository,
   listBranches,
@@ -367,6 +369,21 @@ describe('resolveWorkspace choosing what to fork from', () => {
     );
   });
 
+  it('retries a failed prefetch immediately instead of marking it fresh', async () => {
+    const { repo, origin } = await clonedRepository();
+    await git(repo, ['update-ref', '-d', 'refs/remotes/origin/main']);
+    await git(repo, ['remote', 'set-url', 'origin', join(repo, 'offline')]);
+    await fetchRemoteFor(repo, 'origin/main');
+    await git(repo, ['remote', 'set-url', 'origin', origin]);
+    const first = fetchRemoteFor(repo, 'origin/main');
+    expect(fetchRemoteFor(repo, 'origin/main')).toBe(first);
+    await first;
+    expect(fetchRemoteFor(repo, 'origin/main')).toBe(first);
+    expect((await git(repo, ['rev-parse', 'origin/main'])).trim()).toBe(
+      (await git(repo, ['rev-parse', 'HEAD'])).trim()
+    );
+  });
+
   it('keeps local commits the remote has not seen', async () => {
     const { repo } = await clonedRepository();
     await writeFile(join(repo, 'unpushed.txt'), 'mine\n', 'utf8');
@@ -504,11 +521,117 @@ describe('SpareWorktrees', () => {
   const spareAt = (container: string) => join(container, '.b4m', 'spare');
 
   async function spareReady(main: string, container: string): Promise<void> {
-    await vi.waitUntil(async () => (await listWorktrees(main)).some(entry => entry.path === spareAt(container)), {
-      timeout: 10000,
-      interval: 20,
-    });
+    await vi.waitUntil(
+      async () => {
+        if (!(await listWorktrees(main)).some(entry => entry.path === spareAt(container))) return false;
+        try {
+          const directory = (await git(spareAt(container), ['rev-parse', '--absolute-git-dir'])).trim();
+          return (await readFile(join(directory, 'b4m-spare'), 'utf8')).startsWith('bike4mind-spare:');
+        } catch {
+          return false;
+        }
+      },
+      { timeout: 10000, interval: 20 }
+    );
   }
+
+  it.each([false, true])('preserves an unowned detached worktree (dirty: %s)', async dirty => {
+    const { container, main } = await bareLayoutRepository();
+    await mkdir(join(container, '.b4m'), { recursive: true });
+    await git(main, ['worktree', 'add', '--quiet', '--detach', spareAt(container), 'HEAD']);
+    if (dirty) await writeFile(join(spareAt(container), 'mine.txt'), 'keep\n');
+    const spares = new SpareWorktrees(0);
+    try {
+      await resolveWorkspace(main, { base: 'main', branch: 'b4m/preserve', spares });
+      await new Promise(resolve => setTimeout(resolve, 300));
+    } finally {
+      await spares.dispose();
+    }
+    expect(await readFile(join(spareAt(container), 'README.md'), 'utf8')).toBe('hello\n');
+    if (dirty) expect(await readFile(join(spareAt(container), 'mine.txt'), 'utf8')).toBe('keep\n');
+  });
+
+  it('does not delete edits made in its own spare on cleanup', async () => {
+    const { container, main } = await bareLayoutRepository();
+    const spares = new SpareWorktrees(0);
+    await resolveWorkspace(main, { base: 'main', branch: 'b4m/dirty-spare', spares });
+    await spareReady(main, container);
+    await writeFile(join(spareAt(container), 'mine.txt'), 'keep\n');
+    await spares.dispose();
+    expect(await readFile(join(spareAt(container), 'mine.txt'), 'utf8')).toBe('keep\n');
+  });
+
+  it('preserves a clean spare whose detached HEAD someone committed on', async () => {
+    const { container, main } = await bareLayoutRepository();
+    const spares = new SpareWorktrees(0);
+    await resolveWorkspace(main, { base: 'main', branch: 'b4m/committed-spare', spares });
+    await spareReady(main, container);
+    const path = spareAt(container);
+    await writeFile(join(path, 'mine.txt'), 'keep\n');
+    await git(path, ['add', 'mine.txt']);
+    await git(path, ['commit', '--quiet', '-m', 'keep detached work']);
+    await spares.dispose();
+    expect(await readFile(join(path, 'mine.txt'), 'utf8')).toBe('keep\n');
+    expect((await git(path, ['status', '--porcelain'])).trim()).toBe('');
+  });
+
+  it('preserves ignored files in its spare on cleanup', async () => {
+    const { container, main } = await bareLayoutRepository();
+    const spares = new SpareWorktrees(0);
+    await resolveWorkspace(main, { base: 'main', branch: 'b4m/ignored-spare', spares });
+    await spareReady(main, container);
+    await git(main, ['config', 'core.excludesFile', join(container, 'ignore')]);
+    await writeFile(join(container, 'ignore'), 'mine.txt\n');
+    await writeFile(join(spareAt(container), 'mine.txt'), 'keep\n');
+    await spares.dispose();
+    expect(await readFile(join(spareAt(container), 'mine.txt'), 'utf8')).toBe('keep\n');
+  });
+
+  it('cancels a scheduled refill when the project is forgotten', async () => {
+    const { container, main } = await bareLayoutRepository();
+    const spares = new SpareWorktrees(100);
+    try {
+      await resolveWorkspace(main, { base: 'main', branch: 'b4m/forgotten', spares });
+      await spares.forget(main);
+      await new Promise(resolve => setTimeout(resolve, 300));
+      expect((await listWorktrees(main)).some(entry => entry.path === spareAt(container))).toBe(false);
+    } finally {
+      await spares.dispose();
+    }
+  });
+
+  it.each(['forget', 'dispose'] as const)('cancels an in-flight refill on %s', async action => {
+    const { container, main } = await bareLayoutRepository();
+    const spares = new SpareWorktrees(0);
+    const originalGit = projectGit.git;
+    let releaseCheckout!: () => void;
+    const paused = new Promise<void>(resolve => {
+      releaseCheckout = resolve;
+    });
+    let announceCheckout!: () => void;
+    const started = new Promise<void>(resolve => {
+      announceCheckout = resolve;
+    });
+    const spy = vi.spyOn(projectGit, 'git').mockImplementation(async (directory, args) => {
+      if (args.includes('--detach') && args.includes(spareAt(container))) {
+        announceCheckout();
+        await paused;
+      }
+      return originalGit(directory, args);
+    });
+    try {
+      spares.refill(main, container, 'HEAD');
+      await started;
+      const stopped = action === 'forget' ? spares.forget(main) : spares.dispose();
+      releaseCheckout();
+      await stopped;
+      expect((await listWorktrees(main)).some(entry => entry.path === spareAt(container))).toBe(false);
+    } finally {
+      releaseCheckout();
+      await spares.dispose();
+      spy.mockRestore();
+    }
+  });
 
   it('makes a spare only after a cut, then hands it to the next session on its own branch', async () => {
     const { container, main } = await bareLayoutRepository();

@@ -45,6 +45,35 @@ afterEach(async () => {
 });
 
 describe('CustomCommandStore file cache', () => {
+  it('shares a pending parse without treating it as a skipped file', async () => {
+    const file = await writeSkill('shared', '---\ndescription: shared\n---\nBody\n');
+    const originalRead = fs.readFile.bind(fs);
+    let releaseRead!: () => void;
+    const paused = new Promise<void>(resolve => {
+      releaseRead = resolve;
+    });
+    let announceRead!: () => void;
+    const started = new Promise<void>(resolve => {
+      announceRead = resolve;
+    });
+    const read = vi.spyOn(fs, 'readFile').mockImplementation(async (...args) => {
+      if (args[0] === file) {
+        announceRead();
+        await paused;
+      }
+      return originalRead(...args);
+    });
+    const fileCache = new Map<string, CachedCommandFile>();
+    const first = scan(fileCache);
+    await started;
+    const second = scan(fileCache);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    releaseRead();
+    const stores = await Promise.all([first, second]);
+    for (const store of stores) expect(store.hasCommand('shared')).toBe(true);
+    expect(read.mock.calls.filter(call => call[0] === file)).toHaveLength(1);
+  });
+
   it('warns about a broken file once, not on every scan, and again once it is edited', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const file = await writeSkill('broken', '---\ncontext: sideways\n---\nBody\n');

@@ -230,6 +230,8 @@ const TURN_LIMITS: TurnLimits = {
 type TurnOutcome = 'completed' | 'aborted' | 'failed';
 
 type SendOptions = {
+  /** Only launchSpawned may consume the initial-turn reservation. */
+  spawnSeed?: true;
   /** A taken queue entry must never fall back into the queue. */
   released?: ChatQueuedMessage;
   /** A spawned session inherits its parent's relay depth. */
@@ -417,7 +419,7 @@ export interface ChatServiceDeps {
   getEnvironmentUrl(): string;
   emit(event: ChatStreamEvent): void;
   /**
-   * A session's stored summary changed outside any reply - today only its generated title.
+   * A session's stored summary changed outside any reply, such as its title or worktree binding.
    *
    * Separate from `emit` because that union is per-reply progress: this lands after the turn it
    * belongs to has been accepted, can land after the reply has finished, and matters to a
@@ -492,6 +494,8 @@ export class ChatService {
    * The progress is kept so a window that opens one mid-cut can draw the same status line.
    */
   private readonly preparing = new Map<string, WorkspacePreparation>();
+
+  private readonly launching = new Set<string>();
 
   /**
    * A queued message the user promoted past the live turn with "send now", held between the
@@ -764,9 +768,8 @@ export class ChatService {
    * that creating a session never depends on the user completing a native dialog - cancelling
    * one used to produce nothing at all.
    *
-   * The workspace is resolved BEFORE the session is written, so a worktree that cannot be
-   * created leaves nothing behind: there is no session whose tools would then fall back to
-   * some other folder.
+   * The project choice is stored now; the first accepted turn prepares its worktree before
+   * any tools can run there. See ensureWorkspace.
    */
   async createCodeSession(request: CreateCodeSessionRequest): Promise<CreateCodeSessionResult> {
     const timer = new PhaseTimer();
@@ -1031,10 +1034,11 @@ export class ChatService {
       });
       const workspace = { workspaceBranch: resolved.branch, workingDirectory: resolved.workingDirectory };
       const summary = await this.deps.store.updateProjectWorkspace(session.id, workspace);
+      if (!summary) return { error: 'That conversation no longer exists.' };
       // The sidebar row says "Preparing worktree..." off this project until it hears otherwise.
-      if (summary) this.deps.summaryChanged?.(summary);
+      this.deps.summaryChanged?.(summary);
       // A folder shared while the worktree was being cut lives in the store, not in `project`.
-      session.project = summary?.project ?? { ...project, ...workspace };
+      session.project = summary.project;
       this.startDependencyInstall(session.id, resolved.workingDirectory, resolved.outcome);
       return null;
     } catch (err) {
@@ -1468,7 +1472,7 @@ export class ChatService {
      * against the server's catalog at the moment the turn actually goes out. A queued message
      * refused then comes back to the composer - see flushQueue.
      */
-    if (this.isBusy(sessionId)) {
+    if (this.isBusy(sessionId, options.spawnSeed === true)) {
       if (!this.deps.queue || released) return { ok: false, error: 'This conversation is still replying.' };
       // A card the model is parked on would hold this message behind the turn forever; the new
       // message is the user moving on, so it closes the question rather than waiting on it.
@@ -1740,12 +1744,13 @@ export class ChatService {
     }
   }
 
-  private isBusy(sessionId: string): boolean {
+  private isBusy(sessionId: string, spawnSeed = false): boolean {
     return (
       this.active.has(sessionId) ||
       this.accepting.has(sessionId) ||
       this.compacting.has(sessionId) ||
-      this.preparing.has(sessionId)
+      this.preparing.has(sessionId) ||
+      (!spawnSeed && this.launching.has(sessionId))
     );
   }
 
@@ -3055,6 +3060,7 @@ export class ChatService {
           spawnBaseFor(project),
           isGitRepository(project.workingDirectory),
         ]);
+        if (repository) prefetchBase(project.directory, base);
         const suggestion: ChatSpawnSuggestion = {
           // Short because the model has to type it back to revise the card.
           id: randomUUID().slice(0, 8),
@@ -3524,6 +3530,7 @@ export class ChatService {
       onFailed,
     }: { seedHops: number; timer: PhaseTimer; onFailed?: (message: string) => Promise<void> }
   ): Promise<void> {
+    this.launching.add(child.id);
     this.deps.activity?.preparingStarted(child.id);
     let failure: string | null = null;
     try {
@@ -3537,24 +3544,28 @@ export class ChatService {
         }
       }
       if (!failure) {
-        const sent = await this.send(child.id, text, [], { seedHops });
+        const sent = await this.send(child.id, text, [], { seedHops, spawnSeed: true });
         timer.lap('send');
         if (!sent.ok) failure = `The new session could not start: ${sent.error}`;
       }
     } catch (err) {
       failure = `The new session could not start: ${err instanceof Error ? err.message : 'unknown error'}`;
-    } finally {
-      this.deps.activity?.preparingEnded(child.id);
     }
 
-    this.deps.logger.debug(`CHAT: spawn ${child.id} timing ${timer.summary()}`);
-    if (!failure) {
-      this.deps.logger.debug(`CHAT: spawned ${child.id} from ${parentId}`);
-      return;
+    try {
+      this.deps.logger.debug(`CHAT: spawn ${child.id} timing ${timer.summary()}`);
+      if (!failure) {
+        this.deps.logger.debug(`CHAT: spawned ${child.id} from ${parentId}`);
+        return;
+      }
+      await this.abandonSpawn(parentId, child, failure, onFailed).catch((err: unknown) => {
+        this.deps.logger.warn(`CHAT: could not clean up ${child.id}: ${err instanceof Error ? err.message : err}`);
+      });
+    } finally {
+      this.launching.delete(child.id);
+      this.deps.activity?.preparingEnded(child.id);
+      if (!failure) this.flushQueue(child.id);
     }
-    await this.abandonSpawn(parentId, child, failure, onFailed).catch((err: unknown) => {
-      this.deps.logger.warn(`CHAT: could not clean up ${child.id}: ${err instanceof Error ? err.message : err}`);
-    });
   }
 
   /**
