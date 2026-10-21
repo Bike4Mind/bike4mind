@@ -5,6 +5,7 @@ export interface ISecretRotation {
   id: string;
   keyName: string;
   previousKey?: string;
+  capturedKeyFingerprint?: string;
   rotatedAt: Date;
   nextRotation: Date;
   rotationIntervalDays: number;

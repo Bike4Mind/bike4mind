@@ -238,6 +238,6 @@ export const handler = withEventContext(async (event, logger) => {
     );
     if (!written) logger.warn(`Session ${sessionId} no longer writable by ${writer.id}, skipping attempt stamp`);
     logger.warn(`Failed to parse tags from LLM response for session ${sessionId}`);
-    logger.debug(`Raw LLM response: ${tagsText?.substring(0, 500)}${(tagsText?.length || 0) > 500 ? '...' : ''}`);
+    logger.debug('Tagging response could not be parsed', { responseLength: tagsText?.length ?? 0 });
   }
 });

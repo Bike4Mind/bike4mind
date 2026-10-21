@@ -21,6 +21,7 @@ def configured_stack():
         'JWT_SECRET': 'j' * 64,
         'SESSION_SECRET': 's' * 64,
         'SECRET_ENCRYPTION_KEY': 'a' * 64,
+        'MEMORY_KEY_SECRET': 'm' * 64,
         'INTERNAL_WS_SECRET': 'w' * 64,
         'CHAT_COMPLETION_INTERNAL_SECRET': 'c' * 64,
         'INTERNAL_S3_WEBHOOK_SECRET': 'h' * 64,

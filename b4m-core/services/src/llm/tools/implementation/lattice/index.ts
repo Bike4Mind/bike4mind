@@ -593,7 +593,7 @@ export const latticeSetValueTool: ToolDefinition = {
             data: model.data,
             updatedAt: new Date(),
           });
-          context.logger.info(`[Lattice] Set ${entityId}.${attributeKey} = ${value} in model ${modelId}`);
+          context.logger.info(`[Lattice] Set ${entityId}.${attributeKey} in model ${modelId}`);
         } catch (error) {
           context.logger.error(`[Lattice] Failed to persist value to database:`, error);
           return JSON.stringify({

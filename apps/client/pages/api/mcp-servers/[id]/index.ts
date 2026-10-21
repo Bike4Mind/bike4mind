@@ -67,14 +67,18 @@ const handler = baseApi()
       if (storedValue === undefined) {
         throw new BadRequestError('A value is required for a new environment variable', { key });
       }
-      return { key, value: storedValue };
+      return decryptEnvVariables([{ key, value: storedValue }], server)[0];
     });
 
     // Config changed, so clear cached tool schemas
     const updatedServer = await McpServer.findOneAndUpdate(
       { _id: id, userId: req.user.id }, // Ensure user owns the server
       {
-        $set: { name, envVariables: encryptEnvVariables(mergedEnvVariables), enabled },
+        $set: {
+          name,
+          envVariables: encryptEnvVariables(mergedEnvVariables, { userId: server.userId, name, id: server.id }),
+          enabled,
+        },
         $unset: { toolSchemas: '', toolSchemasFetchedAt: '' },
       },
       { new: true, runValidators: true }
@@ -96,7 +100,7 @@ const handler = baseApi()
 
     try {
       const result = await invokeMcpHandler<MCPClient['tools']>({
-        envVariables: decryptEnvVariables(server.envVariables),
+        envVariables: decryptEnvVariables(server.envVariables, server),
         name: server.name,
         action: 'getTools',
         userId: req.user.id,

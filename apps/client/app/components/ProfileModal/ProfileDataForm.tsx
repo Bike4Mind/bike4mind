@@ -305,6 +305,8 @@ const ProfileDataForm: React.FC<ProfileDataFormProps> = ({ userData, adminMode, 
                     <Grid xs={10} sm={5} md={5}>
                       <Typography className="profile-data-form-answer-label">Answer {index + 1}:</Typography>
                       <Input
+                        type="password"
+                        placeholder="New answer (leave blank to keep existing)"
                         value={question.answer}
                         onChange={e => handleSecurityQuestionChange(index, 'answer', e.target.value)}
                         fullWidth

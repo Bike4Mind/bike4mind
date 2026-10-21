@@ -11,6 +11,7 @@ export async function handler() {
   await connectDB(Config.MONGODB_URI.replace('%STAGE%', Resource.App.stage));
 
   try {
+    await secretRotationRepository.findByKeyNameWithSecret('JWT_SECRET');
     const now = new Date();
     const warningThreshold = 7; // days before expiration to warn
 

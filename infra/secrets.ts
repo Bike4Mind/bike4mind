@@ -71,6 +71,7 @@ export const secrets = {
   // Generate with: openssl rand -hex 32
   SECRET_ENCRYPTION_KEY: new sst.Secret('SECRET_ENCRYPTION_KEY', 'my-secret-placeholder-value'),
   // Previous encryption key for key rotation — set this to the old key when rotating
+  MEMORY_KEY_SECRET: new sst.Secret('MEMORY_KEY_SECRET', 'not-configured'),
   SECRET_ENCRYPTION_KEY_PREVIOUS: new sst.Secret('SECRET_ENCRYPTION_KEY_PREVIOUS', 'not-configured'),
   // Shared-secret bearer authenticating the frontend's internal /process dispatch to the
   // always-on ChatCompletion service (see server/utils/dispatchQuest.ts +

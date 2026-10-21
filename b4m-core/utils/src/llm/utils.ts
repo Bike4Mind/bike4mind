@@ -3266,7 +3266,7 @@ export async function buildAndSortMessages(
     logger.log('\nFinal Combined Messages:');
     messages.forEach((msg, i) => {
       const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
-      logger.log(`  ${i + 1}. Role: ${msg.role}, Content: ${content.substring(0, 50)}...`);
+      logger.log(`  ${i + 1}. Role: ${msg.role}, Content length: ${content.length}`);
     });
 
     logger.log(`\nTotal messages: ${messages.length}`);

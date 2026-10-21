@@ -1,7 +1,8 @@
+import { createHash } from 'node:crypto';
 import { ApiKeyScope, Permission } from '@bike4mind/common';
 import { SecretRotation, secretRotationRepository } from '@bike4mind/database/infra';
-import { ForbiddenError, InternalServerError, NotFoundError } from '@bike4mind/utils';
-import { encryptAtRest } from '@bike4mind/utils/security';
+import { BadRequestError, ForbiddenError, InternalServerError, NotFoundError } from '@bike4mind/utils';
+import { encryptAtRest, decryptAtRest } from '@bike4mind/utils/security';
 import { calculateNextRotationDate, toSafeSecretRotation } from '@client/lib/secretRotation/utils';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -23,21 +24,23 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     throw new NotFoundError('Secret rotation not found');
   }
 
-  // Snapshot the secret this process is running with, rather than trusting a caller
-  // to hand over the outgoing value. JWT_SECRET is the only row whose `previousKey`
-  // any verifier reads (see server/auth/secretRotationGrace.ts). Re-capturing on every
-  // renew advances the grace window instead of extending a stale key's life, so the
-  // runbook is: click Renew BEFORE deploying the replacement secret.
-  // Encrypt at rest: this is a live signing secret and must not sit in Mongo as
-  // plaintext; the two verifiers that read it (auth.ts, verifyWsAccessToken.ts)
-  // decryptAtRest it. Plaintext rows written before this keep working (decrypt passes
-  // a non-ciphertext value through unchanged) and re-encrypt on the next renew.
+  const currentFingerprint = createHash('sha256').update(Config.JWT_SECRET).digest('hex');
+  if (secret.keyName === 'JWT_SECRET') {
+    const captured = await secretRotationRepository.findByKeyNameWithSecret('JWT_SECRET');
+    if (
+      captured?.capturedKeyFingerprint === currentFingerprint ||
+      (captured?.previousKey && decryptAtRest(captured.previousKey) === Config.JWT_SECRET)
+    ) {
+      throw new BadRequestError('The signing secret has not changed since its last capture');
+    }
+  }
   const previousKey = secret.keyName === 'JWT_SECRET' ? encryptAtRest(Config.JWT_SECRET) : undefined;
 
   try {
     const updated = await secretRotationRepository.update({
       id,
       previousKey,
+      ...(secret.keyName === 'JWT_SECRET' ? { capturedKeyFingerprint: currentFingerprint } : {}),
       rotatedAt: new Date(),
       nextRotation: calculateNextRotationDate(secret.rotationIntervalDays),
       lastRotatedById: req.user?.id,

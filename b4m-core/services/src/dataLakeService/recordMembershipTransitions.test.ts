@@ -26,7 +26,15 @@ describe('recordMembershipTransitions', () => {
 
   const audit = () => {
     const record = vi.fn().mockResolvedValue({});
-    return { record, adapters: { db: { lakeMembershipChangeEvents: { record } } } };
+    return {
+      record,
+      adapters: {
+        db: {
+          memoryLedger: { markSourceShredded: vi.fn().mockResolvedValue(0) },
+          lakeMembershipChangeEvents: { record },
+        },
+      },
+    };
   };
 
   const actor = { userId, isAdmin: false };
@@ -42,6 +50,7 @@ describe('recordMembershipTransitions', () => {
       { origin: 'person' }
     );
 
+    expect(adapters.db.memoryLedger.markSourceShredded).toHaveBeenCalledWith('lake', 'datalake:lake', userId, 'file1');
     expect(record).toHaveBeenCalledTimes(1);
     expect(record).toHaveBeenCalledWith(
       expect.objectContaining({ dataLakeId: 'lake1', fabFileId: 'file1', action: 'removed', origin: 'person' })
@@ -149,7 +158,7 @@ describe('recordMembershipTransitions', () => {
         actor,
         [lake()],
         [file({ beforeTagNames: ['lk:reports'], afterTagNames: [] })],
-        { db: {} },
+        { db: { memoryLedger: { markSourceShredded: vi.fn().mockResolvedValue(0) } } },
         { origin: 'person' }
       )
     ).resolves.toBeUndefined();
@@ -168,7 +177,13 @@ describe('recordMembershipTransitions', () => {
         file({ fabFileId: 'file1', beforeTagNames: ['lk:reports'], afterTagNames: [] }),
         file({ fabFileId: 'file2', beforeTagNames: ['lk:reports'], afterTagNames: [] }),
       ],
-      { db: { lakeMembershipChangeEvents: { record } }, logger },
+      {
+        db: {
+          memoryLedger: { markSourceShredded: vi.fn().mockResolvedValue(0) },
+          lakeMembershipChangeEvents: { record },
+        },
+        logger,
+      },
       { origin: 'person' }
     );
 

@@ -944,7 +944,7 @@ export class ToolBuilder {
 
           // video_generation and music_generation bill in their job's create step, not here.
           if (toolName === 'image_generation' || toolName === 'edit_image') {
-            this.deps.logger.info(`Tool ${toolName} started with data: ${JSON.stringify(data)}`);
+            this.deps.logger.info(`Tool ${toolName} started`);
             const enforceCredits = precomputed?.adminSettingsEnforceCredits ?? true;
             await this.gateImageCredits(
               toolName,
@@ -963,7 +963,7 @@ export class ToolBuilder {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         onToolFinish: async (toolName: string, data: any) => {
           if (toolName === 'deep_research') {
-            this.deps.logger.info(`Tool ${toolName} finished with data: ${JSON.stringify(data)}`);
+            this.deps.logger.info(`Tool ${toolName} finished`);
             quest.deepResearchState = data;
             await saveQuest(quest);
           }
@@ -989,7 +989,7 @@ export class ToolBuilder {
           }
           // Settle image billing HERE, like audio: a provider error returns before onFinish.
           if (toolName === 'image_generation' || toolName === 'edit_image') {
-            this.deps.logger.info(`Tool ${toolName} finished with data: ${JSON.stringify(data)}`);
+            this.deps.logger.info(`Tool ${toolName} finished`);
             const enforceCredits = precomputed?.adminSettingsEnforceCredits ?? true;
             this.settleImageCredits(
               toolName,

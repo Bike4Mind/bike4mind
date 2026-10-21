@@ -1774,8 +1774,8 @@ export class AnthropicBackend implements ICompletionBackend {
                             {
                               model,
                               toolName: func[event.index].name,
-                              parametersPreview: (func[event.index].parameters || '').substring(0, 100),
-                              error: e instanceof Error ? e.message : String(e),
+                              parametersLength: (func[event.index].parameters || '').length,
+                              errorType: e instanceof Error ? e.name : typeof e,
                             }
                           );
                           collectedContent[event.index].input = {};
@@ -2335,7 +2335,6 @@ export class AnthropicBackend implements ICompletionBackend {
                   isMcpTool: outcome.isMcpTool,
                   durationMs: outcome.durationMs,
                   resultLength: resultStr.length,
-                  resultPreview: resultStr.substring(0, 100) + (resultStr.length > 100 ? '...' : ''),
                 });
 
                 // Track per-outcome whether this specific tool produced artifacts, so the
@@ -2818,7 +2817,6 @@ export class AnthropicBackend implements ICompletionBackend {
                   isMcpTool: outcome.isMcpTool,
                   durationMs: outcome.durationMs,
                   resultLength: resultStr.length,
-                  resultPreview: resultStr.substring(0, 100) + (resultStr.length > 100 ? '...' : ''),
                 });
 
                 let thisToolHadArtifact = false;
@@ -3080,8 +3078,8 @@ export class AnthropicBackend implements ICompletionBackend {
         model: context.model,
         toolName: context.name,
         isMcpTool: context.isMcpTool,
-        parametersPreview: parameters.substring(0, 100),
-        error: parseError instanceof Error ? parseError.message : String(parseError),
+        parameterLength: parameters.length,
+        errorType: parseError instanceof Error ? parseError.name : 'UnknownError',
       });
       // Defensive fallback ID - Anthropic's ToolUseBlock always provides `id`,
       // but we guard against edge cases like partial stream data.
@@ -3140,7 +3138,7 @@ export class AnthropicBackend implements ICompletionBackend {
         this.logger.warn('[AnthropicBackend] Failed to parse tool parameters in pushToolMessages, using empty object', {
           toolName: tool.name,
           parametersPreview: (tool.parameters || '').substring(0, 100),
-          error: parseError instanceof Error ? parseError.message : String(parseError),
+          errorType: parseError instanceof Error ? parseError.name : 'UnknownError',
         });
         parsedInput = {};
       }
@@ -3169,7 +3167,7 @@ export class AnthropicBackend implements ICompletionBackend {
         this.logger.warn('[AnthropicBackend] Failed to parse tool parameters in pushToolMessages, using empty object', {
           toolName: tool.name,
           parametersPreview: (tool.parameters || '').substring(0, 100),
-          error: parseError instanceof Error ? parseError.message : String(parseError),
+          errorType: parseError instanceof Error ? parseError.name : 'UnknownError',
         });
         parsedInput = {};
       }

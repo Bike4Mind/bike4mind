@@ -53,7 +53,8 @@ export const updateUserSchema = z.object({
     .nullable()
     .optional(),
   securityQuestions: z
-    .array(z.object({ question: z.string(), answer: z.string() }))
+    .array(z.object({ question: z.string().max(512), answer: z.string().max(1024) }))
+    .max(10)
     .nullable()
     .optional(),
   // `photoUrl` is intentionally NOT in the self-service schema (same reasoning as
@@ -121,6 +122,15 @@ export function applyBaseUserUpdates(user: IUserDocument, params: UpdateUserPara
     }
     const hashedPassword = bcrypt.hashSync(params.password, 10);
     params.password = hashedPassword;
+  }
+
+  if (params.securityQuestions) {
+    params.securityQuestions = params.securityQuestions.map(question => {
+      if (question.answer) return question;
+      const existing = user.securityQuestions?.find(stored => stored.question === question.question);
+      if (!existing?.answer) throw new BadRequestError('An answer is required for a new or renamed security question');
+      return { ...question, answer: existing.answer };
+    });
   }
 
   return {

@@ -19,5 +19,6 @@ export const SECRET_ROTATION_GRACE_HOURS = 24;
  */
 export function isRotatedSecretWithinGraceWindow(rotatedAt?: Date | string | null): boolean {
   if (!rotatedAt) return false;
-  return dayjs(rotatedAt).isAfter(dayjs().subtract(SECRET_ROTATION_GRACE_HOURS, 'hours'));
+  const rotation = dayjs(rotatedAt);
+  return !rotation.isAfter(dayjs()) && rotation.isAfter(dayjs().subtract(SECRET_ROTATION_GRACE_HOURS, 'hours'));
 }

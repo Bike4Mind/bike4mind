@@ -1402,9 +1402,9 @@ export class QuestMasterFeature implements ChatCompletionFeature {
     try {
       this.logger.log('QuestMaster Request Debug - Initial params:', {
         model,
-        paramsReceived: params,
+        parameterNames: Object.keys(params ?? {}),
         sessionId,
-        message: message.substring(0, 100) + '...',
+        messageLength: message.length,
         historyMessageCount: conversationHistory.length,
       });
 
@@ -1460,7 +1460,7 @@ export class QuestMasterFeature implements ChatCompletionFeature {
         statusAt: new Date(),
       });
 
-      this.logger.info(`🚀 [QuestMaster] Rapid reply sent: "${rapidReplyContent.substring(0, 100)}..."`);
+      this.logger.info(`[QuestMaster] Rapid reply sent (${rapidReplyContent.length} characters)`);
     } catch (error) {
       // Don't throw - rapid reply failures shouldn't break QuestMaster
       this.logger.warn('Failed to send QuestMaster rapid reply:', error);

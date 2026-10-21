@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { decryptAtRest } from '@bike4mind/utils/security';
 import mongoose, { Model, model, Schema } from 'mongoose';
 import { ISecretRotation, ISecretRotationDocument, ISecretRotationRepository } from '@bike4mind/common';
 import { softDeletePlugin } from '../../../utils/mongo';
@@ -11,6 +13,7 @@ const SecretRotationSchema = new Schema<ISecretRotation, Model<ISecretRotationDo
     // by default so a new response path cannot leak it; `findByKeyNameWithSecret` is
     // the one accessor that opts back in.
     previousKey: { type: String, required: false, select: false },
+    capturedKeyFingerprint: { type: String, required: false },
     rotatedAt: { type: Date, required: true },
     nextRotation: { type: Date, required: true },
     rotationIntervalDays: { type: Number, required: true, min: 1 },
@@ -50,7 +53,22 @@ export class SecretRotationRepository
    * serializes the result.
    */
   async findByKeyNameWithSecret(keyName: string) {
-    return this.secretRotationModel.findOne({ keyName }).select('+previousKey');
+    const row = await this.secretRotationModel.findOne({ keyName }).select('+previousKey');
+    if (row?.previousKey && row.rotatedAt.getTime() <= Date.now() - 24 * 60 * 60 * 1000) {
+      const plaintext = decryptAtRest(row.previousKey);
+      const capturedKeyFingerprint =
+        row.capturedKeyFingerprint ?? (plaintext ? createHash('sha256').update(plaintext).digest('hex') : undefined);
+      await this.secretRotationModel.updateOne(
+        { _id: row._id, rotatedAt: row.rotatedAt },
+        {
+          $unset: { previousKey: '' },
+          ...(capturedKeyFingerprint ? { $set: { capturedKeyFingerprint } } : {}),
+        }
+      );
+      row.previousKey = undefined;
+      row.capturedKeyFingerprint = capturedKeyFingerprint;
+    }
+    return row;
   }
 
   async findActiveKeys() {

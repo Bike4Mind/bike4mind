@@ -2,7 +2,13 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { tagService } from '@bike4mind/services';
-import { dataLakeRepository, fabFileRepository, fileTagRepository, userRepository } from '@bike4mind/database';
+import {
+  withTransaction,
+  dataLakeRepository,
+  fabFileRepository,
+  fileTagRepository,
+  userRepository,
+} from '@bike4mind/database';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { lakeMembershipAuditDb } from '@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
@@ -38,35 +44,37 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
         throw new ForbiddenError('Unauthorized');
       }
 
-      const result = await tagService.update(
-        req.user.id,
-        {
-          ...req.body,
-          id: requireTagId(req.query),
-        },
-        {
-          db: {
-            tags: fileTagRepository,
-            fabFiles: fabFileRepository,
-            dataLakes: dataLakeRepository,
-            users: userRepository,
-            // A prefix-arm rename can flip a draft lake to active; without these that transition
-            // would be the one status change the history does not contain.
-            ...lakeConfigAuditDb,
-            // A prefix-arm rename also moves files into or out of lakes in bulk; without this the
-            // membership log would show no trace of a whole lake's worth of files changing hands.
-            ...lakeMembershipAuditDb,
+      const result = await withTransaction(() =>
+        tagService.update(
+          req.user.id,
+          {
+            ...req.body,
+            id: requireTagId(req.query),
           },
-          // Threaded so a failed audit write on that flip is reported through the request logger
-          // rather than console.warn, which alerting cannot see.
-          logger: req.logger,
-          // This route accepts a `b4m_live_` key, so without this a key-driven rename that flips a
-          // draft lake to active records the human it acts for instead of the key.
-          auditPrincipal: lakeConfigAuditPrincipal(req.user, req.apiKeyInfo),
-          // A rename can walk a file into or out of a lake via its `fileTagPrefix` content-tag arm
-          // (see dataLakeScopes.ts) - only fired when tagService actually detects that match.
-          assertWriteScope: () => assertDataLakeWriteScope(req),
-        }
+          {
+            db: {
+              tags: fileTagRepository,
+              fabFiles: fabFileRepository,
+              dataLakes: dataLakeRepository,
+              users: userRepository,
+              // A prefix-arm rename can flip a draft lake to active; without these that transition
+              // would be the one status change the history does not contain.
+              ...lakeConfigAuditDb,
+              // A prefix-arm rename also moves files into or out of lakes in bulk; without this the
+              // membership log would show no trace of a whole lake's worth of files changing hands.
+              ...lakeMembershipAuditDb,
+            },
+            // Threaded so a failed audit write on that flip is reported through the request logger
+            // rather than console.warn, which alerting cannot see.
+            logger: req.logger,
+            // This route accepts a `b4m_live_` key, so without this a key-driven rename that flips a
+            // draft lake to active records the human it acts for instead of the key.
+            auditPrincipal: lakeConfigAuditPrincipal(req.user, req.apiKeyInfo),
+            // A rename can walk a file into or out of a lake via its `fileTagPrefix` content-tag arm
+            // (see dataLakeScopes.ts) - only fired when tagService actually detects that match.
+            assertWriteScope: () => assertDataLakeWriteScope(req),
+          }
+        )
       );
 
       return res.json(result);
@@ -78,28 +86,30 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
         throw new ForbiddenError('Unauthorized');
       }
 
-      const result = await tagService.remove(
-        req.user.id,
-        {
-          id: requireTagId(req.query),
-        },
-        {
-          db: {
-            tags: fileTagRepository,
-            fabFiles: fabFileRepository,
-            dataLakes: dataLakeRepository,
-            // Same reason as the rename above: a prefix-arm delete can drive an auto-activate.
-            ...lakeConfigAuditDb,
-            // Same reason as the rename above: a delete walks every prefix-only file out of a lake.
-            ...lakeMembershipAuditDb,
+      const result = await withTransaction(() =>
+        tagService.remove(
+          req.user.id,
+          {
+            id: requireTagId(req.query),
           },
-          // Same reason as the rename above.
-          logger: req.logger,
-          auditPrincipal: lakeConfigAuditPrincipal(req.user, req.apiKeyInfo),
-          // Same reason as the rename above: a delete can walk a file out of a lake via the
-          // prefix-arm content-tag signal.
-          assertWriteScope: () => assertDataLakeWriteScope(req),
-        }
+          {
+            db: {
+              tags: fileTagRepository,
+              fabFiles: fabFileRepository,
+              dataLakes: dataLakeRepository,
+              // Same reason as the rename above: a prefix-arm delete can drive an auto-activate.
+              ...lakeConfigAuditDb,
+              // Same reason as the rename above: a delete walks every prefix-only file out of a lake.
+              ...lakeMembershipAuditDb,
+            },
+            // Same reason as the rename above.
+            logger: req.logger,
+            auditPrincipal: lakeConfigAuditPrincipal(req.user, req.apiKeyInfo),
+            // Same reason as the rename above: a delete can walk a file out of a lake via the
+            // prefix-arm content-tag signal.
+            assertWriteScope: () => assertDataLakeWriteScope(req),
+          }
+        )
       );
 
       return res.json(result);

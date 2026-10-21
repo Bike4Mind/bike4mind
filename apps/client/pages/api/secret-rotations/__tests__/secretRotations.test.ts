@@ -34,6 +34,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 
 const mockUpdate = vi.hoisted(() => vi.fn().mockResolvedValue({ id: 's1' }));
+const mockFindWithSecret = vi.hoisted(() => vi.fn().mockResolvedValue(null));
 const mockFindById = vi.hoisted(() => vi.fn());
 const mockFindActive = vi.hoisted(() => vi.fn().mockResolvedValue([]));
 const mockCreate = vi.hoisted(() => vi.fn());
@@ -41,6 +42,7 @@ vi.mock('@bike4mind/database/infra', () => ({
   SecretRotation: {},
   secretRotationRepository: {
     update: (...a: unknown[]) => mockUpdate(...a),
+    findByKeyNameWithSecret: (...a: unknown[]) => mockFindWithSecret(...a),
     findById: (...a: unknown[]) => mockFindById(...a),
     findActiveKeys: (...a: unknown[]) => mockFindActive(...a),
     create: (...a: unknown[]) => mockCreate(...a),
@@ -115,6 +117,7 @@ describe('PUT /api/secret-rotations/:id', () => {
 
 describe('POST /api/secret-rotations/renewed', () => {
   beforeEach(() => {
+    mockFindWithSecret.mockResolvedValue(null);
     mockUpdate.mockClear();
     mockUpdate.mockResolvedValue({ id: 's1' });
   });
@@ -150,21 +153,16 @@ describe('POST /api/secret-rotations/renewed', () => {
     }
   });
 
-  it('re-captures on every renew, so the grace window advances rather than extending a stale key', async () => {
+  it('refuses to renew when the captured signing key has not changed, even after expiry cleanup', async () => {
     mockFindById.mockResolvedValue({ id: 's1', keyName: 'JWT_SECRET', rotationIntervalDays: 30 });
     const first = request({ id: 's1' });
     await mockRefs.postHandler!(first.req, first.res);
-    const firstRotatedAt = mockUpdate.mock.calls[0][0].rotatedAt;
-
+    const fingerprint = mockUpdate.mock.calls[0][0].capturedKeyFingerprint;
+    mockFindWithSecret.mockResolvedValue({ capturedKeyFingerprint: fingerprint });
     const second = request({ id: 's1' });
-    await mockRefs.postHandler!(second.req, second.res);
-    const secondCall = mockUpdate.mock.calls[1][0];
-
-    // Shape only (see the note above): each renew captures a previousKey; the
-    // encrypted round-trip is proven in its own test.
-    expect(secondCall.previousKey).toEqual(expect.any(String));
-    expect(secondCall.previousKey.length).toBeGreaterThan(0);
-    expect(secondCall.rotatedAt.getTime()).toBeGreaterThanOrEqual(firstRotatedAt.getTime());
+    await expect(mockRefs.postHandler!(second.req, second.res)).rejects.toThrow('has not changed');
+    expect(mockUpdate).toHaveBeenCalledTimes(1);
+    mockFindWithSecret.mockResolvedValue(null);
   });
 
   it('stores previousKey encrypted at rest, recoverable by the grace-window verifiers', async () => {

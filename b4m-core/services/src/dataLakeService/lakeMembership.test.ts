@@ -227,6 +227,7 @@ describe('removeFileFromLake', () => {
     };
 
     await removeFileFromLake(owner, lake(), 'f1', adapters);
+    expect(adapters.db.memoryLedger.markSourceShredded).toHaveBeenCalledWith('lake', 'datalake:lake', 'owner', 'f1');
 
     expect(adapters.db.fabFiles.setOwnerOrganizationIfUnchanged).toHaveBeenCalledWith(
       'f1',

@@ -222,3 +222,63 @@ describe('Logger.globalInstance lazy construction', () => {
     expect(spy).toHaveBeenCalledWith('x');
   });
 });
+
+describe('log redaction', () => {
+  it.each([
+    { logInJson: true, prettyPrint: false },
+    { logInJson: false, prettyPrint: true },
+    { logInJson: false, prettyPrint: false },
+  ])('redacts provider errors and payloads in every output format: %j', options => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const logger = new Logger({ ...options, metadata: { body: { password: 'password-canary' } } });
+    const error = Object.assign(new Error('provider-text-canary'), {
+      isAxiosError: true,
+      config: { headers: { Authorization: 'Bearer key-canary', 'xi-api-key': 'xi-canary' }, data: 'request-canary' },
+      response: { data: 'response-canary' },
+    });
+    logger
+      .withMetadata({ message: 'user-message-canary', messages: [{ content: 'conversation-canary' }] })
+      .error('Provider failed', { error });
+    const output = JSON.stringify(spy.mock.calls);
+    for (const secret of [
+      'password-canary',
+      'key-canary',
+      'xi-canary',
+      'request-canary',
+      'response-canary',
+      'conversation-canary',
+      'user-message-canary',
+      'provider-text-canary',
+    ]) {
+      expect(output).not.toContain(secret);
+    }
+    expect(output).toContain('Provider failed');
+  });
+});
+
+it('withholds SDK provider error messages and response payloads', () => {
+  const error = Object.assign(new Error('provider-body-canary'), {
+    status: 400,
+    headers: {},
+    error: { message: 'provider-body-canary' },
+  });
+  const entry = captureJson('error', logger => logger.error('Provider request failed', { error }));
+  expect(JSON.stringify(entry)).not.toContain('provider-body-canary');
+  expect(entry.error).toMatchObject({ status: 400, name: 'ProviderError' });
+});
+
+it('redacts numeric-status provider errors and preview aliases', () => {
+  const error = Object.assign(new Error('google-provider-canary'), { status: 400 });
+  const entry = captureJson('error', logger =>
+    logger.error('Request failed', {
+      error,
+      resultPreview: 'result-canary',
+      rawResponsePreview: 'response-canary',
+      resultSnippet: 'snippet-canary',
+      result: 'tool-canary',
+    })
+  );
+  const output = JSON.stringify(entry);
+  for (const value of ['google-provider-canary', 'result-canary', 'response-canary', 'snippet-canary', 'tool-canary'])
+    expect(output).not.toContain(value);
+});

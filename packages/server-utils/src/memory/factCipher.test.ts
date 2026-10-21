@@ -176,3 +176,29 @@ describe('encryptVector / decryptVector', () => {
     expect(decryptVector(dek, { ...sealed, cipher: bytes.toString('base64') })).toBeNull();
   });
 });
+
+describe('deployed memory key safety', () => {
+  it('refuses raw DEK minting without a master key, even with no stage name', () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('MEMORY_KEY_SECRET', 'not-configured');
+    try {
+      const { keyring } = makeKeyring();
+      expect(() => createKeyProvider(keyring)).toThrow('MEMORY_KEY_SECRET');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+it('wraps existing raw DEKs without changing the key or making reruns destructive', async () => {
+  const { rewrapLegacyDek } = await import('./factCipher');
+  const master = createHash('sha256').update('master-test-key').digest();
+  const raw = Buffer.alloc(32, 7);
+  const wrapped = rewrapLegacyDek('raw:' + raw.toString('base64'), master);
+  expect(wrapped.startsWith('enc:')).toBe(true);
+  expect(rewrapLegacyDek(wrapped, master)).toBe(wrapped);
+  const { keyring, store } = makeKeyring();
+  store.set('user:u1', wrapped);
+  const provider = createKeyProvider(keyring, master);
+  expect((await provider.getDek({ kind: 'user', id: 'u1' }))?.equals(raw)).toBe(true);
+});

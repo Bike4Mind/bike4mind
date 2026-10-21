@@ -221,7 +221,8 @@ describe('redactUserSecretsForSelf', () => {
 
   it('re-includes fields listed in the keep option (for tightly-scoped callers)', () => {
     const kept = redactUserSecretsForSelf(fullUser, { keep: ['securityQuestions'] })!;
-    expect(kept.securityQuestions).toBeDefined();
+    expect(kept.securityQuestions).toEqual([{ question: 'q', answer: '' }]);
+    expect(JSON.stringify(kept)).not.toContain('ANSWER-SECRET');
     // credentials are still stripped even with a keep list
     expect('password' in kept).toBe(false);
     expect('resetPasswordToken' in kept).toBe(false);
@@ -595,7 +596,13 @@ describe('redactUserSecretsForSelf <-> selfUserResponseSchema contract', () => {
   });
 
   it('the profile schema still never admits loginRecords', () => {
-    expect(selfUserProfileResponseSchema.parse(fullUser)).not.toHaveProperty('loginRecords');
+    expect(selfUserProfileResponseSchema.parse(redactUserSecretsForSelf(fullUser))).not.toHaveProperty('loginRecords');
+  });
+
+  it('the profile schema rejects stored security answers', () => {
+    expect(
+      selfUserProfileResponseSchema.safeParse({ securityQuestions: [{ question: 'Pet?', answer: 'secret' }] }).success
+    ).toBe(false);
   });
 
   it('keeps toJSON() identity and timestamp keys, drops __v', () => {

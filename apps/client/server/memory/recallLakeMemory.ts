@@ -64,6 +64,7 @@ export interface RecallLakeMemoryOptions {
    * Injected because it needs the caller's retrieval filter, embedding-model and FabFile reads.
    */
   resolveReachableSources: (sourceIds: string[]) => Promise<Set<string>>;
+  resolveMemberSources?: (datalakeTag: string, sourceIds: string[]) => Promise<Set<string>>;
   /**
    * When each source document was authored, for dating the recalled beliefs (#1501). Resolved AFTER
    * the budget cut, so it reads only the slice that will actually be rendered rather than every
@@ -128,7 +129,18 @@ export async function recallLakeMemory(opts: RecallLakeMemoryOptions): Promise<L
 
   // Beliefs from different lakes never collide: `belief.id` is an HMAC under each lake's own key, so a
   // cross-lake merge needs no dedup. `foldEvents` already deduped within each lake.
-  const beliefs = profiles.flatMap(p => p?.beliefs ?? []).filter(b => !b.shredded);
+  const memberProfiles = await Promise.all(
+    profiles.map(async (profile, index) => {
+      if (!profile || !opts.resolveMemberSources) return profile;
+      const sources = [...new Set(profile.beliefs.flatMap(b => b.sources ?? []).filter(isDocumentSource))];
+      const members = await opts.resolveMemberSources(opts.lakes[index].datalakeTag, sources);
+      return {
+        ...profile,
+        beliefs: profile.beliefs.filter(b => (b.sources ?? []).filter(isDocumentSource).some(id => members.has(id))),
+      };
+    })
+  );
+  const beliefs = memberProfiles.flatMap(p => p?.beliefs ?? []).filter(b => !b.shredded);
   if (beliefs.length === 0) return [];
 
   // Reachability gate + query embed are independent of each other (both derive from the belief set),

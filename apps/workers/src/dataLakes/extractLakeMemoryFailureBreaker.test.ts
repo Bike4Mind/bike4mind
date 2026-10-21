@@ -14,6 +14,8 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+const sourceFileMock = vi.fn();
+const sourceShredMock = vi.fn();
 const findByIdMock = vi.fn();
 const findLakeMemoryExtractionMembersMock = vi.fn();
 const findTextsByFabFileIdMock = vi.fn();
@@ -36,7 +38,9 @@ vi.mock('@bike4mind/database', () => ({
     getLakeMemoryFence: async () => ({ exists: true, purgedAt: null }),
   },
   fabFileChunkRepository: { findTextsByFabFileId: (...a: unknown[]) => findTextsByFabFileIdMock(...a) },
+  memoryLedgerRepository: { markSourceShredded: (...args: unknown[]) => sourceShredMock(...args) },
   fabFileRepository: {
+    findById: (...args: unknown[]) => sourceFileMock(...args),
     findLakeMemoryExtractionMembers: (...a: unknown[]) => findLakeMemoryExtractionMembersMock(...a),
   },
 }));
@@ -47,7 +51,7 @@ vi.mock('@bike4mind/common', () => ({
 }));
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) },
-  dataLakeService: { lakeMembershipScope: () => 'datalake:test' },
+  dataLakeService: { lakeMembershipScope: () => 'datalake:test', lakeMembershipSignals: () => ({ inLake: true }) },
 }));
 vi.mock('@bike4mind/services/llm', () => ({
   LakeMemoryExtractionService: class {
@@ -102,6 +106,8 @@ const READABLE = 'some durable reference text';
 describe('extractLakeMemoryForBatch consecutive-failure breaker', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    sourceFileMock.mockResolvedValue({ id: 'source-file' });
+    sourceShredMock.mockResolvedValue(1);
     claimLakeMemoryExtractionMock.mockResolvedValue(true);
     releaseLakeMemoryExtractionMock.mockResolvedValue(undefined);
     setLakeMemoryCursorMock.mockResolvedValue(undefined);
