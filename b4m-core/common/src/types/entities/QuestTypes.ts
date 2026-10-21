@@ -28,6 +28,8 @@ export interface IChatHistoryItemRepository extends IBaseRepository<IChatHistory
     timestamp: Date
   ): Promise<IChatHistoryItemDocument[]>;
   getMostRecentChatHistory: (sessionId: string, limit: number) => Promise<IChatHistoryItemDocument[]>;
+  // Live (not soft-deleted) quests in the session, the current turn included. Served from the session index alone.
+  countBySessionId: (sessionId: string) => Promise<number>;
   findBySessionIdAndId: (sessionId: string, id: string) => Promise<IChatHistoryItemDocument | null>;
   // Partial update matched on the quest id AND sessionId; null when no live (not soft-deleted) quest of that session matches.
   updateInSession: (

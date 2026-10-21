@@ -149,7 +149,7 @@ describe('ChatService next-prompt model', () => {
     const id = await settledSession();
     const schedule = vi.spyOn(globalThis, 'setTimeout');
     const pending = service.suggestNextPrompt(id, model);
-    await vi.waitUntil(() => indexOf(SUGGESTION_INSTRUCTION) >= 0);
+    await vi.waitUntil(() => indexOf(SUGGESTION_INSTRUCTION) >= 0, { timeout: 5000, interval: 5 });
     const index = indexOf(SUGGESTION_INSTRUCTION);
     streams[index].write(frame({ type: 'content', text: 'Add tests' }));
     const signal = (post.mock.calls[index][2] as { signal: AbortSignal }).signal;

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { copyFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { PERMISSION_LISTS, type PermissionRuleLists, type PermissionScope } from '@shared/permissions';
 import {
   app,
   BrowserWindow,
@@ -87,6 +88,9 @@ import {
 } from './project/git';
 import { accountSkillsProvider } from './skills/accountSkills';
 import { ProjectTrustStore } from './skills/ProjectTrustStore';
+import { ClaudeCodeSettings, MANAGED_SETTINGS_PATH } from './permissions/ClaudeCodeSettings';
+import { PermissionRuleStore } from './permissions/PermissionRuleStore';
+import { PermissionService } from './permissions/PermissionService';
 import { SkillCatalog } from './skills/SkillCatalog';
 import { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
@@ -163,6 +167,28 @@ function shrinkImage(bytes: Buffer, mediaType: string, maxEdge: number): { bytes
  * Every channel here is main-side work on purpose: sending a message needs the access token,
  * which never leaves this process, so the renderer asks for a turn and receives text.
  */
+function permissionScope(value: unknown): PermissionScope | null {
+  if (!value || typeof value !== 'object') return null;
+  const scope = value as { kind?: unknown; directory?: unknown };
+  if (scope.kind === 'user') return { kind: 'user' };
+  if (scope.kind === 'project' && typeof scope.directory === 'string' && isAbsolute(scope.directory)) {
+    return { kind: 'project', directory: scope.directory };
+  }
+  return null;
+}
+
+function permissionLists(value: unknown): PermissionRuleLists | null {
+  if (!value || typeof value !== 'object') return null;
+  const lists: PermissionRuleLists = { allow: [], ask: [], deny: [] };
+  for (const list of PERMISSION_LISTS) {
+    const entries = (value as Record<string, unknown>)[list];
+    if (entries === undefined) continue;
+    if (!Array.isArray(entries) || !entries.every(entry => typeof entry === 'string')) return null;
+    lists[list] = entries;
+  }
+  return lists;
+}
+
 export interface RegisteredChat {
   service: ChatService;
   /** Background processes, exposed so main/index.ts can tear them down on every quit path. */
@@ -303,10 +329,21 @@ export function registerChat(
   const recentFolders = new RecentFolderStore(join(userData, 'recent-folders.json'));
   // The trust file is its own file beside tool-access.json, and for the same reason: both record
   // a consent the user gave once and should not be asked for again on every launch.
-  const skills = new SkillCatalog(
-    new ProjectTrustStore(join(userData, 'project-skill-trust.json')),
-    accountSkillsProvider(auth, userData)
-  );
+  const projectTrust = new ProjectTrustStore(join(userData, 'project-skill-trust.json'));
+  const skills = new SkillCatalog(projectTrust, accountSkillsProvider(auth, userData));
+  // App-wide like approval-mode.json. Claude Code's files are only ever read; the protected roots
+  // are folders no allow rule may cover, since a call writing there would grant itself more.
+  const home = app.getPath('home');
+  const claudeCode = new ClaudeCodeSettings({ home, logger, onChange: () => permissions.invalidate() });
+  const permissions: PermissionService = new PermissionService({
+    store: new PermissionRuleStore(join(userData, 'permission-rules.json')),
+    claudeCode,
+    isTrusted: directory => projectTrust.isTrusted(directory),
+    home,
+    protectedRoots: [userData, join(home, '.claude'), dirname(MANAGED_SETTINGS_PATH)],
+    logger,
+  });
+  void permissions.start().catch(error => logger.warn(`PERMISSIONS: could not load rules: ${String(error)}`));
   const attachments = new AttachmentStore(join(userData, 'attachments'), logger, shrinkImage);
   const media = new MediaStore(join(userData, 'media'));
   registerMediaProtocol(media);
@@ -423,6 +460,7 @@ export function registerChat(
     preferredModel: PREFERRED_MODEL,
     modelMemory: modelPreference,
     approvals,
+    permissions,
     background,
     foreground,
     dependencies: new DependencyInstaller(background),
@@ -496,6 +534,17 @@ export function registerChat(
     mode === 'ask' || mode === 'auto' || mode === 'full' ? service.setApprovalMode(sessionId, mode) : null
   );
   ipcMain.handle(IPC_CHANNELS.chatListSessions, () => service.listSessions());
+  ipcMain.handle(IPC_CHANNELS.permissionsGetState, () => permissions.state());
+  // Shapes checked here: this is the only door a rule comes in by besides the approval card.
+  ipcMain.handle(IPC_CHANNELS.permissionsSetRules, (_event, scope: unknown, lists: unknown) => {
+    const parsedScope = permissionScope(scope);
+    const parsedLists = permissionLists(lists);
+    if (!parsedScope || !parsedLists) return { ok: false, error: 'Not a permission rule list.' };
+    return permissions.setRules(parsedScope, parsedLists);
+  });
+  ipcMain.handle(IPC_CHANNELS.permissionsSetSharing, (_event, share: unknown) =>
+    permissions.setShareClaudeCode(share === true)
+  );
   ipcMain.handle(IPC_CHANNELS.chatGetSessionStatuses, () => service.sessionStatuses());
   const rememberFolder = (directory: string | null): void => {
     if (!directory) return;

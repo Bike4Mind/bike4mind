@@ -47,6 +47,7 @@ import type { ShareDirectoryResult } from './directoryRequest';
 import type { PrActionResult, PrBarState, PrOption, PrSummaryEvent } from './pullRequest';
 import type { SidebarSectionsState } from './sidebarSections';
 import type { SkillsState } from './skills';
+import type { PermissionMutationResult, PermissionRuleLists, PermissionScope, PermissionsState } from './permissions';
 import type {
   SkillMarketDetailResult,
   SkillMarketFilters,
@@ -197,6 +198,13 @@ export const IPC_CHANNELS = {
   toolsGetAccess: 'tools:get-access',
   toolsGrantAccess: 'tools:grant-access',
   toolsRevokeAccess: 'tools:revoke-access',
+  /**
+   * Standing permission rules. Renderer -> main only, from Settings: like toolsGrantAccess,
+   * nothing the MODEL can reach may write a rule.
+   */
+  permissionsGetState: 'permissions:get-state',
+  permissionsSetRules: 'permissions:set-rules',
+  permissionsSetSharing: 'permissions:set-sharing',
   updateGetState: 'update:get-state',
   updateCheck: 'update:check',
   updateDownload: 'update:download',
@@ -814,6 +822,12 @@ export interface DesktopApi {
     /** Opens the OS folder picker. Resolves unchanged if the user cancels. */
     grantAccess(): Promise<ToolAccessState>;
     revokeAccess(root: string): Promise<ToolAccessState>;
+  };
+  permissions: {
+    getState(): Promise<PermissionsState>;
+    /** Replaces one scope's lists. Refused, with the reason, when any rule does not parse. */
+    setRules(scope: PermissionScope, lists: PermissionRuleLists): Promise<PermissionMutationResult>;
+    setSharing(share: boolean): Promise<PermissionsState>;
   };
   pullRequests: {
     /**

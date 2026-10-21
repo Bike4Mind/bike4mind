@@ -41,8 +41,9 @@ export interface AbsenceInput {
  * ids only: a region-prefixed inference profile is never in it, so a profile id
  * is sighted through its foundation id when that was listed, and otherwise left
  * frozen rather than counted as missed. Absence therefore never retires a profile
- * id; its sunset must arrive through a typed lifecycle that names the profile id
- * directly - the seed catalog or an aggregator feed - not this bare-id listing.
+ * id; its sunset must arrive through a typed lifecycle - the seed catalog, an
+ * aggregator feed, or the foundation's own sunset copied by sources/bedrock.ts -
+ * not from this listing being silent.
  */
 export function planAbsence({ coveredBackends, sightedModelIds, base }: AbsenceInput): AbsencePlan {
   const sighted: string[] = [];

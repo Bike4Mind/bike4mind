@@ -94,6 +94,9 @@ export const forkSession = async (userId: string, parameters: ForkSessionParamet
         retrievalExcludeFilenameMarkers: session.retrievalExcludeFilenameMarkers,
         retrievalVectorizedOnly: session.retrievalVectorizedOnly,
         enabledTools: session.enabledTools,
+        // Keeps the fork's tool list identical to the source's, which the provider's prompt cache
+        // keys on. Safe to carry: each tool's eligibility is re-checked against the reader every turn.
+        autoAddedTools: session.autoAddedTools,
         disabledTools: session.disabledTools,
         disableUserIntegrations: session.disableUserIntegrations,
         systemPromptId: session.systemPromptId,
