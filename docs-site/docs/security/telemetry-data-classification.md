@@ -174,6 +174,8 @@ Each chat reply records where its wall-clock time went, so a slow or retried rep
 | Model switches | `turnTiming.fallbackHops`: a count                                                              | Lives with the reply | Show that a reply moved to a fallback model                                  |
 | Retry metric   | CloudWatch metric `ChatRetry`, dimensioned by stage, reason and model; no user or reply id      | CloudWatch retention | Retry rate by cause and model                                                |
 
+The record also ships to clients: on the live reply frames and in the `GET /api/v1/quests/{id}` poll body. It is not redacted for people a session is shared with, matching the session message API they can already call, which returns the same fields: the record carries no prompt or reply text, and the model and provider request ids appear there too.
+
 ## Integrations gallery usage
 
 The `/integrations` page records first-party `IntegrationsEvents` through the existing `/api/analytics/log-event` route. They are stored like every other counter event (`CounterLog` and the per-user `UserActivityCounter`), tied to the signed-in user, and sent to no third party. Like the rest of first-party usage analytics, they are not behind the attribution consent banner.

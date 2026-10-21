@@ -1093,8 +1093,9 @@ export class AnthropicBackend implements ICompletionBackend {
       // a PRIOR turn that had tools, even when THIS turn offers none (e.g. toolMode switched off
       // between turns) - Anthropic rejects any tool_use/tool_result block when `tools` is absent
       // from the request regardless of pairing, and a balanced count means the mismatch repair
-      // below never fires. Strip proactively instead of relying on the post-400 retry in
-      // ChatCompletionProcess's isToolPairingError net to recover a request we can predict fails.
+      // below never fires. Strip proactively instead of relying on the post-400 retry in the
+      // completion loop's isToolPairingError net (services/src/llm/llmErrorPredicates.ts) to
+      // recover a request we can predict fails.
       if (!options.tools?.length) {
         this.logger.warn(
           `[Pre-API #6181] Tool blocks present (tool_use: ${toolUseCount}, tool_result: ${toolResultCount}, server: ${serverBlockCount}) but no tools offered this turn. Stripping all tool blocks.`
@@ -1534,8 +1535,7 @@ export class AnthropicBackend implements ICompletionBackend {
                   isRetryable: err => isRetryableError(err) && !isUserInitiatedAbort(err, options.abortSignal),
                   logger: this.logger,
                   abortSignal: combinedSignal,
-                  onRetry: ({ error, delayMs }) =>
-                    options._internal?.turnTelemetry?.onRetry({ error, delayMs, model }),
+                  onRetry: ({ error, delayMs }) => options._internal?.turnTelemetry?.onRetry({ error, delayMs, model }),
                 }
               ).then(r => r.result);
 
@@ -1957,8 +1957,9 @@ export class AnthropicBackend implements ICompletionBackend {
                   lastEventType,
                   funcEntries: func.filter(f => f?.name).length,
                 });
-                // Worded to include "stream timeout" so ChatCompletionProcess's
-                // isStreamIdleTimeoutError retries once and then falls back, the same as
+                // Worded to include "stream timeout" so the completion loop's
+                // isStreamIdleTimeoutError (services/src/llm/llmErrorPredicates.ts) retries once and
+                // then falls back, the same as
                 // the Bedrock truncation error in bedrockBackend/base.ts. Must not say
                 // "aborted": isAbortError would then treat it as a benign cancel.
                 reject(
