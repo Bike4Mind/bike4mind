@@ -25,6 +25,7 @@ import {
 } from '@shared/chat';
 import type { PrSummary } from '@shared/pullRequest';
 import { sectionOf, type SidebarSection, type SidebarSectionsState } from '@shared/sidebarSections';
+import { capRows, GROUP_ROW_CAP, GROUP_ROW_STEP, setGroupLimit, useGroupLimit } from './groupCap';
 import { groupSessions, orderedSessions, type CustomGroup, type ProjectGroup } from './grouping';
 import {
   ArrowLeftIcon,
@@ -601,6 +602,119 @@ function CustomSectionHeader({
   );
 }
 
+const SHOW_MORE_SX = {
+  justifyContent: 'flex-start',
+  minHeight: '28px',
+  px: 1,
+  '--Button-radius': '6px',
+  fontSize: '0.8125rem',
+  fontWeight: 'normal',
+  color: 'text.secondary',
+};
+
+/** Statuses a row is never hidden behind "Show more" in: the user is waiting on it or it on them. */
+const isLive = (status: ChatSessionStatus | undefined) => status === 'processing' || status === 'needs-action';
+
+/**
+ * A group's rows, capped at GROUP_ROW_CAP with "Show more" / "Show less" below them. The active,
+ * pinned and live rows always draw, in place. `uncapped` is set while a search is narrowing the
+ * list, which then shows every match.
+ */
+function CappedSessionRows({
+  groupKey,
+  testIdPrefix,
+  sessions,
+  uncapped,
+  activeId,
+  statuses,
+  row,
+}: {
+  groupKey: string;
+  testIdPrefix: 'sidebar-project' | 'sidebar-section';
+  sessions: ChatSessionSummary[];
+  uncapped: boolean;
+  activeId: string | null;
+  statuses: ReadonlyMap<string, ChatSessionStatus>;
+  row: (session: ChatSessionSummary) => ReactNode;
+}) {
+  const limit = useGroupLimit(groupKey);
+  const capped = useMemo(
+    () =>
+      uncapped
+        ? null
+        : capRows(
+            sessions,
+            limit,
+            session => session.id === activeId || session.pinned === true || isLive(statuses.get(session.id))
+          ),
+    [sessions, uncapped, limit, activeId, statuses]
+  );
+
+  // Each button unmounts on the click that empties it; focus moves to the other one rather than
+  // falling back to the document.
+  const moreRef = useRef<HTMLButtonElement>(null);
+  const lessRef = useRef<HTMLButtonElement>(null);
+  const pendingFocus = useRef<'more' | 'less' | null>(null);
+  useEffect(() => {
+    const next =
+      pendingFocus.current === 'more' ? moreRef.current : pendingFocus.current === 'less' ? lessRef.current : null;
+    pendingFocus.current = null;
+    next?.focus();
+  });
+
+  const hidden = capped?.hidden ?? 0;
+  const expanded = !uncapped && limit > GROUP_ROW_CAP && sessions.length > GROUP_ROW_CAP;
+
+  return (
+    <>
+      <List size="sm" sx={SESSION_LIST_SX}>
+        {(capped?.visible ?? sessions).map(row)}
+      </List>
+      {(hidden > 0 || expanded) && (
+        <Stack direction="row" sx={{ alignItems: 'center', gap: 0.25 }}>
+          {capped && hidden > 0 && (
+            <Button
+              ref={moreRef}
+              size="sm"
+              variant="plain"
+              color="neutral"
+              onClick={event => {
+                if (hidden <= GROUP_ROW_STEP && event.currentTarget === document.activeElement) {
+                  pendingFocus.current = 'less';
+                }
+                setGroupLimit(groupKey, capped.nextLimit);
+              }}
+              sx={{ ...SHOW_MORE_SX, flex: 1 }}
+              data-testid={`${testIdPrefix}-show-more-btn`}
+            >
+              Show {Math.min(GROUP_ROW_STEP, hidden)} more
+              <Typography component="span" level="body-xs" textColor="text.tertiary" sx={{ ml: 0.75 }}>
+                ({hidden} hidden)
+              </Typography>
+            </Button>
+          )}
+          {expanded && (
+            <Button
+              ref={lessRef}
+              size="sm"
+              variant="plain"
+              color="neutral"
+              onClick={event => {
+                if (event.currentTarget === document.activeElement) pendingFocus.current = 'more';
+                setGroupLimit(groupKey, null);
+              }}
+              sx={{ ...SHOW_MORE_SX, ...(hidden === 0 && { flex: 1 }) }}
+              data-testid={`${testIdPrefix}-show-less-btn`}
+            >
+              Show less
+            </Button>
+          )}
+        </Stack>
+      )}
+    </>
+  );
+}
+
 /** A type of our own, so a drag of text, a link or files (see useFileDrop) is never taken for a row. */
 const SESSION_DRAG_TYPE = 'application/x-b4m-session';
 
@@ -701,11 +815,12 @@ export function SessionList({
   const dragFrame = useRef(0);
   const [nameRequest, setNameRequest] = useState<SectionNameRequest | null>(null);
 
+  const searching = query.trim() !== '';
   const sections = useMemo(() => {
     const grouped = groupSessions(matching, mode, userSections);
     // An empty section under a search is only noise; with no query it stays so it can be found.
-    return query.trim() ? { ...grouped, custom: grouped.custom.filter(group => group.sessions.length > 0) } : grouped;
-  }, [matching, mode, userSections, query]);
+    return searching ? { ...grouped, custom: grouped.custom.filter(group => group.sessions.length > 0) } : grouped;
+  }, [matching, mode, userSections, searching]);
   const empty =
     sections.pinned.length === 0 &&
     sections.custom.length === 0 &&
@@ -880,9 +995,15 @@ export function SessionList({
         onDelete={section => sectionActions.remove(section.id)}
       />
       {group.sessions.length > 0 ? (
-        <List size="sm" sx={SESSION_LIST_SX}>
-          {group.sessions.map(row)}
-        </List>
+        <CappedSessionRows
+          groupKey={`section:${group.section.id}`}
+          testIdPrefix="sidebar-section"
+          sessions={group.sessions}
+          uncapped={searching}
+          activeId={activeId}
+          statuses={statuses}
+          row={row}
+        />
       ) : (
         // Nothing at rest, where a line of text read as a row; a dashed slot only while a row is in the air.
         draggedSession && (
@@ -1090,9 +1211,15 @@ export function SessionList({
             {sections.projects.map(group => (
               <Box key={group.directory} data-testid="project-group">
                 <ProjectHeader group={group} onCreateInProject={target => onCreateInProject(target.directory)} />
-                <List size="sm" sx={SESSION_LIST_SX}>
-                  {group.sessions.map(row)}
-                </List>
+                <CappedSessionRows
+                  groupKey={`project:${group.directory}`}
+                  testIdPrefix="sidebar-project"
+                  sessions={group.sessions}
+                  uncapped={searching}
+                  activeId={activeId}
+                  statuses={statuses}
+                  row={row}
+                />
               </Box>
             ))}
 
