@@ -12,20 +12,27 @@ const PAGE_HEIGHT = 800;
 const SNIPPET_LINES = 14;
 
 /**
- * Whether `target` is on screen or within `margin` of it. True where IntersectionObserver does
- * not exist, so a host without one draws everything rather than nothing.
+ * Whether `target` is within `margin` of `root`'s visible area. The root must be the scroller the
+ * target sits in: measured against the window, a scroller clips its content before the margin is
+ * applied, so nothing below its fold would ever count as near. True where IntersectionObserver
+ * does not exist, so a host without one draws everything rather than nothing.
  */
-export function useNearViewport(target: RefObject<Element | null>, margin = '200px'): boolean {
+export function useNearViewport(
+  target: RefObject<Element | null>,
+  root: RefObject<Element | null>,
+  margin = '200px'
+): boolean {
   const [near, setNear] = useState(() => typeof IntersectionObserver === 'undefined');
   useEffect(() => {
     const el = target.current;
     if (!el || typeof IntersectionObserver === 'undefined') return;
     const observer = new IntersectionObserver(entries => setNear(entries.some(entry => entry.isIntersecting)), {
+      root: root.current,
       rootMargin: margin,
     });
     observer.observe(el);
     return () => observer.disconnect();
-  }, [target, margin]);
+  }, [target, root, margin]);
   return near;
 }
 
@@ -67,22 +74,27 @@ function PagePreview({ artifact }: { artifact: ChatArtifactView }) {
   );
 }
 
-// Keyed on id and mode: a diagram scrolled out and back, or met again on reopening, is not recompiled.
-const diagramCache = new Map<string, string | null>();
+// A diagram scrolled out and back, or met again on reopening, is not recompiled. The source is
+// kept with the drawing because an artifact edited in the web app keeps its id.
+const diagramCache = new Map<string, { content: string; svg: string | null }>();
+
+function cachedDiagram(key: string, content: string): string | null | undefined {
+  const entry = diagramCache.get(key);
+  return entry?.content === content ? entry.svg : undefined;
+}
 
 function DiagramPreview({ artifact, mode }: { artifact: ChatArtifactView; mode: 'light' | 'dark' }) {
   const key = `${artifact.id}:${mode}`;
-  const [svg, setSvg] = useState<string | null | undefined>(() => diagramCache.get(key));
+  const [svg, setSvg] = useState<string | null | undefined>(() => cachedDiagram(key, artifact.content));
 
   useEffect(() => {
-    if (diagramCache.has(key)) {
-      setSvg(diagramCache.get(key));
-      return;
-    }
+    const cached = cachedDiagram(key, artifact.content);
+    setSvg(cached);
+    if (cached !== undefined) return;
     let live = true;
     void renderMermaidDiagram(artifact.content, mode).then(result => {
       const drawn = result.ok ? result.svg : null;
-      diagramCache.set(key, drawn);
+      diagramCache.set(key, { content: artifact.content, svg: drawn });
       if (live) setSvg(drawn);
     });
     return () => {

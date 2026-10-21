@@ -1,4 +1,14 @@
-import { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+  memo,
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type RefObject,
+} from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -50,6 +60,7 @@ interface ArtifactTileProps {
   mode: 'light' | 'dark';
   onOpen: (id: string) => void;
   onNear: (id: string, near: boolean) => void;
+  scroller: RefObject<HTMLDivElement | null>;
 }
 
 /**
@@ -57,9 +68,9 @@ interface ArtifactTileProps {
  * because typing in the search re-renders the panel on every key, and a card whose props did not
  * change has nothing new to draw.
  */
-const ArtifactTile = memo(function ArtifactTile({ summary, body, mode, onOpen, onNear }: ArtifactTileProps) {
+const ArtifactTile = memo(function ArtifactTile({ summary, body, mode, onOpen, onNear, scroller }: ArtifactTileProps) {
   const root = useRef<HTMLButtonElement>(null);
-  const near = useNearViewport(root);
+  const near = useNearViewport(root, scroller);
   const avatar = avatarColors(summary.id, mode);
   const date = shortDate(summary.createdAt);
 
@@ -628,6 +639,7 @@ export function ArtifactLibraryPanel({ onClose }: { onClose: () => void }) {
                     mode={mode}
                     onOpen={openArtifact}
                     onNear={loader.near}
+                    scroller={grid}
                   />
                 ))}
               </Box>

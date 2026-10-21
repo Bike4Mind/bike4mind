@@ -30,11 +30,14 @@ const summaries: ChatArtifactSummary[] = [
  * A hand-driven IntersectionObserver: nothing is on screen until a test says so, which is what
  * lets these tests see which bodies the panel asks for and when.
  */
-const observed: { element: Element; callback: IntersectionObserverCallback }[] = [];
+const observed: { element: Element; root: Element | Document | null; callback: IntersectionObserverCallback }[] = [];
 class ManualObserver {
-  constructor(private readonly callback: IntersectionObserverCallback) {}
+  constructor(
+    private readonly callback: IntersectionObserverCallback,
+    private readonly options: IntersectionObserverInit = {}
+  ) {}
   observe(element: Element) {
-    observed.push({ element, callback: this.callback });
+    observed.push({ element, root: this.options.root ?? null, callback: this.callback });
   }
   unobserve() {}
   disconnect() {
@@ -232,6 +235,8 @@ describe('ArtifactLibraryPanel list', () => {
     });
     await mount();
     expect(readArtifact).not.toHaveBeenCalled();
+    // Rooted at the grid's own scroller, or the prefetch margin would be clipped away.
+    expect(observed.map(entry => entry.root)).toEqual(observed.map(() => byTestId('artifact-library-grid-scroller')));
 
     const [first] = allByTestId('artifact-library-card');
     await bringNear([first]);
