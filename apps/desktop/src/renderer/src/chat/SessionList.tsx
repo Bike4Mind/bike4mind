@@ -664,7 +664,6 @@ function CappedSessionRows({
       session =>
         raised.current.has(session.id) ||
         session.id === activeId ||
-        session.pinned === true ||
         isLive(statuses.get(session.id)) ||
         session.id === revealId
     );
