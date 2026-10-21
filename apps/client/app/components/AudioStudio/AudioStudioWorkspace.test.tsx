@@ -11,6 +11,10 @@ const { useAudioProvidersMock, useGenerateAudioMock, generate, hookState } = vi.
   hookState: { result: null as null | { url: string; saved: boolean }, isGenerating: false },
 }));
 
+const settings = vi.hoisted(() => ({ enforceCredits: true }));
+vi.mock('@client/app/hooks/data/settings', () => ({
+  useGetSettingsValue: (key: string) => (key === 'enforceCredits' ? settings.enforceCredits : undefined),
+}));
 vi.mock('@client/app/hooks/data/audioProviders', () => ({ useAudioProviders: useAudioProvidersMock }));
 vi.mock('./useGenerateAudio', () => ({ useGenerateAudio: useGenerateAudioMock }));
 vi.mock('@client/app/components/Session/AISettings/AudioGenerationSettings', () => ({
@@ -19,6 +23,7 @@ vi.mock('@client/app/components/Session/AISettings/AudioGenerationSettings', () 
 
 import { SoundEffectsStudioWorkspace, SpeechStudioWorkspace } from './AudioStudioWorkspace';
 import { useAudioGenSettings } from '@client/app/stores/useAudioGenSettings';
+import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { useAudioStudioDraft } from './useAudioStudioDraft';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -31,6 +36,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   hookState.result = null;
   hookState.isGenerating = false;
+  settings.enforceCredits = true;
+  useSelectedAccount.setState({ selectedAccount: null });
   // Read through on each call: the tests below set hookState just before rendering.
   useGenerateAudioMock.mockImplementation(() => ({
     generate,
@@ -125,5 +132,26 @@ describe('AudioStudioWorkspace form', () => {
     hookState.result = { url: 'blob:audio', saved: true };
     renderWithTheme(<SpeechStudioWorkspace testId="speech-studio" />);
     expect(screen.queryByTestId('speech-studio-player')).not.toBeInTheDocument();
+  });
+});
+
+describe('AudioStudioWorkspace payer note', () => {
+  const select = (name: string, personal: boolean) =>
+    useSelectedAccount.setState({ selectedAccount: { id: 'acct-1', name, personal, credits: 100 } });
+
+  it('names the selected organization', () => {
+    select('Acme', false);
+    renderWithTheme(<SpeechStudioWorkspace testId="speech-studio" />);
+    expect(screen.getByTestId('audio-form-payer-note')).toHaveTextContent('Paid from Acme credits');
+  });
+
+  it('is hidden with no selection or when credits are not enforced', () => {
+    renderWithTheme(<SpeechStudioWorkspace testId="speech-studio" />);
+    expect(screen.queryByTestId('audio-form-payer-note')).not.toBeInTheDocument();
+
+    settings.enforceCredits = false;
+    select('Acme', false);
+    renderWithTheme(<SoundEffectsStudioWorkspace testId="sound-effects-studio" />);
+    expect(screen.queryByTestId('audio-form-payer-note')).not.toBeInTheDocument();
   });
 });
