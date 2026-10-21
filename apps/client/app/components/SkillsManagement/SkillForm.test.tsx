@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { toSkillMd } from '@bike4mind/common/utils/skillMd';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -30,7 +30,68 @@ const paste = (text: string) => {
   fireEvent.click(screen.getByTestId('skill-form-import-paste-apply'));
 };
 
+const deferredFile = () => {
+  let resolveRead: (text: string) => void = () => {
+    throw new Error('File read has not started');
+  };
+  let rejectRead: (error: Error) => void = () => {
+    throw new Error('File read has not started');
+  };
+  const read = new Promise<string>((resolve, reject) => {
+    resolveRead = resolve;
+    rejectRead = reject;
+  });
+  const file = new File([], 'SKILL.md', { type: 'text/markdown' });
+  file.text = () => read;
+  return { file, resolveRead, rejectRead };
+};
+
 describe('SkillForm SKILL.md import', () => {
+  it('always explains that supporting files are not imported', () => {
+    renderForm();
+    expect(screen.getByTestId('skill-form-import-file-limitations')).toHaveTextContent('Only SKILL.md is imported');
+    paste('---\nname: review-pr\ndescription: Review a PR\n---\nRun scripts/review.py.');
+    expect(screen.queryByTestId('skill-form-import-dropped')).not.toBeInTheDocument();
+    expect(screen.getByTestId('skill-form-import-file-limitations')).toHaveTextContent("aren't imported");
+  });
+
+  it.each(['resolve', 'reject'] as const)(
+    'ignores an older file that later %ss after a newer import',
+    async outcome => {
+      renderForm();
+      const older = deferredFile();
+      fireEvent.change(screen.getByTestId('skill-form-import-file'), { target: { files: [older.file] } });
+      upload('---\nname: newer\ndescription: Newer description\n---\nNewer body');
+      await waitFor(() => expect(value('skill-name-input')).toBe('newer'));
+
+      await act(async () => {
+        if (outcome === 'resolve') older.resolveRead('---\nname: older\ndescription: Old description\n---\nOld body');
+        else older.rejectRead(new Error('Old read failed'));
+      });
+
+      expect(value('skill-name-input')).toBe('newer');
+      expect(value('skill-description-input')).toBe('Newer description');
+      expect(value('skill-body-input')).toBe('Newer body');
+      expect(screen.queryByTestId('skill-form-import-error')).not.toBeInTheDocument();
+    }
+  );
+
+  it('keeps a pasted import when an earlier file finishes reading', async () => {
+    renderForm();
+    const older = deferredFile();
+    fireEvent.change(screen.getByTestId('skill-form-import-file'), { target: { files: [older.file] } });
+    paste('---\nname: pasted\ndescription: Pasted description\n---\nPasted body');
+
+    await act(async () => {
+      older.resolveRead('---\nname: older\ndescription: Old description\n---\nOld body');
+    });
+
+    expect(value('skill-name-input')).toBe('pasted');
+    expect(value('skill-description-input')).toBe('Pasted description');
+    expect(value('skill-body-input')).toBe('Pasted body');
+    expect(screen.queryByTestId('skill-form-import-error')).not.toBeInTheDocument();
+  });
+
   it('prefills every field from an uploaded file and reports unsupported keys', async () => {
     renderForm();
     upload(

@@ -172,6 +172,10 @@ export const SkillForm: FC<SkillFormProps> = ({
                 Paste
               </Button>
             </Stack>
+            <Typography level="body-xs" textColor="text.tertiary" data-testid="skill-form-import-file-limitations">
+              Only SKILL.md is imported. Supporting files next to it, such as scripts or reference documents,
+              aren&apos;t imported.
+            </Typography>
             {pasteOpen ? (
               <Stack spacing={1}>
                 <Textarea
@@ -221,8 +225,7 @@ export const SkillForm: FC<SkillFormProps> = ({
             ) : null}
             {importResult?.ok && importResult.dropped.length ? (
               <Alert color="warning" variant="soft" data-testid="skill-form-import-dropped">
-                Not supported in Bike4Mind skills: {importResult.dropped.join(', ')}. These were ignored, and supporting
-                files next to SKILL.md aren&apos;t imported.
+                Not supported in Bike4Mind skills: {importResult.dropped.join(', ')}. These were ignored.
               </Alert>
             ) : null}
           </Stack>

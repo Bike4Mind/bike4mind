@@ -86,7 +86,11 @@ function quoteRawArgumentHint(frontmatter: string): string {
     if (/^["'|>]/.test(raw)) return line;
     // A trailing comment only follows a closed bracket or a plain scalar; inside `[pr #123]` the `#`
     // is part of the hint.
-    const hint = raw.replace(/([\]>])[ \t]+#.*$/, '$1').trimEnd();
+    const hint = (
+      raw.startsWith('[') || raw.startsWith('<')
+        ? raw.replace(/([\]>])[ \t]+#.*$/, '$1')
+        : raw.replace(/[ \t]+#.*$/, '')
+    ).trimEnd();
     return hint.startsWith('[') || hint.startsWith('<') || hint.includes(': ') ? `${key}${JSON.stringify(hint)}` : line;
   });
 }

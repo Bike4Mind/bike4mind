@@ -11,7 +11,7 @@ export const SKILL_MD_SOURCE_MARKER = 'Bike4Mind-Source:';
 /** Opening `---<lang>` fence, the frontmatter text, then the closing `---` line. */
 const FRONTMATTER = /^---([^\r\n]*)\r?\n(?:([\s\S]*?)\r?\n)?---[ \t]*(?:\r?\n|$)/;
 
-const SOURCE_LINE = new RegExp(`^\\s*#\\s*${SKILL_MD_SOURCE_MARKER}[ \\t]*(\\S*)`, 'm');
+const SOURCE_LINE = new RegExp(`^[ \\t]*#[ \\t]*${SKILL_MD_SOURCE_MARKER}[ \\t]*(\\S*)`);
 
 export interface SkillMdFrontmatterSplit {
   /** Lowercased language tag on the opening fence ('' for a plain `---`). */
@@ -30,9 +30,18 @@ export function splitSkillMdFrontmatter(text: string): SkillMdFrontmatterSplit |
   return { lang: match[1].trim().toLowerCase(), frontmatter: match[2] ?? '', rest: text.slice(match[0].length) };
 }
 
-/** The `# Bike4Mind-Source:` URL inside the raw frontmatter text, or undefined when unstamped. */
+/** The source URL in the leading comment header, before any YAML data or scalar content. */
 export function readSkillMdSourceUrl(frontmatter: string): string | undefined {
-  return frontmatter.match(SOURCE_LINE)?.[1];
+  for (const line of frontmatter.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    // A marker below YAML data may be literal text inside a block or quoted scalar. Exports put
+    // their marker before any data, so only inspect the leading comment header without parsing YAML.
+    if (!trimmed.startsWith('#')) return undefined;
+    const match = line.match(SOURCE_LINE);
+    if (match) return match[1];
+  }
+  return undefined;
 }
 
 /**
