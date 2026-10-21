@@ -138,6 +138,26 @@ describe('B4mApiClient', () => {
     expect(mockGet).toHaveBeenCalledWith('/api/user-api-keys', { timeout: 5000 });
   });
 
+  it('prefers the longest matching stored prefix over a shorter legacy one', async () => {
+    mockGet.mockResolvedValue([
+      { keyPrefix: 'b4m_live_abc', status: 'active', scopes: ['notebooks:read'] },
+      { keyPrefix: 'b4m_live_abcdef01', status: 'active', scopes: ['optihashi:read', 'optihashi:compute'] },
+    ]);
+    const own = new B4mApiClient('http://localhost:3000', undefined, 'b4m_live_abcdef012345');
+
+    await expect(own.getOwnKeyScopes()).resolves.toEqual(['optihashi:read', 'optihashi:compute']);
+  });
+
+  it('refuses to guess between two active keys with equally long matching prefixes', async () => {
+    mockGet.mockResolvedValue([
+      { keyPrefix: 'b4m_live_abc', status: 'active', scopes: ['optihashi:read', 'optihashi:compute'] },
+      { keyPrefix: 'b4m_live_abc', status: 'active', scopes: ['notebooks:read'] },
+    ]);
+    const own = new B4mApiClient('http://localhost:3000', undefined, 'b4m_live_abc999999999');
+
+    await expect(own.getOwnKeyScopes()).resolves.toEqual([]);
+  });
+
   it('has no key scopes to read for a login caller and makes no request', async () => {
     mockGet.mockClear();
     await expect(new B4mApiClient('http://localhost:3000').getOwnKeyScopes()).resolves.toBeUndefined();
