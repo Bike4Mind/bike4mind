@@ -1483,6 +1483,45 @@ describe('Context Management Tests', () => {
       expect(meta.oldestIncludedQuestId).toBe(makeItem(1).id);
     });
 
+    it('leaves no dangling user turn for a prompt stopped before any reply', async () => {
+      // Newest-first: 4 is the current prompt (popped), 3 was stopped with no output, 2 streamed some
+      // text before the stop, 1 completed.
+      const items = [
+        makeItem(4, { status: 'running', replies: [], reply: '' }),
+        makeItem(3, { status: 'stopped', replies: [], reply: '' }),
+        makeItem(2, { status: 'stopped', replies: ['partial answer'] }),
+        makeItem(1),
+      ];
+      const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+      const [messages] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db });
+
+      expect(messages).toEqual([
+        { role: 'user', content: 'prompt 1' },
+        { role: 'assistant', content: 'reply 1' },
+        { role: 'user', content: 'prompt 2' },
+        { role: 'assistant', content: 'partial answer' },
+      ]);
+    });
+
+    it('keeps a stopped turn that already recorded tool calls', async () => {
+      const items = [
+        makeItem(2, { status: 'running', replies: [], reply: '' }),
+        makeItem(1, {
+          status: 'stopped',
+          replies: [],
+          reply: '',
+          structuredReplies: [{ content: [{ type: 'text', text: 'calling a tool' }] }],
+        }),
+      ];
+      const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+      const [messages] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db });
+
+      expect(messages[0]).toEqual({ role: 'user', content: 'prompt 1' });
+      expect(messages).toHaveLength(2);
+    });
+
     it('excludes messages at or before the boundary', async () => {
       // Items 1-4 returned newest-first
       const items = [makeItem(4), makeItem(3), makeItem(2), makeItem(1)];
@@ -2120,6 +2159,22 @@ describe('Context Management Tests', () => {
       ]);
       // All content is plain strings (no tool_use / tool_result arrays).
       expect(messages.every(m => typeof m.content === 'string')).toBe(true);
+    });
+
+    it('skips a prompt stopped before any reply, but keeps a stopped turn that streamed text', async () => {
+      const items = [
+        makeItem(3, { status: 'stopped', replies: [], reply: '' }),
+        makeItem(2, { status: 'stopped', replies: ['partial answer'] }),
+        makeItem(1, { status: 'stopped', replies: ['<think>only thoughts</think>'] }),
+      ];
+      const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+      const messages = await fetchAgentConversationHistory(makeSession(), 20, { db });
+
+      expect(messages).toEqual([
+        { role: 'user', content: 'prompt 2' },
+        { role: 'assistant', content: 'partial answer' },
+      ]);
     });
 
     it('returns empty without querying when questCount <= 0', async () => {
