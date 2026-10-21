@@ -8,7 +8,7 @@
     },
     {
       "id": "gpu-market-analysis",
-      "prompt": "Create a market analysis on GPU sales between Nvidia, AMD, and Intel",
+      "prompt": "Create a market analysis on GPU sales between Nvidia, AMD, and Intel. Answer in chat; do not create an artifact.",
       "expectedKeywords": ["Nvidia", "AMD", "Intel", "GPU", "market"]
     },
     {
