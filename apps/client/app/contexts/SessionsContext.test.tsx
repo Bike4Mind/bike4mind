@@ -21,10 +21,18 @@ vi.mock('@client/app/contexts/UserContext', () => {
 });
 
 vi.mock('@client/app/contexts/LLMContext', () => ({
-  useLLM: (selector?: (s: Record<string, unknown>) => unknown): unknown => {
-    const state: Record<string, unknown> = { setLLM: vi.fn(), tools: [], isQuestMasterEnabled: false };
-    return selector ? selector(state) : state;
-  },
+  useLLM: Object.assign(
+    (selector?: (s: Record<string, unknown>) => unknown): unknown => {
+      const state: Record<string, unknown> = {
+        setLLM: vi.fn(),
+        selectSessionModel: vi.fn(),
+        tools: [],
+        isQuestMasterEnabled: false,
+      };
+      return selector ? selector(state) : state;
+    },
+    { getState: () => ({ hasExplicitSessionModelSelection: false }) }
+  ),
 }));
 
 vi.mock('@client/app/hooks/data/fabFiles', () => ({

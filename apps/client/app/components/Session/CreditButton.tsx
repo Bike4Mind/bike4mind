@@ -6,7 +6,7 @@ import { STATUS_ITEM_HEIGHT, useStatusLineCompact } from './SessionBottom/Compos
 import { FC, useState } from 'react';
 import CreditIcon from '../svgs/icons/CreditIcon';
 import { orange } from '@client/app/utils/themes/colors';
-import CreditsExplanationModal from '../subscription/CreditsExplanationModal';
+import BillingModal from '../subscription/BillingModal';
 import { useEffectiveCredits } from '@client/app/hooks/useEffectiveCredits';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { formatCreditBalance } from '@client/app/utils/formatCredits';
@@ -23,9 +23,10 @@ import { useLogEvent } from '@client/app/hooks/data/analytics';
  */
 export const LOW_CREDITS_THRESHOLD = LOW_CREDITS_THRESHOLD_DEFAULT;
 
-function balanceTooltip(credits: number): string {
-  if (credits <= 0) return 'No answers left on this model. Your chats and files are safe.';
-  return 'About how many typical answers are left on the current model. Click to learn how credits work.';
+function balanceTooltip(credits: number, lowCreditsThreshold: number): string {
+  if (credits <= 0) return 'No credits left. Subscribe or top up to continue. Your chats and files are safe.';
+  if (credits < lowCreditsThreshold) return 'Running low. Subscribe or top up so your work is not interrupted.';
+  return 'About how many typical answers are left on the current model. Click to see plans and top up.';
 }
 
 /**
@@ -42,7 +43,7 @@ export const CreditBalanceChipView: FC<{
   payerNote?: string | null;
 }> = ({ credits, lowCreditsThreshold, onClick, answersLeft, modelName, payerNote }) => {
   const color = credits <= 0 ? 'danger' : credits < lowCreditsThreshold ? 'warning' : 'neutral';
-  const balanceText = balanceTooltip(credits);
+  const balanceText = balanceTooltip(credits, lowCreditsThreshold);
   // Out of room on the status line: the number without "credits" (the icon says it; the name keeps it).
   const compact = useStatusLineCompact();
   const hasEstimate = answersLeft !== undefined && answersLeft !== null;
@@ -69,8 +70,10 @@ export const CreditBalanceChipView: FC<{
           : 'less than 1 typical answer'
         : `about ${count.toLocaleString('en-US')} typical ${noun}`;
   const ariaLabel =
-    `${answerPhrase ?? formatCreditBalance(credits)} left${modelName ? ` on ${modelName}` : ''}.` +
-    `${answerPhrase ? ` ${formatCreditBalance(credits)}.` : ''}${payerNote ? ` ${payerNote}.` : ''} Learn about credits`;
+    credits <= 0
+      ? `No credits left.${payerNote ? ` ${payerNote}.` : ''} See plans and top up`
+      : `${answerPhrase ?? formatCreditBalance(credits)} left${modelName ? ` on ${modelName}` : ''}.` +
+        `${answerPhrase ? ` ${formatCreditBalance(credits)}.` : ''}${payerNote ? ` ${payerNote}.` : ''} See plans and top up`;
   const title = payerNote ? (
     <Box sx={{ maxWidth: 280, display: 'flex', flexDirection: 'column', gap: '4px' }}>
       <Typography level="body-xs" textColor="inherit" sx={{ fontWeight: 600 }}>
@@ -163,7 +166,7 @@ const CreditBalanceChip: FC<{ session?: ISessionDocument | null }> = ({ session 
         modelName={selected?.name}
         payerNote={payerNote}
       />
-      <CreditsExplanationModal open={isOpen} onClose={() => setIsOpen(false)} />
+      <BillingModal open={isOpen} entry="credits_chip" onClose={() => setIsOpen(false)} />
     </>
   );
 };

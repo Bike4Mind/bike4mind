@@ -605,7 +605,12 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
             models={accessibleModels ?? []}
             selectedModelId={model}
             credits={effectiveCredits}
-            inputTokens={estimateNextInputTokens(contextUsage?.actualInputTokens, chatInputValue)}
+            inputTokens={estimateNextInputTokens(
+              contextUsage?.actualInputTokens,
+              chatInputValue,
+              model,
+              contextUsage?.inputModelId
+            )}
             selectedMaxTokens={max_tokens}
             thinking={thinking}
             onSelect={affordableOffer.onSelect}

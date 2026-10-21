@@ -1,6 +1,6 @@
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
@@ -30,23 +30,18 @@ vi.mock('@client/app/hooks/data/useModelInfo', () => ({
     ],
   }),
 }));
-vi.mock('./BillingModal', () => ({
-  default: ({ open, focus }: { open: boolean; focus?: string }) =>
-    open ? <div data-testid="billing-open" data-focus={focus} /> : null,
-}));
-
-import CreditsExplanationModal from './CreditsExplanationModal';
+import CreditsExplanation from './CreditsExplanation';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
 const renderModal = () =>
   render(
     <CssVarsProvider theme={appTheme}>
-      <CreditsExplanationModal open onClose={vi.fn()} />
+      <CreditsExplanation />
     </CssVarsProvider>
   );
 
-describe('CreditsExplanationModal', () => {
+describe('CreditsExplanation', () => {
   beforeEach(() => {
     state.defaultFreeCredits = 100;
     state.organizationId = null;
@@ -73,22 +68,12 @@ describe('CreditsExplanationModal', () => {
     expect(screen.queryByText(/require no card/)).toBeNull();
   });
 
-  it('explains free credits and answers before opening top-up one click deeper', () => {
-    render(
-      <CssVarsProvider theme={appTheme}>
-        <CreditsExplanationModal open onClose={vi.fn()} />
-      </CssVarsProvider>
-    );
-
-    expect(screen.getByTestId('credits-explanation-modal')).toBeInTheDocument();
+  it('explains credits inline without putting another dialog in front of buying', () => {
+    renderModal();
+    expect(screen.getByTestId('credits-explanation')).toBeInTheDocument();
     expect(screen.getByTestId('credits-explanation-answers')).toHaveTextContent(/typical answers left/);
     expect(screen.getByText(/Free starting credits require no card/)).toBeInTheDocument();
-    expect(screen.queryByTestId('billing-open')).toBeNull();
-
-    expect(screen.getByTestId('credits-explanation-top-up')).toHaveTextContent('See usage, plans and top up');
-    expect(screen.queryByTestId('credits-explanation-usage')).toBeNull();
-    fireEvent.click(screen.getByTestId('credits-explanation-top-up'));
-    expect(screen.queryByTestId('credits-explanation-modal')).toBeNull();
-    expect(screen.getByTestId('billing-open')).toHaveAttribute('data-focus', 'credits');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.queryByRole('button')).toBeNull();
   });
 });

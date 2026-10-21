@@ -1,6 +1,7 @@
 import {
   ABSTENTION_PROMPT,
   ARTIFACT_EMISSION_PROMPT,
+  CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS,
   getTextModelCost,
   getTextModelCreditsPer1M,
   HELP_CENTER_PROMPT,
@@ -11,11 +12,7 @@ import {
   type ModelInfo,
   usdToCredits,
 } from '@bike4mind/common';
-import {
-  buildThinkingParams,
-  reasonsWithinOutputBudget,
-  resolveDispatchForRecord,
-} from '@bike4mind/llm-adapters/model-sizing';
+import { sentMaxTokensFor, reasonsWithinOutputBudget } from '@bike4mind/llm-adapters/model-sizing';
 import { computeDefaultMaxTokens } from './aiSettingsUtils';
 
 // ~4.3 chars per cl100k token measured on the blocks below; 4 rounds the overhead up, never down.
@@ -40,9 +37,17 @@ export const TYPICAL_PROMPT_TOKENS = 1_000;
 export const TYPICAL_ANSWER_INPUT_TOKENS = APP_PROMPT_TOKENS + TYPICAL_PROMPT_TOKENS;
 export const TYPICAL_ANSWER_OUTPUT_TOKENS = 1_000;
 
-/** Recent context plus the draft; one token per character deliberately rounds the draft up. */
-export function estimateNextInputTokens(previousInputTokens: number | undefined, draft: string): number {
-  return Math.max(previousInputTokens ?? 0, TYPICAL_ANSWER_INPUT_TOKENS) + draft.length;
+/** Recent context in the selected model's token units plus a conservative draft estimate. */
+export function estimateNextInputTokens(
+  previousInputTokens: number | undefined,
+  draft: string,
+  selectedModelId?: string,
+  previousModelId?: string
+): number {
+  const selectedMultiplier = tokenEstimateMultiplier(selectedModelId);
+  const previousMultiplier = tokenEstimateMultiplier(previousModelId ?? selectedModelId);
+  const previousTokens = ((previousInputTokens ?? 0) / previousMultiplier) * selectedMultiplier;
+  return Math.ceil(Math.max(previousTokens, TYPICAL_ANSWER_INPUT_TOKENS * selectedMultiplier) + draft.length);
 }
 
 export interface ModelAnswerCost {
@@ -63,10 +68,10 @@ export function typicalAnswerCredits(model: ModelInfo): number | null {
   return credits > 0 ? credits : null;
 }
 
-interface PreflightThinking {
+type PreflightThinking = {
   enabled?: boolean;
   budget_tokens?: number;
-}
+};
 
 /** Credits the chat admission hold needs for this model, context size and output ceiling. */
 export function preflightAnswerCredits(
@@ -77,12 +82,7 @@ export function preflightAnswerCredits(
 ): number | null {
   if (model.freeToRun) return 0;
   if (!model.pricing || Object.keys(model.pricing).length === 0) return null;
-  const family = resolveDispatchForRecord(model)?.adapterFamily;
-  const thinkingRaisesCeiling =
-    !!thinking?.enabled && !!model.can_think && (family === 'anthropic-messages' || family === 'bedrock-anthropic');
-  const sentMaxTokens = thinkingRaisesCeiling
-    ? buildThinkingParams(model.id, model, thinking.budget_tokens ?? 16_000, maxTokens).maxTokens
-    : maxTokens;
+  const sentMaxTokens = sentMaxTokensFor(model, thinking, maxTokens);
   const outputTokens = reservationOutputTokens(
     sentMaxTokens,
     sentMaxTokens > maxTokens || reasonsWithinOutputBudget(model)
@@ -116,10 +116,20 @@ export function findAffordableModelOffer(
     .filter(
       model => model.type === 'text' && model.id !== selectedModelId && !model.disabled && !isModelDeprecated(model)
     )
-    .map(model => ({
-      model,
-      credits: preflightAnswerCredits(model, inputTokens, computeDefaultMaxTokens(model), thinking),
-    }))
+    .map(model => {
+      // The current estimate uses the selected model's tokenizer; candidates may count it differently.
+      const candidateInputTokens = Math.ceil(
+        (inputTokens / tokenEstimateMultiplier(selected.id)) * tokenEstimateMultiplier(model.id)
+      );
+      const maxTokens = computeDefaultMaxTokens(model);
+      const sentMaxTokens = sentMaxTokensFor(model, thinking, maxTokens);
+      const fitsContext =
+        candidateInputTokens + sentMaxTokens + CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS <= model.contextWindow;
+      return {
+        model,
+        credits: fitsContext ? preflightAnswerCredits(model, candidateInputTokens, maxTokens, thinking) : null,
+      };
+    })
     .filter((candidate): candidate is { model: ModelInfo; credits: number } => candidate.credits !== null)
     .filter(candidate => candidate.credits <= credits && candidate.credits < selectedCredits)
     .sort((a, b) => a.credits - b.credits)[0];

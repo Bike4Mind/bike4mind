@@ -7,6 +7,12 @@ import { getThemeConfig } from '../../utils/themes';
 import { preflightAnswerCredits } from '../../utils/creditEstimate';
 import { AffordableModelOffer } from './AffordableModelOffer';
 
+vi.mock('./CreditOfferActions', () => ({
+  CreditOfferActions: ({ moment }: { moment: string }) => (
+    <div data-testid="credit-offer-actions" data-moment={moment} />
+  ),
+}));
+
 const model = (id: string, name: string, output: number): ModelInfo =>
   ({
     id,
@@ -41,10 +47,14 @@ describe('AffordableModelOffer', () => {
       </CssVarsProvider>
     );
 
-    expect(screen.getByTestId('affordable-model-offer')).toHaveTextContent('will become your active model');
-    expect(screen.getByTestId('affordable-model-offer')).toHaveTextContent('may need about');
+    expect(screen.getByTestId('affordable-model-offer')).toHaveTextContent('Your default model stays the same');
+    expect(screen.getByTestId('affordable-model-offer')).toHaveTextContent('needs an estimated');
     expect(screen.getByTestId('affordable-model-offer')).toHaveTextContent('attachments and tools');
-    fireEvent.click(screen.getByTestId('affordable-model-use-btn'));
+    const paid = screen.getByTestId('credit-offer-actions');
+    const switchButton = screen.getByTestId('affordable-model-use-btn');
+    expect(paid).toHaveAttribute('data-moment', 'low');
+    expect(paid.compareDocumentPosition(switchButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(switchButton);
     expect(onSelect).toHaveBeenCalledWith(affordable);
   });
 

@@ -2,7 +2,6 @@ import { useCallback, useState } from 'react';
 import { toast } from 'sonner';
 import type { ModelInfo } from '@bike4mind/common';
 import { useLLM } from '@client/app/contexts/LLMContext';
-import { buildModelSelectionPatch } from '@client/app/utils/aiSettingsUtils';
 import { updateSessionToServer } from '@client/app/utils/sessionsAPICalls';
 
 interface UseAffordableModelOfferArgs {
@@ -23,7 +22,7 @@ export function useAffordableModelOffer({
 
   const onSelect = useCallback(
     (affordableModel: ModelInfo) => {
-      useLLM.getState().setLLM(buildModelSelectionPatch(affordableModel));
+      useLLM.getState().selectSessionModel(affordableModel.id, affordableModel);
       if (sessionId) {
         void updateSessionToServer({ id: sessionId, lastUsedModel: affordableModel.id }).catch(error => {
           console.error('Failed to persist affordable model selection:', error);

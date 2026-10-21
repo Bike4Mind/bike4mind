@@ -67,7 +67,7 @@ interface CreditsWarningProps {
   reason?: string;
   /** Whether the composer holds text that will wait for credits. */
   hasDraft?: boolean;
-  /** Free routes to credits; listed ahead of the paid actions. */
+  /** Free routes to credits, alongside the paid actions. */
   freeRoutes?: ReactNode;
   /** Replaces the account-aware CreditOfferActions, e.g. to preview one kind of account. */
   actions?: ReactNode;
@@ -150,8 +150,8 @@ export function CreditsWarning({ show, actions, reason, hasDraft = false, freeRo
             Out of Credits
           </Typography>
           <Typography level="body-sm" sx={{ mt: '2px', fontSize: '13px', color: 'text.tertiary' }}>
-            Your chats and files are safe. You can still review and export your work, then continue when credits are
-            available.
+            Subscribe or top up to continue. Your chats and files are safe, and you can still review and export your
+            work.
           </Typography>
           {reason && (
             <Typography

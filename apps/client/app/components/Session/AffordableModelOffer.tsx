@@ -3,6 +3,7 @@ import { Box, Button, Typography } from '@mui/joy';
 import type { ModelInfo } from '@bike4mind/common';
 import { findAffordableModelOffer } from '@client/app/utils/creditEstimate';
 import { ComposerNote } from './ComposerNote';
+import { CreditOfferActions } from './CreditOfferActions';
 
 interface AffordableModelOfferProps {
   enabled: boolean;
@@ -43,15 +44,21 @@ export const AffordableModelOffer = ({
       dismissLabel="Dismiss affordable model offer"
       onDismiss={onDismiss}
     >
-      <Typography level="title-sm">Try a lower-cost model</Typography>
+      <Typography level="title-sm">Keep chatting</Typography>
       <Typography level="body-sm">
-        Based on recent context and your draft, {offer.current.modelName} may need about{' '}
-        {offer.current.creditsPerAnswer.toLocaleString('en-US')} credits up front. {offer.affordable.name} is estimated
-        at {offer.affordableCredits.toLocaleString('en-US')} and will become your active model. Actual credits depend on
-        your next message, attachments and tools.
+        Based on recent context and your draft, {offer.current.modelName} needs an estimated{' '}
+        {offer.current.creditsPerAnswer.toLocaleString('en-US')} credits to start the next answer.{' '}
+        {offer.affordable.name} is estimated at {offer.affordableCredits.toLocaleString('en-US')} for this chat. Your
+        default model stays the same. Actual credits depend on your next message, attachments and tools.
       </Typography>
-      <Box sx={{ mt: 1 }}>
-        <Button size="sm" data-testid="affordable-model-use-btn" onClick={() => onSelect(offer.affordable)}>
+      <Box sx={{ mt: 1, display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
+        <CreditOfferActions moment="low" />
+        <Button
+          size="sm"
+          variant="plain"
+          data-testid="affordable-model-use-btn"
+          onClick={() => onSelect(offer.affordable)}
+        >
           Switch to {offer.affordable.name}
         </Button>
       </Box>

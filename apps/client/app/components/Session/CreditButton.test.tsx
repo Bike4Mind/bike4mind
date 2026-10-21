@@ -9,8 +9,9 @@ const { state, logEvent } = vi.hoisted(() => ({
   logEvent: vi.fn(),
 }));
 
-vi.mock('../subscription/CreditsExplanationModal', () => ({
-  default: ({ open }: { open: boolean }) => (open ? <div data-testid="credits-explanation-open" /> : null),
+vi.mock('../subscription/BillingModal', () => ({
+  default: ({ open, entry }: { open: boolean; entry?: string }) =>
+    open ? <div data-testid="billing-open" data-entry={entry} /> : null,
 }));
 vi.mock('@client/app/hooks/useEffectiveCredits', () => ({ useEffectiveCredits: () => state.credits }));
 vi.mock('./CreditPayerNote', () => ({ useCreditPayerNote: () => state.payerNote }));
@@ -74,14 +75,14 @@ describe('CreditBalanceChip', () => {
     logEvent.mockClear();
   });
 
-  it('shows answers as the primary unit and opens the explanation instead of Billing', () => {
+  it('shows answers as the primary unit and opens Billing directly with chip attribution', () => {
     renderChip();
     const chip = screen.getByTestId('credit-balance-chip');
     expect(chip).toHaveTextContent(/answers/);
     expect(within(chip).getByTestId('credit-icon')).toBeInTheDocument();
-    expect(screen.queryByTestId('credits-explanation-open')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('billing-open')).not.toBeInTheDocument();
     fireEvent.click(chip);
-    expect(screen.getByTestId('credits-explanation-open')).toBeInTheDocument();
+    expect(screen.getByTestId('billing-open')).toHaveAttribute('data-entry', 'credits_chip');
     expect(logEvent).toHaveBeenCalledWith({ type: 'credits_chip_clicked' });
   });
 
@@ -90,7 +91,7 @@ describe('CreditBalanceChip', () => {
     renderChip();
     const chip = screen.getByTestId('credit-balance-chip');
     expect(chip).not.toHaveTextContent('credits');
-    expect(chip).toHaveAccessibleName(/124,560 credits.*Learn about credits/);
+    expect(chip).toHaveAccessibleName(/124,560 credits.*See plans and top up/);
   });
 
   it('recomputes answers left when the selected model changes', () => {
@@ -117,6 +118,7 @@ describe('CreditBalanceChip', () => {
     state.credits = 0;
     const { unmount } = renderChip();
     expect(screen.getByTestId('credit-balance-chip')).toHaveTextContent(/^0 answers$/);
+    expect(screen.getByTestId('credit-balance-chip')).toHaveAccessibleName('No credits left. See plans and top up');
     unmount();
     state.credits = -5;
     renderChip();
@@ -162,7 +164,7 @@ describe('CreditBalanceChip', () => {
     renderChip();
     const chip = screen.getByTestId('credit-balance-chip');
     expect(chip).not.toHaveTextContent(/answer/);
-    expect(chip).toHaveAccessibleName(/^9,98\d credits left on Free Model\. Learn about credits$/);
+    expect(chip).toHaveAccessibleName(/^9,98\d credits left on Free Model\. See plans and top up$/);
   });
 
   it('renders nothing while credits are not enforced', () => {
@@ -176,7 +178,7 @@ describe('CreditBalanceChip', () => {
     renderChip();
     const chip = screen.getByTestId('credit-balance-chip');
     expect(within(chip).getByTestId('credit-payer-mark')).toBeInTheDocument();
-    expect(chip).toHaveAccessibleName(/Paid from your balance, not the owner's.*Learn about credits/);
+    expect(chip).toHaveAccessibleName(/Paid from your balance, not the owner's.*See plans and top up/);
     fireEvent.mouseOver(chip);
     expect(await screen.findByRole('tooltip')).toHaveTextContent(/^Paid from your balance, not the owner's/);
   });
@@ -184,5 +186,12 @@ describe('CreditBalanceChip', () => {
   it('has no mark in a notebook the user owns', () => {
     renderChip();
     expect(screen.queryByTestId('credit-payer-mark')).toBeNull();
+  });
+
+  it('offers a direct purchase from the low-balance tooltip', async () => {
+    state.credits = 1;
+    renderChip();
+    fireEvent.mouseOver(screen.getByTestId('credit-balance-chip'));
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('Subscribe or top up');
   });
 });

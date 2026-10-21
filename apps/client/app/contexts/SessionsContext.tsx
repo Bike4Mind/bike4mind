@@ -36,6 +36,7 @@ import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { setSessionLayout, clearRecentArtifacts } from '../hooks/useSessionLayout';
 import { useSettingsFromServer } from '@client/app/hooks/data/settings';
 import { useLLM } from './LLMContext';
+import { useHydrateModelFromSession } from '../components/Session/AISettings/useHydrateModelFromSession';
 
 export interface SessionsContextProps {
   changeSession: (sessionId: string) => Promise<void>;
@@ -336,6 +337,19 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   // The current session, with all the data
   const [currentSession, setCurrentSession] = useState<ISessionDocument | null>(null);
+  const selectSessionModel = useLLM(state => state.selectSessionModel);
+  const applyPinnedModel = useCallback((model: string) => selectSessionModel(model), [selectSessionModel]);
+  const restorePreferredModel = useCallback(() => selectSessionModel(null), [selectSessionModel]);
+  const hasExplicitModelSelection = useCallback(() => useLLM.getState().hasExplicitSessionModelSelection, []);
+  const modelSession =
+    currentSessionId && !isOptimisticId(currentSessionId)
+      ? {
+          id: currentSessionId,
+          lastUsedModel: currentSession?.id === currentSessionId ? currentSession.lastUsedModel : null,
+        }
+      : null;
+  useHydrateModelFromSession(modelSession, applyPinnedModel, restorePreferredModel, hasExplicitModelSelection);
+
   const [sessionsMetaDataVersion, setSessionsMetaDataVersion] = useState<number>(0);
   const [filesMetaDataVersion, setFilesMetaDataVersion] = useState<number>(0);
 
