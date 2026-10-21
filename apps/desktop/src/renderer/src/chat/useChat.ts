@@ -27,6 +27,7 @@ import { applyReplyDone } from './replyDone';
 import { applyStatusEvents } from './sessionStatus';
 import { EVENT_STAMP_RESOLUTION_MS, REASONING_TAIL_CHARS, totalTokens, type TurnProgress } from './statusLine';
 import { applyWorkspaceEvent, preparingOnSend, type WorkspaceProgress } from './workspaceProgress';
+import { canHoldWorktree, worktreeByDefault } from './worktreeDefault';
 import { parseDirectoryOutcome, REQUEST_DIRECTORY_TOOL_NAME } from '@shared/directoryRequest';
 
 const LIVE_FLUSH_FALLBACK_MS = 100;
@@ -1030,7 +1031,12 @@ export function useConversation(
       }
       // The workspace choice does not travel: it named a worktree of the repository being left,
       // and carrying it across would create one in a repository the user has only just pointed at.
-      const moved = await changeProject({ directory, branch: inspected.currentBranch ?? '', workspace: false });
+      // The new folder starts from the user's default instead; see worktreeDefault.ts.
+      const moved = await changeProject({
+        directory,
+        branch: inspected.currentBranch ?? '',
+        workspace: worktreeByDefault() && canHoldWorktree(inspected),
+      });
       // The folder is still usable when git could not be read - it just has no branches to offer -
       // so this is reported after the move rather than instead of it.
       if (moved && inspected.error) setProjectError({ message: inspected.error, busy: false });

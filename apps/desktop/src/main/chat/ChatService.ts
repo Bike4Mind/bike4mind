@@ -737,6 +737,9 @@ export class ChatService {
   /**
    * The base a workspace session is cut from: the picked branch, else the repository's default.
    * Only a repository with nothing to base on is refused.
+   *
+   * The renderer asks the same question before it offers a worktree - see `canHoldWorktree` in
+   * renderer/src/chat/worktreeDefault.ts - so keep the two rules in sync.
    */
   private async resolveWorkspaceBase(
     directory: string,

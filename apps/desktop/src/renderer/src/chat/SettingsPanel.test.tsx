@@ -26,6 +26,7 @@ describe('the Settings screen', () => {
     expect(html).toContain('data-entry="prompt-suggestions"');
     expect(html).toContain('data-entry="server"');
     expect(html).toContain('data-entry="updates"');
+    expect(html).toContain('data-entry="worktree-default"');
     expect(html).not.toContain('data-entry="permissions"');
     expect(html).not.toContain('data-entry="claude-import"');
   });
@@ -60,6 +61,10 @@ describe('the Settings screen', () => {
 
   it('offers the suggested next prompt preference', () => {
     expect(html).toContain('data-testid="settings-suggestions-switch"');
+  });
+
+  it('offers the worktree-by-default preference', () => {
+    expect(html).toContain('data-testid="settings-worktree-default-switch"');
   });
 
   it('mounts the same server picker and updater, not copies of them', () => {
