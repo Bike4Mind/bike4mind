@@ -289,7 +289,7 @@ async function resolveSlackClient(workspaceId: string, questId: string, logger: 
   return new SlackClient(decryptedToken, logger);
 }
 
-const getSlackVideoToolConfigResolver = (questId: string, userId: string) => () =>
+export const getSlackVideoToolConfigResolver = (questId: string, userId: string) => () =>
   buildSlackVideoToolConfig(questId, userId, {
     findSlackNotification: async id => {
       const quest = await Quest.findById(id);
