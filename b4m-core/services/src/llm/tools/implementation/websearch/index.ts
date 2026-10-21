@@ -192,6 +192,9 @@ interface WebSearchResult {
   citables: CitableSource[];
 }
 
+// The desktop web search tool matches these by their "Web search is ..." prefix (SERVER_NOTICE in
+// apps/desktop/src/main/chat/tools/webTools.ts) and passes them through unframed, so keep the
+// prefix when rewording either sentence.
 export const WEB_SEARCH_NOT_CONFIGURED_MSG =
   'Web search is not configured: an administrator needs to set a Serper API key or a local SearXNG URL ' +
   'in Admin > API Keys. No search was performed.';
