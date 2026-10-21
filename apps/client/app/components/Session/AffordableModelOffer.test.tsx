@@ -31,6 +31,104 @@ const maxTokens = 16_384;
 const appTheme = extendTheme({ ...getThemeConfig() });
 
 describe('AffordableModelOffer', () => {
+  it.each(['output ceiling', 'pricing', 'context window'] as const)(
+    'uses the live %s when access settings contain an older model snapshot',
+    field => {
+      const liveCandidate = {
+        ...model(
+          'stale-candidate',
+          'Stale candidate',
+          field === 'context window' ? 1 : field === 'output ceiling' ? 3 : 5
+        ),
+        contextWindow: field === 'context window' ? 8_000 : 200_000,
+        max_tokens: field === 'output ceiling' ? 128_000 : 4_096,
+      };
+      const savedCandidate = {
+        ...liveCandidate,
+        ...(field === 'output ceiling' && { max_tokens: 4_096 }),
+        ...(field === 'pricing' && { pricing: affordable.pricing }),
+        ...(field === 'context window' && { contextWindow: 128_000 }),
+      };
+      const accessSettings = [expensive, savedCandidate, affordable];
+      const onSelect = vi.fn();
+      render(
+        <CssVarsProvider theme={appTheme}>
+          <AffordableModelOffer
+            enabled
+            models={[expensive, liveCandidate, affordable]}
+            accessibleModelIds={accessSettings.map(candidate => candidate.id)}
+            selectedModelId={expensive.id}
+            credits={100}
+            inputTokens={inputTokens}
+            selectedMaxTokens={maxTokens}
+            onSelect={onSelect}
+          />
+        </CssVarsProvider>
+      );
+
+      fireEvent.click(screen.getByTestId('affordable-model-use-btn'));
+      expect(onSelect).toHaveBeenCalledExactlyOnceWith(affordable);
+      expect(screen.getByTestId('affordable-model-offer')).toHaveTextContent(
+        `Affordable is estimated at ${preflightAnswerCredits(affordable, inputTokens, maxTokens)}`
+      );
+    }
+  );
+
+  it('does not offer a live model excluded by the access settings', () => {
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <AffordableModelOffer
+          enabled
+          models={[expensive, affordable]}
+          accessibleModelIds={[expensive.id]}
+          selectedModelId={expensive.id}
+          credits={100}
+          inputTokens={inputTokens}
+          selectedMaxTokens={maxTokens}
+          onSelect={vi.fn()}
+        />
+      </CssVarsProvider>
+    );
+    expect(screen.queryByTestId('affordable-model-offer')).toBeNull();
+  });
+
+  it('triggers from the live selected price and ignores access IDs missing from the live catalog', () => {
+    const savedSelected = { ...expensive, pricing: affordable.pricing };
+    const missingCandidate = { ...affordable, id: 'removed-candidate', freeToRun: true };
+    const accessSettings = [savedSelected, missingCandidate];
+    const { rerender } = render(
+      <CssVarsProvider theme={appTheme}>
+        <AffordableModelOffer
+          enabled
+          models={[expensive, affordable]}
+          accessibleModelIds={accessSettings.map(candidate => candidate.id)}
+          selectedModelId={expensive.id}
+          credits={100}
+          inputTokens={inputTokens}
+          selectedMaxTokens={maxTokens}
+          onSelect={vi.fn()}
+        />
+      </CssVarsProvider>
+    );
+    expect(screen.queryByTestId('affordable-model-offer')).toBeNull();
+
+    rerender(
+      <CssVarsProvider theme={appTheme}>
+        <AffordableModelOffer
+          enabled
+          models={[expensive, affordable]}
+          accessibleModelIds={[...accessSettings.map(candidate => candidate.id), affordable.id]}
+          selectedModelId={expensive.id}
+          credits={100}
+          inputTokens={inputTokens}
+          selectedMaxTokens={maxTokens}
+          onSelect={vi.fn()}
+        />
+      </CssVarsProvider>
+    );
+    expect(screen.getByTestId('affordable-model-use-btn')).toHaveTextContent('Switch to Affordable');
+  });
+
   it('appears above the balance gate and switches to the offered model on demand', () => {
     const onSelect = vi.fn();
     render(
@@ -38,6 +136,7 @@ describe('AffordableModelOffer', () => {
         <AffordableModelOffer
           enabled
           models={[expensive, affordable]}
+          accessibleModelIds={[expensive.id, affordable.id]}
           selectedModelId={expensive.id}
           credits={preflightAnswerCredits(affordable, inputTokens, maxTokens)!}
           inputTokens={inputTokens}
@@ -64,6 +163,7 @@ describe('AffordableModelOffer', () => {
         <AffordableModelOffer
           enabled
           models={[expensive, affordable]}
+          accessibleModelIds={[expensive.id, affordable.id]}
           selectedModelId={expensive.id}
           credits={preflightAnswerCredits(expensive, inputTokens, maxTokens)!}
           inputTokens={inputTokens}
@@ -81,6 +181,7 @@ describe('AffordableModelOffer', () => {
         <AffordableModelOffer
           enabled={false}
           models={[expensive, affordable]}
+          accessibleModelIds={[expensive.id, affordable.id]}
           selectedModelId={expensive.id}
           credits={preflightAnswerCredits(affordable, inputTokens, maxTokens)!}
           inputTokens={inputTokens}

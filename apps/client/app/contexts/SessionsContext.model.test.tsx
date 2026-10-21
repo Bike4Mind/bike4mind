@@ -5,6 +5,11 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ISessionDocument } from '@bike4mind/common';
 
 const mockGetFabFilesByIds = vi.fn().mockResolvedValue([]);
+const mockGetOrFetchSession = vi.fn();
+
+vi.mock('@client/app/hooks/data/sessions', () => ({
+  getOrFetchSession: (...args: unknown[]) => mockGetOrFetchSession(...args),
+}));
 
 vi.mock('@client/app/utils/filesAPICalls', () => ({
   getFabFilesFromServerByIds: (ids: string[]) => mockGetFabFilesByIds(ids),
@@ -21,7 +26,12 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
 
 vi.mock('@client/app/contexts/UserContext', () => {
   const mockGetState = () => ({ currentUser: { id: 'u1' } });
-  const useUser = Object.assign(vi.fn().mockReturnValue(null), { getState: mockGetState });
+  const useUser = Object.assign(
+    vi.fn((selector: (state: ReturnType<typeof mockGetState>) => unknown) => selector(mockGetState())),
+    {
+      getState: mockGetState,
+    }
+  );
   return { useUser };
 });
 
@@ -90,6 +100,7 @@ function setup() {
 
 describe('session model lifecycle without a mounted toolbar', () => {
   beforeEach(() => {
+    mockGetOrFetchSession.mockReset();
     useLLM.getState().resetSettings();
     useLLM.setState({ ...buildModelSelectionPatch(preferred), max_tokens: 4096 });
   });
@@ -117,6 +128,36 @@ describe('session model lifecycle without a mounted toolbar', () => {
       result.current.sessions.setCurrentSessionRaw(null);
     });
     expect(useLLM.getState()).toMatchObject({ model: preferred.id, max_tokens: 4096 });
+  });
+
+  it('restores the default when a failed optimistic first chat is abandoned for /new', () => {
+    const { result } = setup();
+    act(() => result.current.offer.onSelect(affordable));
+    act(() => {
+      result.current.sessions.setCurrentSessionId('optimistic-session-failed');
+      result.current.sessions.setCurrentSessionRaw(session('optimistic-session-failed', null));
+    });
+    expect(useLLM.getState().model).toBe(affordable.id);
+
+    // Failed sends keep their optimistic chat so its error remains visible. No real id arrives.
+    act(() => {
+      result.current.sessions.setCurrentSessionId(null);
+      result.current.sessions.setCurrentSessionRaw(null);
+    });
+    expect(useLLM.getState()).toMatchObject({ model: preferred.id, max_tokens: 4096, sessionModelOverride: null });
+  });
+
+  it('adopts an existing chat pin when navigating directly from a failed optimistic chat', async () => {
+    const { result } = setup();
+    act(() => result.current.offer.onSelect(affordable));
+    act(() => {
+      result.current.sessions.setCurrentSessionId('optimistic-session-failed');
+      result.current.sessions.setCurrentSessionRaw(session('optimistic-session-failed', null));
+    });
+    mockGetOrFetchSession.mockResolvedValue(session('existing-chat', 'existing-pinned-model'));
+
+    await act(async () => result.current.sessions.changeSession('existing-chat'));
+    expect(useLLM.getState().model).toBe('existing-pinned-model');
   });
 
   it.each(['offer', 'picker'] as const)('keeps a %s selection when a delayed stale session pin arrives', source => {

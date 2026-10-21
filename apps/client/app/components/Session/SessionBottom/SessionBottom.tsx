@@ -602,7 +602,8 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
         {affordableOffer.show && (
           <AffordableModelOffer
             enabled={!researchModeEnabled && !agentModeEnabled && displayAgents.length === 0}
-            models={accessibleModels ?? []}
+            models={modelInfo ?? []}
+            accessibleModelIds={accessibleModels.map(candidate => candidate.id)}
             selectedModelId={model}
             credits={effectiveCredits}
             inputTokens={estimateNextInputTokens(

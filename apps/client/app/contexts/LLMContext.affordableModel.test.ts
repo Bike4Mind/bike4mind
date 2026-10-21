@@ -87,6 +87,20 @@ describe('chat model overrides', () => {
     expect(readPersisted()).toMatchObject({ state: { model: preferred.id, max_tokens: 4096 } });
   });
 
+  it('persists settings edited after resuming a chat on the preferred model', async () => {
+    renderHook(() =>
+      useHydrateModelFromSession(session('chat-a', preferred.id), selectPinnedModel, restorePreferredModel)
+    );
+    act(() => useLLM.getState().setLLM({ max_tokens: 2048, temperature: 0.2 }));
+    expect(readPersisted()).toMatchObject({ state: { model: preferred.id, max_tokens: 2048, temperature: 0.2 } });
+
+    const snapshot = localStorage.getItem('llm-settings');
+    useLLM.getState().resetSettings();
+    localStorage.setItem('llm-settings', snapshot!);
+    await useLLM.persist.rehydrate();
+    expect(useLLM.getState()).toMatchObject({ model: preferred.id, max_tokens: 2048, temperature: 0.2 });
+  });
+
   it('restores each chat pin and returns to the preferred model for a new unpinned chat', () => {
     const { rerender } = renderHook(
       ({ currentSession }: { currentSession: Session }) =>

@@ -341,13 +341,13 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
   const applyPinnedModel = useCallback((model: string) => selectSessionModel(model), [selectSessionModel]);
   const restorePreferredModel = useCallback(() => selectSessionModel(null), [selectSessionModel]);
   const hasExplicitModelSelection = useCallback(() => useLLM.getState().hasExplicitSessionModelSelection, []);
-  const modelSession =
-    currentSessionId && !isOptimisticId(currentSessionId)
-      ? {
-          id: currentSessionId,
-          lastUsedModel: currentSession?.id === currentSessionId ? currentSession.lastUsedModel : null,
-        }
-      : null;
+  const modelSession = currentSessionId
+    ? {
+        id: currentSessionId,
+        lastUsedModel: currentSession?.id === currentSessionId ? currentSession.lastUsedModel : null,
+        isOptimistic: isOptimisticId(currentSessionId),
+      }
+    : null;
   useHydrateModelFromSession(modelSession, applyPinnedModel, restorePreferredModel, hasExplicitModelSelection);
 
   const [sessionsMetaDataVersion, setSessionsMetaDataVersion] = useState<number>(0);
@@ -620,6 +620,9 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
 
       setSessionLayout({ selectedArtifactId: undefined, artifactData: undefined });
       // Fetch and set the new session
+      // Explicit navigation is a different chat even when the one being left still
+      // has an optimistic id. Its eventual server-id replacement preserves selection.
+      restorePreferredModel();
       setCurrentSession(session);
       setCurrentSessionId(sessionId);
 
@@ -653,6 +656,7 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
       setWorkBenchFiles,
       setWorkBenchHydrated,
       initializeSession,
+      restorePreferredModel,
     ]
   );
 

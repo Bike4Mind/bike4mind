@@ -31,7 +31,7 @@ import type { ISessionDocument } from '@bike4mind/common';
  * @param applyModel called with the model id to select; must be referentially stable
  */
 export function useHydrateModelFromSession(
-  currentSession: Pick<ISessionDocument, 'id' | 'lastUsedModel'> | null | undefined,
+  currentSession: (Pick<ISessionDocument, 'id' | 'lastUsedModel'> & { isOptimistic?: boolean }) | null | undefined,
   applyModel: (model: string) => void,
   restorePreferredModel?: () => void,
   hasExplicitModelSelection?: () => boolean
@@ -39,13 +39,19 @@ export function useHydrateModelFromSession(
   // Session id this hook has already hydrated. Survives re-renders; never triggers one.
   const hydratedSessionIdRef = useRef<string | null>(null);
   const activeSessionIdRef = useRef<string | null>(null);
+  const activeSessionIsOptimisticRef = useRef(false);
 
   useEffect(() => {
     const sessionId = currentSession?.id ?? null;
     if (activeSessionIdRef.current !== sessionId) {
       // null -> id is also the first send creating a chat. Keep its pre-send selection.
-      if (activeSessionIdRef.current !== null || currentSession?.lastUsedModel) restorePreferredModel?.();
+      // Replacing an optimistic id with the server id is still that same chat.
+      const adoptingCreatedSession = activeSessionIsOptimisticRef.current && sessionId !== null;
+      if (!adoptingCreatedSession && (activeSessionIdRef.current !== null || currentSession?.lastUsedModel)) {
+        restorePreferredModel?.();
+      }
       activeSessionIdRef.current = sessionId;
+      activeSessionIsOptimisticRef.current = currentSession?.isOptimistic ?? false;
       hydratedSessionIdRef.current = null;
     }
     if (!sessionId) {

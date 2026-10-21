@@ -8,6 +8,7 @@ import { CreditOfferActions } from './CreditOfferActions';
 interface AffordableModelOfferProps {
   enabled: boolean;
   models: readonly ModelInfo[];
+  accessibleModelIds: readonly string[];
   selectedModelId: string;
   credits: number;
   inputTokens: number;
@@ -20,6 +21,7 @@ interface AffordableModelOfferProps {
 export const AffordableModelOffer = ({
   enabled,
   models,
+  accessibleModelIds,
   selectedModelId,
   credits,
   inputTokens,
@@ -31,9 +33,18 @@ export const AffordableModelOffer = ({
   const offer = useMemo(
     () =>
       enabled
-        ? findAffordableModelOffer(models, selectedModelId, credits, inputTokens, selectedMaxTokens, thinking)
+        ? findAffordableModelOffer(
+            // Access settings can contain old catalog snapshots. Only their IDs decide access;
+            // costs and sizing must use the same live metadata as the request/provider refit.
+            models.filter(model => accessibleModelIds.includes(model.id)),
+            selectedModelId,
+            credits,
+            inputTokens,
+            selectedMaxTokens,
+            thinking
+          )
         : null,
-    [enabled, models, selectedModelId, credits, inputTokens, selectedMaxTokens, thinking]
+    [enabled, models, accessibleModelIds, selectedModelId, credits, inputTokens, selectedMaxTokens, thinking]
   );
   if (!offer) return null;
 

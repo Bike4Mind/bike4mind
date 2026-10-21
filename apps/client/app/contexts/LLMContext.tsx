@@ -239,6 +239,9 @@ export const useLLM = create(
       },
       selectSessionModel: (model, modelInfo) => {
         set(state => {
+          // Resuming the preferred model does not override it. Keep later edits to its
+          // output budget and temperature durable, just as they are in a new chat.
+          if (model && model === state.model && !modelInfo && !state.sessionModelOverride) return state;
           const preferred = state.sessionModelOverride ?? {
             model: state.model,
             max_tokens: state.max_tokens,
