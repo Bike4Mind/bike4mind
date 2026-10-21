@@ -1,3 +1,4 @@
+import { useUser } from '@client/app/contexts/UserContext';
 import {
   createRegInvites,
   deleteRegInvites,
@@ -76,5 +77,6 @@ export function useSubmitUserInvitation() {
 export function useSubmitReferral() {
   return useMutation({
     mutationFn: async (data: IUserInvitation) => await submitReferral(data),
+    onSettled: () => useUser.getState().refreshUser(),
   });
 }

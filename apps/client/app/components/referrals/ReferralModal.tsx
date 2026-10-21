@@ -144,6 +144,7 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
           // per-email summary, but the (future) user-invitation endpoint does not. The
           // Array.isArray guards below treat every field as optional, so the type matches
           // the real runtime contract across both modes.
+          onError: () => setLoading(false),
           onSuccess: (result: Partial<IReferralResult> | undefined) => {
             setLoading(false);
 
@@ -164,7 +165,9 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
 
             onClose();
             setFriendEmail('');
-            setNumReferralsAvailable(numReferralsAvailable - sent.length);
+            if (inviteType === ReferralInviteType.userInvitation) {
+              setNumReferralsAvailable(Math.max(0, numReferralsAvailable - sent.length));
+            }
           },
         }
       );
@@ -237,6 +240,7 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
                 Friend&apos;s Email *
               </FormLabel>
               <Input
+                slotProps={{ input: { 'data-testid': 'referral-email-input' } }}
                 value={friendEmail}
                 autoFocus
                 onChange={e => setFriendEmail(e.target.value)}
@@ -310,11 +314,12 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
                   fontWeight: 'bold',
                 }}
               >
-                {numReferralsAvailable}
+                <span data-testid="referral-quota-count">{numReferralsAvailable}</span>
               </Typography>
             </Box>
 
             <Button
+              data-testid="referral-submit-button"
               disabled={!friendEmail || numReferralsAvailable === 0}
               onClick={handleReferralSubmit}
               sx={{

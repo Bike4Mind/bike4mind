@@ -819,3 +819,8 @@ export interface IUserActivityCounter {
 }
 
 export interface IUserActivityCounterDocument extends IUserActivityCounter, IMongoDocument {}
+
+export type ReferralQuotaRepository = {
+  reserveReferrals: (userId: string, count: number) => Promise<boolean>;
+  settleReferrals: (userId: string, refundCount: number, newInviteIds: string[]) => Promise<void>;
+};

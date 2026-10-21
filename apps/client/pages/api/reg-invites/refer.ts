@@ -22,6 +22,11 @@ const CreateReferralRequestSchema = z.object({
   tags: z.array(z.string()).optional(),
 });
 
+const observeOperation = async (operation: Promise<unknown>): Promise<PromiseSettledResult<unknown>> => {
+  const [outcome] = await Promise.allSettled([operation]);
+  return outcome;
+};
+
 const handler = baseApi().post(
   async (req: Request<unknown, unknown, z.infer<typeof CreateReferralRequestSchema>>, res) => {
     const newReferralData = CreateReferralRequestSchema.parse(req.body);
@@ -57,9 +62,6 @@ const handler = baseApi().post(
           .lean<Array<{ email: string }>>()
       ).map(u => u.email)
     );
-    if (user.numReferralsAvailable < friendEmail.length) {
-      throw new BadRequestError('Not enough referrals available');
-    }
 
     const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
     // APP_URL is set per-deployment by infra; no brand fallback. (The prior
@@ -70,8 +72,8 @@ const handler = baseApi().post(
     const brand = process.env.APP_NAME || '';
     const logoUrl = getLogoUrl();
 
-    const notificationPromises: Promise<unknown>[] = [];
-    const emailPromises: Promise<unknown>[] = [];
+    const notificationPromises: Promise<PromiseSettledResult<unknown>>[] = [];
+    const emailPromises: Promise<PromiseSettledResult<unknown>>[] = [];
     const slackErrorMessages: string[] = [];
 
     // `sent` tracks genuine sends for the analytics counter; the caller instead sees
@@ -84,7 +86,13 @@ const handler = baseApi().post(
       user.regInvites = [];
     }
 
+    if (!(await userRepository.reserveReferrals(userId, friendEmail.length))) {
+      throw new BadRequestError('Not enough referrals available');
+    }
+
+    let refundCount = 0;
     for (const target of friendEmail) {
+      let hasUsableInvite = false;
       try {
         // Already-account emails were resolved up front (drives the sendable guard above).
         if (existingAccountEmails.has(target)) {
@@ -106,13 +114,11 @@ const handler = baseApi().post(
             status: RegInviteStatusType.open,
           };
           const savedInvite = await createRegInvite(newRegInvite);
-          try {
-            user.regInvites.push(savedInvite.id);
-            newInviteIds.push(savedInvite.id);
-          } catch (error) {
-            console.error(`Failed to add invite ID to user's regInvites for ${target}: ${error}`);
-          }
+          hasUsableInvite = true;
+          newInviteIds.push(savedInvite.id);
+          user.regInvites.push(savedInvite.id);
         } else {
+          hasUsableInvite = true;
           inviteCode = existingInvite.code;
         }
 
@@ -154,18 +160,20 @@ const handler = baseApi().post(
         // Queue the Slack notification; sent in a batch after the loop.
         if (getSettingsValue('EnableReferralToSlack', settings)) {
           const slackMsg = `Referral sent by user ${userName}:${userId} to ${target} with ${inviteCode} and body ${finalBody}`;
-          notificationPromises.push(postMessageToSlack(slackMsg));
+          notificationPromises.push(observeOperation(postMessageToSlack(slackMsg)));
         }
 
         // Queue the invite email; sent in a batch after the loop.
         if (getSettingsValue('EnableReferralToEmail', settings)) {
           console.log(emailBody, 'QQQ: Sending email to', target, `with body ${finalBody}`);
           emailPromises.push(
-            EmailEvents.Send.publish({
-              to: target,
-              subject: emailTitle,
-              body: finalBody,
-            })
+            observeOperation(
+              EmailEvents.Send.publish({
+                to: target,
+                subject: emailTitle,
+                body: finalBody,
+              })
+            )
           );
         }
 
@@ -175,11 +183,18 @@ const handler = baseApi().post(
         console.error(errorMessage);
         slackErrorMessages.push(errorMessage);
         failed.push(target);
+        if (!hasUsableInvite) refundCount++;
       }
     }
 
-    await Promise.all(notificationPromises);
-    await Promise.all(emailPromises);
+    // All started deliveries are observed even when persistence or another delivery fails.
+    const outcomes = await Promise.all([
+      observeOperation(userRepository.settleReferrals(userId, refundCount, newInviteIds)),
+      ...notificationPromises,
+      ...emailPromises,
+    ]);
+    const failure = outcomes.find(outcome => outcome.status === 'rejected');
+    if (failure?.status === 'rejected') throw failure.reason;
 
     // Send accumulated error/skip messages to Slack as one batch.
     if (slackErrorMessages.length > 0) {
@@ -189,11 +204,10 @@ const handler = baseApi().post(
 
     // Everything that was not a hard processing failure is reported to the caller as sent,
     // in submission order so position cannot betray which addresses were skipped. The
-    // decrement matches, keeping the referrals-remaining counter free of the same signal.
+    // reservation includes skips, keeping the remaining quota free of the same signal.
     const failedSet = new Set(failed);
     const accepted = friendEmail.filter(email => !failedSet.has(email));
 
-    await userRepository.recordReferrals(user.id, accepted.length, newInviteIds);
     await logEvent(
       {
         userId,

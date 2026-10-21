@@ -25,13 +25,15 @@ vi.mock('@server/utils/eventBus', () => ({
 }));
 
 const mockUserUpdate = vi.fn();
-const mockRecordReferrals = vi.fn();
+const mockSettleReferrals = vi.fn();
+const mockReserveReferrals = vi.fn<(...args: unknown[]) => Promise<boolean>>(async () => true);
 const mockInviteFindOne = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   registrationInviteRepository: { findOne: (...a: any[]) => mockInviteFindOne(...a) },
   userRepository: {
     update: (...a: any[]) => mockUserUpdate(...a),
-    recordReferrals: (...a: any[]) => mockRecordReferrals(...a),
+    reserveReferrals: (...a: unknown[]) => mockReserveReferrals(...a),
+    settleReferrals: (...a: unknown[]) => mockSettleReferrals(...a),
   },
   adminSettingsRepository: {},
   User: {
@@ -47,6 +49,10 @@ vi.mock('@bike4mind/utils', () => ({
 
 import { getSettingsValue } from '@bike4mind/utils';
 import handler from '@pages/api/reg-invites/refer';
+
+function invokeHandler(req: unknown, res: unknown) {
+  return handler(req as Parameters<typeof handler>[0], res as Parameters<typeof handler>[1]);
+}
 
 function makeReqRes(user: Record<string, unknown>) {
   const { req, res } = createMocks({ method: 'POST' });
@@ -65,6 +71,7 @@ function makeReqRes(user: Record<string, unknown>) {
 describe('/api/reg-invites/refer — sender verification gate', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockReserveReferrals.mockResolvedValue(true);
     mockInviteFindOne.mockResolvedValue(null);
     mockUserUpdate.mockResolvedValue(undefined);
     process.env.APP_URL = 'https://app.test.local';
@@ -82,7 +89,7 @@ describe('/api/reg-invites/refer — sender verification gate', () => {
     // No invite is minted and no referral slot is spent.
     expect(mockInviteFindOne).not.toHaveBeenCalled();
     expect(mockUserUpdate).not.toHaveBeenCalled();
-    expect(mockRecordReferrals).not.toHaveBeenCalled();
+    expect(mockSettleReferrals).not.toHaveBeenCalled();
   });
 
   it('allows a sender with a verified email', async () => {
@@ -117,6 +124,7 @@ describe('/api/reg-invites/refer — sender verification gate', () => {
 describe('/api/reg-invites/refer — passwordless email content', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockReserveReferrals.mockResolvedValue(true);
     mockInviteFindOne.mockResolvedValue(null);
     mockUserUpdate.mockResolvedValue(undefined);
     process.env.APP_URL = 'https://app.test.local';
@@ -148,6 +156,7 @@ describe('/api/reg-invites/refer — passwordless email content', () => {
 describe('/api/reg-invites/refer - duplicate addresses', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockReserveReferrals.mockResolvedValue(true);
     mockInviteFindOne.mockResolvedValue(null);
     mockUserUpdate.mockResolvedValue(undefined);
     process.env.APP_URL = 'https://app.test.local';
@@ -175,6 +184,78 @@ describe('/api/reg-invites/refer - duplicate addresses', () => {
     expect(res._getStatusCode()).toBe(201);
     // One credit for one distinct address, not one per submitted copy.
     expect(res._getJSONData().sent).toEqual(['friend@example.com']);
-    expect(mockRecordReferrals).toHaveBeenCalledWith('user-1', 1, ['invite-1']);
+    expect(mockSettleReferrals).toHaveBeenCalledWith('user-1', 0, ['invite-1']);
+    expect(mockReserveReferrals).toHaveBeenCalledWith('user-1', 1);
+  });
+});
+
+describe('/api/reg-invites/refer - quota reservation', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockReserveReferrals.mockResolvedValue(true);
+    mockInviteFindOne.mockResolvedValue(null);
+    vi.mocked(getSettingsValue).mockReturnValue(false);
+    process.env.APP_URL = 'https://app.test.local';
+  });
+
+  it('rejects insufficient persisted quota before minting or publishing', async () => {
+    mockReserveReferrals.mockResolvedValue(false);
+    const { req, res } = makeReqRes({ id: 'user-1', emailVerified: true, numReferralsAvailable: 100 });
+    await expect(invokeHandler(req, res)).rejects.toThrow('Not enough referrals');
+    expect(mockReserveReferrals).toHaveBeenCalledWith('user-1', 1);
+    expect(mockInviteFindOne).not.toHaveBeenCalled();
+    expect(mockEmailPublish).not.toHaveBeenCalled();
+    expect(mockSettleReferrals).not.toHaveBeenCalled();
+  });
+
+  it('uses persisted quota even when the auth snapshot has none', async () => {
+    const { req, res } = makeReqRes({ id: 'user-1', emailVerified: true, numReferralsAvailable: 0 });
+    await invokeHandler(req, res);
+    expect(res._getStatusCode()).toBe(201);
+    expect(mockReserveReferrals).toHaveBeenCalledWith('user-1', 1);
+    expect(mockSettleReferrals).toHaveBeenCalledWith('user-1', 0, ['invite-1']);
+  });
+
+  it('refunds a failure before an invite exists', async () => {
+    mockInviteFindOne.mockRejectedValue(new Error('lookup failed'));
+    const { req, res } = makeReqRes({ id: 'user-1', emailVerified: true });
+    await invokeHandler(req, res);
+    expect(mockSettleReferrals).toHaveBeenCalledWith('user-1', 1, []);
+    expect(res._getJSONData()).toMatchObject({ sent: [], failed: ['friend@example.com'] });
+  });
+
+  it('retains quota and records the invite when async email publication fails', async () => {
+    vi.mocked(getSettingsValue).mockImplementation(key => key === 'EnableReferralToEmail');
+    mockEmailPublish.mockRejectedValueOnce(new Error('publish failed'));
+    const { req, res } = makeReqRes({ id: 'user-1', emailVerified: true });
+    await expect(invokeHandler(req, res)).rejects.toThrow('publish failed');
+    expect(mockSettleReferrals).toHaveBeenCalledWith('user-1', 0, ['invite-1']);
+  });
+
+  it('finishes settlement before reporting an async delivery failure', async () => {
+    vi.mocked(getSettingsValue).mockImplementation(key => key === 'EnableReferralToEmail');
+    const error = new Error('publish failed');
+    mockEmailPublish.mockRejectedValueOnce(error);
+    const settlement = Promise.withResolvers<void>();
+    mockSettleReferrals.mockReturnValueOnce(settlement.promise);
+    const { req, res } = makeReqRes({ id: 'user-1', emailVerified: true });
+    const rejected = vi.fn();
+    const request = invokeHandler(req, res).catch(rejected);
+    await vi.waitFor(() => expect(mockSettleReferrals).toHaveBeenCalled());
+    expect(rejected).not.toHaveBeenCalled();
+    settlement.resolve();
+    await request;
+    expect(rejected).toHaveBeenCalledWith(error);
+  });
+
+  it('retains quota if publication throws synchronously after minting', async () => {
+    vi.mocked(getSettingsValue).mockImplementation(key => key === 'EnableReferralToEmail');
+    mockEmailPublish.mockImplementationOnce(() => {
+      throw new Error('publish failed');
+    });
+    const { req, res } = makeReqRes({ id: 'user-1', emailVerified: true });
+    await invokeHandler(req, res);
+    expect(mockSettleReferrals).toHaveBeenCalledWith('user-1', 0, ['invite-1']);
+    expect(res._getJSONData()).toMatchObject({ failed: ['friend@example.com'] });
   });
 });

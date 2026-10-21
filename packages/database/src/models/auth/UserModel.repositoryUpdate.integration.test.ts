@@ -150,4 +150,33 @@ describe('BaseRepository.update whole-document hazard (via userRepository)', () 
     expect(after!.regInvites.map(String)).toEqual([invite]);
     expect(after!.numReferralsAvailable).toBe(3);
   });
+
+  it('admits only one concurrent reservation and settles without a second charge', async () => {
+    const existingInvite = new Types.ObjectId();
+    const user = await User.create({
+      username: 'referrer',
+      name: 'Referrer',
+      email: 'r@example.com',
+      numReferralsAvailable: 3,
+      regInvites: [existingInvite],
+    });
+    const id = String(user._id);
+    const results = await Promise.all([userRepository.reserveReferrals(id, 2), userRepository.reserveReferrals(id, 2)]);
+    expect(results.sort()).toEqual([false, true]);
+    expect((await User.findById(id))!.numReferralsAvailable).toBe(1);
+    const invite = new Types.ObjectId().toString();
+    await userRepository.settleReferrals(id, 1, [invite]);
+    const after = await User.findById(id);
+    expect(after!.numReferralsAvailable).toBe(2);
+    expect(after!.regInvites.map(String)).toEqual([existingInvite.toString(), invite]);
+  });
+
+  it('rejects invalid counts without changing quota', async () => {
+    const user = await seed();
+    const id = String(user._id);
+    for (const count of [-1, 0.5, NaN, Infinity]) {
+      await expect(userRepository.reserveReferrals(id, count)).rejects.toThrow('Invalid referral');
+      await expect(userRepository.settleReferrals(id, count, [])).rejects.toThrow('Invalid referral');
+    }
+  });
 });
