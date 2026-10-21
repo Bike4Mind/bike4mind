@@ -163,10 +163,10 @@ describe('planLifecycleSignals', () => {
       const docs = planLifecycleSignals({ contributions: [provider('anthropic', [active({}, 'docs')])] });
       const typed = planLifecycleSignals({ contributions: [provider('bedrock', [active({}, 'typed')])] });
 
-      expect(docs.providerUndated).toEqual(new Map([['claude-x', 'anthropic']]));
+      expect(docs.providerUndated).toEqual(new Map([['claude-x', ['anthropic']]]));
       // The docs claim itself still never reaches the overlay.
       expect(docs.contributions[0].records[0].patch).not.toHaveProperty('lifecycle');
-      expect(typed.providerUndated).toEqual(new Map([['claude-x', 'bedrock']]));
+      expect(typed.providerUndated).toEqual(new Map([['claude-x', ['bedrock']]]));
     });
 
     it('ignores an aggregator, a dated or sunset claim, and a source whose parser shifted', () => {

@@ -114,8 +114,8 @@ export interface CatalogWriteInput {
   priorDiscoveryGroups?: ReadonlyMap<string, readonly FieldGroup[]>;
   /** Contributors on that same superseded row, so a re-claim keeps its provenance. */
   priorContributors?: ReadonlyMap<string, readonly ICatalogContributor[]>;
-  /** planLifecycleSignals' providerUndated: the provider that reports each model undated this run. */
-  providerUndated?: ReadonlyMap<string, string>;
+  /** planLifecycleSignals' providerUndated: the providers that report each model undated this run. */
+  providerUndated?: ReadonlyMap<string, readonly string[]>;
   /**
    * Every registered provider source except those skipped as not configured, whether or not they
    * ran. A provider with no credentials releases what it held.
@@ -443,7 +443,9 @@ function planOne(
     !input.contributions.some(c => c.name === heldProvider)
       ? heldProvider
       : undefined;
-  const undatedBy = input.providerUndated?.get(candidate.modelId) ?? downProvider;
+  // The provider credited with the held lifecycle speaks for it when it is among the undated reporters.
+  const undated = input.providerUndated?.get(candidate.modelId) ?? [];
+  const undatedBy = (heldProvider && undated.includes(heldProvider) ? heldProvider : undated[0]) ?? downProvider;
   if (
     undatedBy &&
     dropsFutureDeprecation(draft, base, contributed, candidate, input, undatedBy, dropped, heldProvider)

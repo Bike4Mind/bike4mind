@@ -699,7 +699,7 @@ describe('planCatalogWrites', () => {
         ]
       );
     const priorDiscoveryGroups = new Map([['gpt-6', GROUPS as never]]);
-    const providerUndated = new Map([['gpt-6', 'openai']]);
+    const providerUndated = new Map([['gpt-6', ['openai']]]);
     const litellmDate = {
       name: 'litellm',
       kind: 'aggregator' as const,
@@ -789,6 +789,24 @@ describe('planCatalogWrites', () => {
         },
       ]);
     });
+
+    it.each([
+      ['azure first', ['azure', 'openai']],
+      ['openai first', ['openai', 'azure']],
+    ])(
+      'lets the supplying provider clear its date when another provider also reports the model undated (%s)',
+      (_label, order) => {
+        const dated = run([openaiDated], seeded);
+        const next = run(
+          order.map(name => typedProvider(name, { status: 'active' })),
+          dated
+        );
+
+        expect(next.rows).toHaveLength(1);
+        expect(next.rows[0].patch.lifecycle).toEqual({ status: 'active' });
+        expect(next.rows[0].contributors).toContainEqual({ group: 'lifecycle', source: 'openai' });
+      }
+    );
 
     it('lets the provider that supplied a date clear it by later reporting the model undated', () => {
       const dated = run([openaiDated], seeded);
