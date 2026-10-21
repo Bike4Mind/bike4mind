@@ -524,6 +524,22 @@ export function resolveQuestErrorCode(error: unknown): QuestErrorCode | undefine
  */
 export const FORCE_FALLBACK_TEST_MARKER = '[[force-provider-fallback]]';
 
+/**
+ * Whether `current_model_details` must not be offered to `model`. A model that cannot call tools
+ * keeps its identity line (unset counts as unsupported, matching canServeChat in the fallback
+ * selector). Alone, the tool would make a plain turn carry tools: the 5.4 family then loses
+ * reasoning_effort on chat completions, and the rest of the set moves onto the Responses
+ * transport. Shared by the primary-turn trim and the per-hop fallback override so they cannot drift.
+ */
+function withholdIdentityTool(model: { id: string; supportsTools?: boolean }, toolNames: string[]): boolean {
+  return (
+    !model.supportsTools ||
+    (REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS.has(model.id) &&
+      toolNames.length === 1 &&
+      toolNames[0] === 'current_model_details')
+  );
+}
+
 function isToolPairingError(error: Error): boolean {
   const msg = error.message.toLowerCase();
   // Match known Anthropic tool-pairing failure patterns:
@@ -3388,21 +3404,14 @@ export class ChatCompletionProcess {
         }
       }
 
-      // A model that cannot call tools cannot call this one either, so it keeps its identity line.
-      // Unset counts as unsupported, matching canServeChat in the fallback selector.
-      if (!modelInfo.supportsTools && allTools) {
-        allTools = allTools.filter(t => t.toolSchema.name !== 'current_model_details');
-      }
-
-      // Alone, the tool would make a plain turn carry tools. The 5.4 family then loses
-      // reasoning_effort on chat completions, and the rest of the set would move onto the
-      // Responses transport. Keep plain turns as they were, with the identity line.
       if (
-        REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS.has(modelInfo.id) &&
-        allTools?.length === 1 &&
-        allTools[0].toolSchema.name === 'current_model_details'
+        allTools &&
+        withholdIdentityTool(
+          modelInfo,
+          allTools.map(t => t.toolSchema.name)
+        )
       ) {
-        allTools = [];
+        allTools = allTools.filter(t => t.toolSchema.name !== 'current_model_details');
       }
 
       const offeredToolNames = allTools?.map(t => t.toolSchema.name) ?? [];
@@ -5010,9 +5019,12 @@ export class ChatCompletionProcess {
               outboundMessages,
               {
                 ...options,
-                // A fallback hop onto a model that cannot call tools gets its identity line back
-                // rather than a tool it cannot call.
-                ...(options.identityViaTool && !currentModel.supportsTools
+                // A fallback hop gets its identity line back wherever the primary turn would have.
+                ...(options.identityViaTool &&
+                withholdIdentityTool(
+                  currentModel,
+                  (options.tools ?? []).map(t => t.toolSchema.name)
+                )
                   ? {
                       tools: options.tools?.filter(t => t.toolSchema.name !== 'current_model_details'),
                       identityViaTool: false,

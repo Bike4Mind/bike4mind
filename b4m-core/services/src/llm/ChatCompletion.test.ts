@@ -3607,8 +3607,9 @@ describe('ChatCompletionProcess', () => {
           expect(lastCompleteOpts().identityViaTool).toBe(true);
         });
 
-        it.each([{ supportsTools: false }, {}])(
-          'hands a fallback onto a model without tool support its identity line, and does not require tools for it (%j)',
+        // The last case would carry the tool alone onto a GPT-5.4 model, which the primary trim also prevents.
+        it.each([{ supportsTools: false }, {}, { id: ChatModels.GPT5_4_MINI, supportsTools: true }])(
+          'hands a fallback hop that withholds the tool its identity line, and does not require tools for it (%j)',
           async hopCaps => {
             setModel({ supportsTools: true });
             mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };
@@ -3653,7 +3654,7 @@ describe('ChatCompletionProcess', () => {
             expect(mockDb.quests.update).toHaveBeenCalledWith(
               expect.objectContaining({
                 replies: ['Hello from fallback'],
-                fallbackInfo: expect.objectContaining({ fallbackModel: 'fallback-no-tools' }),
+                fallbackInfo: expect.objectContaining({ fallbackModel: hopCaps.id ?? 'fallback-no-tools' }),
               })
             );
             const hopOpts = fallbackComplete.mock.calls[0][2];
