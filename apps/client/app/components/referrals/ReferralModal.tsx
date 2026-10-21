@@ -141,16 +141,16 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
           tags,
         },
         {
-          // Partial, not full IReferralResult: the referral endpoint returns the complete
-          // per-email summary, but the (future) user-invitation endpoint does not. The
-          // Array.isArray guards below treat every field as optional, so the type matches
-          // the real runtime contract across both modes.
           // Losing the quota race is a designed outcome (the server answers 400 with the
           // reason), so the sender has to see it rather than watch the spinner stop.
           onError: (error: unknown) => {
             setLoading(false);
             toast.error(getErrorMessage(error));
           },
+          // Partial, not full IReferralResult: the referral endpoint returns the complete
+          // per-email summary, but the (future) user-invitation endpoint does not. The
+          // Array.isArray guards below treat every field as optional, so the type matches
+          // the real runtime contract across both modes.
           onSuccess: (result: Partial<IReferralResult> | undefined) => {
             setLoading(false);
 
