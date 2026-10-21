@@ -59,6 +59,7 @@ import {
 import {
   buildThinkingParams,
   effortForComplexity,
+  isAdaptiveThinkingByDefault,
   planReasoningEffort,
   resolveAnthropicEffort,
   resolveOutputMaxTokens,
@@ -1584,9 +1585,17 @@ export class AnthropicBackend implements ICompletionBackend {
               // Feature flag controlled via options._internal.enableIdleTimeout
               const enableIdleTimeout = options._internal?.enableIdleTimeout ?? false;
               const configuredIdleTimeoutMs = options._internal?.idleTimeoutMs;
-              const idleTimeoutMs = this.isThinkingEnabled
-                ? THINKING_IDLE_TIMEOUT_MS
-                : (configuredIdleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS);
+              // A model that thinks unasked reasons on every turn unless thinking is explicitly
+              // disabled, and that thinking can stream nothing for long stretches, so it needs the
+              // thinking budget even when the caller never enabled thinking.
+              const mayThinkSilently =
+                !!currentModelInfo &&
+                isAdaptiveThinkingByDefault(model, currentModelInfo) &&
+                apiParams.thinking?.type !== 'disabled';
+              const idleTimeoutMs =
+                this.isThinkingEnabled || mayThinkSilently
+                  ? THINKING_IDLE_TIMEOUT_MS
+                  : (configuredIdleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS);
 
               let idleTimer: ReturnType<typeof setTimeout> | undefined;
               let eventCount = 0;
@@ -1887,7 +1896,8 @@ export class AnthropicBackend implements ICompletionBackend {
               // If idle timeout was triggered but the stream ended naturally (e.g., HTTP connection dropped
               // without abort working), reject rather than continuing with partial/corrupt tool parameters
               if (isIdleTimeout) {
-                this.logger.error(
+                // WARN, not error: same benign idle timeout the abort branch below logs at warn.
+                this.logger.warn(
                   '[AnthropicBackend] Stream ended after idle timeout - rejecting to avoid processing partial data',
                   {
                     model,
