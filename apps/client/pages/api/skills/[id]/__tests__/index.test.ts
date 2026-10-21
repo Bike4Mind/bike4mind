@@ -100,6 +100,16 @@ describe('/api/skills/[id] PUT — edit permission', () => {
     expect(mockUpdate).toHaveBeenCalled();
   });
 
+  it('explicitly unsets a null argument hint', async () => {
+    mockFindById.mockResolvedValue(skillDoc({ argumentHint: '<previous>' }));
+    const { req, res } = makeReqRes('PUT', OWNER, { argumentHint: null });
+    await handler(req, res);
+    expect(mockUpdate).toHaveBeenCalledWith(
+      { id: 'skill-1', argumentHint: undefined },
+      { new: true, unset: ['argumentHint'] }
+    );
+  });
+
   it('persists an explicitly cleared argument hint as an empty string', async () => {
     mockFindById.mockResolvedValue(skillDoc({ argumentHint: '<previous>' }));
     const { req, res } = makeReqRes('PUT', OWNER, { argumentHint: '' });
@@ -162,6 +172,18 @@ describe('/api/skills/[id] PUT - global skill content changes go through the Ski
     mockUpdateGuarded.mockImplementation(async (patch: Record<string, unknown>) => ({ ...skillDoc(), ...patch }));
     mockRateLimit.mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 60_000) });
     mockClassify.mockResolvedValue(classifierPass());
+  });
+
+  it('scans and unsets a null argument hint on a global skill', async () => {
+    mockFindById.mockResolvedValue(skillDoc({ isGlobalRead: true, argumentHint: '<topic>' }));
+    const { req, res } = makeReqRes('PUT', OWNER, { argumentHint: null });
+    await handler(req, res);
+    expect(mockClassify).toHaveBeenCalledTimes(1);
+    expect(mockClassify.mock.calls[0][0]).not.toHaveProperty('argumentHint');
+    expect(mockUpdateGuarded).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'skill-1', argumentHint: undefined }),
+      { new: true, unset: ['argumentHint'] }
+    );
   });
 
   it.each([

@@ -48,7 +48,7 @@ const VISIBILITY_OPTIONS: Array<{ value: SkillListingVisibility; title: string; 
   {
     value: 'public',
     title: 'Public',
-    body: 'Anyone on Bike4Mind can find and import it. Held for a reviewer if the scan flags anything.',
+    body: 'Anyone on Bike4Mind can find and import it.',
     icon: <PublicIcon />,
   },
   {
@@ -322,8 +322,8 @@ const PublishDialog: FC<PublishDialogProps> = ({ onClose, skill, ownSkills = [] 
               <Alert variant="soft" color="neutral" startDecorator={<ShieldIcon />}>
                 <Typography level="body-sm">
                   Every submission gets an automated safety scan and an AI-written summary of what it really does, shown
-                  next to your description. Skills that use tools which act outside the chat need a reviewer before
-                  going live. Future edits are submitted as new versions.
+                  next to your description. At every visibility, the scan can reject a submission or hold it for a
+                  reviewer before it goes live. Future edits are submitted as new versions.
                 </Typography>
               </Alert>
 

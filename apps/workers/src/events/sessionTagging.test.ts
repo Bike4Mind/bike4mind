@@ -145,10 +145,29 @@ describe('sessionTagging', () => {
       expect(h.sessionUpdate.mock.calls[0][0]).toMatchObject({ id: SHAREE });
       // tag.ts admits a global-write sharee via CASL, so the re-check must too.
       expect(h.sessionUpdate.mock.calls[0][2]).toEqual({ includeGlobalWrite: true });
-      // Billing stays on the owner.
+      // The sharee asked, so the sharee pays, not the owner.
       expect(h.recordUsage).toHaveBeenCalledWith(
-        expect.objectContaining({ user: expect.objectContaining({ id: OWNER }) })
+        expect.objectContaining({ user: expect.objectContaining({ id: SHAREE }) })
       );
+    });
+
+    it('bills the named payer (an admin), while the write still re-checks as the owner', async () => {
+      h.completionText = ['[{"name": "pulsars", "strength": 9}]'];
+
+      await run({ sessionId: SESSION_ID, payerId: 'user-admin' });
+
+      expect(h.sessionUpdate.mock.calls[0][0]).toMatchObject({ id: OWNER });
+      expect(h.recordUsage).toHaveBeenCalledWith(
+        expect.objectContaining({ user: expect.objectContaining({ id: 'user-admin' }) })
+      );
+    });
+
+    it('drops the job before any spend when the payer no longer exists', async () => {
+      h.userFindById.mockImplementation(async (id: string) => (id === 'user-gone' ? null : { id, isAdmin: false }));
+
+      await expect(run({ sessionId: SESSION_ID, payerId: 'user-gone' })).resolves.toBeUndefined();
+
+      expectNoOperationalSpend();
     });
 
     it('re-checks the requester on the no-usable-tags attempt stamp too', async () => {

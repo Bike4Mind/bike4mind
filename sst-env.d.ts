@@ -377,11 +377,6 @@ declare module "sst" {
       "arn": string
       "type": "sst.aws.SnsTopic"
     }
-    "SlackEventBus": {
-      "arn": string
-      "name": string
-      "type": "sst.aws.Bus"
-    }
     "SlackQuestProcessor": {
       "name": string
       "type": "sst.aws.Function"

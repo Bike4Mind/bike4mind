@@ -304,7 +304,7 @@ Revoking your app's access in B4M stops new exchanges wherever the consent check
 | 422 | The body failed validation; `error` names the failing fields. | - |
 | 429 | Rate limited. Wait `Retry-After` seconds, then retry. When called with an API key, `X-RateLimit-*` headers show the window state. | - |
 | 500 | Internal error. Retry, and log `request_id` if it persists. | - |
-| 503 | The database is unavailable, or the model's provider is not configured on this deployment. Retry later or pick another model. | `provider_not_configured` for the model case |
+| 503 | The database is unavailable, the model's provider is not configured on this deployment, or the self-hosted model server that lists the model (Ollama, local image) is unreachable. Retry later or pick another model. | `provider_not_configured` for the model cases |
 
 The body is `{ "error": "...", "request_id": "...", "errorCode": "..." }` (`errorCode` only where the table shows one), and `request_id` also arrives as the `X-Request-ID` header. Branch on the status and `errorCode`, never on `error`, which is prose and can change. The public API never returns 402.
 

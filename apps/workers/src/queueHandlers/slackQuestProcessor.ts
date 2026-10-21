@@ -363,7 +363,7 @@ async function deliverSlackProcessingFailure(questId: string, logger: Logger): P
 /**
  * Slack Quest Processor Lambda Handler
  *
- * Handles Slack-originated completion requests routed via SlackEventBus.
+ * Handles Slack-originated completion requests ('slack.completion.started' on AppEventBus).
  * Always enables Slack tools (no enableSlackTools flag check needed).
  * Delivers the final AI response directly to Slack after processing,
  * replacing the async notification EventBridge hop.

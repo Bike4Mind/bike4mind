@@ -2,7 +2,6 @@ import { appFilesBucket, fabFileBucket, generatedImagesBucket } from './buckets'
 import { DEFAULT_LAMBDA_ENVIRONMENT, TEST_GENERATION_PROVIDER_ENVIRONMENT } from './constants';
 import { eventBus } from './eventBus';
 import { generationJobQueue } from './queues';
-import { slackEventBus } from './bus';
 import { imageProcessor } from './imageProcessor';
 import { mcpHandler } from './mcp';
 import { allSecrets } from './secrets';
@@ -18,7 +17,7 @@ export { imageProcessor };
 /**
  * Slack Quest Processor Lambda Function
  *
- * Handles Slack-originated completion requests routed via SlackEventBus.
+ * Handles Slack-originated completion requests ('slack.completion.started' on AppEventBus).
  * Owns all Slack-specific logic (tools, pending actions, async notification).
  * Web-originated completions are handled by the always-on ChatCompletion
  * (infra/chatCompletion.ts), not a Lambda.
@@ -41,7 +40,6 @@ export const slackQuestProcessor = new sst.aws.Function('SlackQuestProcessor', {
     websocketApi,
     mcpHandler,
     eventBus,
-    slackEventBus,
     imageProcessor,
     generationJobQueue,
   ],

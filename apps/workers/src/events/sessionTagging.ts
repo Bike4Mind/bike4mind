@@ -78,12 +78,13 @@ function parseTagsFromLLMResponse(text: string | undefined | null): Array<{ name
 
 export const handler = withEventContext(async (event, logger) => {
   const body = SessionEvents.Tag.schema.parse(event.properties);
-  const { sessionId, userId, requesterId } = body;
+  const { sessionId, userId, requesterId, payerId } = body;
 
   logger.updateMetadata({
     sessionId,
     userId,
     requesterId,
+    payerId,
   });
 
   const session = await sessionRepository.findById(sessionId);
@@ -107,6 +108,12 @@ export const handler = withEventContext(async (event, logger) => {
   }
   // tag.ts authorizes the requester with CASL, which grants update on a global-write session.
   const writeOpts = requesterId ? { includeGlobalWrite: true } : undefined;
+  // Whoever asked pays (a sharee or an admin), not the owner on their behalf.
+  const payer = payerId ? await userRepository.findById(payerId) : requesterId ? writer : user;
+  if (!payer) {
+    logger.warn(`Payer ${payerId} not found, skipping tagging for session ${sessionId}`);
+    return;
+  }
 
   logger.info(`Handling tagging job for session ${sessionId} (as user ${user.id})`);
 
@@ -182,7 +189,7 @@ export const handler = withEventContext(async (event, logger) => {
   });
 
   await recordSessionOperationalUsage({
-    user,
+    user: payer,
     sessionId,
     modelId,
     modelInfo,
