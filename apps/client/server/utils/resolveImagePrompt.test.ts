@@ -158,6 +158,15 @@ describe('buildHistoryTranscript', () => {
     expect(buildHistoryTranscript([stopped])).toMatch(/"q" \u2192 stopped before any reply$/);
   });
 
+  it('does not label a tool turn as stopped before any reply', () => {
+    const stopped = {
+      ...makeRepliesMessage('s', 'q', []),
+      status: 'stopped',
+      structuredReplies: [{ content: [{ type: 'tool_use', id: 'call-1', name: 'search', input: {} }] }],
+    } as IChatHistoryItemDocument;
+    expect(buildHistoryTranscript([stopped])).toMatch(/stopped after output$/);
+  });
+
   it('keeps the reply text of a stopped turn that streamed output', () => {
     const partial = { ...makeTextMessage('p', 'q', 'partial answer'), status: 'stopped' } as IChatHistoryItemDocument;
     expect(buildHistoryTranscript([partial])).toContain('assistant: "partial answer"');

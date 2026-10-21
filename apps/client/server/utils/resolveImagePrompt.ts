@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { IChatHistoryItemDocument, PromptIntent } from '@bike4mind/common';
 import { getEffectiveApiKeyByBackend, OperationsModelService } from '@client/services/operationsModelService';
 import { serializeError } from '@bike4mind/server-utils/utils/serializeError';
+import { isStoppedBeforeReply } from '@bike4mind/utils';
 import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
 
 export const HISTORY_LOOKBACK = 6;
@@ -106,7 +107,8 @@ export const buildHistoryTranscript = (recentMessages: IChatHistoryItemDocument[
         return `[${idx}] user: "${promptText}" → assistant: "${truncateReply(reply)}"`;
       }
       if (msg.status === 'stopped') {
-        return `[${idx}] user: "${promptText}" \u2192 stopped before any reply`;
+        const stoppedLabel = isStoppedBeforeReply(msg) ? 'stopped before any reply' : 'stopped after output';
+        return `[${idx}] user: "${promptText}" \u2192 ${stoppedLabel}`;
       }
       return `[${idx}] user: "${promptText}" → reply`;
     })

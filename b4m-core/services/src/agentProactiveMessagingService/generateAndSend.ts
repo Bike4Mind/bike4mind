@@ -258,7 +258,7 @@ export async function generateAndSendProactiveMessage({
 /**
  * Builds messages array for LLM to generate a proactive message
  */
-function buildProactiveMessageMessages({
+export function buildProactiveMessageMessages({
   agent,
   config,
   session,

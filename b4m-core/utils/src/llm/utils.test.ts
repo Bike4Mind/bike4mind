@@ -6,6 +6,7 @@ import {
   computeCosineSimilarity,
   fetchAndProcessPreviousMessages,
   fetchAgentConversationHistory,
+  isStoppedBeforeReply,
   includeHardcodedSystemMessage,
   includeImagePromptSystemMessage,
   TOOL_RESULT_NOT_RECORDED,
@@ -23,6 +24,64 @@ import {
   formatChoicesBlock,
 } from '@bike4mind/common';
 import type { IMessage, ISessionDocument } from '@bike4mind/common';
+
+describe('isStoppedBeforeReply', () => {
+  type HistoryItem = Parameters<typeof isStoppedBeforeReply>[0];
+  const cases: Array<[string, HistoryItem, boolean]> = [
+    ['no output', { status: 'stopped', replies: [] }, true],
+    ['absent replies', { status: 'stopped' }, true],
+    ['empty reply', { status: 'stopped', replies: [''] }, true],
+    ['thinking only', { status: 'stopped', replies: ['<think>reasoning</think>'] }, true],
+    ['partial text', { status: 'stopped', replies: ['partial answer'] }, false],
+    ['text after thinking', { status: 'stopped', replies: ['<think>reasoning</think>', 'answer'] }, false],
+    ['completed without output', { status: 'done', replies: [] }, false],
+    ['running without output', { status: 'running', replies: [] }, false],
+    ['legacy status absent', { replies: [] }, false],
+    [
+      'successful research',
+      { status: 'stopped', researchModeResults: [{ configurationId: 'r', success: true, response: 'answer' }] },
+      false,
+    ],
+    [
+      'failed research',
+      { status: 'stopped', researchModeResults: [{ configurationId: 'r', success: false, error: 'failed' }] },
+      true,
+    ],
+    [
+      'blank research',
+      { status: 'stopped', researchModeResults: [{ configurationId: 'r', success: true, response: '  ' }] },
+      true,
+    ],
+    [
+      'structured output',
+      { status: 'stopped', structuredReplies: [{ content: [{ type: 'text', text: 'answer' }] }] },
+      false,
+    ],
+    [
+      'recorded result',
+      { status: 'stopped', promptMeta: { functionCalls: [{ id: 'call-1', name: 'search', returnValue: 'result' }] } },
+      false,
+    ],
+    [
+      'recorded failure',
+      {
+        status: 'stopped',
+        promptMeta: { functionCalls: [{ id: 'call-1', name: 'search', returnValue: 'failed', success: false }] },
+      },
+      false,
+    ],
+    ['resultless tool', { status: 'stopped', promptMeta: { functionCalls: [{ id: 'call-1', name: 'search' }] } }, true],
+    [
+      'unpaired result',
+      { status: 'stopped', promptMeta: { functionCalls: [{ name: 'search', returnValue: 'result' }] } },
+      true,
+    ],
+  ];
+
+  it.each(cases)('%s', (_name, item, expected) => {
+    expect(isStoppedBeforeReply(item)).toBe(expected);
+  });
+});
 
 // Define ITokenizer type locally since it's in @bike4mind/utils
 interface ITokenizer {
