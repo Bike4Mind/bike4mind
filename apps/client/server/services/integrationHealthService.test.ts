@@ -4,6 +4,7 @@ import type { Logger } from '@bike4mind/observability';
 const h = vi.hoisted(() => ({
   recordCheck: vi.fn(),
   fetch: vi.fn(),
+  emitMetrics: vi.fn(),
 }));
 
 // Only what the probes may touch: no user, MCP server or workspace repository is exported, so a
@@ -15,7 +16,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
-  emitMetrics: vi.fn().mockResolvedValue(undefined),
+  emitMetrics: h.emitMetrics,
 }));
 
 import { runAllProbes, runProbe } from './integrationHealthService';
@@ -30,6 +31,7 @@ describe('integrationHealthService probes', () => {
   beforeEach(() => {
     h.recordCheck.mockReset().mockImplementation(async (check: unknown) => check);
     h.fetch.mockReset();
+    h.emitMetrics.mockReset().mockResolvedValue(undefined);
     vi.stubGlobal('fetch', h.fetch);
   });
 
@@ -47,6 +49,29 @@ describe('integrationHealthService probes', () => {
       const headers = new Headers((init as RequestInit).headers);
       expect(headers.has('authorization')).toBe(false);
     }
+  });
+
+  it('does not resolve until the CloudWatch metrics are sent', async () => {
+    respondWith(200);
+    let releaseEmit: () => void = () => {};
+    h.emitMetrics.mockReturnValue(new Promise<void>(resolve => (releaseEmit = resolve)));
+
+    let settled = false;
+    const pending = runAllProbes(logger).then(() => (settled = true));
+    await vi.waitFor(() => expect(h.emitMetrics).toHaveBeenCalledTimes(1));
+
+    expect(settled).toBe(false);
+    releaseEmit();
+    await pending;
+    expect(settled).toBe(true);
+  });
+
+  it('still returns the recorded checks when publishing metrics fails', async () => {
+    respondWith(200);
+    h.emitMetrics.mockRejectedValue(new Error('Signature expired'));
+
+    await expect(runAllProbes(logger)).resolves.toHaveLength(4);
+    expect(logger.error).toHaveBeenCalledWith('Failed to publish CloudWatch metrics', expect.anything());
   });
 
   it.each([401, 403, 404, 429])('treats HTTP %d as reachable, since the provider answered', async status => {

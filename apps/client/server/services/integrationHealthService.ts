@@ -159,10 +159,13 @@ export async function runAllProbes(logger: Logger): Promise<IIntegrationHealthCh
     }
   }
 
-  // Publish CloudWatch metrics (fire-and-forget - don't block on metric failures)
-  publishMetrics(recorded, logger).catch(err => {
+  // Awaited, not fire-and-forget: the cron Lambda freezes once its handler returns, so an
+  // un-awaited PutMetricData is sent on the next thaw (5 min later) and fails "Signature expired".
+  try {
+    await publishMetrics(recorded, logger);
+  } catch (err) {
     logger.error('Failed to publish CloudWatch metrics', { error: err });
-  });
+  }
 
   return recorded;
 }
