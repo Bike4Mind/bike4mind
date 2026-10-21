@@ -145,6 +145,60 @@ describe('buildLlmBackend — Ollama multiplexing', () => {
     expect(startupLog.some(l => l.includes('Ollama'))).toBe(true);
     expect(res.modelInfo.id).toBe('m1');
   });
+
+  const downOllama = () =>
+    ({
+      currentModel: 'none',
+      getModelInfo: vi.fn(async () => {
+        throw new TypeError('fetch failed');
+      }),
+    }) as never;
+
+  it('starts on the server models alone and says Ollama is unreachable when its listing rejects', async () => {
+    const ollama = downOllama();
+    const { deps } = makeDeps({ createOllamaBackend: vi.fn(() => ollama) });
+    const startupLog: string[] = [];
+
+    const res = await buildLlmBackend(
+      makeInput({ apiClient: fakeApiClient({}), startupLog, ollamaHost: 'http://localhost:11434' }),
+      deps
+    );
+
+    expect(deps.createMultiBackend).toHaveBeenCalledWith(expect.anything(), ollama, [model('m1')], [], 'm1');
+    expect(startupLog.some(l => l.includes('Ollama at http://localhost:11434 is unreachable: fetch failed'))).toBe(
+      true
+    );
+    expect(startupLog.some(l => l.includes('ollama pull'))).toBe(false);
+    expect(res.modelInfo.id).toBe('m1');
+  });
+
+  it('names an unreachable Ollama when neither the server nor Ollama has models', async () => {
+    const { deps } = makeDeps({
+      createServerBackend: vi.fn(() => fakeBackend([])),
+      createOllamaBackend: vi.fn(downOllama),
+    });
+
+    const build = buildLlmBackend(
+      makeInput({ apiClient: fakeApiClient({}), ollamaHost: 'http://localhost:11434' }),
+      deps
+    );
+
+    await expect(build).rejects.toThrow('Ollama at http://localhost:11434 is unreachable: fetch failed');
+    await expect(build).rejects.not.toThrow('ollama pull');
+  });
+
+  it('keeps the pull hint when Ollama answers with no models', async () => {
+    const { deps } = makeDeps({ createOllamaBackend: vi.fn(() => fakeBackend([])) });
+    const startupLog: string[] = [];
+
+    await buildLlmBackend(
+      makeInput({ apiClient: fakeApiClient({}), startupLog, ollamaHost: 'http://localhost:11434' }),
+      deps
+    );
+
+    expect(startupLog.some(l => l.includes('No models found in Ollama at http://localhost:11434'))).toBe(true);
+    expect(startupLog.some(l => l.includes('unreachable'))).toBe(false);
+  });
 });
 
 describe('buildLlmBackend — model resolution', () => {
