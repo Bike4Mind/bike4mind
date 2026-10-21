@@ -140,6 +140,8 @@ use to build a typed client). They are deliberately not repeated here, so the tw
 - Completions, embeddings and tools: \`/api/ai/v1/*\`, \`/api/v1/embeddings\`
 - Decisions (typed questions answered with probabilities): \`/api/v1/decisions\`, \`/api/v1/decision-models\`
 - Account and models: \`/api/v1/me\`, \`/api/v1/credits\`, \`/api/v1/models\`
+- Skill Market as a Claude Code plugin marketplace: \`/api/v1/skills/market/claude-marketplace.json\`,
+  \`/api/v1/skills/market/{id}/claude-plugin.zip\`
 - Release notes: \`/api/v1/whats-new\` (public, no key needed)
 
 Image, video, music and chat work is asynchronous; the Async jobs section of the

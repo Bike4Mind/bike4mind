@@ -16,10 +16,11 @@ export const USER_CREDIT_HISTORY_DAYS = 90;
 
 /**
  * From this instant every admin credit change writes a ledger row, so a balance reconstructed from the
- * ledger is trustworthy after it. Null until the mandatory-ledger change ships: the whole window is
- * then treated as possibly incomplete. Set it to that release's deploy time.
+ * ledger is trustworthy after it. It is the end of the first production deploy that made the admin
+ * ledger mandatory, rounded up so no Lambda still ran the old code. Null treats the whole window as
+ * possibly incomplete.
  */
-export const ADMIN_CREDIT_LEDGER_RELIABLE_FROM: string | null = null;
+export const ADMIN_CREDIT_LEDGER_RELIABLE_FROM: string | null = '2026-10-21T08:17:00Z';
 
 export type UserCreditBalancePoint = {
   /** UTC calendar day, YYYY-MM-DD. */

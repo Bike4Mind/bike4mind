@@ -42,6 +42,7 @@ import {
   conflictInfo,
   useImportListing,
   useListingDetail,
+  useMarketMe,
   useModerateListing,
   useRateListing,
   useReportListing,
@@ -388,6 +389,7 @@ const ListingDetail: FC<{ listingId?: string; token?: string }> = ({ listingId, 
   const [delistOpen, setDelistOpen] = useState(false);
   const [claudeCodeOpen, setClaudeCodeOpen] = useState(false);
   const moderate = useModerateListing();
+  const { data: me } = useMarketMe();
 
   if (isLoading) {
     return (
@@ -418,6 +420,8 @@ const ListingDetail: FC<{ listingId?: string; token?: string }> = ({ listingId, 
   const { listing, version, ratings, viewer, similar } = data;
   const live = listing.status === 'approved' && !listing.hiddenByReports;
   const shareUrl = listing.shareToken ? `${window.location.origin}/skills/market/u/${listing.shareToken}` : null;
+  const marketplaceOrg =
+    listing.visibility === 'organization' ? me?.organizations.find(o => o.id === listing.organizationId) : undefined;
 
   return (
     <Box sx={{ height: '100%', overflowY: 'auto', ...scrollbarStyles }} data-testid="market-listing-page">
@@ -677,6 +681,7 @@ const ListingDetail: FC<{ listingId?: string; token?: string }> = ({ listingId, 
           version={version.version}
           thirdParty={!viewer.isAuthor}
           showImportHint={viewer.canImport && !data.myImport?.skill}
+          marketplace={marketplaceOrg ? { org: marketplaceOrg, pluginName: listing.claudePluginName } : undefined}
         />
       ) : null}
     </Box>

@@ -58,6 +58,7 @@ const catalogPlan = (contributions: SourceContribution[], base: Map<string, Reso
     contributions,
     base,
     coveredBackends: new Set<string>([ModelBackend.OpenAI]),
+    providerSourceNames: new Set(['openai']),
     operatorOwnedModelIds: new Set(),
     credentials: testCredentials(),
     policy: 'priced',
@@ -162,10 +163,10 @@ describe('planLifecycleSignals', () => {
       const docs = planLifecycleSignals({ contributions: [provider('anthropic', [active({}, 'docs')])] });
       const typed = planLifecycleSignals({ contributions: [provider('bedrock', [active({}, 'typed')])] });
 
-      expect(docs.providerUndated).toEqual(new Map([['claude-x', 'anthropic']]));
+      expect(docs.providerUndated).toEqual(new Map([['claude-x', ['anthropic']]]));
       // The docs claim itself still never reaches the overlay.
       expect(docs.contributions[0].records[0].patch).not.toHaveProperty('lifecycle');
-      expect(typed.providerUndated).toEqual(new Map([['claude-x', 'bedrock']]));
+      expect(typed.providerUndated).toEqual(new Map([['claude-x', ['bedrock']]]));
     });
 
     it('ignores an aggregator, a dated or sunset claim, and a source whose parser shifted', () => {
@@ -417,6 +418,7 @@ describe('planLifecycle typed transitions', () => {
         coveredBackends: new Set<string>([ModelBackend.OpenAI]),
         priorDiscoveryGroups: new Map([['gpt-5', ['identity', 'lifecycle']]]),
         providerUndated: signals.providerUndated,
+        providerSourceNames: new Set(['openai']),
         operatorOwnedModelIds: new Set(),
         credentials: testCredentials(),
         policy: 'priced',
