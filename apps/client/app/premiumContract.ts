@@ -26,7 +26,10 @@ import type { ComponentType } from 'react';
 export interface PremiumRouteDescriptor {
   path: string;
   lazyImport: () => Promise<{ default: ComponentType }>;
-  /** Optional card on the admin landing page. Use only on a concrete, directly navigable route. */
+  /**
+   * STRUCTURAL field: optional card on the admin landing page, linking to the literal `path`.
+   * `partitionPremiumRoutes` throws when it is set on a path with a `$param` segment.
+   */
   adminDashboard?: {
     label: string;
     description: string;
