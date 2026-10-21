@@ -266,24 +266,112 @@ describe('copy accuracy', () => {
       .mockResolvedValueOnce(overLongReply)
       .mockResolvedValueOnce(editorialReply([4938]));
 
-    await writeReleaseNotes(overstatedRelease, new Map([[4938, 'n']]), complete);
+    const { draft } = await writeReleaseNotes(overstatedRelease, new Map([[4938, 'n']]), complete);
 
     expect(complete.mock.calls[0][0]).toContain('at most 160 characters');
     expect(complete.mock.calls[1][0]).toContain('items.0.text');
+    expect(draft.headline).toBe('Faster search');
+    expect(draft.items[0].text).toBe('Search is quicker.');
   });
 
   it('keeps an over-long item whole when the repair still runs over, so the release gets a note', async () => {
     const warn = vi.fn();
-    const complete = vi.fn().mockResolvedValue(overLongReply);
+    const repairedDraft = {
+      headline: 'Repaired headline',
+      summary: 'Repaired summary.',
+      items: [{ category: 'improved', text: 'y'.repeat(162), importance: 2, sourcePrs: [4938] }],
+    };
+    const complete = vi.fn().mockResolvedValueOnce(overLongReply).mockResolvedValueOnce(JSON.stringify(repairedDraft));
 
     const { draft } = await writeReleaseNotes(overstatedRelease, new Map([[4938, 'n']]), complete, {
       logger: { warn },
     });
 
     expect(complete).toHaveBeenCalledTimes(2);
-    expect(draft.items).toHaveLength(1);
-    expect(draft.items[0].text).toHaveLength(161);
+    expect(draft).toEqual(repairedDraft);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('over 160 chars'));
+  });
+
+  it('drops a stray sourcePr from the kept first draft, warning once', async () => {
+    const warn = vi.fn();
+    const strayReply = JSON.stringify({
+      headline: 'Storage usage by uploader',
+      summary: 'Organizations can see storage usage.',
+      items: [{ category: 'new', text: 'x'.repeat(161), importance: 1, sourcePrs: [4938, 9999] }],
+    });
+    const complete = vi.fn().mockResolvedValueOnce(strayReply).mockResolvedValueOnce('not json');
+
+    const { draft } = await writeReleaseNotes(overstatedRelease, new Map([[4938, 'n']]), complete, {
+      logger: { warn },
+    });
+
+    expect(draft.items[0].sourcePrs).toEqual([4938]);
+    expect(warn.mock.calls.filter(([message]) => String(message).includes('9999'))).toHaveLength(1);
+  });
+
+  it.each([
+    [
+      'fails schema validation',
+      (c: ReturnType<typeof vi.fn>) => c.mockResolvedValueOnce('{"items":[]}'),
+      'repair invalid',
+    ],
+    [
+      'is malformed',
+      (c: ReturnType<typeof vi.fn>) => c.mockResolvedValueOnce('sorry, here you go: {'),
+      'repair invalid',
+    ],
+    [
+      'times out',
+      (c: ReturnType<typeof vi.fn>) => c.mockRejectedValueOnce(new Error('timed out')),
+      'repair call failed (timed out)',
+    ],
+  ])('keeps the over-long first draft when the repair %s', async (_, secondReply, warning) => {
+    const warn = vi.fn();
+    const complete = secondReply(vi.fn().mockResolvedValueOnce(overLongReply));
+
+    const { draft } = await writeReleaseNotes(overstatedRelease, new Map([[4938, 'n']]), complete, {
+      logger: { warn },
+    });
+
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(draft).toEqual(JSON.parse(overLongReply));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(warning));
+    // The over-length warning fires once, on the draft that is kept.
+    expect(warn).toHaveBeenCalledTimes(2);
+  });
+
+  it('rethrows when the first reply fails and there is no draft to keep', async () => {
+    const complete = vi.fn().mockRejectedValueOnce(new Error('boom'));
+
+    await expect(writeReleaseNotes(overstatedRelease, new Map([[4938, 'n']]), complete)).rejects.toThrow(/boom/);
+    expect(complete).toHaveBeenCalledTimes(1);
+  });
+
+  it('rethrows when a schema-invalid first reply is followed by a failed repair', async () => {
+    const complete = vi
+      .fn()
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          headline: 'x'.repeat(121),
+          summary: 'Organizations can see storage usage.',
+          items: [{ category: 'new', text: 'x'.repeat(161), importance: 1, sourcePrs: [4938] }],
+        })
+      )
+      .mockRejectedValueOnce(new Error('timed out'));
+
+    await expect(writeReleaseNotes(overstatedRelease, new Map([[4938, 'n']]), complete)).rejects.toThrow(/timed out/);
+    expect(complete).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not use an invalid triage response as a fallback when its repair fails', async () => {
+    const complete = vi
+      .fn()
+      .mockResolvedValueOnce(triageReply([{ number: 2, customerFacing: true, note: 'Wrong PR.' }]))
+      .mockRejectedValueOnce(new Error('timed out'));
+
+    await expect(triageReleaseNotes([pr(1)], complete)).rejects.toThrow('timed out');
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(complete.mock.calls[1][0]).toContain('missing entry for pull request 1');
   });
 });
 
