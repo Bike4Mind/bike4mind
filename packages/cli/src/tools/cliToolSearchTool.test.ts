@@ -29,9 +29,9 @@ describe('parseToolReferences', () => {
     ]);
   });
 
-  it('tolerates a field the core serializer may add later', () => {
+  it('drops a field the core serializer may add later', () => {
     expect(parseToolReferences('[{"type":"tool_reference","tool_name":"a","extra":1}]')).toEqual([
-      { type: 'tool_reference', tool_name: 'a', extra: 1 },
+      { type: 'tool_reference', tool_name: 'a' },
     ]);
   });
 

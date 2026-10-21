@@ -129,6 +129,17 @@ describe('prepareToolSearchRequest', () => {
     expect(resultContent(history, 1)).toBe(serialized);
   });
 
+  it('sends only the fields a tool_reference block may carry', () => {
+    const { registry, tools } = setup();
+    const serialized = '[{"type":"tool_reference","tool_name":"mcp__a","extra":1}]';
+    const prepared = prepareToolSearchRequest(
+      { messages: toolSearchTurn('toolu_1', serialized), tools },
+      registry,
+      true
+    );
+    expect(resultContent(prepared.messages, 1)).toEqual(references('mcp__a'));
+  });
+
   it('leaves a reference to a tool no longer offered as text', () => {
     const { registry, tools } = setup();
     const serialized = JSON.stringify(references('mcp__gone'));

@@ -21,7 +21,7 @@ export interface CliToolSearchToolOptions {
  * The `tool_reference` blocks a `toolReference` tool_search result serializes to, or null for any
  * other text (a no-match hint, a mutateTools result, or a result with an appended warning).
  * Extra keys are tolerated so a field added to the core serializer does not silently disable the
- * native path.
+ * native path, and dropped because the provider rejects a `tool_reference` block with any other field.
  */
 export function parseToolReferences(text: string): ToolReferenceBlock[] | null {
   let parsed: unknown;
@@ -36,7 +36,7 @@ export function parseToolReferences(text: string): ToolReferenceBlock[] | null {
     block !== null &&
     (block as ToolReferenceBlock).type === 'tool_reference' &&
     typeof (block as ToolReferenceBlock).tool_name === 'string';
-  return parsed.every(isReference) ? parsed : null;
+  return parsed.every(isReference) ? parsed.map(({ type, tool_name }) => ({ type, tool_name })) : null;
 }
 
 /**
