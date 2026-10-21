@@ -31,8 +31,6 @@ type PendingFileReadiness = {
   startedAt: number;
   uploadedFiles?: number;
   readyAt?: number;
-  chunkedFiles: number;
-  vectorizedFiles: number;
 };
 const pendingFileReadiness = new Map<string, PendingFileReadiness>();
 const READINESS_RETENTION_MS = 24 * 60 * 60 * 1000;
@@ -42,7 +40,6 @@ type LogFirstRunEvent = ReturnType<typeof useLogEvent>['mutate'];
 function logFileReadiness(batchId: string, logEvent: LogFirstRunEvent): void {
   const pending = pendingFileReadiness.get(batchId);
   if (!pending?.uploadedFiles || pending.readyAt === undefined) return;
-  if (pending.chunkedFiles < pending.uploadedFiles || pending.vectorizedFiles < pending.uploadedFiles) return;
   pendingFileReadiness.delete(batchId);
   logEvent({
     type: FirstRunEvents.FILE_READY_MS,
@@ -188,7 +185,7 @@ export function useBatchUpload() {
           setRecoverableLake,
           onBatchCreated: batchId => {
             createdBatchId = batchId;
-            pendingFileReadiness.set(batchId, { startedAt, chunkedFiles: 0, vectorizedFiles: 0 });
+            pendingFileReadiness.set(batchId, { startedAt });
             queryClient.invalidateQueries({ queryKey: dataLakeKeys.activeBatches });
           },
           onUploadComplete: () => {
@@ -446,13 +443,6 @@ export function useDataLakeBatchCompletionSync() {
       if (message.action !== 'data_lake_batch_progress') return;
       const pending = pendingFileReadiness.get(message.batchId);
       if (pending) {
-        const chunkedFiles = Math.max(pending.chunkedFiles, message.chunkedFiles ?? 0);
-        const vectorizedFiles = Math.max(pending.vectorizedFiles, message.vectorizedFiles ?? 0);
-        if (chunkedFiles > pending.chunkedFiles || vectorizedFiles > pending.vectorizedFiles) {
-          pending.readyAt = undefined;
-        }
-        pending.chunkedFiles = chunkedFiles;
-        pending.vectorizedFiles = vectorizedFiles;
         if (message.status === 'failed' || message.status === 'cancelled') {
           pendingFileReadiness.delete(message.batchId);
         } else if (message.status === 'completed' || message.status === 'completed_with_errors') {

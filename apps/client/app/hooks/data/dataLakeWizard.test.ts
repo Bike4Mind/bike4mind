@@ -1874,25 +1874,21 @@ describe('upload readiness analytics survives the wizard session', () => {
     });
   });
 
-  it('does not log partial early processing before every browser upload settles', async () => {
+  it('buffers terminal readiness until every browser upload settles', async () => {
     seedWizard({ names: ['a.txt', 'b.txt'] });
     const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
     const { result } = mountUploadAndCompletion();
     uploadFileToUrlMock.mockImplementation(async () => {
+      now.mockReturnValue(1_300);
       await complete('batch1', 1);
       expect(logEvent).not.toHaveBeenCalled();
     });
     await act(async () => {
       await result.current.mutateAsync();
     });
-    expect(logEvent).not.toHaveBeenCalled();
-    now.mockReturnValue(1_500);
-    await act(async () => {
-      await complete('batch1', 2);
-    });
     expect(logEvent).toHaveBeenCalledExactlyOnceWith({
       type: 'file_ready_ms',
-      metadata: { milliseconds: 500, files: 2 },
+      metadata: { milliseconds: 300, files: 2 },
     });
   });
 
@@ -1903,9 +1899,8 @@ describe('upload readiness analytics survives the wizard session', () => {
       now.mockReturnValue(1_400);
       await complete();
       now.mockReturnValue(1_450);
-      await complete();
-      now.mockReturnValue(1_475);
-      await complete('batch1', 0); // A delayed lower-count snapshot must not undo readiness.
+      const [, onMessage] = subscribeToAction.mock.calls.at(-1)!;
+      await onMessage({ action: 'data_lake_batch_progress', batchId: 'batch1', chunkedFiles: 1 });
       expect(logEvent).not.toHaveBeenCalled();
     });
     await act(async () => {
@@ -1914,6 +1909,51 @@ describe('upload readiness analytics survives the wizard session', () => {
     expect(logEvent).toHaveBeenCalledExactlyOnceWith({
       type: 'file_ready_ms',
       metadata: { milliseconds: 400, files: 1 },
+    });
+  });
+
+  it('logs readiness when the terminal batch skipped a file', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const { result } = mountUploadAndCompletion();
+    await act(async () => {
+      await result.current.mutateAsync();
+    });
+    now.mockReturnValue(1_500);
+    const [, onMessage] = subscribeToAction.mock.calls.at(-1)!;
+    await act(async () => {
+      await onMessage({
+        action: 'data_lake_batch_progress',
+        batchId: 'batch1',
+        status: 'completed',
+        skippedFiles: 1,
+      });
+    });
+    expect(logEvent).toHaveBeenCalledExactlyOnceWith({
+      type: 'file_ready_ms',
+      metadata: { milliseconds: 500, files: 1 },
+    });
+  });
+
+  it('logs readiness when processing completes with an error', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const { result } = mountUploadAndCompletion();
+    await act(async () => {
+      await result.current.mutateAsync();
+    });
+    now.mockReturnValue(1_500);
+    const [, onMessage] = subscribeToAction.mock.calls.at(-1)!;
+    await act(async () => {
+      await onMessage({
+        action: 'data_lake_batch_progress',
+        batchId: 'batch1',
+        status: 'completed_with_errors',
+        failedFiles: 1,
+        processingFailedFiles: 1,
+      });
+    });
+    expect(logEvent).toHaveBeenCalledExactlyOnceWith({
+      type: 'file_ready_ms',
+      metadata: { milliseconds: 500, files: 1 },
     });
   });
 
