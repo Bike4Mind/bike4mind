@@ -51,6 +51,7 @@ import { presentReply } from './codeStream';
 import { seedOnArrival } from './firstRunSeed';
 import { readLastSession, useLastSession } from './lastSession';
 import { newSessionInProject } from './newSessionInProject';
+import { startsInWorktree, worktreeByDefault } from './worktreeDefault';
 import { roundsOf } from './replyRounds';
 import { contextTokens, describeActivity, latestReply, writingProse, type ComposerUsage } from './statusLine';
 import { useAccountCredits } from './useAccountCredits';
@@ -506,7 +507,8 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
    *
    * The folder is what defines the group, so it carries across and the dialog stays shut.
    * Nothing else does - see newSessionInProject for why the branch is left for the user to
-   * pick on the new session.
+   * pick on the new session. The worktree toggle follows the user's default, and git is only
+   * asked whether the folder can hold one when that default is on.
    */
   const onCreateInProject = useCallback(
     async (directory: string) => {
@@ -514,7 +516,9 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
       if (!sibling) return;
       setScreen('conversation');
       clearCodeError();
-      const created = await createCode(newSessionInProject(sibling));
+      const inWorktree =
+        worktreeByDefault() && startsInWorktree(true, await window.b4m.chat.inspectProject(sibling.directory));
+      const created = await createCode(newSessionInProject(sibling, inWorktree));
       if (created) setActiveId(created);
     },
     [sessions, createCode, clearCodeError]
