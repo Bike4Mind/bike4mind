@@ -10,29 +10,38 @@ export function markFirstSignupSession(userId: string): void {
   }
 }
 
-export function isFirstSignupSession(userId: string | undefined, now: number = Date.now()): boolean {
-  if (!userId) return false;
+export function readFirstSignupSession(
+  userId: string | undefined,
+  now: number = Date.now()
+): { active: boolean; expiresAt?: number } {
+  if (!userId) return { active: false };
   try {
     const raw = localStorage.getItem(FIRST_SIGNUP_SESSION_KEY);
-    if (raw === null) return false;
+    if (raw === null) return { active: false };
     let parsed: { userId?: unknown; markedAt?: unknown } | null = null;
     try {
       parsed = JSON.parse(raw);
     } catch {
       parsed = null;
     }
-    if (
-      parsed &&
-      parsed.userId === userId &&
-      typeof parsed.markedAt === 'number' &&
-      now - parsed.markedAt < FIRST_SIGNUP_SESSION_TTL_MS
-    ) {
-      return true;
+    if (parsed && parsed.userId === userId && typeof parsed.markedAt === 'number') {
+      const expiresAt = parsed.markedAt + FIRST_SIGNUP_SESSION_TTL_MS;
+      if (now < expiresAt) return { active: true, expiresAt };
     }
-    localStorage.removeItem(FIRST_SIGNUP_SESSION_KEY);
-    return false;
+    return { active: false };
   } catch (error) {
     console.warn('Unable to read first signup session', error);
-    return false;
+    return { active: false };
   }
+}
+
+export function isFirstSignupSession(userId: string | undefined, now: number = Date.now()): boolean {
+  if (!userId) return false;
+  if (readFirstSignupSession(userId, now).active) return true;
+  try {
+    if (localStorage.getItem(FIRST_SIGNUP_SESSION_KEY) !== null) localStorage.removeItem(FIRST_SIGNUP_SESSION_KEY);
+  } catch (error) {
+    console.warn('Unable to read first signup session', error);
+  }
+  return false;
 }
