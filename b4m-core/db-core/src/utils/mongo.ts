@@ -108,10 +108,31 @@ const reselectServer = async (logger?: Logger): Promise<void> => {
   }
 };
 
-/** `overrides` is merged last, e.g. `{ autoIndex: false }` for a read-only script. */
-export const connectDB = async (url: string, logger?: Logger, overrides?: ConnectOptions) => {
+const SERVERLESS_IDLE_TIME_MS = 30_000;
+let lastConnectionUse = 0;
+let connectionAttempt: Promise<boolean> | undefined;
+
+const isServerlessRuntime = () => Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.VERCEL);
+
+const checkWarmConnection = async (logger: Logger): Promise<void> => {
+  try {
+    await mongoose.connection.getClient().db().command({ ping: 1 });
+  } catch (error) {
+    if (!isConnectionLostError(error)) throw error;
+    // The driver invalidates failed network connections. Re-select without closing other requests' sockets.
+    logger.warn('Database ping failed after inactivity, retrying on a healthy connection', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    await mongoose.connection.getClient().db().command({ ping: 1 });
+  }
+};
+
+const ensureConnection = async (url: string, logger?: Logger, overrides?: ConnectOptions): Promise<boolean> => {
   logger ??= Logger.withMetadata({});
   if (mongoose.connection.readyState === 1) {
+    if (isServerlessRuntime() && Date.now() - lastConnectionUse >= SERVERLESS_IDLE_TIME_MS) {
+      await checkWarmConnection(logger);
+    }
     return true;
   }
 
@@ -133,14 +154,15 @@ export const connectDB = async (url: string, logger?: Logger, overrides?: Connec
     // Causes indexes to be built automatically. This is the default, but
     // here we make it explicit:
     autoIndex: true,
-    minPoolSize: 1,
+    minPoolSize: isServerlessRuntime() ? 0 : 1,
     // One connection per request is likely enough; 2 may be more than needed.
     maxPoolSize,
-    // Close idle connections after 30s in Lambda/DocumentDB so stale connections
-    // don't cause EPIPE errors. Only set for DocumentDB; local/long-running
-    // processes keep the default (no idle timeout) to avoid unnecessary churn.
-    ...(isDocumentDBConnection(url) && {
-      maxIdleTimeMS: parseInt(process.env.MONGODB_MAX_IDLE_TIME_MS || '30000', 10),
+    // Expire stale sockets for every serverless deployment, including Atlas.
+    // Long-running processes retain the driver default; an explicit 0 disables expiry.
+    ...((isServerlessRuntime() ||
+      isDocumentDBConnection(url) ||
+      process.env.MONGODB_MAX_IDLE_TIME_MS !== undefined) && {
+      maxIdleTimeMS: parseInt(process.env.MONGODB_MAX_IDLE_TIME_MS || String(SERVERLESS_IDLE_TIME_MS), 10),
     }),
     // Connection timeout settings to handle Lambda cold starts and network issues
     serverSelectionTimeoutMS: 30000, // 30s to select a server (default is 30s)
@@ -193,6 +215,21 @@ export const connectDB = async (url: string, logger?: Logger, overrides?: Connec
   throw new Error(
     `Database connection failed after ${maxRetries + 1} attempts: ${lastError?.message || 'Unknown error'}`
   );
+};
+
+/** `overrides` is merged last, e.g. `{ autoIndex: false }` for a read-only script. */
+export const connectDB = async (url: string, logger?: Logger, overrides?: ConnectOptions): Promise<boolean> => {
+  if (connectionAttempt) return connectionAttempt;
+
+  // Cold starts and concurrent requests after a thaw must await the same connection check.
+  connectionAttempt = ensureConnection(url, logger, overrides);
+  try {
+    const connected = await connectionAttempt;
+    lastConnectionUse = Date.now();
+    return connected;
+  } finally {
+    connectionAttempt = undefined;
+  }
 };
 
 export const getDB = () => {

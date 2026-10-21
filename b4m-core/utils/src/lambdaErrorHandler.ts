@@ -22,7 +22,13 @@ function classifyError(error: unknown): ErrorCategory {
     }
     // Connection errors
     const connectionErrors = ['ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED', 'EPIPE', 'ENOTFOUND'];
-    if (connectionErrors.some(code => error.message.includes(code))) {
+    const code = 'code' in error ? error.code : undefined;
+    if (
+      error.name === 'MongoNetworkError' ||
+      error.name === 'MongoNetworkTimeoutError' ||
+      (typeof code === 'string' && connectionErrors.includes(code)) ||
+      connectionErrors.some(code => error.message.includes(code))
+    ) {
       return 'network_connection';
     }
   }
