@@ -125,10 +125,22 @@ export function applyBaseUserUpdates(user: IUserDocument, params: UpdateUserPara
   }
 
   if (params.securityQuestions) {
+    // Each stored answer is claimed at most once. Matching on text alone collapses two stored
+    // answers to the same question onto the first one, silently dropping the second.
+    const claimed = new Set<number>();
     params.securityQuestions = params.securityQuestions.map(question => {
       if (question.answer) return question;
-      const existing = user.securityQuestions?.find(stored => stored.question === question.question);
-      if (!existing?.answer) throw new BadRequestError('An answer is required for a new or renamed security question');
+      const index =
+        user.securityQuestions?.findIndex((stored, i) => !claimed.has(i) && stored.question === question.question) ??
+        -1;
+      if (index < 0) {
+        throw new BadRequestError('An answer is required for a new or renamed security question');
+      }
+      const existing = user.securityQuestions![index];
+      if (!existing.answer) {
+        throw new BadRequestError('An answer is required for a new or renamed security question');
+      }
+      claimed.add(index);
       return { ...question, answer: existing.answer };
     });
   }
