@@ -124,6 +124,7 @@ import {
   reasonsWithinOutputBudget,
   getAvailableModels,
   getLlmByModel,
+  withFederatedSharedKeys,
   type ICompletionOptions,
   PipelineTimer,
   resolveDeprecatedModelId,
@@ -177,7 +178,7 @@ import { createHmac } from 'crypto';
 import { MongoAbility } from '@casl/ability';
 import { Mutex } from 'async-mutex';
 import { z } from 'zod';
-import { getEffectiveLLMApiKeys } from '../apiKeyService';
+import { getEffectiveLLMApiKeys, sharedAdminKeyProviders } from '../apiKeyService';
 import { resolveToolAvailability } from './toolAvailability';
 import { resolveToolConfigSafely } from './resolveToolConfigSafely';
 import type { VideoToolConfig } from './tools/implementation/videoGeneration';
@@ -2433,7 +2434,8 @@ export class ChatCompletionProcess {
       // without this the find returns undefined and the run dies with "Invalid LLM backend".
       const resolvedModelId = resolveDeprecatedModelId(model, 'ChatCompletionProcess');
       const modelInfo = models.find(m => m.id === resolvedModelId);
-      const llm = getLlmByModel(apiKeyTable, {
+      // Federation reaches this backend only; apiKeyTable keeps static keys for the direct-SDK consumers below.
+      const llm = getLlmByModel(withFederatedSharedKeys(apiKeyTable, sharedAdminKeyProviders(apiKeyTable)), {
         modelInfo,
         logger,
         endUserId: this.user.id,

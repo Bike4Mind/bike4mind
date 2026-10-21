@@ -578,6 +578,7 @@ export * from './dispatchModel';
 export * from './dispatchResolver';
 export * from './endUserId';
 export * from './mergeCatalog';
+export * from './providerAuth';
 export * from './routeTwinNames';
 export * from './wifTokenSource';
 

@@ -35,7 +35,7 @@ import {
 } from '@bike4mind/utils';
 import type { RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import { measureIdentityNamedExclusion } from '../dataLakeService/getDynamicDataLakeTags';
-import { getEffectiveLLMApiKeys } from '../apiKeyService';
+import { getEffectiveLLMApiKeys, sharedAdminKeyProviders } from '../apiKeyService';
 import type { FabFileNotice } from '@bike4mind/utils';
 import {
   getLlmByModel,
@@ -177,6 +177,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 vi.mock('../apiKeyService', () => ({
   getEffectiveApiKey: vi.fn(),
   getEffectiveLLMApiKeys: vi.fn(),
+  sharedAdminKeyProviders: vi.fn(),
   // Consumed by resolveToolAvailability (toolAvailability.ts), threaded through
   // ChatCompletionProcess into ToolBuilder.buildTools - default to "not configured" so
   // resolveToolAvailability computes real (all-false) values instead of hitting its
@@ -12092,6 +12093,28 @@ describe('prompt moderation', () => {
     const instance = vi.mocked(OpenaiModerationsService).mock.instances[0] as any;
     expect(instance.checkPrompt).toHaveBeenCalledWith('Hello');
     expect(BedrockGuardrailsService).not.toHaveBeenCalled();
+  });
+
+  it('federates only the chat backend: moderation keeps the static admin key', async () => {
+    wireModMocks({ openaiKey: 'demo-key', guardrailId: null });
+    vi.mocked(sharedAdminKeyProviders).mockReturnValue({ openai: true, anthropic: false });
+    vi.stubEnv('B4M_PROVIDER_AUTH', 'federated');
+    vi.spyOn(service as any, 'getDefaultSettingValue').mockImplementation((key: string) =>
+      key === 'ModerationEnabled' ? true : false
+    );
+
+    try {
+      await service.process({ body: startParams, logger: mockLogger });
+    } finally {
+      vi.unstubAllEnvs();
+      vi.mocked(sharedAdminKeyProviders).mockReset();
+    }
+
+    expect(OpenaiModerationsService).toHaveBeenCalledWith('demo-key', expect.anything());
+    expect(mockedGetLlmByModel).toHaveBeenCalledWith(
+      expect.objectContaining({ openai: 'federated' }),
+      expect.anything()
+    );
   });
 
   it('calls BedrockGuardrailsService when no OpenAI key but guardrail is configured', async () => {
