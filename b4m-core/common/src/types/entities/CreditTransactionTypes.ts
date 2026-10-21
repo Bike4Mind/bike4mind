@@ -93,8 +93,9 @@ export const GenericCreditAddTransaction = BaseCreditTransaction.extend({
 });
 
 /**
- * Known reasons for generic credit deductions.
- * New callers should use one of these values - not a free-form string.
+ * Built-in reasons for generic credit deductions; they seed the registry below.
+ * A package that needs its own reason registers it with registerGenericDeductReason
+ * instead of adding it here.
  */
 export const GenericDeductReasons = [
   'dispute_clawback',
@@ -109,7 +110,51 @@ export const GenericDeductReasons = [
   'credit_expiry',
 ] as const;
 
-export type GenericDeductReason = (typeof GenericDeductReasons)[number];
+/**
+ * Type-level extension point: a package that registers a reason at runtime also adds it here
+ * through declaration merging, e.g. `declare module '@bike4mind/common' { interface
+ * GenericDeductReasonExtensions { my_reason: true } }`.
+ */
+export interface GenericDeductReasonExtensions {}
+
+export type GenericDeductReason = (typeof GenericDeductReasons)[number] | keyof GenericDeductReasonExtensions;
+
+const GENERIC_DEDUCT_REASON_PATTERN = /^[a-z][a-z0-9_]*$/;
+
+// Kept on globalThis so two loaded copies of this module (CJS and ESM, or two bundles in one
+// process) validate against the same set.
+const GENERIC_DEDUCT_REASON_REGISTRY_KEY = Symbol.for('b4m.credit.genericDeductReasons');
+
+function genericDeductReasonRegistry(): Set<string> {
+  const holder = globalThis as unknown as Record<symbol, Set<string> | undefined>;
+  let registry = holder[GENERIC_DEDUCT_REASON_REGISTRY_KEY];
+  if (!registry) {
+    registry = new Set<string>(GenericDeductReasons);
+    holder[GENERIC_DEDUCT_REASON_REGISTRY_KEY] = registry;
+  }
+  return registry;
+}
+
+/**
+ * Adds a reason that `generic_deduct` transactions may carry. Idempotent. Must run before the
+ * first transaction with that reason is parsed, since validation reads the registry at parse time.
+ */
+export function registerGenericDeductReason(reason: string): void {
+  if (typeof reason !== 'string' || !GENERIC_DEDUCT_REASON_PATTERN.test(reason)) {
+    throw new Error(
+      `Invalid generic deduct reason ${JSON.stringify(reason)}: expected lowercase snake_case matching ${GENERIC_DEDUCT_REASON_PATTERN}`
+    );
+  }
+  genericDeductReasonRegistry().add(reason);
+}
+
+export function isGenericDeductReason(value: unknown): value is GenericDeductReason {
+  return typeof value === 'string' && genericDeductReasonRegistry().has(value);
+}
+
+export function listGenericDeductReasons(): readonly string[] {
+  return [...genericDeductReasonRegistry()];
+}
 
 /**
  * Generic credit deduction transaction for legacy data and flexible use cases
@@ -123,9 +168,12 @@ export const GenericCreditDeductTransaction = BaseCreditTransaction.extend({
    */
   userId: z.string().optional(),
   /**
-   * Reason/source for the transaction. Use GenericDeductReasons for new callers.
+   * Reason/source for the transaction: a built-in GenericDeductReasons value or one added with
+   * registerGenericDeductReason.
    */
-  reason: z.enum(GenericDeductReasons).optional(),
+  reason: z
+    .custom<GenericDeductReason>(isGenericDeductReason, { message: 'Unregistered generic deduct reason' })
+    .optional(),
   /**
    * Stripe dispute ID - set for dispute clawback transactions.
    * Used for idempotency (unique sparse index prevents duplicate clawbacks).
@@ -251,6 +299,9 @@ export const TransferCreditTransaction = BaseCreditTransaction.extend({
  * 5. apps/client/app/components/ProfileModal/CreditAnalyticsTabContent.tsx - Add filtering and display logic
  *
  * Failure to sync these files will cause validation errors in MongoDB.
+ *
+ * A new `generic_deduct` reason is not a new type: register it with registerGenericDeductReason
+ * rather than adding it to GenericDeductReasons.
  */
 export const CreditTransaction = z.discriminatedUnion('type', [
   PurchaseTransaction,
