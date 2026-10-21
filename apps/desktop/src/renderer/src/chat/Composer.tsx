@@ -88,6 +88,7 @@ export function Composer({
   returned,
   onReturnedConsumed,
   fill,
+  onFillConsumed,
   footer,
   leading,
   skills,
@@ -161,6 +162,7 @@ export function Composer({
    * chat's suggestion. Taken once per id, like `returned`, so picking the same card twice works.
    */
   fill?: { id: number; text: string } | null;
+  onFillConsumed?: () => void;
   /** Controls that belong to the next turn rather than to the app - the model picker. */
   footer?: ReactNode;
   /**
@@ -280,7 +282,8 @@ export function Composer({
     consumedFill.current = fill.id;
     setText(fill.text);
     setCaretRequest(request => request + 1);
-  }, [fill]);
+    onFillConsumed?.();
+  }, [fill, onFillConsumed]);
   // After the commit that put the text in, so the caret lands past it and not at its old length.
   useLayoutEffect(() => {
     const el = textareaRef.current;
