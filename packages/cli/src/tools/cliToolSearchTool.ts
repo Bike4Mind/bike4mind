@@ -7,6 +7,8 @@ import {
 } from '@bike4mind/agents';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 
+export const TOOL_SEARCH_TOOL_NAME = 'tool_search';
+
 export interface CliToolSearchToolOptions {
   registry: DeferredToolRegistry;
   logger?: ToolSearchLogger;
@@ -18,6 +20,8 @@ export interface CliToolSearchToolOptions {
 /**
  * The `tool_reference` blocks a `toolReference` tool_search result serializes to, or null for any
  * other text (a no-match hint, a mutateTools result, or a result with an appended warning).
+ * Extra keys are tolerated so a field added to the core serializer does not silently disable the
+ * native path.
  */
 export function parseToolReferences(text: string): ToolReferenceBlock[] | null {
   let parsed: unknown;
@@ -30,7 +34,6 @@ export function parseToolReferences(text: string): ToolReferenceBlock[] | null {
   const isReference = (block: unknown): block is ToolReferenceBlock =>
     typeof block === 'object' &&
     block !== null &&
-    Object.keys(block).length === 2 &&
     (block as ToolReferenceBlock).type === 'tool_reference' &&
     typeof (block as ToolReferenceBlock).tool_name === 'string';
   return parsed.every(isReference) ? parsed : null;
@@ -58,7 +61,9 @@ export function createCliToolSearchTool(options: CliToolSearchToolOptions): ICom
         const liveTools = toolListAccessor();
         const liveNames = new Set(liveTools.map(t => t.toolSchema.name));
         for (const tool of registry.getByNames(references.map(r => r.tool_name))) {
-          if (!liveNames.has(tool.toolSchema.name)) liveTools.push(tool);
+          if (liveNames.has(tool.toolSchema.name)) continue;
+          liveNames.add(tool.toolSchema.name);
+          liveTools.push(tool);
         }
       }
       return result;

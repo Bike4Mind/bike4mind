@@ -29,12 +29,17 @@ describe('parseToolReferences', () => {
     ]);
   });
 
+  it('tolerates a field the core serializer may add later', () => {
+    expect(parseToolReferences('[{"type":"tool_reference","tool_name":"a","extra":1}]')).toEqual([
+      { type: 'tool_reference', tool_name: 'a', extra: 1 },
+    ]);
+  });
+
   it.each([
     ['plain text', 'tool_search: no deferred tools matched query "x".'],
     ['an empty array', '[]'],
     ['a non-array', '{"type":"tool_reference","tool_name":"a"}'],
     ['another block type', '[{"type":"text","text":"a"}]'],
-    ['an extra key', '[{"type":"tool_reference","tool_name":"a","x":1}]'],
     ['a non-string name', '[{"type":"tool_reference","tool_name":1}]'],
     ['a trailing warning', '[{"type":"tool_reference","tool_name":"a"}]\n\nWarning: repeated call'],
   ])('is null for %s', (_label, text) => {
@@ -88,6 +93,25 @@ describe('createCliToolSearchTool', () => {
     await tool.toolFn({ query: 'select:slack__post' });
     await tool.toolFn({ query: 'select:slack__post' });
     expect(names(liveTools)).toEqual(['read_file', 'slack__post']);
+  });
+
+  it('does not add a tool twice when one query names it twice', async () => {
+    const { liveTools, tool } = setup(() => true);
+    await tool.toolFn({ query: 'select:slack__post,slack__post' });
+    expect(names(liveTools)).toEqual(['read_file', 'slack__post']);
+  });
+
+  it('rejects before the agent tools are wired, without touching the live list', async () => {
+    const { registry } = setup(() => true);
+    const tool = createCliToolSearchTool({
+      registry,
+      toolListAccessor: () => {
+        throw new Error('tool_search invoked before agent context was wired');
+      },
+      useToolReference: () => true,
+    });
+
+    await expect(tool.toolFn({ query: 'select:slack__post' })).rejects.toThrow(/before agent context was wired/);
   });
 
   it('passes a no-match hint through and leaves the live list alone', async () => {
