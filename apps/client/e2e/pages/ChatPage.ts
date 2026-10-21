@@ -264,6 +264,25 @@ export class ChatPage extends BasePage {
   }
 
   /**
+   * Whether the newest reply carries a model-emitted artifact. The rendered cards alone cannot
+   * answer this: the client also promotes plain fenced code (python, mermaid, react, html) into
+   * artifact cards, so an ordinary chat reply containing a snippet renders one too. The app tags
+   * the reply root from its raw text instead (`data-artifact-tag`, PromptReplies), which only an
+   * `<artifact` tag the model actually wrote sets - and an artifact must also have rendered, so a
+   * reply that merely names the tag in prose does not count.
+   *
+   * One-shot: same caveat as waitForArtifactSettled - it only sees what the stream has delivered.
+   */
+  async hasArtifact(): Promise<boolean> {
+    const root = this.aiResponseRoot.last();
+    if ((await root.getAttribute('data-artifact-tag')) !== 'true') return false;
+    const artifact = root.locator(
+      '[data-testid^="artifact-renderer-"], [data-testid="generating-artifact-indicator"], [data-testid="artifact-loading"]'
+    );
+    return (await artifact.count()) > 0;
+  }
+
+  /**
    * Waits for the artifact placeholders to clear on the newest reply, so a text scrape reads
    * the resolved content instead of a spinner.
    *
@@ -284,19 +303,6 @@ export class ChatPage extends BasePage {
    * count is already 0 and this returns at once. Fine for these prompts, which do stream an
    * artifact - revisit if a prompt relies on this as proof one mounted.
    */
-  /**
-   * Whether the newest reply carries an artifact: a mounted renderer (`artifact-renderer-<type>`,
-   * ArtifactRenderer) or either pending placeholder. Counting the placeholders catches a reply
-   * whose stream ended before the renderer mounted.
-   */
-  async hasArtifact(): Promise<boolean> {
-    const root = this.aiResponseRoot.last();
-    const artifact = root.locator(
-      '[data-testid^="artifact-renderer-"], [data-testid="generating-artifact-indicator"], [data-testid="artifact-loading"]'
-    );
-    return (await artifact.count()) > 0;
-  }
-
   async waitForArtifactSettled(timeout: number = TIMEOUTS.IMAGE_GENERATION) {
     const root = this.aiResponseRoot.last();
     const generating = root.getByTestId('generating-artifact-indicator');

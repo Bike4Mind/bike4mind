@@ -35,6 +35,12 @@ import type { PromptScenario, PromptResult } from '../../../apps/client/e2e/ai-l
  * results file - one that reports a healthy average for a cell that timed out.
  */
 
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+const CHAT_PAGE = path.join(REPO, 'apps/client/e2e/pages/ChatPage.ts');
+const PROMPT_REPLIES = path.join(REPO, 'apps/client/app/components/Session/PromptReplies.tsx');
+const ARTIFACT_RENDERER = path.join(REPO, 'apps/client/app/components/Session/artifacts/ArtifactRenderer.tsx');
+const readSource = (file: string) => fs.readFileSync(file, 'utf8');
+
 const scenario = (over: Partial<PromptScenario> = {}): PromptScenario => ({
   id: 'p',
   prompt: 'prompt text',
@@ -412,10 +418,6 @@ describe('describeStall', () => {
 });
 
 describe('ChatPage reply reader', () => {
-  const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
-  const CHAT_PAGE = path.join(REPO, 'apps/client/e2e/pages/ChatPage.ts');
-  const PROMPT_REPLIES = path.join(REPO, 'apps/client/app/components/Session/PromptReplies.tsx');
-
   it('reads replies from the body inside the root container, never the <p>-only ai-response id', () => {
     // ChatPage imports Playwright, so no vitest project can load it; the selector is pinned as
     // text. Reverting to `ai-response` brings back the list-only-reply stall above.
@@ -488,16 +490,18 @@ describe('unexpected artifact on a chat prompt', () => {
 });
 
 describe('ChatPage artifact detector', () => {
-  it('matches the renderer test id and both placeholders the app mounts', () => {
-    const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
-    const chatPage = fs.readFileSync(path.join(REPO, 'apps/client/e2e/pages/ChatPage.ts'), 'utf8');
-    const renderer = fs.readFileSync(
-      path.join(REPO, 'apps/client/app/components/Session/artifacts/ArtifactRenderer.tsx'),
-      'utf8'
-    );
-    expect(chatPage).toContain('[data-testid^="artifact-renderer-"]');
-    expect(renderer).toContain('data-testid={`artifact-renderer-${artifact.type}`}');
-    expect(chatPage).toContain('[data-testid="generating-artifact-indicator"]');
-    expect(chatPage).toContain('[data-testid="artifact-loading"]');
+  it('keys on the raw artifact tag, so a promoted code fence stays a chat reply', () => {
+    // ChatPage imports Playwright, so no vitest project can load it; the wiring is pinned as text.
+    // The client promotes plain ```python/```mermaid fences into artifact cards too, so a detector
+    // that trusted the renderer test id alone would drop ordinary chat replies from the gate.
+    expect(readSource(CHAT_PAGE)).toContain('data-artifact-tag');
+    expect(readSource(PROMPT_REPLIES)).toMatch(/data-artifact-tag=\{hasArtifactTag\(/);
+  });
+
+  it('pins the placeholder test ids against the components that mount them', () => {
+    expect(readSource(ARTIFACT_RENDERER)).toContain('data-testid={`artifact-renderer-${artifact.type}`}');
+    expect(readSource(CHAT_PAGE)).toContain('getByTestId(\'generating-artifact-indicator\')');
+    expect(readSource(PROMPT_REPLIES)).toContain('data-testid="generating-artifact-indicator"');
+    expect(readSource(ARTIFACT_RENDERER)).toContain('data-testid="artifact-loading"');
   });
 });

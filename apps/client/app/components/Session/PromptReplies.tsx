@@ -95,7 +95,7 @@ import {
   noteReplyInFlight,
   settleReplyInFlight,
 } from '@client/app/utils/uiSideEffectDispatcher';
-import { getReplyTruncationState, repairTruncatedArtifact } from '@client/app/utils/replyTruncation';
+import { getReplyTruncationState, hasArtifactTag, repairTruncatedArtifact } from '@client/app/utils/replyTruncation';
 import { GitHubProjectActionTarget } from './GitHubProjectActionTarget';
 
 import SearchResultCards from './SearchResultCards';
@@ -1543,6 +1543,9 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   return (
     <Box
       data-testid="ai-response-root-container"
+      // Only a model-emitted <artifact> tag sets this; the parser also promotes plain fenced
+      // code to artifact cards below, so the rendered cards alone cannot tell the two apart.
+      data-artifact-tag={hasArtifactTag(cleanReply) ? 'true' : undefined}
       sx={{
         display: 'flex',
         justifyContent: 'center',

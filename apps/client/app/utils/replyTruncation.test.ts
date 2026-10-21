@@ -1,8 +1,29 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { parseArtifactsWithFallback } from './artifactParser';
-import { getReplyTruncationState, repairTruncatedArtifact } from './replyTruncation';
+import { getReplyTruncationState, hasArtifactTag, repairTruncatedArtifact } from './replyTruncation';
 
 const OPEN_ARTIFACT = '<artifact identifier="x" type="text/html" title="Dashboard"><html><body>';
+
+describe('hasArtifactTag', () => {
+  it('sees a tag the model wrote, closed or still streaming', () => {
+    expect(hasArtifactTag(OPEN_ARTIFACT)).toBe(true);
+    expect(hasArtifactTag('Done.\n<artifact identifier="y" type="text/html"></artifact>')).toBe(true);
+    expect(hasArtifactTag('<ARTIFACT identifier="z">')).toBe(true);
+  });
+
+  it('does not count a code fence the parser would promote to an artifact', () => {
+    // A chat answer with a python snippet renders an artifact card, but the model never emitted
+    // an artifact - so this must stay a chat reply.
+    expect(hasArtifactTag('Try this:\n```python\nimport math\ndef area(r):\n    return math.pi * r * r\n```')).toBe(
+      false
+    );
+    expect(hasArtifactTag('Plain answer, no cards.')).toBe(false);
+  });
+
+  it('does not match a tag named in a code span without the artifact word boundary', () => {
+    expect(hasArtifactTag('Use <artifacts> in your markup.')).toBe(false);
+  });
+});
 
 describe('getReplyTruncationState', () => {
   describe('truncated before any artifact tag (#1052)', () => {
