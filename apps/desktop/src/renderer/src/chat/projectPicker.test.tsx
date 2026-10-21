@@ -83,6 +83,22 @@ describe('cancelling the folder picker', () => {
     );
   });
 
+  it('leaves the worktree off by default', async () => {
+    pickProjectDirectory.mockResolvedValue('/other');
+    inspectProject.mockResolvedValue({ isRepository: true, branches: ['main'], currentBranch: 'main' });
+    updateProject.mockResolvedValue({ ok: true, session: PROJECT });
+
+    await act(async () => binding.pickDirectory());
+
+    expect(inspectProject).toHaveBeenCalledWith('/other');
+    expect(updateProject).toHaveBeenCalledWith({
+      sessionId: SESSION,
+      directory: '/other',
+      branch: 'main',
+      workspace: false,
+    });
+  });
+
   it('leaves the worktree off for a folder that cannot hold one', async () => {
     setWorktreeByDefault(true);
     pickProjectDirectory.mockResolvedValue('/plain');
