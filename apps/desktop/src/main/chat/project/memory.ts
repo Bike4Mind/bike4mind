@@ -1,7 +1,7 @@
 import { mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { isWithin, realpathNearest } from '../tools/paths';
-import { credentialPaths } from '../tools/sandbox';
+import { secretPaths } from '../tools/sandbox';
 import { containerDirectory } from './git';
 
 /** The index, loaded into every session; one line per memory and never a memory's contents. */
@@ -80,22 +80,13 @@ export function assertMemoryName(name: string): string {
 }
 
 /**
- * The credential stores, minus the instructions root itself.
- *
- * Same subtraction `instructions.ts:resolveAllowed` makes and for the same reason: that list
- * names ~/.claude, which is the folder this whole feature reads and writes inside, so the one
- * blanket entry cannot stand while every other store - ~/.ssh, ~/.aws, the app's own vault -
- * still must. What replaces it here is narrower than the .md rule there: a memory can only ever
- * be <store>/<kebab-case-name>.md, so .credentials.json is unnameable.
- *
- * Resolved like the roots are, because the candidate is compared after symlinks are collapsed
- * and a deny entry left in its unresolved spelling would never match one - and would fail open.
- * Not `realpathNearest`: a store that does not exist must stay itself rather than collapsing to
- * its nearest existing ancestor, which for ~/.ssh is the whole home folder.
+ * The secret stores, resolved like the roots are: the candidate is compared after symlinks are
+ * collapsed, and a deny entry left in its unresolved spelling would never match one - and would
+ * fail open. Not `realpathNearest`: a store that does not exist must stay itself rather than
+ * collapsing to its nearest existing ancestor, which for ~/.ssh is the whole home folder.
  */
-async function deniedPaths(userInstructionsRoot: string): Promise<string[]> {
-  const paths = credentialPaths().filter(path => path !== userInstructionsRoot);
-  return Promise.all(paths.map(path => realpath(path).catch(() => resolve(path))));
+async function deniedPaths(): Promise<string[]> {
+  return Promise.all(secretPaths().map(path => realpath(path).catch(() => resolve(path))));
 }
 
 /**
@@ -114,7 +105,7 @@ export async function resolveMemoryPath(store: MemoryStore, name: string): Promi
   const [real, root, denied] = await Promise.all([
     realpathNearest(lexical),
     realpathNearest(store.directory),
-    deniedPaths(store.userInstructionsRoot),
+    deniedPaths(),
   ]);
 
   if (!isWithin(root, real)) throw new Error(`Refused: ${name} does not resolve inside the memory folder.`);

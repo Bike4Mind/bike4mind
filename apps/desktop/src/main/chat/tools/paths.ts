@@ -1,5 +1,8 @@
-import { realpath } from 'node:fs/promises';
-import { dirname, isAbsolute, join, parse, resolve, sep } from 'node:path';
+import { readlink, realpath } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join, parse, resolve, sep } from 'node:path';
+
+/** The kernel's own limit (MAXSYMLINKS); past it the open fails with ELOOP anyway. */
+const MAX_LINK_HOPS = 32;
 
 /**
  * Thrown when a tool is pointed outside every granted root. Carries no filesystem detail
@@ -53,7 +56,7 @@ export async function resolveWithinRoots(
   const lexical = isAbsolute(requested) || !baseDirectory ? resolve(requested) : resolve(baseDirectory, requested);
   const realRoots = await Promise.all(roots.map(root => realpath(root).catch(() => resolve(root))));
 
-  const real = await realpathNearest(lexical);
+  const real = await physicalTarget(lexical);
   if (!realRoots.some(root => isWithin(root, real))) throw new PathAccessDenied(requested);
 
   // The lexical path is what the caller gets back: `real` may point at the symlink TARGET,
@@ -124,5 +127,24 @@ export async function realpathNearest(target: string): Promise<string> {
       if (parent === current) return current;
       current = parent;
     }
+  }
+}
+
+/**
+ * Where opening `target` would land, every symlink followed - including a dangling one, which
+ * `open(O_CREAT)` follows to create its target. `realpathNearest` stops at the nearest existing
+ * ancestor, so a link in a granted folder aimed at a file that does not exist yet would look
+ * like a new file inside the folder.
+ */
+export async function physicalTarget(target: string, hops = 0): Promise<string> {
+  try {
+    return await realpath(target);
+  } catch {
+    const parent = dirname(target);
+    if (parent === target) return target;
+    const directory = await physicalTarget(parent, hops);
+    const link = hops < MAX_LINK_HOPS ? await readlink(target).catch(() => null) : null;
+    if (link === null) return join(directory, basename(target));
+    return physicalTarget(resolve(directory, link), hops + 1);
   }
 }

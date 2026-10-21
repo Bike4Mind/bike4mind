@@ -36,6 +36,13 @@ describe('resolveWithinRoots', () => {
     await expect(resolveWithinRoots(target, [granted])).resolves.toBe(target);
   });
 
+  // writeFile follows a dangling link to create its target, so the target is what must be inside.
+  it('denies a dangling symlink that points outside every root', async () => {
+    const link = join(granted, 'later.txt');
+    await symlink(join(base, 'outside', 'new.txt'), link);
+    await expect(resolveWithinRoots(link, [granted])).rejects.toBeInstanceOf(PathAccessDenied);
+  });
+
   it('denies a sibling folder that merely shares the granted prefix', async () => {
     const sibling = join(base, 'granted-secret');
     await mkdir(sibling, { recursive: true });
