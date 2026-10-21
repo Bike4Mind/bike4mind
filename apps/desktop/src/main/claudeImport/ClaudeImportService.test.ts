@@ -2,6 +2,7 @@ import { copyFile, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { ChatSession } from '@shared/chat';
 import { IPC_CHANNELS } from '@shared/ipc';
 import { SessionStore } from '../chat/SessionStore';
 import { codeSessionId, importScopeTag } from './ClaudeCodeSync';
@@ -127,6 +128,57 @@ describe('ClaudeImportService', () => {
     await service.setCodeSettings({ projects: 'all' });
     await service.syncCode();
     expect((await store.list()).map(session => session.id)).toEqual([SESSION_ID]);
+  });
+
+  it('re-files and prunes existing copies at launch, with sync off', async () => {
+    const { root, service, store } = await setup();
+    const repository = join(root, 'repo');
+    const worktree = join(repository, '.claude', 'worktrees', 'wt');
+    await mkdir(worktree, { recursive: true });
+    const copy = (id: string, cwd: string, extra: Partial<ChatSession['importOrigin']> = {}): ChatSession => ({
+      id,
+      title: id,
+      model: 'm',
+      createdAt: 'x',
+      updatedAt: 'x',
+      mode: 'code',
+      approvalMode: 'ask',
+      reasoningEffort: 'default',
+      project: {
+        directory: cwd,
+        name: 'old',
+        branch: 'b',
+        workspace: false,
+        workingDirectory: cwd,
+        contextDirectories: [],
+      },
+      importOrigin: {
+        kind: 'claude-code',
+        sourceId: id,
+        importedAt: 'x',
+        sourceUpdatedAt: 'x',
+        cwd,
+        gitBranch: 'b',
+        ...extra,
+      },
+      messages: [{ id: 'cc-1', role: 'user', content: 'hi', createdAt: 'x' }],
+    });
+    await store.putImported(copy('cc-in', worktree));
+    await store.putImported(copy('cc-out', join(repository, '.manifold', 'worktrees', 'run')));
+    await store.putImported(copy('cc-kept', join(repository, '.manifold', 'worktrees', 'run'), { forkedAt: 'x' }));
+    await store.putImported(copy('cca-agent', worktree, { parentSourceId: 'cc-in' }));
+
+    service.onScopeChanged();
+    await vi.waitUntil(async () => (await store.get('cc-out')) === null, { timeout: 3000 });
+    expect((await store.list()).map(session => session.id).sort()).toEqual(['cc-in', 'cc-kept']);
+    expect((await store.get('cc-in'))!.project).toMatchObject({
+      directory: repository,
+      name: 'repo',
+      workspace: true,
+      workspaceBranch: 'b',
+      workingDirectory: worktree,
+    });
+    expect((await service.state()).code.settings.enabled).toBe(false);
   });
 
   it('filters by project', async () => {

@@ -1,4 +1,5 @@
-import type { ChatSessionMode, ChatSessionSummary } from '@shared/chat';
+import type { ChatProject, ChatSessionMode, ChatSessionSummary } from '@shared/chat';
+import { claudeWorktreeOf } from '@shared/claudeImport';
 import {
   EMPTY_SIDEBAR_SECTIONS,
   sectionOf,
@@ -106,12 +107,20 @@ export function groupSessions(
       loose.push(session);
       continue;
     }
-    const group = byDirectory.get(project.directory);
+    const { directory, name } = projectGroupOf(project);
+    const group = byDirectory.get(directory);
     if (group) group.sessions.push(session);
-    else byDirectory.set(project.directory, { directory: project.directory, name: project.name, sessions: [session] });
+    else byDirectory.set(directory, { directory, name, sessions: [session] });
   }
 
   return { pinned, custom, projects: [...byDirectory.values()], loose, archived, imported };
+}
+
+/** A project picked inside a Claude Code worktree belongs with its repository, not a group of its own. */
+function projectGroupOf(project: ChatProject): { directory: string; name: string } {
+  const repository = claudeWorktreeOf(project.directory)?.repository;
+  if (!repository) return { directory: project.directory, name: project.name };
+  return { directory: repository, name: repository.split(/[\\/]/).filter(Boolean).pop() ?? repository };
 }
 
 /** How many rows the modifier-plus-digit shortcut reaches. */

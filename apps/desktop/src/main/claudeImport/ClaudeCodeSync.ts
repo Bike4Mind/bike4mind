@@ -9,6 +9,7 @@ import type {
   ClaudeCodeProject,
   ClaudeImportCounts,
 } from '@shared/claudeImport';
+import { claudeWorktreeOf } from '@shared/claudeImport';
 import { deriveTitle, isForkedImport, type SessionStore } from '../chat/SessionStore';
 import {
   applyCodeEvent,
@@ -166,16 +167,6 @@ export async function peekTranscript(transcript: IndexedTranscript): Promise<Cod
   parseLines(head, state);
   parseLines(tail, state);
   return state;
-}
-
-/**
- * `<repository>/.claude/worktrees/<name>`, the worktrees Claude Code makes for its own sessions.
- * Only sessions that ran in one sync: other tools drive Claude Code from worktrees of their own
- * (and the CLI runs anywhere), and those are not the user's sessions to mirror.
- */
-export function claudeWorktreeOf(cwd: string | undefined): { repository: string; worktree: string } | null {
-  const match = cwd ? /^(.+?)[\\/]\.claude[\\/]worktrees[\\/]([^\\/]+)/.exec(cwd) : null;
-  return match ? { repository: match[1], worktree: match[0] } : null;
 }
 
 /** The project filter names repositories, so all of a repository's worktrees go together. */
@@ -425,3 +416,4 @@ export async function runQueue<T>(items: readonly T[], limit: number, work: (ite
 }
 
 export type { ScopeImportState };
+export { claudeWorktreeOf };

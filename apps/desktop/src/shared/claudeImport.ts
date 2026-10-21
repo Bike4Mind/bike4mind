@@ -124,3 +124,14 @@ export interface ClaudeRemoveResult {
 /** Where the claude.ai export lives, for the Settings link. */
 export const CLAUDE_EXPORT_HELP_URL =
   'https://support.claude.com/en/articles/9450526-how-can-i-export-my-claude-ai-data';
+
+/**
+ * `<repository>/.claude/worktrees/<name>`, the worktrees Claude Code makes for its own sessions.
+ * The sidebar files every session in one under its repository, and only sessions that ran in
+ * one sync from Claude Code: other tools drive Claude Code from worktrees of their own
+ * (and the CLI runs anywhere), and those are not the user's sessions to mirror.
+ */
+export function claudeWorktreeOf(cwd: string | undefined): { repository: string; worktree: string } | null {
+  const match = cwd ? /^(.+?)[\\/]\.claude[\\/]worktrees[\\/]([^\\/]+)/.exec(cwd) : null;
+  return match ? { repository: match[1], worktree: match[0] } : null;
+}

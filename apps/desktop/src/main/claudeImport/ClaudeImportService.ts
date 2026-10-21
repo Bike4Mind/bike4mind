@@ -22,12 +22,18 @@ import {
   matchesFilter,
   needsImport,
   peekTranscript,
+  projectFor,
   projectsOf,
   runQueue,
   type IndexedTranscript,
 } from './ClaudeCodeSync';
 import type { PendingAttachment } from './claudeCodeMapper';
-import { ImportStateStore, type ClaudeImportSettings, type ScopeImportState } from './ImportStateStore';
+import {
+  ImportStateStore,
+  type ClaudeImportSettings,
+  type FileCursor,
+  type ScopeImportState,
+} from './ImportStateStore';
 
 /** Low on purpose: an import is background work and must never compete with a reply. */
 const IMPORT_CONCURRENCY = 2;
@@ -72,6 +78,8 @@ export class ClaudeImportService {
   private chatTimer: NodeJS.Timeout | null = null;
   private sessionsTimer: NodeJS.Timeout | null = null;
   private startTimer: NodeJS.Timeout | null = null;
+  /** Scopes whose existing copies were brought in line this launch; see tidyImports. */
+  private readonly tidied = new Set<string>();
   private disposed = false;
   private removing = false;
   /** Settings writes are read-modify-write; two quick clicks must not lose one of them. */
@@ -230,8 +238,54 @@ export class ClaudeImportService {
   }
 
   private async autoSync(): Promise<void> {
+    const scopeKey = this.deps.scopeKey();
+    if (!scopeKey) return;
+    if (!this.tidied.has(scopeKey)) {
+      this.tidied.add(scopeKey);
+      await this.tidyImports(scopeKey).catch(error =>
+        this.deps.logger.warn(`CLAUDE IMPORT: could not tidy imported sessions: ${String(error)}`)
+      );
+    }
     const settings = await this.states.readSettings();
-    if (settings.code.enabled && this.deps.scopeKey()) await this.syncCode();
+    if (settings.code.enabled) await this.syncCode();
+  }
+
+  /**
+   * Brings the copies already on disk in line with what syncs now, with sync on or off: ones
+   * outside the scope or filter go, and ones an older mapping filed elsewhere move to their
+   * repository's project. Reads only the session store, never a transcript, so with sync off
+   * nothing new comes in. Continued sessions are the user's and are left as they are.
+   */
+  private async tidyImports(scopeKey: string): Promise<void> {
+    const settings = await this.states.readSettings();
+    const scope = await this.states.scope(scopeKey);
+    const pathOf = new Map(Object.entries(scope.files).map(([path, cursor]) => [cursor.sessionId, path]));
+    let changed = false;
+    for (const summary of await this.deps.listSessions()) {
+      const origin = summary.importOrigin;
+      if (origin?.kind !== 'claude-code' || origin.forkedAt) continue;
+      if (this.disposed || this.removing || this.deps.scopeKey() !== scopeKey) break;
+      const path = pathOf.get(summary.id);
+      const cursor = path ? scope.files[path] : undefined;
+      const wanted =
+        matchesFilter(origin.cwd, settings.code) && (settings.code.includeSubagents || !origin.parentSourceId);
+      if (!wanted) {
+        await this.deps.deleteSession(summary.id);
+        if (path && cursor) scope.files[path] = pendingCursor(cursor);
+        changed = true;
+        continue;
+      }
+      const project = await projectFor(origin.cwd, origin.gitBranch, isDirectory);
+      if (!project || summary.project?.directory === project.directory) continue;
+      const session = await this.deps.store.getImported(summary.id, scopeKey).catch(() => null);
+      if (!session || isForkedImport(session)) continue;
+      await this.deps.store.putImported({ ...session, project }, scopeKey);
+      changed = true;
+    }
+    if (!changed) return;
+    await this.states.saveScope(scopeKey);
+    this.sessionsChanged();
+    this.pushState();
   }
 
   /** Coalesces: a sync asked for while one runs makes that one go round again once. */
@@ -365,14 +419,7 @@ export class ClaudeImportService {
         scope.files[transcript.path] = { ...cursor, status: 'forked' };
       } else {
         if (existing) await this.deps.deleteSession(cursor.sessionId);
-        scope.files[transcript.path] = {
-          sessionId: cursor.sessionId,
-          size: 0,
-          mtimeMs: 0,
-          offset: 0,
-          status: 'pending',
-          ...(cursor.cwd ? { cwd: cursor.cwd } : {}),
-        };
+        scope.files[transcript.path] = pendingCursor(cursor);
         this.sessionsChanged();
       }
       pruned = true;
@@ -455,15 +502,7 @@ export class ClaudeImportService {
     const scope = await this.states.scope(scopeKey);
     if (kind === 'claude-code') {
       for (const [path, cursor] of Object.entries(scope.files)) {
-        if (cursor.status !== 'forked')
-          scope.files[path] = {
-            sessionId: cursor.sessionId,
-            size: 0,
-            mtimeMs: 0,
-            offset: 0,
-            status: 'pending',
-            ...(cursor.cwd ? { cwd: cursor.cwd } : {}),
-          };
+        if (cursor.status !== 'forked') scope.files[path] = pendingCursor(cursor);
       }
     } else {
       scope.conversations = {};
@@ -573,6 +612,18 @@ export class ClaudeImportService {
     if (which === 'code') this.codeTimer = timer;
     else this.chatTimer = timer;
   }
+}
+
+/** Read again from the top next time it is in scope: the copy it described is gone. */
+function pendingCursor(cursor: FileCursor): FileCursor {
+  return {
+    sessionId: cursor.sessionId,
+    size: 0,
+    mtimeMs: 0,
+    offset: 0,
+    status: 'pending',
+    ...(cursor.cwd ? { cwd: cursor.cwd } : {}),
+  };
 }
 
 /** One lookup per run: a sync while offline would otherwise wait out a timeout per transcript. */

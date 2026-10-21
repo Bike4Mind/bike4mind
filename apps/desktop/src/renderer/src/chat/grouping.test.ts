@@ -241,3 +241,18 @@ describe('user sections', () => {
     expect(inline.loose.map(entry => entry.id)).toEqual(['own', 'imported', 'continued']);
   });
 });
+
+describe('Claude Code worktrees', () => {
+  it('files a project picked inside one under its repository', () => {
+    const sessions = [
+      session({ id: 'root', mode: 'code', project: project('/work/repo', 'repo') }),
+      session({ id: 'tree', mode: 'code', project: project('/work/repo/.claude/worktrees/wt', 'repo') }),
+      session({ id: 'other', mode: 'code', project: project('/work/repo/.manifold/worktrees/run', 'run') }),
+    ];
+    const { projects } = groupSessions(sessions, 'code');
+    expect(projects.map(group => [group.directory, group.name, group.sessions.map(entry => entry.id)])).toEqual([
+      ['/work/repo', 'repo', ['root', 'tree']],
+      ['/work/repo/.manifold/worktrees/run', 'run', ['other']],
+    ]);
+  });
+});
