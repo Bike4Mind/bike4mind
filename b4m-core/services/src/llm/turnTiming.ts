@@ -1,5 +1,6 @@
 import { CloudWatchClient, PutMetricDataCommand, StandardUnit } from '@aws-sdk/client-cloudwatch';
 import type { ITurnRetry, ITurnTiming, TurnRetryReason } from '@bike4mind/common';
+import { MAX_RECORDED_TURN_RETRIES } from '@bike4mind/common';
 import type { TurnTelemetrySink } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import { getHttpStatus, isOverloadedError, isRetryableError } from '@bike4mind/utils';
@@ -11,9 +12,10 @@ export const CHAT_RETRY_METRIC = 'ChatRetry';
 
 /**
  * Bounds the persisted list on a pathological turn (many tool rounds, each retrying). Retries
- * past the cap still log and emit the metric; only the quest record stops growing.
+ * past the cap still log and emit the metric; only the quest record stops growing. Shared with
+ * the client so it can render a full list as a lower bound.
  */
-export const MAX_RECORDED_RETRIES = 50;
+export const MAX_RECORDED_RETRIES = MAX_RECORDED_TURN_RETRIES;
 
 /**
  * Timeouts first: the backends' own idle and request timeouts say "the model may be overloaded",
@@ -138,7 +140,9 @@ export class TurnTimingRecorder {
   constructor(
     private readonly turnStartedAt: Date,
     private readonly processStartedAt: number,
-    private readonly logger?: Logger
+    private readonly logger?: Logger,
+    /** Called after every change, so the quest carries what a backend reported mid-turn. */
+    private readonly onChange?: (timing: ITurnTiming) => void
   ) {
     this.timing = {
       queueMs: Math.max(0, processStartedAt - turnStartedAt.getTime()),
@@ -161,7 +165,9 @@ export class TurnTimingRecorder {
   }
 
   addSemaphoreWait(waitMs: number): void {
-    if (waitMs > 0) this.timing.semaphoreWaitMs += Math.round(waitMs);
+    if (waitMs <= 0) return;
+    this.timing.semaphoreWaitMs += Math.round(waitMs);
+    this.changed();
   }
 
   recordRetry(error: Error, delayMs: number, model: string): ITurnRetry {
@@ -173,15 +179,22 @@ export class TurnTimingRecorder {
       attempt: this.retryCount,
     });
     emitChatRetryMetric(retry, this.logger);
+    this.changed();
     return retry;
   }
 
   recordFallbackHop(): void {
     this.timing.fallbackHops += 1;
+    this.changed();
   }
 
   finish(now = Date.now()): void {
     this.timing.totalMs = Math.max(0, now - this.turnStartedAt.getTime());
+    this.changed();
+  }
+
+  private changed(): void {
+    this.onChange?.(this.snapshot());
   }
 
   /** A copy, so a later record does not mutate what was already handed to the quest. */
