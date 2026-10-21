@@ -154,7 +154,6 @@ export const DEFAULT_MANIFEST = {
   HistoryUploadCompleteFunction: { kind: 'function' },
   ImageProcessor: { kind: 'function' },
   NotebookImportCompleteFunction: { kind: 'function' },
-  SlackEventBus: { kind: 'function' },
   mcpHandler: { kind: 'function', optional: true },
   // --- service ---
   // Always-on chatCompletion HTTP service the frontend dispatches quests to

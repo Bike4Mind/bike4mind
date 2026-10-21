@@ -65,13 +65,18 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     value: ApiKeyScope.WRITE_FILES,
     label: 'Write Files',
     description: 'Upload and modify files',
-    endpoints: ['POST /api/v1/files', 'PATCH|DELETE /api/v1/files/:id'],
+    endpoints: [
+      'POST /api/v1/files',
+      'PATCH|DELETE /api/v1/files/:id',
+      'POST /api/files/createFabFile (datalake:write to tag into a lake)',
+    ],
   },
   {
     value: ApiKeyScope.AI_GENERATE,
     label: 'AI Generate',
     description: 'Use AI generation features',
     endpoints: [
+      'POST /api/v1/sessions',
       'POST /api/v1/image-generations',
       'POST /api/v1/image-edits',
       'POST /api/v1/video-generations',
@@ -192,6 +197,13 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     // Keep in sync with the me:read consent label in app/routes/oauth/consentScopes.ts.
     description: "Read the key owner's own name, plan tier, subscription, credit balance, and entitlements",
     endpoints: ['GET /api/v1/me', 'GET /api/v1/credits'],
+  },
+  {
+    value: ApiKeyScope.SKILLS_READ,
+    label: 'Skill Market: Claude Code feed',
+    // Confined, so it is minted from the Skill Market's "Use in Claude Code" dialog, not the New-Key modals.
+    description: "Read the Claude Code plugin marketplace of an organization's approved Skill Market listings",
+    endpoints: ['GET /api/v1/skills/market/claude-marketplace.json', 'GET /api/v1/skills/market/:id/claude-plugin.zip'],
   },
   {
     value: ApiKeyScope.MARKETING_REPORTS_READ,

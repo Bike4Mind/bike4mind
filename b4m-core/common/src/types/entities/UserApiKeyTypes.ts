@@ -131,6 +131,12 @@ export enum ApiKeyScope {
    * to carry the `qa-ingest` user tag (QA_INGEST_USER_TAG in schemas/qa.ts).
    */
   QA_INGEST = 'qa:ingest',
+  /**
+   * List and download the Claude Code plugin feed of an org's approved Skill Market listings
+   * (`/api/v1/skills/market/*`). Confined: the key ends up in plaintext in `~/.claude/settings.json`,
+   * so it must reach nothing else. Minted from the Skill Market's "Use in Claude Code" dialog.
+   */
+  SKILLS_READ = 'skills:read',
 }
 
 /**
@@ -149,6 +155,7 @@ export const CONFINED_API_KEY_SCOPES: readonly ApiKeyScope[] = [
   ApiKeyScope.EMBED_CHAT,
   ApiKeyScope.OVERWATCH_INGEST_WRITE,
   ApiKeyScope.QA_INGEST,
+  ApiKeyScope.SKILLS_READ,
 ];
 
 export enum ApiKeyStatus {

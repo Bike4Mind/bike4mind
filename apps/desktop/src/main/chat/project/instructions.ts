@@ -2,7 +2,7 @@ import { readFile, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { isWithin, realpathNearest } from '../tools/paths';
-import { credentialPaths } from '../tools/sandbox';
+import { protectionFor } from '../tools/sandbox';
 import { MEMORY_INDEX_FILE, type MemoryStore } from './memory';
 
 /**
@@ -86,7 +86,6 @@ class Budget {
 interface Allowed {
   /** Real paths an import may resolve inside. */
   roots: readonly string[];
-  denied: readonly string[];
 }
 
 interface ImportContext {
@@ -149,19 +148,7 @@ async function readMemoryIndex(memory: MemoryStore, context: ImportContext): Pro
 }
 
 async function resolveAllowed(directories: readonly string[], userInstructionsRoot: string): Promise<Allowed> {
-  const [roots, denied] = await Promise.all([
-    realPaths([...directories, userInstructionsRoot]),
-    // `credentialPaths()` lists ~/.claude, which is also where the user's instructions live, so
-    // that one entry cannot stand: the feature is reading a file inside it. Every other store -
-    // ~/.ssh, ~/.aws, the app's own token vault - still applies, and what replaces the blanket
-    // denial over ~/.claude is the .md rule in `resolveImport`, which keeps .credentials.json out.
-    //
-    // Resolved like the roots are, and for the same reason sandbox.ts resolves its own copies:
-    // the candidate is compared after symlinks are collapsed, so a deny entry left in its
-    // unresolved spelling would never match one - and would fail open.
-    realPaths(credentialPaths().filter(path => path !== userInstructionsRoot)),
-  ]);
-  return { roots, denied };
+  return { roots: await realPaths([...directories, userInstructionsRoot]) };
 }
 
 /** Each path with symlinks collapsed, falling back to the lexical form when it does not exist. */
@@ -293,11 +280,11 @@ async function resolveImport(spec: string, importerPath: string, context: Import
   // rather than by whether it is there - the reason it was refused must not answer "does
   // /Users/someone/secrets exist" for anything outside the roots.
   const real = await realpathNearest(lexical);
-  const { roots, denied } = await context.allowed();
+  const { roots } = await context.allowed();
   if (!roots.some(root => isWithin(root, real))) {
     throw new Error('refused, outside this project and your instructions folder');
   }
-  if (denied.some(path => isWithin(path, real))) throw new Error('refused, a protected path');
+  if (protectionFor([lexical, real], 'read')) throw new Error('refused, a protected path');
 
   // The lexical spelling is what gets read: `real` may be a symlink's target, and reading that
   // would quietly follow a link somewhere other than where the file says. Safe only because the
