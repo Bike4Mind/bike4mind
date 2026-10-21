@@ -169,8 +169,6 @@ describe('mergeContributedRows', () => {
     ['an embed grant', { impliedEntitlements: [{ ifHeld: 'example:a', alsoGrant: ['embed:whitelabel'] }] }],
     ['a changed built-in credit amount', { signupCredits: [{ key: 'CORE:PRO', credits: 999_999 }] }],
     ['credits for an unpriced built-in key', { signupCredits: [{ key: 'core:addon', credits: 10 }] }],
-    ['fractional credits', { signupCredits: [{ key: 'example:pro', credits: 1.5 }] }],
-    ['oversized credits', { signupCredits: [{ key: 'example:pro', credits: 250_001 }] }],
     ['credits on a key no contributed staff key holds', { signupCredits: [{ key: 'example:pro', credits: 10 }] }],
     [
       'an implication from a key no contribution grants',
@@ -192,6 +190,48 @@ describe('mergeContributedRows', () => {
 
     expect(merged).toEqual(BUILT_IN);
     expect(reasons).toHaveLength(1);
+  });
+
+  it.each([
+    ['fractional', 1.5],
+    ['oversized', 250_001],
+    ['zero', 0],
+    ['negative', -1],
+    ['NaN', Number.NaN],
+    ['infinite', Number.POSITIVE_INFINITY],
+  ])('drops %s credits on a contributed staff key and says why', async (_case, credits) => {
+    const registry = await loadRegistry({});
+    const reasons: string[] = [];
+    const merged = registry.mergeContributedRows(
+      BUILT_IN,
+      { internalStaffEntitlements: ['example:staff'], signupCredits: [{ key: 'example:staff', credits }] },
+      { onReject: reason => reasons.push(reason) }
+    );
+
+    expect(merged).toEqual({
+      ...BUILT_IN,
+      internalStaffEntitlements: [...BUILT_IN.internalStaffEntitlements, 'example:staff'],
+    });
+    expect(reasons).toEqual(['signup credits for "example:staff" must be an integer from 1 to 250000']);
+  });
+
+  it('keeps the first credit row for a contributed key and reports a conflicting second', async () => {
+    const registry = await loadRegistry({});
+    const reasons: string[] = [];
+    const merged = registry.mergeContributedRows(
+      BUILT_IN,
+      {
+        internalStaffEntitlements: ['example:staff'],
+        signupCredits: [
+          { key: 'example:staff', credits: 100 },
+          { key: 'example:staff', credits: 200 },
+        ],
+      },
+      { onReject: reason => reasons.push(reason) }
+    );
+
+    expect(merged.signupCreditRows).toEqual([...BUILT_IN.signupCreditRows, { key: 'example:staff', credits: 100 }]);
+    expect(reasons).toEqual(['signup credits for "example:staff" are contributed twice with different amounts']);
   });
 
   it('keeps one granting tag per contributed key', async () => {

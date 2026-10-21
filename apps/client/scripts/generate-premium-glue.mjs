@@ -810,7 +810,12 @@ function generateToolDisplayLabels(packages) {
 const GRANT_KEY_RE = /^[a-z0-9][a-z0-9:_-]*$/;
 // Must stay in sync with isReservedContributionKey and MAX_CONTRIBUTED_SIGNUP_CREDITS in the registry.
 const isReservedGrantKey = key =>
-  key === 'base' || key.startsWith('datalake:') || key.startsWith('embed:') || key.startsWith('source:');
+  key === 'base' ||
+  key.startsWith('datalake:') ||
+  key.startsWith('embed:') ||
+  key.startsWith('source:') ||
+  key === 'customer' ||
+  key === 'pending-free-credits';
 const MAX_CONTRIBUTED_SIGNUP_CREDITS = 250_000;
 const ENTITLEMENT_GRANT_FIELDS = ['tagGrants', 'impliedEntitlements', 'signupCredits', 'internalStaffEntitlements'];
 

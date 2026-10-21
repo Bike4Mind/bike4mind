@@ -187,12 +187,15 @@ describe('premium entitlement grants', () => {
     expectRejected(/package "@bike4mind\/premium-bad".*signupCredits key "example:a"/);
   });
 
-  it.each(['base', 'datalake:x', 'embed:x', 'source:x'])('rejects reserved tag %s as the registry does', sample => {
-    expect(isReservedContributionKey(sample)).toBe(true);
-    writeOverlay('bad', { entitlementGrants: { tagGrants: [{ tag: sample, entitlements: ['example:pro'] }] } });
+  it.each(['base', 'datalake:x', 'embed:x', 'source:x', 'customer', 'pending-free-credits'])(
+    'rejects reserved tag %s as the registry does',
+    sample => {
+      expect(isReservedContributionKey(sample)).toBe(true);
+      writeOverlay('bad', { entitlementGrants: { tagGrants: [{ tag: sample, entitlements: ['example:pro'] }] } });
 
-    expectRejected(/invalid entitlementGrants from package "@bike4mind\/premium-bad".*reserved/);
-  });
+      expectRejected(/invalid entitlementGrants from package "@bike4mind\/premium-bad".*reserved/);
+    }
+  );
 
   it('fails when two tags grant one key, naming both', () => {
     writeOverlay('alpha', {
@@ -214,15 +217,7 @@ describe('premium entitlement grants', () => {
     ['an empty key list', { tagGrants: [{ tag: 'example-pro', entitlements: [] }] }],
     ['a missing key list', { impliedEntitlements: [{ ifHeld: 'example:pro' }] }],
     ['an empty internal staff list', { internalStaffEntitlements: [] }],
-    ['zero signup credits', { signupCredits: [{ key: 'example:pro', credits: 0 }] }],
-    ['negative signup credits', { signupCredits: [{ key: 'example:pro', credits: -5 }] }],
     ['non-numeric signup credits', { signupCredits: [{ key: 'example:pro', credits: '100' }] }],
-    ['NaN signup credits (null once serialized)', { signupCredits: [{ key: 'example:pro', credits: NaN }] }],
-    ['fractional signup credits', { signupCredits: [{ key: 'example:pro', credits: 1.5 }] }],
-    [
-      'oversized signup credits',
-      { signupCredits: [{ key: 'example:pro', credits: MAX_CONTRIBUTED_SIGNUP_CREDITS + 1 }] },
-    ],
     [
       'an implication from the reserved base key',
       { impliedEntitlements: [{ ifHeld: 'base', alsoGrant: ['example:a'] }] },
@@ -251,5 +246,22 @@ describe('premium entitlement grants', () => {
     writeOverlay('bad', { entitlementGrants });
 
     expectRejected(/invalid entitlementGrants from package "@bike4mind\/premium-bad"/);
+  });
+
+  it.each([
+    ['zero', 0],
+    ['negative', -5],
+    ['NaN (null once serialized)', NaN],
+    ['fractional', 1.5],
+    ['oversized', MAX_CONTRIBUTED_SIGNUP_CREDITS + 1],
+  ])('rejects %s signup credits on a contributed staff key', (_case, credits) => {
+    writeOverlay('bad', {
+      entitlementGrants: {
+        internalStaffEntitlements: ['example:staff'],
+        signupCredits: [{ key: 'example:staff', credits }],
+      },
+    });
+
+    expectRejected(/signupCredits for "example:staff" must be an integer from 1 to 250000/);
   });
 });

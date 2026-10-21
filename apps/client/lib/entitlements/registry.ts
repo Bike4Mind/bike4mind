@@ -31,6 +31,7 @@ import {
   DATA_LAKE_SLUG_REGEX,
   MAX_DATA_LAKE_SLUG_LENGTH,
   isOAuthSourceTag,
+  PENDING_FREE_CREDITS_TAG,
 } from '@bike4mind/common';
 import type { PremiumEntitlementGrants } from '@client/app/premiumContract';
 import { premiumEntitlementGrants } from '@client/app/premium-generated/premiumEntitlementGrants.generated';
@@ -350,11 +351,16 @@ export const MAX_CONTRIBUTED_SIGNUP_CREDITS = 250_000;
 /**
  * Keys and ids a contribution may never name: `base` is held by every user, `datalake:` and
  * `embed:` keys need a literal owner grant, and `source:` tags are self-assertable OAuth
- * attribution. Must stay in sync with the codegen check.
+ * attribution. `customer` and `pending-free-credits` are stamped on accounts by core. Must stay in sync with the codegen check.
  */
 export function isReservedContributionKey(key: string): boolean {
   return (
-    key === BASE_ENTITLEMENT_KEY || key.startsWith('datalake:') || key.startsWith('embed:') || isOAuthSourceTag(key)
+    key === BASE_ENTITLEMENT_KEY ||
+    key.startsWith('datalake:') ||
+    key.startsWith('embed:') ||
+    isOAuthSourceTag(key) ||
+    key === 'customer' ||
+    key === PENDING_FREE_CREDITS_TAG
   );
 }
 
@@ -496,7 +502,12 @@ export function mergeContributedRows(
       reject(`signup credits for "${key}" must be an integer from 1 to ${MAX_CONTRIBUTED_SIGNUP_CREDITS}`);
       continue;
     }
-    if (rejectsKeys(`signup credits for "${key}"`, [key]) || credits.has(key)) continue;
+    if (rejectsKeys(`signup credits for "${key}"`, [key])) continue;
+    if (credits.has(key)) {
+      if (credits.get(key) !== row.credits)
+        reject(`signup credits for "${key}" are contributed twice with different amounts`);
+      continue;
+    }
     if (!contributedStaff.has(key)) {
       reject(`signup credits for "${key}" must sit on a contributed internal staff key`);
       continue;
