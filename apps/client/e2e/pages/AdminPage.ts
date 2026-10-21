@@ -188,6 +188,11 @@ export class AdminPage extends BasePage {
     await this.fillMuiInput(this.page.getByTestId('login-as-mfa-input').locator('input'), code);
   }
 
+  /** Confirm stays disabled until the audited reason meets ADMIN_ACTION_REASON_MIN_LENGTH. */
+  async fillLoginAsReason(reason = 'E2E login-as regression guard') {
+    await this.page.getByTestId('login-as-reason-input').fill(reason);
+  }
+
   async confirmLoginAs() {
     const confirmBtn = this.page.getByTestId('login-as-mfa-confirm-btn');
     await expect(confirmBtn).toBeEnabled({ timeout: TIMEOUTS.ELEMENT_STATE });
@@ -224,6 +229,11 @@ export class AdminPage extends BasePage {
 
   async clickDeleteUserButton() {
     await this.page.getByTestId('delete-user-btn').click();
+  }
+
+  /** The confirm-delete button stays disabled until the audited reason meets ADMIN_ACTION_REASON_MIN_LENGTH. */
+  async fillDeleteReason(reason = 'E2E user CRUD cleanup') {
+    await this.page.getByTestId('user-delete-reason-input').fill(reason);
   }
 
   async confirmDeleteUser() {
