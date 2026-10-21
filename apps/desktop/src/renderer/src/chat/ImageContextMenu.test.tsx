@@ -187,6 +187,38 @@ describe('the image context menu', () => {
     expect(byTestId('image-menu-error-notice')?.textContent).toContain('That image is no longer available.');
   });
 
+  // The invoke itself can reject, before there is any result to inspect.
+  it('shows a rejected action as a notice', async () => {
+    imageAction.mockRejectedValueOnce(new Error('ipc down'));
+    await render(
+      <ImageMenuProvider>
+        <MediaAttachments media={[SCREENSHOT]} />
+      </ImageMenuProvider>
+    );
+    await rightClick(byTestId('chat-media-view-btn')!);
+    await click('image-menu-copy-btn');
+    await act(async () => undefined);
+
+    expect(byTestId('image-menu-error-notice')?.textContent).toContain('ipc down');
+  });
+
+  it('shows a failed attach as a notice', async () => {
+    await render(
+      <ImageMenuProvider
+        onAttach={async () => {
+          throw new Error('attach failed');
+        }}
+      >
+        <MediaAttachments media={[SCREENSHOT]} />
+      </ImageMenuProvider>
+    );
+    await rightClick(byTestId('chat-media-view-btn')!);
+    await click('image-menu-attach-btn');
+    await act(async () => undefined);
+
+    expect(byTestId('image-menu-error-notice')?.textContent).toContain('attach failed');
+  });
+
   it('opens from the keyboard and closes on Escape', async () => {
     await render(
       <ImageMenuProvider>

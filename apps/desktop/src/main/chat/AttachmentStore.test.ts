@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -116,6 +116,28 @@ describe('AttachmentStore lifecycle', () => {
     await store.discard(SESSION, attachment.id);
 
     expect(await store.read(SESSION, attachment.id)).toBeNull();
+  });
+
+  // Every "that image is no longer available" answer goes through locate.
+  it('locates a stored attachment, then reports a discarded one as gone', async () => {
+    const [attachment] = (
+      await store.add(SESSION, [
+        { source: 'bytes', name: 'a.png', mediaType: 'image/png', data: new Uint8Array([1, 2]) },
+      ])
+    ).attachments;
+
+    const path = await store.locate(SESSION, attachment.id);
+    expect(path).toBe(join(base, SESSION, attachment.id));
+    expect((await stat(path!)).isFile()).toBe(true);
+
+    await store.discard(SESSION, attachment.id);
+
+    expect(await store.locate(SESSION, attachment.id)).toBeNull();
+  });
+
+  it('locates nothing for an id that would escape the session directory', async () => {
+    expect(await store.locate(SESSION, '../../../etc/passwd')).toBeNull();
+    expect(await store.locate('../elsewhere', 'abc')).toBeNull();
   });
 
   it('deletes everything a conversation owns', async () => {

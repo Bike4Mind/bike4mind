@@ -64,7 +64,7 @@ async function setup() {
     expect(deps.reveal).not.toHaveBeenCalled();
   };
 
-  return { base, media, deps, act, attach, mediaRef, attachmentRef, screenshot, touchedNothing };
+  return { base, media, deps, act, attach, mediaRef, attachmentRef, screenshot, attachment, touchedNothing };
 }
 
 describe('image menu IPC', () => {
@@ -193,6 +193,19 @@ describe('image menu IPC', () => {
       s.deps.copyImage.mockResolvedValueOnce(false);
       expect(await s.act(s.mediaRef, 'copy')).toMatchObject({ ok: false });
     });
+
+    it('copies an image on disk as Markdown pointing at its stored file', async () => {
+      expect(await s.act(s.mediaRef, 'copy-markdown')).toEqual({ ok: true, done: true });
+      expect(await s.act(s.attachmentRef, 'copy-markdown')).toEqual({ ok: true, done: true });
+
+      const [mediaLink] = s.deps.copyText.mock.calls[0];
+      expect(mediaLink.startsWith('![](')).toBe(true);
+      expect(mediaLink.endsWith(')')).toBe(true);
+      expect(mediaLink.slice(4, -1).startsWith(join(s.base, 'media', SESSION) + sep)).toBe(true);
+
+      const [attachmentLink] = s.deps.copyText.mock.calls[1];
+      expect(attachmentLink).toBe(`![](${join(s.base, 'attachments', SESSION, s.attachment.id)})`);
+    });
   });
 
   describe('attach', () => {
@@ -219,6 +232,24 @@ describe('image menu IPC', () => {
       }
       expect(s.deps.readFile).not.toHaveBeenCalled();
     });
+
+    it('answers a failed read with a rejected batch instead of throwing', async () => {
+      s.deps.readFile.mockRejectedValueOnce(new Error('ENOENT: no such file or directory'));
+
+      const result = await s.attach(SESSION, s.mediaRef);
+
+      expect(result.attachments).toEqual([]);
+      expect(result.rejected).toEqual([{ name: 'image', reason: expect.stringContaining('could not be attached') }]);
+    });
+
+    it('answers a failed write the same way', async () => {
+      const add = vi.spyOn(s.deps.attachments, 'add').mockRejectedValueOnce(new Error('ENOSPC: no space left'));
+
+      const result = await s.attach(SESSION, s.mediaRef);
+
+      add.mockRestore();
+      expect(result.rejected).toEqual([{ name: 'image', reason: expect.stringContaining('could not be attached') }]);
+    });
   });
 });
 
@@ -228,5 +259,14 @@ describe('markdownImage', () => {
       '![](</Users/me/Library/Application Support/app/x.png>)'
     );
     expect(markdownImage('/tmp/x.png')).toBe('![](/tmp/x.png)');
+  });
+
+  // A bare `\` before the closing paren escapes it, leaving the link unclosed.
+  it('escapes a backslash in a bare destination', () => {
+    expect(markdownImage('https://x.com/a.png?q=\\')).toBe('![](https://x.com/a.png?q=\\\\)');
+  });
+
+  it('escapes angle brackets in a bare destination', () => {
+    expect(markdownImage('/tmp/a<b>.png')).toBe('![](/tmp/a\\<b\\>.png)');
   });
 });
