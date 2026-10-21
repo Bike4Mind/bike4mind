@@ -27,7 +27,7 @@ const {
   withTransaction: vi.fn(async <T>(fn: () => Promise<T>): Promise<T> => fn()),
 }));
 
-vi.mock('@server/utils/errors', () => ({
+vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   BadRequestError: class BadRequestError extends Error {
     statusCode = 400;
   },

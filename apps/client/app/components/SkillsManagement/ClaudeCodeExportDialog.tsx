@@ -92,7 +92,7 @@ const ClaudeCodeExportDialog: FC<ClaudeCodeExportDialogProps> = ({
             ) : null}
 
             <Stack spacing={1}>
-              <Typography level="title-sm">macOS / Linux</Typography>
+              <Typography level="title-sm">macOS / Linux (bash, zsh)</Typography>
               <Button
                 startDecorator={<ContentCopyIcon />}
                 onClick={copyCommand}

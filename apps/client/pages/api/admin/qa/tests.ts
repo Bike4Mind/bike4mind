@@ -1,6 +1,6 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ensureAdmin, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, ensureAdmin, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { getQaTestHistory } from '@server/qa/reads';
 
 /** GET /api/admin/qa/tests?testKey= . Query param, not a path segment: keys contain / > ? #. */

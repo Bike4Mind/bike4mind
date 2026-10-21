@@ -196,7 +196,7 @@ type InfraDlqDescriptor = DlqDescriptor & {
 };
 
 // ⚠️  SYNC WARNING: When adding/removing a DLQ here, also update
-// DLQ_REGISTRY in apps/client/server/utils/dlqRegistry.ts to keep the admin replay UI in sync.
+// DLQ_REGISTRY in packages/server-utils/src/utils/dlqRegistry.ts to keep the admin replay UI in sync.
 // Drift is caught automatically by dlqRegistrySync.test.ts.
 const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
   // queues.ts DLQs

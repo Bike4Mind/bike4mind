@@ -26,8 +26,8 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
-vi.mock('@server/utils/objectId', () => ({ isValidObjectId: () => true }));
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/objectId', () => ({ isValidObjectId: () => true }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ upload: h.upload, getSignedUrl: h.getSignedUrl, delete: h.deleteObject }),
 }));
 vi.mock('@server/utils/aiEditVersionRetention', async orig => ({

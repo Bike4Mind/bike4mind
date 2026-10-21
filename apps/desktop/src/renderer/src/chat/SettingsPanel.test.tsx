@@ -23,6 +23,7 @@ describe('the Settings screen', () => {
     expect(html).toContain('data-entry="prompt-suggestions"');
     expect(html).toContain('data-entry="server"');
     expect(html).toContain('data-entry="updates"');
+    expect(html).toContain('data-entry="permissions"');
   });
 
   it('offers appearance as a three-way choice', () => {

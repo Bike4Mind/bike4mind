@@ -1,4 +1,4 @@
-import { buildEmailLogoImg, escapeHtml } from './emailHelpers';
+import { buildEmailLogoImg, escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 
 export interface PaymentFailedEmailInput {
   /** Where the owner updates the card: the org Billing tab, or the personal plans modal. */

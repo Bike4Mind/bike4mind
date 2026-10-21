@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { Memento } from '@bike4mind/database/content';
 import { baseApi } from '@server/middlewares/baseApi';
 import { NotFoundError } from '@bike4mind/utils';
-import { isValidObjectId } from '@server/utils/objectId';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 
 const handler = baseApi().delete(async (req: Request, res: Response) => {
   const { id } = req.query;

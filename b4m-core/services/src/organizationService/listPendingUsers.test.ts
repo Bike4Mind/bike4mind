@@ -11,7 +11,12 @@ describe('listPendingUsers', () => {
   const invites = { findAllByDocumentId: vi.fn() };
   const users = { findAllByEmailsOrUsernames: vi.fn() };
   const adapters = { db: { organizations, invites, users } } as unknown as Parameters<typeof listPendingUsers>[2];
-  const organization = { id: 'org1', userId: 'owner1', managerId: 'manager1', users: [] };
+  const organization = {
+    id: 'org1',
+    userId: 'owner1',
+    adminUserIds: ['manager1'],
+    users: [{ userId: 'manager1', permissions: ['read'] }],
+  };
 
   beforeEach(() => {
     organizations.findById.mockReset().mockResolvedValue(organization);
@@ -20,7 +25,7 @@ describe('listPendingUsers', () => {
     users.findAllByEmailsOrUsernames.mockReset().mockResolvedValue([]);
   });
 
-  it('lets an appointed manager read the pending roster without a membership row', async () => {
+  it('lets an appointed manager read the pending roster when the ACL lookup misses', async () => {
     const manager = { id: 'manager1', isAdmin: false } as IUserDocument;
 
     await expect(listPendingUsers(manager, { organizationId: 'org1' }, adapters)).resolves.toEqual([]);

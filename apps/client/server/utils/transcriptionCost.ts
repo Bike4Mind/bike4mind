@@ -1,6 +1,6 @@
 import { usdToCredits } from '@bike4mind/utils';
 import { assertPreflightCredits, InsufficientCreditsPreflightError } from '@server/utils/creditPreflight';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 // File size is used as a proxy for duration since the actual duration is not
 // available pre-transcription. PCM baseline (16-bit 16kHz mono) is multiplied
@@ -26,6 +26,7 @@ export interface TranscriptionCost {
   credits: number;
 }
 
+// `credits` is the rounded-up pre-flight figure; the debit settles `costUsd` stochastically (transcribe.ts).
 export function estimateTranscriptionCost(contentLength: number, usdPerMinute: number): TranscriptionCost {
   const durationMinutes = (contentLength * COMPRESSION_FACTOR) / PCM_BYTES_PER_MINUTE;
   const costUsd = durationMinutes * usdPerMinute;

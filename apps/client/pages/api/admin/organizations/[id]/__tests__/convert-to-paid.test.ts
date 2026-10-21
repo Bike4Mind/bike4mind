@@ -55,7 +55,7 @@ vi.mock('@server/integrations/stripe/callbackUrl', async importOriginal => {
   const actual = await importOriginal<typeof import('@server/integrations/stripe/callbackUrl')>();
   return { ...actual, isAllowedCallbackOrigin: (...args: unknown[]) => mockIsAllowedCallbackOrigin(...args) };
 });
-vi.mock('@server/utils/config', () => ({ Config: { STAGE: 'test' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { STAGE: 'test' } }));
 
 const mockSessionsCreate = vi.fn();
 const mockCreateCustomer = vi.fn();

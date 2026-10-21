@@ -3,7 +3,7 @@ import { optionalAuth } from '@server/middlewares/optionalAuth';
 import { Annotation, PublishedArtifact } from '@bike4mind/database';
 import { UpdateAnnotationRequestSchema } from '@bike4mind/common';
 import { toAnnotationDto, type AnnotationLean } from '@server/services/publish';
-import { isValidObjectId } from '@server/utils/objectId';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 
 /**
  * /api/publish/annotations/[publicId]/[id] - mutate a single annotation.

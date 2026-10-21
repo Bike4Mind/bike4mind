@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { ensureTavernAccess } from '@server/utils/errors';
+import { ensureTavernAccess } from '@bike4mind/server-utils/utils/errors';
 import { OperationsModelService } from '@client/services/operationsModelService';
 import { agentRepository } from '@bike4mind/database';
 import { agentMemoryService } from '@bike4mind/services';

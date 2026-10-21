@@ -60,7 +60,7 @@ vi.mock('@server/integrations/stripe/dunning', () => ({
 }));
 
 const mockEmitMetric = vi.fn();
-vi.mock('@server/utils/cloudwatch', () => ({
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   emitMetric: (...args: unknown[]) => mockEmitMetric(...args),
 }));
 

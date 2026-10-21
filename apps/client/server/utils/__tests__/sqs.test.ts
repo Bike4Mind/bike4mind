@@ -26,7 +26,7 @@ vi.mock('@aws-sdk/client-sqs', () => ({
   },
 }));
 
-import { sendBatchToQueue } from '../sqs';
+import { sendBatchToQueue } from '@bike4mind/server-utils/utils/sqs';
 
 function allSuccess(entries: { Id: string }[]) {
   return {

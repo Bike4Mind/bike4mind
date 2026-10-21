@@ -1,6 +1,6 @@
 import { QaRun, QaTestResult } from '@bike4mind/database';
 import { deriveRunStatus, qaObjectPrefix, type QaRunInput, type QaRunStatus } from '@bike4mind/common';
-import { UnprocessableEntityError } from '@server/utils/errors';
+import { UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
 
 export interface IngestRunResult {
   runId: string;

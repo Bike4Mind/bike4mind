@@ -173,6 +173,20 @@ describe("DELETE /api/data-lakes/[id] - the archive door's Drive-connection port
     );
   });
 
+  it('returns the archived lake through the response schema, stripping undeclared keys', async () => {
+    h.archiveDataLake.mockResolvedValue({
+      id: 'lake1',
+      status: 'archived',
+      _id: 'raw-object-id',
+      __v: 3,
+      notInSchema: 'x',
+    });
+    const { res, json } = makeRes();
+    await run(del({ user: { id: 'owner' } }), res);
+
+    expect(json.mock.calls[0][0]).toEqual({ id: 'lake1', status: 'archived' });
+  });
+
   // Pins the IDENTITY of the object, not merely that something truthy rides along - a stub or a
   // fresh `{}` would still pass a shape-only assertion while leaving the residency-confirm clear
   // pointed at nothing real.

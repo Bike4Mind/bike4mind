@@ -8,7 +8,7 @@ import {
   requireGitHubLakeAppConfig,
   toGitHubLakeConnectionResponse,
 } from '@server/integrations/github/dataLake/githubLakeConnection';
-import { parseOrBadRequest } from '@server/utils/errors';
+import { parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
 import { Request } from 'express';
 import { z } from 'zod';
 

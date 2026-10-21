@@ -39,7 +39,7 @@ vi.mock('@bike4mind/database', () => ({
     create: (...a: unknown[]) => mockServerCreate(...a),
   },
 }));
-vi.mock('@server/utils/errors', () => ({ BadRequestError: class extends Error {} }));
+vi.mock('@bike4mind/server-utils/utils/errors', () => ({ BadRequestError: class extends Error {} }));
 vi.mock('@server/security/tokenEncryption', () => ({
   decryptToken: (t: unknown) => t,
   encryptEnvVariables: (v: unknown) => v,

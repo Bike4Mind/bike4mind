@@ -1,5 +1,5 @@
 import { AuditLogFiltersSchema, type AuditLogCursor, type AuditLogFilters } from '@bike4mind/common';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 const DEFAULT_LIMIT = 50;
 const MIN_LIMIT = 1;

@@ -26,7 +26,7 @@ const mockPostMessageToSlack = vi.fn();
 vi.mock('@server/integrations/slack/slack', () => ({
   postMessageToSlack: (...args: unknown[]) => mockPostMessageToSlack(...args),
 }));
-vi.mock('@server/utils/cloudwatch', () => ({ emitMetric: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetric: vi.fn() }));
 
 import { runCreditPurchaseReconciliation } from './creditPurchaseReconciliation';
 

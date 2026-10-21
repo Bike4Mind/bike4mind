@@ -3,7 +3,7 @@ import { Session as SessionModel } from '@bike4mind/database/auth';
 import { ApiKeyScope, Permission, VoiceSessionSendTranscriptAction } from '@bike4mind/common';
 import { accessibleBy } from '@casl/mongoose';
 import ability from '@server/auth/ability';
-import { NotFoundError } from '@server/utils/errors';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { connectionHoldsScope } from '@server/websocket/connectionScope';
 import { withWebSocketContext } from '@server/websocket/utils';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';

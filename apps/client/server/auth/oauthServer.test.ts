@@ -8,7 +8,7 @@ vi.mock('@bike4mind/database', () => ({
   oauthClientRepository: {},
   oauthAuthorizationCodeRepository: {},
 }));
-vi.mock('@server/utils/config', () => ({ Config: { OAUTH_RSA_PRIVATE_KEY: undefined } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { OAUTH_RSA_PRIVATE_KEY: undefined } }));
 
 import { generateIdToken, releasedIdentityClaims, verifyPkce } from './oauthServer';
 

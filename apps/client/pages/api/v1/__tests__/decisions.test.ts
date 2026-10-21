@@ -82,7 +82,7 @@ vi.mock('@server/files/loadAccessibleFabFile', () => ({ loadAccessibleFabFile: (
 vi.mock('@bike4mind/utils/imageResize', () => ({
   ensureImageWithinDimensionLimit: (...a: unknown[]) => resize(...a),
 }));
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ download: (...a: unknown[]) => download(...a) }),
 }));
 

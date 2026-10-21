@@ -53,7 +53,7 @@ vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({
   encryptSecret: (s: string) => s,
   decryptSecret: (s: string) => s,
 }));
-vi.mock('@server/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: undefined } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: undefined } }));
 
 import '@pages/api/organizations/[id]/webhooks/github';
 
@@ -67,7 +67,7 @@ const call = (orgId: string) => {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  organizationRepository.findById.mockResolvedValue({ id: ORG_ID, userId: 'owner1', managerId: null });
+  organizationRepository.findById.mockResolvedValue({ id: ORG_ID, userId: 'owner1' });
   orgWebhookConfigRepository.findByOrganizationId.mockResolvedValue({
     id: 'cfg1',
     organizationId: ORG_ID,
@@ -150,7 +150,6 @@ describe('PUT /api/organizations/[id]/webhooks/github', () => {
 describe('webhook config is owner-only', () => {
   const orgs = {
     'a roster manager': { userId: 'owner1', adminUserIds: ['mgr'], users: [{ userId: 'mgr' }] },
-    'the legacy managerId': { userId: 'owner1', managerId: 'mgr' },
   };
   const methods = ['getHandler', 'postHandler', 'putHandler', 'deleteHandler'] as const;
 

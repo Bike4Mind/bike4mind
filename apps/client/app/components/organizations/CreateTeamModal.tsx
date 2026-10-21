@@ -1,6 +1,9 @@
 import { useSubscribeTeamPlan, useCreateTeamDev } from '@client/app/hooks/data/subscriptions';
 import { useTeamPlanAvailable, useTeamSeatLimits } from '@client/app/hooks/data/teamPlanSettings';
-import { ORGANIZATION_SUBSCRIPTION_PRICE_ID, TEAM_PLAN_UNAVAILABLE_MESSAGE } from '@client/lib/subscriptions/constants';
+import {
+  ORGANIZATION_SUBSCRIPTION_PRICE_ID,
+  TEAM_PLAN_UNAVAILABLE_MESSAGE,
+} from '@bike4mind/server-utils/lib/subscriptions/constants';
 import {
   Box,
   Button,

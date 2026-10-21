@@ -24,7 +24,7 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (fn: (req: unknown, res: unknown) => unknown) => fn,
 }));
 
-vi.mock('@server/utils/errors', () => ({
+vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   ForbiddenError: class ForbiddenError extends Error {},
 }));
 
@@ -51,7 +51,9 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn() }));
-vi.mock('@server/utils/adminAudit', () => ({
+// parseAdminActionReason stays real so the reason 400s come from the route itself.
+vi.mock('@server/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),
   recordAdminActionFromRequest: vi.fn(async () => {
     insideTransactionAtAudit = inTransaction;
     return null;
@@ -62,11 +64,13 @@ vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoin
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import handler from '../top-up';
 
+const BODY = { credits: 100, idempotencyKey: 'idem-key-12345', reason: 'Support goodwill top-up' };
+
 function call(options: { isAdmin?: boolean; body?: object; id?: string }) {
   const { req, res } = createMocks({
     method: 'POST',
     query: { id: options.id ?? 'org-1' },
-    body: options.body ?? { credits: 100, idempotencyKey: 'idem-key-12345' },
+    body: options.body ?? BODY,
   });
   (req as unknown as { user: { isAdmin: boolean; id: string; username: string } }).user = {
     isAdmin: options.isAdmin ?? true,
@@ -114,6 +118,7 @@ describe('POST /api/admin/organizations/[id]/top-up', () => {
       expect.objectContaining({
         action: 'org.credits.topped_up',
         target: expect.objectContaining({ kind: 'organization', id: 'org-1' }),
+        reason: 'Support goodwill top-up',
       })
     );
   });
@@ -123,5 +128,16 @@ describe('POST /api/admin/organizations/[id]/top-up', () => {
     const { res, run } = call({});
     await expect(run()).rejects.toThrow('audit down');
     expect(res._isEndCalled()).toBe(false);
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['under five characters', ' abc '],
+    ['over 500 characters', 'x'.repeat(501)],
+  ])('answers 400 and adds no credits when the reason is %s', async (_label, reason) => {
+    const { run } = call({ body: { ...BODY, reason } });
+    await expect(run()).rejects.toMatchObject({ statusCode: 400 });
+    expect(mockAddCredits).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
   });
 });

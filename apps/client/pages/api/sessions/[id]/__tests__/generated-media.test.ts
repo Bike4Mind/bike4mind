@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { ZodError } from 'zod';
-import { NotFoundError } from '@server/utils/errors';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 
 /**
  * The route signs only keys that a quest of an accessible session references: access to the
@@ -34,7 +34,7 @@ vi.mock('@bike4mind/database', () => ({
   sessionRepository: { shareable: { findAccessibleById } },
   questRepository: { findGeneratedMediaKeysInSession },
 }));
-vi.mock('@server/utils/storage', () => ({ getGeneratedImageStorage: () => ({ getSignedUrl }) }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getGeneratedImageStorage: () => ({ getSignedUrl }) }));
 
 import '@pages/api/sessions/[id]/generated-media';
 

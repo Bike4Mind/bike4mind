@@ -31,6 +31,7 @@ function pr(overrides = {}) {
     number: 7,
     title: 'feat(client): add a widget',
     body: 'Adds a widget.',
+    base: { sha: '9'.repeat(40) },
     head: { ref: 'feat/widget', sha: 'h'.repeat(40) },
     commits: 1,
     changed_files: 1,
@@ -42,6 +43,16 @@ const commit = (message, sha = 'c'.repeat(40)) => ({ sha, commit: { message } })
 const file = (filename, patch, extra = {}) => ({ filename, status: 'modified', changes: 1, patch, ...extra });
 
 const commitRoute = (sha, files) => ({ [`/repos/acme/widgets/commits/${sha}`]: response({ sha, files }) });
+
+// Merge parents need not include the current PR base tip.
+const MAIN_TIP = 'f'.repeat(40);
+const merge = (message, sha, mergedIn = MAIN_TIP) => ({
+  ...commit(message, sha),
+  parents: [{ sha: 'p'.repeat(40) }, { sha: mergedIn }],
+});
+const mergeRoute = (sha, files, base = '9'.repeat(40)) => ({
+  [`/repos/acme/widgets/compare/${base}...${sha}`]: response({ files }),
+});
 
 async function check({ event = PR_EVENT, eventName = 'pull_request_target', routes, terms = TERMS, token = 'token' }) {
   const lines = [];
@@ -329,12 +340,12 @@ describe('run', () => {
     const { code, output } = await check({
       routes: prRoutes({
         pull: pr({ commits: 3 }),
-        commits: [commit('add', a), commit('remove', b), { ...commit('merge main', m), parents: [{}, {}] }],
+        commits: [commit('add', a), commit('remove', b), merge('merge main', m)],
         files: [file('src/a.ts', '@@ -0,0 +1 @@\n+ok')],
         extra: {
           ...commitRoute(a, [file('src/a.ts', '@@ -0,0 +1,2 @@\n+ok\n+zorblax')]),
           ...commitRoute(b, [file('src/a.ts', '@@ -1,2 +1 @@\n ok\n-zorblax')]),
-          ...commitRoute(m, []),
+          ...mergeRoute(m, []),
         },
       }),
     });
@@ -344,20 +355,149 @@ describe('run', () => {
   });
 
   it('checks a merge resolution even when a later commit removes its added term', async () => {
-    const [merge, removal] = ['e'.repeat(40), 'b'.repeat(40)];
+    const [mergeSha, removal] = ['e'.repeat(40), 'b'.repeat(40)];
     const { code, output } = await check({
       routes: prRoutes({
         pull: pr({ commits: 2 }),
-        commits: [{ ...commit('merge', merge), parents: [{}, {}] }, commit('remove', removal)],
+        commits: [merge('merge', mergeSha), commit('remove', removal)],
         extra: {
-          ...commitRoute(merge, [file('src/a.ts', '@@ -0,0 +1 @@\n+zorblax')]),
+          ...mergeRoute(mergeSha, [file('src/a.ts', '@@ -0,0 +1 @@\n+zorblax')]),
           ...commitRoute(removal, [file('src/a.ts', '@@ -1 +0,0 @@\n-zorblax')]),
         },
       }),
     });
     expect(code).toBe(1);
-    expect(output).toContain(`Restricted term found in commit ${merge.slice(0, 12)} file src/a.ts line 1.`);
+    expect(output).toContain(`Restricted term found in commit ${mergeSha.slice(0, 12)} file src/a.ts line 1.`);
     expect(output).not.toContain('zorblax');
+  });
+
+  it('fails closed when a merge changes more files than compare lists', async () => {
+    const m = 'e'.repeat(40);
+    const many = Array.from({ length: 300 }, (_, i) => file(`src/f${i}.ts`, '@@ -0,0 +1 @@\n+ok'));
+    const { code, output } = await check({
+      routes: prRoutes({
+        pull: pr({ commits: 2 }),
+        commits: [commit('feat'), merge('merge main', m)],
+        extra: { ...commitRoute('c'.repeat(40), []), ...mergeRoute(m, many) },
+      }),
+    });
+    expect(code).toBe(1);
+    expect(output).toContain(`Incomplete check: merge ${m.slice(0, 12)} changes 300+ files`);
+  });
+
+  it("does not charge a merge of the base branch with the base branch's own changes", async () => {
+    const [a, m] = ['a'.repeat(40), 'e'.repeat(40)];
+    const { code, output } = await check({
+      routes: prRoutes({
+        pull: pr({ commits: 2 }),
+        commits: [commit('feat', a), merge('merge main', m)],
+        extra: {
+          ...commitRoute(a, [file('src/a.ts', '@@ -0,0 +1 @@\n+ok')]),
+          // The first-parent diff carries a term main added; the merge's own diff is clean.
+          ...commitRoute(m, [file('docs/main.md', '@@ -0,0 +1 @@\n+zorblax')]),
+          ...mergeRoute(m, [file('src/a.ts', '@@ -0,0 +1 @@\n+ok')]),
+        },
+      }),
+    });
+    expect(output).not.toContain('Restricted term found');
+    expect(code).toBe(0);
+  });
+
+  it.each([
+    ['an older side branch', ['p'.repeat(40), 's'.repeat(40)]],
+    ['an octopus merge', ['p'.repeat(40), MAIN_TIP, 's'.repeat(40)]],
+  ])('does not charge main content inherited before merging %s', async (_description, parents) => {
+    const [feature, mergeSha] = ['a'.repeat(40), 'e'.repeat(40)];
+    const pull = pr({ commits: 2 });
+    const { code, output } = await check({
+      routes: prRoutes({
+        pull,
+        commits: [
+          commit('feature', feature),
+          { ...merge('merge side branch', mergeSha), parents: parents.map(sha => ({ sha })) },
+        ],
+        extra: {
+          ...commitRoute(feature, []),
+          // Main's term is inherited by the first parent, but absent from the older side branch.
+          ...mergeRoute(mergeSha, [file('docs/main.md', '@@ -0,0 +1 @@\n+zorblax')], parents.at(-1)),
+          ...mergeRoute(mergeSha, [file('src/a.ts', '@@ -0,0 +1 @@\n+ok')], pull.base.sha),
+        },
+      }),
+    });
+    expect(output).not.toContain('Restricted term found');
+    expect(code).toBe(0);
+  });
+
+  it('checks a push merge resolution before a later commit removes it', async () => {
+    const [before, mergeSha, removal] = ['1'.repeat(40), 'e'.repeat(40), '2'.repeat(40)];
+    const event = { ref: 'refs/heads/main', before, after: removal };
+    const { code, output } = await check({
+      eventName: 'push',
+      event,
+      routes: {
+        [`/repos/acme/widgets/compare/${before}...${removal}`]: response({
+          commits: [merge('merge side branch', mergeSha), commit('remove', removal)],
+          files: [],
+        }),
+        ...mergeRoute(mergeSha, [file('src/a.ts', '@@ -0,0 +1 @@\n+zorblax')], before),
+        ...commitRoute(removal, [file('src/a.ts', '@@ -1 +0,0 @@\n-zorblax')]),
+      },
+    });
+    expect(code).toBe(1);
+    expect(output).toContain(`Restricted term found in commit ${mergeSha.slice(0, 12)} file src/a.ts line 1.`);
+    expect(output).not.toContain('zorblax');
+  });
+
+  it('does not charge a push merge with content already on the pushed branch', async () => {
+    const [before, mergeSha, after] = ['1'.repeat(40), 'e'.repeat(40), '2'.repeat(40)];
+    const event = { ref: 'refs/heads/main', before, after };
+    const { code, output } = await check({
+      eventName: 'push',
+      event,
+      routes: {
+        [`/repos/acme/widgets/compare/${before}...${after}`]: response({
+          commits: [merge('merge side branch', mergeSha), commit('feature', after)],
+          files: [],
+        }),
+        ...mergeRoute(mergeSha, [file('docs/main.md', '@@ -0,0 +1 @@\n+zorblax')], MAIN_TIP),
+        ...mergeRoute(mergeSha, [], before),
+        ...commitRoute(after, []),
+      },
+    });
+    expect(output).not.toContain('Restricted term found');
+    expect(code).toBe(0);
+  });
+
+  it('checks a single merge through the net PR diff', async () => {
+    const mergeSha = 'e'.repeat(40);
+    const { code, output } = await check({
+      routes: prRoutes({
+        commits: [merge('merge main', mergeSha)],
+        files: [file('src/a.ts', '@@ -0,0 +1 @@\n+zorblax')],
+      }),
+    });
+    expect(code).toBe(1);
+    expect(output).toContain('Restricted term found in file src/a.ts line 1.');
+    expect(output).not.toContain('could not complete');
+    expect(output).not.toContain('zorblax');
+  });
+
+  it.each([404, 500])('fails closed when the merge comparison returns HTTP %s', async status => {
+    const mergeSha = 'e'.repeat(40);
+    const pull = pr({ commits: 2 });
+    const { code, output } = await check({
+      routes: prRoutes({
+        pull,
+        commits: [commit('feature'), merge('merge main', mergeSha)],
+        extra: {
+          ...commitRoute('c'.repeat(40), []),
+          [`/repos/acme/widgets/compare/${pull.base.sha}...${mergeSha}`]: response({}, { status }),
+        },
+      }),
+    });
+    expect(code).toBe(1);
+    expect(output).toContain(`could not complete: GitHub API ${status}`);
+    expect(output).not.toContain('No restricted terms found');
   });
 
   it('reports contextual zero-width configuration errors without echoing the pattern', async () => {

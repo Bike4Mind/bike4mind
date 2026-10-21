@@ -53,6 +53,9 @@ export interface RemoteSkillSourceOptions {
   freshTtlMs?: number;
   /** Hard limit on entries fetched per call. */
   pageLimit?: number;
+  /** Keep Skill Market imports, marked `untrusted`, instead of dropping them. Only for a host that
+   *  runs an untrusted command wrapped as untrusted content (apps/desktop's expandSkill). */
+  includeImports?: boolean;
 }
 
 const DEFAULT_FRESH_TTL_MS = 5 * 60 * 1000;
@@ -62,6 +65,8 @@ export class RemoteSkillSource {
   private readonly cacheFilePath: string;
   private readonly freshTtlMs: number;
   private readonly pageLimit: number;
+  private readonly includeImports: boolean;
+  private forceNext = false;
 
   constructor(
     private readonly apiClient: Pick<AuthenticatedApiClient, 'get' | 'getCurrentUser'>,
@@ -70,6 +75,13 @@ export class RemoteSkillSource {
     this.cacheFilePath = options.cacheFilePath ?? path.join(os.homedir(), '.bike4mind', 'cache', 'remote-skills.json');
     this.freshTtlMs = options.freshTtlMs ?? DEFAULT_FRESH_TTL_MS;
     this.pageLimit = options.pageLimit ?? DEFAULT_PAGE_LIMIT;
+    this.includeImports = options.includeImports ?? false;
+  }
+
+  /** Make the next `fetchSkills` go to the network even inside the TTL. The cache stays as the
+   *  offline fallback. For a host that just changed the account's skills itself. */
+  invalidate(): void {
+    this.forceNext = true;
   }
 
   /**
@@ -79,7 +91,9 @@ export class RemoteSkillSource {
    */
   async fetchSkills(): Promise<CustomCommand[]> {
     const cached = await this.readCache();
-    if (cached && this.isFresh(cached)) {
+    const forced = this.forceNext;
+    this.forceNext = false;
+    if (cached && !forced && this.isFresh(cached)) {
       return this.mapAndFilter(cached.skills);
     }
 
@@ -121,6 +135,7 @@ export class RemoteSkillSource {
    *   only visible cross-account via `isGlobalRead`, and
    * - a Skill Market import: the user owns the copy but someone else wrote it, and local commands run
    *   as trusted instructions next to shell/file tools (the web app wraps it as untrusted instead).
+   *   With `includeImports` it is kept as `untrusted: true`, for a host that wraps it the same way.
    * Own, system (no `userId`), and org-scoped (server-gated, no `userId`) skills pass.
    *
    * Unauthenticated contract (fail-closed, intentional): when getCurrentUser()
@@ -135,7 +150,7 @@ export class RemoteSkillSource {
       .filter(skill => {
         if (isReservedCommandName(skill.name)) return false;
         if (skill.userId && skill.userId !== currentUserId) return false;
-        if (skill.importedFrom) return false;
+        if (skill.importedFrom && !this.includeImports) return false;
         return true;
       })
       .map(skill => this.toCustomCommand(skill));
@@ -203,6 +218,7 @@ export class RemoteSkillSource {
       argumentHint: skill.argumentHint,
       allowedTools: skill.allowedTools,
       disableModelInvocation: skill.disableModelInvocation,
+      ...(skill.importedFrom ? { untrusted: true } : {}),
       source: 'remote',
       // Synthetic - remote skills have no on-disk path. Used in `/commands`
       // listings to disambiguate the origin; never opened by the file loader.

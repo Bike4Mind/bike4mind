@@ -4,6 +4,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
 import {
   claimModerationScan,
+  recordLandedObject,
   releaseModerationClaim,
   scanUploadedObject,
   toVerdictPatch,
@@ -77,6 +78,17 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(
       return res.json({ moderationStatus: 'pending' });
     }
 
+    // Version reconciliation owns its compare-and-set. A separate HEAD followed by an unconditional
+    // version write in the claim could rewind a newer event's version while this request waited.
+    try {
+      await recordLandedObject(fabFile._id, objectKey);
+    } catch (error) {
+      req.logger.warn('On-demand moderation could not reconcile the current object; leaving it pending', {
+        fabFileId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return res.json({ moderationStatus: 'pending' });
+    }
     let claimedAt = new Date();
     const claimed = await claimModerationScan(fabFile._id, claimedAt);
     // Lost the claim: the S3 event (or an earlier call) owns the verdict and will land it.

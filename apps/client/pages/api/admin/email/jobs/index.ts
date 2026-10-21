@@ -1,7 +1,7 @@
 import { emailJobRepository, emailTemplateRepository } from '@bike4mind/database';
 import { ApiKeyScope, EmailJobOverallStatus, EmailJobStatus } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import { assertParseableDate } from '@server/utils/dateParam';
 

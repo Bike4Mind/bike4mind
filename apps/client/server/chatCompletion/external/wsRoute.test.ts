@@ -7,9 +7,9 @@ import { checkRateLimit, verifyJwtToken } from '@server/cli/auth';
 import { executeCompletion } from '@bike4mind/services/cliCompletions';
 import { Connection } from '@bike4mind/database/social';
 import { sendToConnection } from '@server/websocket/utils';
-import { emitMetrics } from '@server/utils/cloudwatch';
+import { emitMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 vi.mock('@bike4mind/observability', () => ({
   Logger: class {
@@ -48,11 +48,13 @@ vi.mock('@server/cli/auth', () => ({
 
 vi.mock('@server/utils/logCompletionAnalytics', () => ({ logCompletionAnalytics: vi.fn() }));
 vi.mock('@server/websocket/utils', () => ({ sendToConnection: vi.fn() }));
-vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
+  Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' },
+}));
 vi.mock('sst', () => ({
   Resource: { App: { stage: 'test' }, websocket: { managementEndpoint: 'wss://example.test' } },
 }));
-vi.mock('@server/utils/cloudwatch', () => ({ emitMetrics: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetrics: vi.fn() }));
 
 import { registerWsCompletionRoutes } from './wsRoute';
 
@@ -225,6 +227,7 @@ describe('completion analytics', () => {
         cacheReadInputTokens: 301_000,
         cacheCreationInputTokens: 500,
         turnUsage,
+        creditsUsed: 7,
       });
       // A trailing frame without the breakdown must not clear the latched one.
       await onChunk([''], { stopReason: 'end_turn' });
@@ -240,6 +243,7 @@ describe('completion analytics', () => {
         finalCacheReadTokens: 301_000,
         finalCacheWriteTokens: 500,
         finalTurnUsage: turnUsage,
+        finalCreditsUsed: 7,
       })
     );
   });

@@ -19,7 +19,7 @@ interface UserJourneyProps {
 }
 
 const UserJourney: React.FC<UserJourneyProps> = ({ user, index }) => {
-  const setFullUserViewUserId = useFullUserViewModal(state => state.setUserId);
+  const { setUserId: setFullUserViewUserId } = useFullUserViewModal();
   const counters = useGetUserActivityCounters(user.id);
   const isCreated = !!user.createdAt;
 

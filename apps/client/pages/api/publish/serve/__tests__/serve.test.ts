@@ -44,7 +44,7 @@ vi.mock('@server/utils/starterCredits', () => ({
   getOpenSignupStarterCredits: () => mockStarterCredits(),
 }));
 
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getPublishedArtifactsStorage: () => ({ download: mockDownload }),
 }));
 

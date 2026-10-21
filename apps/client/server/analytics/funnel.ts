@@ -1,7 +1,7 @@
 import type { Request } from 'express';
 import type { IUserAcquisition } from '@bike4mind/common';
 import { adminSettingsRepository, User, userRepository } from '@bike4mind/database';
-import type { AcquisitionTouches } from '@client/lib/subscriptions/acquisition';
+import type { AcquisitionTouches } from '@bike4mind/server-utils/lib/subscriptions/acquisition';
 import { readConsentedAcquisitionTouches } from './acquisition';
 import { emitProductEvent, HOST_PRODUCT_ID } from './emitActiveEvent';
 import { pseudonymizeUserId } from './pseudonymize';
@@ -39,6 +39,22 @@ async function syntheticTestDomains(): Promise<string[]> {
   } catch {
     return [];
   }
+}
+
+/** Classify and persist a synthetic account without reading acquisition cookies from its creator. */
+export async function recordSyntheticIdentity(user: {
+  id: string;
+  username?: string | null;
+  email?: string | null;
+}): Promise<boolean> {
+  const isSynthetic = isSyntheticIdentity(user, await syntheticTestDomains());
+  if (!isSynthetic) return false;
+  try {
+    await userRepository.update({ id: user.id, isSynthetic: true });
+  } catch (err) {
+    console.warn('[b4m-analytics] synthetic identity not persisted', err instanceof Error ? err.message : err);
+  }
+  return true;
 }
 
 /** The user-record shape of the touches, or undefined when there is no touch to keep. */
@@ -100,7 +116,7 @@ function signedUpAfterLaunch(createdAt: Date | string | null | undefined): boole
   return Number.isFinite(ms) && ms >= FIRST_VALUE_LAUNCH_AT.getTime();
 }
 
-export type FunnelEvent = 'credits_granted' | 'email_verified' | 'first_value';
+export type FunnelEvent = 'credits_granted' | 'email_verified' | 'first_value' | 'signup_completed';
 
 /**
  * One once-per-user funnel stage to Overwatch under the host product. The eventId is keyed on the
@@ -125,6 +141,53 @@ export async function emitFunnelEvent(opts: {
     ...(opts.metadata && { metadata: opts.metadata }),
   }).catch(() => {});
   return true;
+}
+
+/**
+ * The funnel stages of a brand-new account. An unverified signup with nothing granted skips
+ * credits_granted: the stable eventId would lock in 0 and drop the grant that arrives at
+ * verification (emitEmailVerifiedFunnelEvents). An unverified signup granted credits immediately
+ * owns that stable stage, so later verification grants are not separately represented. The emits
+ * are independent, so they run concurrently to bound the caller's latency at one emit timeout.
+ */
+export async function emitSignupFunnelEvents(opts: {
+  user: FunnelUser;
+  method: string;
+  emailVerified: boolean;
+  creditsGranted: number;
+}): Promise<void> {
+  const metadata = { method: opts.method };
+  await Promise.all([
+    opts.emailVerified && emitFunnelEvent({ user: opts.user, event: 'email_verified', metadata }),
+    (opts.emailVerified || opts.creditsGranted > 0) &&
+      emitFunnelEvent({
+        user: opts.user,
+        event: 'credits_granted',
+        metadata: { amount: opts.creditsGranted, source: 'signup', ...metadata },
+      }),
+    emitFunnelEvent({ user: opts.user, event: 'signup_completed', metadata }),
+  ]);
+}
+
+/**
+ * The funnel stages of an existing account becoming email-verified. Gated to accounts created
+ * after launch: no backfill of earlier accounts, the same rule as first_value.
+ */
+export async function emitEmailVerifiedFunnelEvents(opts: {
+  user: FunnelUser & { createdAt?: Date | string | null };
+  method: string;
+  creditsGranted: number;
+}): Promise<void> {
+  if (!signedUpAfterLaunch(opts.user.createdAt)) return;
+  const metadata = { method: opts.method };
+  await Promise.all([
+    emitFunnelEvent({ user: opts.user, event: 'email_verified', metadata }),
+    emitFunnelEvent({
+      user: opts.user,
+      event: 'credits_granted',
+      metadata: { amount: opts.creditsGranted, source: 'signup', ...metadata },
+    }),
+  ]);
 }
 
 /**

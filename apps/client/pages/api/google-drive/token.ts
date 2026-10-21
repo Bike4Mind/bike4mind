@@ -1,7 +1,7 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { User } from '@bike4mind/database';
-import { BadRequestError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import dayjs from 'dayjs';
 import { getAuthUrl, isInvalidGrantError, refreshAccessToken } from '@server/integrations/google/drive/common';
 import { encryptToken, decryptToken } from '@server/security/tokenEncryption';

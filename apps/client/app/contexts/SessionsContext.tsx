@@ -5,7 +5,7 @@ import { pushChatMessage, updateSessionToServer } from '@client/app/utils/sessio
 import { getOrFetchSession } from '@client/app/hooks/data/sessions';
 import { isOptimisticId } from '@client/app/utils/llm';
 import { formatSessionTitle } from '@client/app/utils/sessionTitle';
-import { visibleReplyForExport } from '@client/shared/replyUtils';
+import { visibleReplyForExport } from '@bike4mind/server-utils/shared/replyUtils';
 import { toast } from 'sonner';
 import { IFabFileDocument, ISessionDocument, IChatHistoryItem, IAgent } from '@bike4mind/common';
 import React, {

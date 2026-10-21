@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import {
   SLACK_USER_VALIDATION_ERRORS,
   SLACK_USER_ERROR_MESSAGE_PATTERNS,

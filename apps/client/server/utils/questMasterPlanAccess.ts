@@ -18,7 +18,7 @@
 import { questMasterPlanRepository, sessionRepository } from '@bike4mind/database';
 import { IQuestMasterPlanDocument } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, NotFoundError, UnauthorizedError } from '@bike4mind/common';
-import { isValidObjectId } from '@server/utils/objectId';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 
 /** Regex pattern for valid quest/sub-quest ID strings (alphanumeric, hyphens, underscores, dots) */
 export const QUEST_ID_PATTERN = /^[a-zA-Z0-9_.-]+$/;

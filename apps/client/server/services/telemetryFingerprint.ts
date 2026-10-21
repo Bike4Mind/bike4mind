@@ -185,7 +185,7 @@ export function extractSemanticFingerprintFromBody(body: string | null | undefin
 // ISSUE TITLE/BODY GENERATION
 // ============================================================================
 
-// `escapeMarkdown` moved to `@server/utils/markdownEscape` - it's a generic
+// `escapeMarkdown` moved to `@bike4mind/server-utils/utils/markdownEscape` - it's a generic
 // Markdown/`@`-mention escape used across multiple LLM-to-GH-issue paths, not a
 // telemetry-specific concern.
 

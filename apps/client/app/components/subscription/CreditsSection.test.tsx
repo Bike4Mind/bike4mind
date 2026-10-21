@@ -62,6 +62,12 @@ describe('CreditsSection', () => {
     expect(navigate).toHaveBeenCalledWith({ to: '/profile', search: { tab: 'usage' } });
   });
 
+  it('starts on the $20 pack, not the middle one', () => {
+    renderSection();
+    expect(screen.getByTestId('credits-purchase-btn')).toHaveAttribute('data-package', 'package_25k');
+    expect(screen.getByRole('radio', { name: /33,333/ })).toBeChecked();
+  });
+
   it('has one purchase button that buys the selected pack', () => {
     renderSection();
     const buy = screen.getByTestId('credits-purchase-btn');
@@ -69,9 +75,13 @@ describe('CreditsSection', () => {
     expect(buy).toHaveAttribute('data-package', 'package_25k');
     expect(buy).toHaveTextContent('Buy 33,333 credits for $20');
 
-    fireEvent.click(screen.getByRole('radio', { name: /58,333/ }));
-    expect(screen.getByTestId('credits-purchase-btn')).toHaveAttribute('data-package', 'package_50k');
-    expect(screen.getByTestId('credits-purchase-btn')).toHaveTextContent('Buy 58,333 credits for $35');
+    fireEvent.click(screen.getByRole('radio', { name: /83,333/ }));
+    expect(screen.getByTestId('credits-purchase-btn')).toHaveAttribute('data-package', 'package_usd50');
+    expect(screen.getByTestId('credits-purchase-btn')).toHaveTextContent('Buy 83,333 credits for $50');
+
+    fireEvent.click(screen.getByRole('radio', { name: /166,667/ }));
+    expect(screen.getByTestId('credits-purchase-btn')).toHaveAttribute('data-package', 'package_usd100');
+    expect(screen.getByTestId('credits-purchase-btn')).toHaveTextContent('Buy 166,667 credits for $100');
   });
 
   it('card radios are not pinned to a fixed input size by global styles', () => {
@@ -85,7 +95,7 @@ describe('CreditsSection', () => {
 
   it('renders each pack as an overlay radio inside its card', () => {
     renderSection();
-    for (const id of ['package_10k', 'package_25k', 'package_50k']) {
+    for (const id of ['package_25k', 'package_usd50', 'package_usd100']) {
       const card = screen.getByTestId(`credits-pack-${id}`);
       const input = card.querySelector('input[type="radio"]') as HTMLInputElement;
       expect(input).not.toBeNull();
@@ -97,13 +107,13 @@ describe('CreditsSection', () => {
 
   it('marks each pack credit count with the decorative credit icon', () => {
     renderSection();
-    for (const id of ['package_10k', 'package_25k', 'package_50k']) {
+    for (const id of ['package_25k', 'package_usd50', 'package_usd100']) {
       const icon = screen.getByTestId(`credits-pack-${id}-icon`);
       expect(screen.getByTestId(`credits-pack-${id}`)).toContainElement(icon);
       expect(icon).toHaveAttribute('aria-hidden', 'true');
     }
     // Decorative: the radio's accessible name is still the number and "credits".
-    expect(screen.getByRole('radio', { name: /58,333\s*credits/ })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /166,667\s*credits/ })).toBeInTheDocument();
   });
 
   it('states the per-1,000 rate computed from the packs, with no best-value badge', () => {
@@ -122,6 +132,7 @@ describe('CreditsSection', () => {
   });
 
   it('lists purchases only, and shows placeholders while they load', () => {
+    // 16,667 credits for $10 is a retired pack: history renders from the ledger row, not the pack table.
     const purchase = {
       id: 't1',
       type: 'purchase',

@@ -1,5 +1,5 @@
 {
-  "thresholdSec": 150,
+  "thresholdSec": 30,
   "prompts": [
     {
       "id": "reuters-top-stories",

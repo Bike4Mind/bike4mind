@@ -5,7 +5,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { getPasskeyRelyingParty, passkeyDeps, sendPasskeyError } from '@server/auth/passkey';
 import { stepUpMethodsFor } from '@server/auth/stepUp';
-import { NotFoundError } from '@server/utils/errors';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 
 /** Step 1 of stepping up with a passkey; step 2 is POST /api/auth/step-up with method 'passkey'. */
 const handler = baseApi({ auth: 'jwtOnly' })

@@ -1,7 +1,7 @@
 import { adminAuditLogRepository } from '@bike4mind/database';
 import { ApiKeyScope, AUDIT_SUMMARY_WINDOWS, type AuditSummary, type AuditSummaryWindow } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ensureAdmin } from '@server/utils/errors';
+import { BadRequestError, ensureAdmin } from '@bike4mind/server-utils/utils/errors';
 
 const DEFAULT_WINDOW_DAYS: AuditSummaryWindow = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;

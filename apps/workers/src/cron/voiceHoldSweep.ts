@@ -6,10 +6,10 @@
  * Bills connected time up to the call's last sign of life (voiceLastActivityAt: client heartbeats
  * and provider turns), capped at the hold; a call that never connected costs nothing. A realtime
  * hold stays open for its whole call, so it is only stale past the realtime hold's own window; it
- * keeps at least what its responses billed and pays the open-time floor up to the last frame the
- * server saw. Settles through settleVoiceHold, the same claim-then-refund rule as the end
- * endpoint, so a concurrent end and a second sweep run are both no-ops. Every settlement writes
- * one voice_hold_settled line.
+ * keeps at least what its responses billed and pays the open-time floor up to the sweep (capped at
+ * the hold's window), since its activity markers come only from the client. Settles through
+ * settleVoiceHold, the same claim-then-refund rule as the end endpoint, so a concurrent end and a
+ * second sweep run are both no-ops. Every settlement writes one voice_hold_settled line.
  *
  * The hosted handler publishes each run's settled and failed counts, which the
  * voiceStaleHoldsSettled and voiceHoldSweepFailures alarms in infra/alarms.ts watch. The
@@ -21,8 +21,8 @@ import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { connectDB, sessionRepository } from '@bike4mind/database';
 import { VOICE_METRICS, VOICE_NAMESPACE } from '@bike4mind/infra';
 import { Logger } from '@bike4mind/observability';
-import { emitMetrics } from '@server/utils/cloudwatch';
-import { Config } from '@server/utils/config';
+import { emitMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { lastSeenAt, settleVoiceHold } from '@server/voice/settleVoiceHold';
 import { MAX_SESSION_SECONDS, REALTIME_VOICE_HOLD_SECONDS } from '@bike4mind/server-utils/voice/voiceSessionLimits';
 import { Resource } from 'sst';
@@ -62,7 +62,7 @@ export async function runVoiceHoldSweep(now: Date = new Date()): Promise<VoiceHo
 
   for (const hold of holds) {
     try {
-      const settlement = await settleVoiceHold(hold, lastSeenAt(hold), 'sweep');
+      const settlement = await settleVoiceHold(hold, lastSeenAt(hold), 'sweep', now);
       if (!settlement.settled) {
         result.alreadySettled++;
         continue;

@@ -7,7 +7,7 @@
 
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { sreErrorTrackingRepository } from '@bike4mind/database';
 import { DEFAULT_SRE_METRICS_WINDOW, SRE_METRICS_WINDOW_MS, type SreMetricsWindow } from '@bike4mind/common';
 

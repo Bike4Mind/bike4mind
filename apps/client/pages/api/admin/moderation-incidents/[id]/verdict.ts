@@ -5,7 +5,7 @@ import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { imageModerationIncidentRepository } from '@bike4mind/database';
 import { ncmecService } from '@bike4mind/services';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 // Resolve NCMEC credentials from SST Resource (linked secrets expose Resource.X.value, not
 // process.env.X). Fall back to process.env for local dev and self-host. useSandbox defaults

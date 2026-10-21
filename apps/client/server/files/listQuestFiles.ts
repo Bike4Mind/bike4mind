@@ -6,7 +6,7 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { fabFilesService } from '@bike4mind/services';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 
 /**
  * The files attached to one quest, with a fresh signed `fileUrl` on each serveable file. Shared by

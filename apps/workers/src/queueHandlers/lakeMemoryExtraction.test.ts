@@ -33,7 +33,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@workers/dataLakes/extractLakeMemory', () => ({
   extractLakeMemoryForBatch: (...a: unknown[]) => extractMock(...a),
 }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => sendToQueueMock(...a) }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => sendToQueueMock(...a) }));
 vi.mock('sst', () => ({ Resource: { lakeMemoryQueue: { url: 'https://sqs.example/lake-memory' } } }));
 
 const { dispatch } = await import('./lakeMemoryExtraction');

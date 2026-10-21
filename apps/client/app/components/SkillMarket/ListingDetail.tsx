@@ -675,8 +675,8 @@ const ListingDetail: FC<{ listingId?: string; token?: string }> = ({ listingId, 
           skill={version.snapshot}
           sourcePath={`/skills/market/${encodeURIComponent(listing.id)}`}
           version={version.version}
-          thirdParty
-          showImportHint={!data.myImport?.skill}
+          thirdParty={!viewer.isAuthor}
+          showImportHint={viewer.canImport && !data.myImport?.skill}
         />
       ) : null}
     </Box>

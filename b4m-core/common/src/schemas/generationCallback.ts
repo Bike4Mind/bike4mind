@@ -6,7 +6,7 @@ import { z } from 'zod';
  * settles, carrying the same body `GET /api/v1/quests/{id}` returns.
  *
  * The request-time guard here is syntactic only; the server also resolves the host and rejects
- * private/link-local targets (apps/client/server/utils/ssrfProtection.ts) before accepting it,
+ * private/link-local targets (packages/server-utils/src/utils/ssrfProtection.ts) before accepting it,
  * and again before every delivery attempt.
  */
 export const GENERATION_CALLBACK_URL_MAX_LENGTH = 2048;

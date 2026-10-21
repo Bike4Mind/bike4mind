@@ -18,6 +18,7 @@ import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
+import { storageOwnerTransferDb } from '@server/files/storageOwnerTransferDb';
 
 /**
  * The four corpus actions, as a discriminated union rather than a partial patch: they touch
@@ -94,6 +95,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
     const result = await withTransaction(async () => {
       const applied = await dataLakeService.applyCorpusAction(actor, id, findingId, body, {
         db: {
+          ...storageOwnerTransferDb,
           dataLakes: dataLakeRepository,
           dataLakeAccessGrants: dataLakeAccessGrantRepository,
           fabFiles: fabFileRepository,

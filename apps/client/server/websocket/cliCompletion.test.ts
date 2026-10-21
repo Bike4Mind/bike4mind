@@ -37,7 +37,7 @@ vi.mock('@server/websocket/utils', () => ({
 }));
 
 import { checkApiKeyRateLimitOrThrow, checkRateLimit, verifyApiKey, verifyJwtToken } from '@server/cli/auth';
-import { TooManyRequestsError } from '@server/utils/errors';
+import { TooManyRequestsError } from '@bike4mind/server-utils/utils/errors';
 import { sendToConnection } from '@server/websocket/utils';
 import { func } from './cliCompletion';
 
@@ -187,6 +187,7 @@ describe('cliCompletion websocket handler', () => {
           cacheReadInputTokens: 301_000,
           cacheCreationInputTokens: 500,
           turnUsage,
+          creditsUsed: 7,
         });
         // A trailing frame without the breakdown must not clear the latched one.
         await onChunk([''], { stopReason: 'end_turn' });
@@ -202,6 +203,7 @@ describe('cliCompletion websocket handler', () => {
         finalCacheReadTokens: 301_000,
         finalCacheWriteTokens: 500,
         finalTurnUsage: turnUsage,
+        finalCreditsUsed: 7,
       })
     );
   });

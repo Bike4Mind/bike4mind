@@ -1,6 +1,6 @@
 import { emailJobRepository, emailTemplateRepository, userRepository, subscriberRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { ApiKeyScope } from '@bike4mind/common';
 
 /**

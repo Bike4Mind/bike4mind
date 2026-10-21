@@ -5,11 +5,11 @@ const { mockFindById, mockGet } = vi.hoisted(() => ({ mockFindById: vi.fn(), moc
 
 // baseApi is stubbed (no auth chain); the route's own path-token check is what is under test.
 vi.mock('@server/middlewares/baseApi', () => import('@server/qa/testing/baseApiStub'));
-vi.mock('@server/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' } }));
 vi.mock('@bike4mind/database', () => ({
   QaRun: { findById: (...a: unknown[]) => mockFindById(...a) },
 }));
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getQaArtifactsStorage: () => ({ getContentAsBuffer: (...a: unknown[]) => mockGet(...a) }),
 }));
 

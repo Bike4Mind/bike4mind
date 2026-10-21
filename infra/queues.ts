@@ -250,6 +250,9 @@ const fabFileBucketNotification = fabFileBucket.notify({
       function: {
         handler: 'apps/workers/src/s3/objectCreated.func',
         runtime: 'nodejs24.x',
+        // Animated images are moderated frame by frame (up to 60 frames), which can exceed the default 20s/1024 MB.
+        timeout: '2 minutes',
+        memory: '2048 MB',
         link: [...allSecrets, websocketApi, fabFileChunkQueue, fabFileBucket],
         permissions: [
           { actions: ['rekognition:DetectModerationLabels'], resources: ['*'] },

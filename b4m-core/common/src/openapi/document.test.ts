@@ -135,6 +135,8 @@ describe('buildOpenApiDocument', () => {
       'all_tools_deferred',
       'deferred_tool_cache_control',
       'unknown_tool_reference',
+      'tool_changes_unsupported',
+      'invalid_tool_change',
     ]);
     expect(json('413')).toEqual(ref('ErrorResponse'));
     expect(json('422')).toEqual(ref('createCompletionResponse422'));

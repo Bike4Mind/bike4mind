@@ -11,7 +11,7 @@ import { ChatCompletionInvoke } from '@bike4mind/services/llm/ChatCompletionInvo
 import { SQSService } from '@bike4mind/utils';
 import { getOrCreateSession } from '@server/managers/sessionManager';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
-import { resolveBillingOrgId } from '@server/utils/orgAccess';
+import { resolveRequestBillingOrgId } from '@server/billing/apiKeyBillingOrg';
 import { dataLakeToolsDeniedFor } from '@server/dataLakes/dataLakeScopes';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
@@ -82,8 +82,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
 
     // Resolve the billing org from the client-supplied value, rejecting any org the caller is
     // not a member of (a bare body value would otherwise let A bill B's credit pool).
-    // null = personal account, undefined = fall back to the caller's own org.
-    const effectiveOrgId = await resolveBillingOrgId(req, invokeParams.organizationId);
+    // null = personal account, undefined = fall back to the caller's own org. An org-billed
+    // API key always bills its own org, as on the v1 media routes; naming another is a 403.
+    const effectiveOrgId = await resolveRequestBillingOrgId(req, invokeParams.organizationId);
 
     const { session, sessionId, asyncPromises } = await getOrCreateSession({
       sessionId: reqSessionId,

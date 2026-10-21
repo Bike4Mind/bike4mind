@@ -506,10 +506,11 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         max_tokens: 64000,
         can_stream: true,
         can_think: true,
+        // us. is a regional endpoint: AWS bills a 10% premium over the global rate ($3 / $15).
         pricing: {
           200000: {
-            input: 3 / 1000000, // $3 per 1M input tokens same with  sonnet4
-            output: 15 / 1000000, // $15 per 1M output tokens
+            input: 3.3e-6, // $3.30 per 1M input tokens
+            output: 16.5 / 1000000, // $16.50 per 1M output tokens
           },
         },
         supportsVision: true,
@@ -519,6 +520,9 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         rank: 2,
         trainingCutoff: '2025-07-01',
         releaseDate: '2025-09-30',
+        // Bedrock reports it LEGACY; the static redirect in resolveDeprecatedModel.ts already serves it as 4.6,
+        // so hide it from the picker even before discovery has written the lifecycle.
+        deprecationDate: '2026-10-08',
         description:
           "Anthropic's most intelligent model hosted in AWS Bedrock. Delivers exceptional performance across coding, analysis, and complex reasoning tasks with improved speed and efficiency. Ideal for production workloads requiring both power and reliability.",
       },
@@ -531,8 +535,9 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         max_tokens: 64000,
         can_stream: true,
         can_think: true,
+        // us. is a regional endpoint: AWS bills a 10% premium over the global rate ($1 / $5).
         pricing: {
-          200000: { input: 1 / 1_000_000, output: 5 / 1_000_000 },
+          200000: { input: 1.1 / 1_000_000, output: 5.5 / 1_000_000 },
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
@@ -1087,11 +1092,6 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
 
     Object.assign(body, capCacheControlMarkers(body));
 
-    // Log the actual body being sent (first 1000 chars)
-    const bodyStr = JSON.stringify(body);
-    console.log(
-      `[AnthropicBedrockBackend] Request body: ${bodyStr.substring(0, 1000)}${bodyStr.length > 1000 ? '...' : ''}`
-    );
     return {
       modelId: modelId,
       contentType: 'application/json',

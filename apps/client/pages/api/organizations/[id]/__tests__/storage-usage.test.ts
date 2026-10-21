@@ -54,14 +54,12 @@ import { ORG_STORAGE_USAGE_MAX_TIME_MS, ORG_STORAGE_USAGE_RATE_LIMIT } from '../
 
 const ORG = '650000000000000000000abc';
 const OWNER = '650000000000000000000111';
-const MANAGER = '650000000000000000000222';
 const APPOINTED_ADMIN = '650000000000000000000444';
 const MEMBER = '650000000000000000000333';
 
 const org = {
   id: ORG,
   userId: OWNER,
-  managerId: MANAGER,
   adminUserIds: [APPOINTED_ADMIN],
   users: [{ userId: MEMBER }],
   storageLimit: 5,
@@ -100,7 +98,6 @@ describe('GET /api/organizations/[id]/storage-usage', () => {
 
   it.each([
     ['the owner', { id: OWNER, isAdmin: false }],
-    ['the manager', { id: MANAGER, isAdmin: false }],
     ['an appointed admin', { id: APPOINTED_ADMIN, isAdmin: false }],
     ['a platform admin', { id: MEMBER, isAdmin: true }],
   ])('returns the usage to %s', async (_label, user) => {

@@ -8,7 +8,7 @@ const { connect, find, limit, lean, update } = vi.hoisted(() => ({
   update: vi.fn(),
 }));
 vi.mock('@bike4mind/database', () => ({ connectDB: connect, Quest: { find, updateMany: update } }));
-vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://localhost/%STAGE%' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://localhost/%STAGE%' } }));
 vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
 import { handler, runTelemetryCleanup } from './telemetryCleanup';
 const context = { awsRequestId: 'local-test', functionName: 'cleanup', functionVersion: '1' } as Context;

@@ -3,10 +3,10 @@ import { logEvent } from '@server/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { FeedbackEvents, truncateFeedbackContent } from '@bike4mind/common';
-import { BadRequestError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { originateFeedbackText, reviseFeedbackText } from '@server/utils/feedbackText';
 import { hydrateFeedbackText, toRedactedFeedback } from '@server/utils/redactedFeedback';
-import { isValidObjectId } from '@server/utils/objectId';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { z } from 'zod';
 
 const UpdateFeedbackRequestSchema = z.object({

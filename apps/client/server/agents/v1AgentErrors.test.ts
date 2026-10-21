@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { AGENT_LIMIT_REACHED_ERROR_CODE } from '@bike4mind/common';
 import { AgentValidationError } from '@server/utils/agentValidation';
-import { BadRequestError, NotFoundError, UnprocessableEntityError } from '@server/utils/errors';
+import { BadRequestError, NotFoundError, UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
 import { toV1AgentError } from './v1AgentErrors';
 
 describe('toV1AgentError', () => {

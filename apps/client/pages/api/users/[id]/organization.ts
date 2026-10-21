@@ -3,7 +3,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { User, userRepository } from '@bike4mind/database';
 import { organizationService } from '@bike4mind/services';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 /**
  * A user's active organization: read it (GET) or clear the pointer (DELETE).

@@ -11,7 +11,7 @@ vi.mock('@client/app/utils/llm', () => ({
 vi.mock('@client/app/hooks/data/useModelInfo', () => ({ getCachedModels: () => [] }));
 vi.mock('sonner', () => ({ toast: { error: vi.fn() } }));
 vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: {} }));
-vi.mock('@server/utils/resolveActiveOrg', () => ({ resolveActiveOrg: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/resolveActiveOrg', () => ({ resolveActiveOrg: vi.fn() }));
 
 import { assertNoStrayBillingOrgKeys } from '@server/utils/orgAccess';
 import { handleImageEditCommand, handleImageGenerationCommand } from './ImageGenerationCommand';

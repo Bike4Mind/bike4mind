@@ -14,7 +14,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { connectDB, adminSettingsRepository } from '@bike4mind/database';
 import { SreAgentConfig, SreAgentConfigSchema, resolveWebhookSecret } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { GitHubEvent } from '@server/integrations/github/GitHubEvent';
 import { GitHubEventType } from '@bike4mind/server-utils/integrations/github/types';
 import {
@@ -32,7 +32,7 @@ import {
   SreIssuePayloadSchema,
 } from '@server/integrations/github/sreWebhookDispatch';
 import { dispatchReviewToSreRevision } from '@server/integrations/github/sreRevisionDispatch';
-import { serializeError } from '@server/utils/serializeError';
+import { serializeError } from '@bike4mind/server-utils/utils/serializeError';
 import { randomUUID } from 'crypto';
 
 export const config = {

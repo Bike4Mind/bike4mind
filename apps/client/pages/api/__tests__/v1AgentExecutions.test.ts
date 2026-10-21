@@ -193,6 +193,47 @@ describe('POST /api/v1/agent-executions', () => {
     expect(await statusOf((startHandler as any)(req, res))).toBe(status);
   });
 
+  it('maps billing_organization_mismatch to a 403 carrying the billing_organization_mismatch errorCode', async () => {
+    mockStart.mockResolvedValue({ ok: false, reason: 'billing_organization_mismatch', message: 'wrong payer' });
+    const { req, res } = post({ session_id: 's1', message: 'go', organization_id: 'org2' });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const error = await (startHandler as any)(req, res).catch((err: unknown) => err);
+
+    expect(error).toMatchObject({
+      statusCode: 403,
+      message: 'wrong payer',
+      additionalInfo: { errorCode: 'billing_organization_mismatch' },
+    });
+  });
+
+  it('maps billing_key_stale to a 400', async () => {
+    mockStart.mockResolvedValue({ ok: false, reason: 'billing_key_stale', message: 'key is stale' });
+    const { req, res } = post({ session_id: 's1', message: 'go' });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const error = await (startHandler as any)(req, res).catch((err: unknown) => err);
+
+    expect(error).toMatchObject({ statusCode: 400, message: 'key is stale' });
+  });
+
+  it("forwards an org-billed key's billing fields so startAgentExecution can bill its org", async () => {
+    const keyInfo = {
+      keyId: 'key-1',
+      scopes: [ApiKeyScope.AI_CHAT],
+      billingOwnerType: 'organization',
+      organizationId: 'key-org',
+    };
+    const { req, res } = post({ session_id: 's1', message: 'go' });
+    Object.assign(req, { apiKeyInfo: keyInfo });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (startHandler as any)(req, res);
+
+    expect(mockStart.mock.calls[0][0].apiKeyInfo).toBe(keyInfo);
+    expect(mockStart.mock.calls[0][0].organizationId).toBeUndefined();
+  });
+
   // Scope denials are derived inside startAgentExecution (covered there); the door's job is to
   // forward the credential, and only from the request's apiKeyInfo.
   it('forwards the authenticating key as apiKeyInfo, never an id from the body', async () => {

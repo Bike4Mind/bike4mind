@@ -26,6 +26,15 @@ export const BLOG_REQUEST_PATTERN =
 
 const BLOG_TOOL_NAMES = ['blog_draft', 'blog_publish', 'blog_edit'];
 
+const isDataLakeTool = (name: string): boolean => (DATA_LAKE_TOOL_NAMES as readonly string[]).includes(name);
+
+/**
+ * The non-message gate for a blog tool, shared by the offer gate and the persisted-tool re-check so
+ * a new requirement cannot apply to one path and not the other.
+ */
+const blogToolEligible = (name: string, input: { isAdmin: boolean; hasBlogIntegration: boolean }): boolean =>
+  input.isAdmin && (name === 'blog_draft' || input.hasBlogIntegration);
+
 /**
  * True when an earlier turn in this conversation already used one of `toolNames`. `priorToolNames`
  * comes from `fetchAndProcessPreviousMessages`'s own field of that name, read off each turn's raw
@@ -61,9 +70,9 @@ export function shouldOfferBlogTools(input: {
   const intentOrContinuation =
     BLOG_REQUEST_PATTERN.test(input.message) || hasPriorToolUse(input.priorToolNames, BLOG_TOOL_NAMES);
   return {
-    draft: intentOrContinuation,
-    publish: input.hasBlogIntegration && intentOrContinuation,
-    edit: input.hasBlogIntegration && intentOrContinuation,
+    draft: intentOrContinuation && blogToolEligible('blog_draft', input),
+    publish: intentOrContinuation && blogToolEligible('blog_publish', input),
+    edit: intentOrContinuation && blogToolEligible('blog_edit', input),
   };
 }
 
@@ -129,6 +138,61 @@ export function shouldOfferSkillTool(input: {
   // the tool that could explain why.
   if (detectSkillMentions(input.message.toLowerCase()).length > 0) return true;
   return hasPriorToolUse(input.priorToolNames, ['skill']);
+}
+
+/**
+ * Tools the chat path adds on its own when a turn calls for them, and then keeps for the session
+ * (see resolveStickyAutoAddedTools). `delegate_to_agent` is deliberately not here: its gate has no
+ * continuation by design (see shouldOfferDelegation).
+ */
+export const STICKY_AUTO_ADDED_TOOL_NAMES: readonly string[] = [...BLOG_TOOL_NAMES, ...DATA_LAKE_TOOL_NAMES, 'skill'];
+
+/**
+ * What the current user may be offered, independent of the turn's message. A session can be shared,
+ * so a name persisted by one user's turn must still pass the same gates for the next user's.
+ */
+export interface StickyToolEligibility {
+  isAdmin: boolean;
+  hasBlogIntegration: boolean;
+  hasSkillRepository: boolean;
+  /** A thunk so a turn with no persisted data-lake tool never pays for the settings read. */
+  dataLakesEnabled: () => Promise<boolean>;
+}
+
+/**
+ * The auto-added tool set for this turn: everything triggered now, plus every tool an earlier turn
+ * of the session added that this user is still eligible for.
+ *
+ * Why it sticks: a provider's prompt cache is keyed on the tool list first, so a tool that appears
+ * on the turn whose message mentions it and vanishes on the next one invalidates the cache for the
+ * whole conversation both times. The persisted set only grows - nothing here removes an entry, an
+ * ineligible one is merely not offered - and `tools` is sorted so a given set always serializes to
+ * the same bytes regardless of the order the turns triggered it.
+ *
+ * `newlyTriggered` is what the caller should add to the persisted set.
+ */
+export async function resolveStickyAutoAddedTools(input: {
+  persisted: readonly string[] | undefined;
+  triggered: readonly string[];
+  eligibility: StickyToolEligibility;
+}): Promise<{ tools: string[]; newlyTriggered: string[] }> {
+  const persisted = new Set((input.persisted ?? []).filter(name => STICKY_AUTO_ADDED_TOOL_NAMES.includes(name)));
+  const newlyTriggered = [...new Set(input.triggered)].filter(name => !persisted.has(name)).sort();
+
+  const { isAdmin, hasBlogIntegration, hasSkillRepository, dataLakesEnabled } = input.eligibility;
+  const needsDataLakes = [...persisted].some(isDataLakeTool);
+  const lakesEnabled = needsDataLakes ? await dataLakesEnabled() : false;
+  const stillEligible = (name: string): boolean => {
+    if (BLOG_TOOL_NAMES.includes(name)) return blogToolEligible(name, { isAdmin, hasBlogIntegration });
+    if (isDataLakeTool(name)) return lakesEnabled;
+    // Explicit, not a catch-all: a future sticky name must state its own gate rather than inherit
+    // the skill repository check.
+    return name === 'skill' && hasSkillRepository;
+  };
+
+  const tools = new Set<string>(input.triggered);
+  for (const name of persisted) if (stillEligible(name)) tools.add(name);
+  return { tools: [...tools].sort(), newlyTriggered };
 }
 
 /**

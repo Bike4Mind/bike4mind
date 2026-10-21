@@ -17,10 +17,10 @@ const AGENT_MENTION = /(^|\s)@([a-z][a-z0-9_]+)/gm;
 
 const SKILL_NAME_PATH_SAFE = /^[a-z0-9-]+$/;
 
-// Bytes a terminal's line discipline may act on when the command is pasted: everything in C0 except
-// tab/LF, plus DEL and C1. A quoted heredoc does not protect against them.
+// Bytes a terminal may act on when the command is pasted: everything in C0 except LF (a tab triggers
+// readline completion without bracketed paste), plus DEL and C1. A quoted heredoc does not protect against them.
 // eslint-disable-next-line no-control-regex -- rejecting these bytes is the point of the check.
-const UNSAFE_CONTROL_BYTES = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/;
+const UNSAFE_CONTROL_BYTES = /[\u0000-\u0009\u000B-\u001F\u007F-\u009F]/;
 
 export interface SkillMdFields {
   name?: string;
@@ -86,7 +86,11 @@ function quoteRawArgumentHint(frontmatter: string): string {
     if (/^["'|>]/.test(raw)) return line;
     // A trailing comment only follows a closed bracket or a plain scalar; inside `[pr #123]` the `#`
     // is part of the hint.
-    const hint = raw.replace(/([\]>])[ \t]+#.*$/, '$1').trimEnd();
+    const hint = (
+      raw.startsWith('[') || raw.startsWith('<')
+        ? raw.replace(/([\]>])[ \t]+#.*$/, '$1')
+        : raw.replace(/[ \t]+#.*$/, '')
+    ).trimEnd();
     return hint.startsWith('[') || hint.startsWith('<') || hint.includes(': ') ? `${key}${JSON.stringify(hint)}` : line;
   });
 }
@@ -138,8 +142,7 @@ export function parseSkillMd(input: string): ParseSkillMdResult {
         fields.disableModelInvocation = value === true || value === 'true';
         break;
       // Everything else is reported as dropped, allowed-tools included: Claude Code tool names
-      // (Bash/Read/Edit) are not B4M tools. Keep this rule in step with the CLI's SKILL.md parser
-      // (packages/cli/src/utils/commandParser.ts).
+      // (Bash/Read/Edit) are not B4M tools.
       default:
         dropped.push(key);
     }

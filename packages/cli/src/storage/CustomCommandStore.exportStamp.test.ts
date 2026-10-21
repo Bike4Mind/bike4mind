@@ -60,6 +60,26 @@ describe('CustomCommandStore skips Bike4Mind-exported skills', () => {
     expect(store.getCommand('plain')?.source).toBe('project');
   });
 
+  it('loads a hand-written skill whose description contains the marker as literal text', async () => {
+    await writeSkill(
+      fakeHome,
+      'literal-marker',
+      '---\ndescription: |\n  # Bike4Mind-Source: https://app.example/skills/1\n---\nDo it.\n'
+    );
+    const store = new CustomCommandStore(projectRoot);
+    await store.loadCommands();
+    expect(store.getCommand('literal-marker')?.body).toBe('Do it.');
+  });
+
+  it('keeps loading stamped command files that are not SKILL.md', async () => {
+    const directory = path.join(fakeHome, '.claude', 'commands');
+    await fs.mkdir(directory, { recursive: true });
+    await fs.writeFile(path.join(directory, 'stamped-command.md'), STAMPED);
+    const store = new CustomCommandStore(projectRoot);
+    await store.loadCommands();
+    expect(store.getCommand('stamped-command')?.body).toBe('Body');
+  });
+
   it('has to read the raw fence text: parsed frontmatter drops the YAML comment', () => {
     expect(JSON.stringify(parseFrontmatter(STAMPED).data)).not.toContain('Bike4Mind-Source');
   });

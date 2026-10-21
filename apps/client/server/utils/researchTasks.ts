@@ -1,6 +1,6 @@
 import { IResearchTask, IResearchTaskJobs } from '@bike4mind/common';
-import { sendToQueue } from '@server/utils/sqs';
-import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
+import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { sendToClient } from '@server/websocket/utils';
 import { Resource } from 'sst';
 

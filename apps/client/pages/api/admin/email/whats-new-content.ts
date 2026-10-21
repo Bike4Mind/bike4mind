@@ -2,9 +2,9 @@ import { ModalModel } from '@bike4mind/database';
 import { usableObjectIds } from '@bike4mind/db-core';
 import { ApiKeyScope, IModalDocument } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { assertDateInRange } from '@server/utils/dateParam';
-import { escapeHtml } from '@server/utils/mailer/emailHelpers';
+import { escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 import { renderAndSanitize } from '@server/utils/marketingReportRenderer';
 import { MODAL_SAFE_DEFAULT_KEY } from '@bike4mind/services';
 

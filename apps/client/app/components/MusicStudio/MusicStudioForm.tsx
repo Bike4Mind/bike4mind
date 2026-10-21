@@ -1,4 +1,5 @@
 import type { CreateMusicGenerationBody, PublicMusicModel } from '@bike4mind/common';
+import GenerationPayerNote from '@client/app/components/Credits/GenerationPayerNote';
 import CapabilityForm from '@client/app/components/Studio/CapabilityForm';
 import {
   useCapabilityFormState,
@@ -45,7 +46,9 @@ const MusicStudioForm = ({ models, isSubmitting, onSubmit }: MusicStudioFormProp
       canSubmit={canSubmit(form, model)}
       isSubmitting={isSubmitting}
       onSubmit={() => onSubmit(toCreateBody(form, model))}
-    />
+    >
+      <GenerationPayerNote data-testid="music-form-payer-note" />
+    </CapabilityForm>
   );
 };
 

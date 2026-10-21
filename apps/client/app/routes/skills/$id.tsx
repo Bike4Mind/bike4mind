@@ -198,7 +198,11 @@ const SkillDetailPage: FC = () => {
         <ClaudeCodeExportDialog
           onClose={() => setClaudeCodeOpen(false)}
           skill={skill}
-          sourcePath={`/skills/${encodeURIComponent(skill.id)}`}
+          sourcePath={
+            skill.importedFrom
+              ? `/skills/market/${encodeURIComponent(skill.importedFrom.listingId)}`
+              : `/skills/${encodeURIComponent(skill.id)}`
+          }
           version={skill.importedFrom?.version}
           thirdParty={!!skill.importedFrom}
         />

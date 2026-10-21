@@ -111,9 +111,11 @@ import { readableThinking } from './thinkingBlocks';
 import { COMPACT_MAX_TOKENS, compactRequestMessages, renderForSummary, sanitizeSummary } from './compaction';
 import { pickTitleModel, sanitizeGeneratedTitle, TITLE_MAX_TOKENS, titleRequestMessages } from './sessionTitle';
 import {
+  isLocalModel,
   pickSuggestionModel,
   sanitizeSuggestion,
   SUGGESTION_MAX_TOKENS,
+  suggestionModelChoices,
   suggestionRequestMessages,
 } from './nextPrompt';
 import type { SessionActivity } from './SessionActivity';
@@ -136,6 +138,10 @@ import { WEB_SEARCH_TURN_BUDGET, WebSearchLimiter } from './tools/webSearchLimit
 import { INTERRUPTED_MESSAGE, STOPPED_BEFORE_CHANGE, untilStopped } from './tools/interruptible';
 import { spendsCredits, readsUntrusted, sendsOut } from './tools/riskAssessment';
 import { MCP_TOOL_PREFIX } from './mcp/names';
+import type { PermissionScopeKey, PermissionService } from './permissions/PermissionService';
+import { describeRule, everySessionRules, permissionSubject } from './permissions/subject';
+import { resolveSubject } from './permissions/resolveSubject';
+import type { PermissionRuleSet } from './permissions/rules';
 import {
   capOutput,
   outputCapFor,
@@ -265,6 +271,11 @@ const TITLE_TIMEOUT_MS = 15_000;
 const SUGGESTION_TIMEOUT_MS = 5_000;
 
 /**
+ * Ollama may first need to load the model and prefill the excerpt on slower hardware.
+ */
+const LOCAL_SUGGESTION_TIMEOUT_MS = 30_000;
+
+/**
  * How long a compaction may take before it is abandoned.
  *
  * Generous where a title's is not: the user asked for this one and is watching it, the input is
@@ -327,6 +338,12 @@ export interface ChatServiceDeps {
   modelMemory?: ModelMemory;
   /** Absent in tests that exercise tools needing no consent; a gated tool then never runs. */
   approvals?: ApprovalGate;
+  /**
+   * Standing allow, ask and deny rules - the desktop's and Claude Code's. Read here, and written
+   * only by the approval card's "Always, in every session"; no tool can reach it.
+   */
+  permissions?: Pick<PermissionService, 'rulesFor' | 'rememberAllows' | 'invalidate'> &
+    Partial<Pick<PermissionService, 'dispose'>>;
   /** Owns long-running commands. Absent in tests, which then have no background tools. */
   background?: BackgroundProcessRegistry;
   /** Where a running command offers itself up for moving. Absent in tests, which never move one. */
@@ -685,6 +702,12 @@ export class ChatService {
 
   listModels(force = false): Promise<ChatModelCatalog> {
     return this.deps.models?.list(force) ?? Promise.resolve({ models: [] });
+  }
+
+  /** What Settings offers for the next-prompt hint; see suggestionModelChoices. */
+  async listSuggestionModels(): Promise<ChatModelCatalog> {
+    const catalog = await this.listModels(true);
+    return { ...catalog, models: suggestionModelChoices(catalog.models) };
   }
 
   /**
@@ -1165,6 +1188,8 @@ export class ChatService {
     const root = session?.project?.workingDirectory;
     if (!root) return this.listSkills(sessionId);
     await this.deps.skills.setTrusted(root, trusted);
+    // Trust also decides whether the project's Claude Code files may allow anything.
+    this.deps.permissions?.invalidate();
     return this.deps.skills.state(root);
   }
 
@@ -1286,6 +1311,7 @@ export class ChatService {
     this.active.clear();
     this.deps.approvals?.dispose();
     this.deps.videoJobs?.dispose();
+    this.deps.permissions?.dispose?.();
   }
 
   /**
@@ -1463,6 +1489,7 @@ export class ChatService {
         name: skillCommand.name,
         source: skillSource(skillCommand),
         ...(invocation.args ? { args: invocation.args } : {}),
+        ...(skillCommand.untrusted ? { imported: true as const } : {}),
       };
     }
 
@@ -2027,6 +2054,11 @@ export class ChatService {
         declined: [],
         granted: [],
         ...(resume ? resumedUntrusted(resume.toolCalls) : {}),
+        // A `/name` import's body IS this reply's prompt, so the reply starts as having read it.
+        // Read off the stored message rather than passed in, so a resumed reply re-taints too.
+        ...(session.messages.findLast(message => message.role === 'user')?.skill?.imported
+          ? { untrusted: 'skill' }
+          : {}),
       };
       const project = session.mode === 'code' ? session.project : undefined;
       // Started before the wire messages are built so the instruction files are read alongside
@@ -2247,6 +2279,10 @@ export class ChatService {
                 ask,
                 title: session.title,
                 directories: directoryTurn,
+                permissions: {
+                  project: session.project?.directory ?? null,
+                  workingDirectory: session.project ? (workingDirectory ?? session.project.workingDirectory) : null,
+                },
               },
               sessionId,
               replyId,
@@ -2628,6 +2664,8 @@ export class ChatService {
       title: string;
       /** Absent outside a reply's own loop, where request_directory then has no turn to track. */
       directories?: DirectoryTurn;
+      /** Which project's permission rules apply. */
+      permissions?: PermissionScopeKey;
     },
     sessionId: string,
     messageId: string,
@@ -2781,7 +2819,8 @@ export class ChatService {
           messageId,
           signal,
           looping,
-          scope.directories
+          scope.directories,
+          scope.permissions
         );
         if (gated.settled) return gated.settled;
         // The user's choice becomes part of the call, so every later reader of this row - the
@@ -3557,32 +3596,34 @@ export class ChatService {
     messageId: string,
     signal: AbortSignal,
     looping: boolean,
-    directories: DirectoryTurn = { declined: [], granted: [] }
+    directories: DirectoryTurn = { declined: [], granted: [] },
+    permissionScope: PermissionScopeKey = { project: null, workingDirectory: null }
   ): Promise<ApprovalOutcome> {
-    // Interactive tools never reach the approval mode below, so no mode - "Approve for me" and
-    // full access included - can answer a folder request on the user's behalf.
-    if (tool.interactive && call.name === REQUEST_DIRECTORY_TOOL_NAME) {
-      return this.awaitDirectory(call, context, sessionId, messageId, signal, directories);
-    }
-    // The same structural exclusion for an MCP server's config: which program runs on this
-    // machine, and with which keys, is decided by a click on every mode's behalf.
-    if (tool.interactive && isMcpConfigToolName(call.name)) {
-      return this.awaitMcpConfig(call, sessionId, messageId, signal);
-    }
-    if (tool.interactive) return this.awaitAnswer(call, sessionId, messageId, signal);
-
     const gate = this.deps.approvals;
-    if (!gate || !tool.approval) return { input: call.input };
+    if (!gate && !tool.interactive) return { input: call.input };
+    let rules: PermissionRuleSet | undefined;
+    try {
+      rules = await this.deps.permissions?.rulesFor(permissionScope);
+    } catch (error) {
+      const message = `Cannot load permission rules: ${String(error)}`;
+      this.deps.logger.warn(`PERMISSIONS: ${message}`);
+      const refused: ChatToolCall = { ...call, status: 'denied', error: message };
+      this.emit({ type: 'tool-start', sessionId, messageId, call });
+      this.emit({ type: 'tool-end', sessionId, messageId, call: refused });
+      return { settled: refused, input: call.input };
+    }
+    if (!tool.interactive && !tool.approval && !rules?.size) return { input: call.input };
 
     // Building the prompt reads the filesystem for a write tool, and a refusal there - a path
     // outside every granted folder, a binary file - has to settle the call WITHOUT asking. A
     // denial the user is invited to click through is not a denial.
-    let prompt: ApprovalPrompt;
+    let gatedPrompt: ApprovalPrompt | undefined;
     try {
-      if (tool.needsApproval && !(await tool.needsApproval(call.input, context))) return { input: call.input };
-      prompt = await tool.approval(call.input, context);
-      // Read only by `run`, which no path below that refuses the call goes on to.
-      context.approvedKey = prompt.key;
+      if (tool.approval && (!tool.needsApproval || (await tool.needsApproval(call.input, context)))) {
+        gatedPrompt = await tool.approval(call.input, context);
+        // Read only by `run`, which no path below that refuses the call goes on to.
+        context.approvedKey = gatedPrompt.key;
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const refused: ChatToolCall = {
@@ -3595,6 +3636,53 @@ export class ChatService {
       return { settled: refused, input: call.input };
     }
 
+    // The user's standing rules come before every mode, and a deny applies to a call no tool
+    // would have asked about (a plain file read) as much as to one it would.
+    let subject = permissionSubject(call, gatedPrompt, context);
+    try {
+      if (rules?.size) subject = await resolveSubject(subject);
+    } catch (error) {
+      const refused: ChatToolCall = {
+        ...call,
+        status: 'denied',
+        error: `Cannot resolve permission paths: ${String(error)}`,
+      };
+      this.emit({ type: 'tool-start', sessionId, messageId, call });
+      this.emit({ type: 'tool-end', sessionId, messageId, call: refused });
+      return { settled: refused, input: call.input };
+    }
+    const verdict = rules?.size ? rules.evaluate(subject) : { decision: null };
+    if (verdict.decision === 'deny') {
+      const refused: ChatToolCall = {
+        ...call,
+        status: 'denied',
+        error: `Refused by the user's deny rule ${describeRule(verdict.rule)}. Do not try to run it again or work around it; tell the user what you wanted to do.`,
+      };
+      this.emit({ type: 'tool-start', sessionId, messageId, call });
+      this.emit({ type: 'tool-end', sessionId, messageId, call: refused });
+      return { settled: refused, input: call.input };
+    }
+    // Interactive tools never reach the approval mode below, so no mode - "Approve for me" and
+    // full access included - can answer a folder request on the user's behalf.
+    if (tool.interactive && call.name === REQUEST_DIRECTORY_TOOL_NAME) {
+      return this.awaitDirectory(call, context, sessionId, messageId, signal, directories);
+    }
+    // The same structural exclusion for an MCP server's config: which program runs on this
+    // machine, and with which keys, is decided by a click on every mode's behalf.
+    if (tool.interactive && isMcpConfigToolName(call.name)) {
+      return this.awaitMcpConfig(call, sessionId, messageId, signal);
+    }
+    if (tool.interactive) return this.awaitAnswer(call, sessionId, messageId, signal);
+    if (!gate) return { input: call.input };
+
+    const askedByRule = verdict.decision === 'ask' ? `Asked because of the rule ${describeRule(verdict.rule)}.` : null;
+    if (!gatedPrompt && !askedByRule) return { input: call.input };
+    let prompt: ApprovalPrompt = gatedPrompt ?? {
+      detail: `${call.name} ${JSON.stringify(call.input)}`,
+      key: `rule-ask\x00${call.name}\x00${JSON.stringify(call.input)}`,
+    };
+    if (askedByRule) prompt = { ...prompt, detail: `${prompt.detail}\n\n${askedByRule}` };
+
     // A redirect option is never offered as a standing answer, so it is never looked up as one
     // either - only the options that actually run the call can have been remembered.
     const runnable = (prompt.choice?.options ?? []).filter(option => !option.redirect);
@@ -3606,12 +3694,16 @@ export class ChatService {
     // steering it, so a call that can send data out is asked whatever "always" was answered
     // before - unless the shell scan proved the command has nowhere to send it.
     const tainted = mode === 'auto' && sendsOut(call.name) && !prompt.contained ? directories.untrusted : undefined;
+    // A matching allow rule runs the call in every mode, over a tainted reply as well: the user
+    // wrote it knowing what the command does. A loop still stops, and the rule set itself keeps
+    // the floors (irreversible, opaque commands, outside folders) - see PermissionRuleSet.
+    if (verdict.decision === 'allow' && !stuck) return { input: applyOption(call.input, runnable[0]) };
     if (tainted) prompt = { ...prompt, detail: `${prompt.detail}\n\n${untrustedReason(tainted)}` };
 
     // An irreversible tool is asked every time, whatever was answered before: the standing set
     // is keyed on what a call WOULD do, and for something with no undo that is not a good
     // enough reason to skip asking. The gate refuses to record one for these either.
-    if (!prompt.irreversible && !stuck && !tainted) {
+    if (!prompt.irreversible && !stuck && !tainted && !askedByRule) {
       const standing = gate.isStanding(
         sessionId,
         prompt.key,
@@ -3636,12 +3728,14 @@ export class ChatService {
     // every granted root - is still refused rather than waved through by a loose mode. A mode
     // loose enough to skip the question takes the card's primary action, which is the one the
     // user would have been shown pre-selected.
-    if (this.autoApproves(mode, sessionId, call, prompt, stuck || !!tainted)) {
+    if (!askedByRule && this.autoApproves(mode, sessionId, call, prompt, stuck || !!tainted)) {
       return { input: applyOption(call.input, runnable[0]) };
     }
 
     const choice = prompt.choice ? { options: prompt.choice.options.map(toWireOption) } : undefined;
     const alwaysScope = prompt.always ? describeAlways(prompt.always, context.workingDirectory) : undefined;
+    // An ask rule outranks any allow, so a rule saved from its card would never apply.
+    const everywhere = this.deps.permissions && !askedByRule ? everySessionRules(subject, prompt) : [];
     const answer = await gate.request(
       sessionId,
       prompt.key,
@@ -3666,6 +3760,7 @@ export class ChatService {
                 }
               : {}),
             ...(choice ? { approvalChoice: choice } : {}),
+            ...(everywhere.length > 0 ? { approvalRules: everywhere } : {}),
           },
         });
       },
@@ -3678,6 +3773,17 @@ export class ChatService {
         ...(prompt.choice ? { rememberable: runnable.map(option => option.id) } : {}),
       }
     );
+
+    // The rules saved are the ones main derived and showed; the renderer only says yes to them.
+    if (answer.decision === 'always' && answer.everywhere && everywhere.length > 0) {
+      await this.deps.permissions?.rememberAllows(everywhere).catch(error => {
+        this.deps.logger.warn(`PERMISSIONS: could not save ${everywhere.join(', ')}: ${String(error)}`);
+        context.report?.notice({
+          kind: 'permissions-save-failed',
+          text: `The rule could not be saved for every session: ${String(error)}. This conversation's approval still applies. Retry in Settings > Permissions.`,
+        });
+      });
+    }
 
     const picked = findOption(prompt, answer.optionId);
 
@@ -4061,9 +4167,9 @@ export class ChatService {
    * Pulled by the renderer when a turn settles rather than pushed from the reply loop, and that
    * is the load-bearing choice: the hint exists only for a window that has this conversation
    * open with an empty composer, so a push would spend credits per turn on every window that
-   * has it closed, plus the ones with a draft half typed. The caller also owns the switch, so a
-   * user who turned the feature off makes no call at all and main never needs to read a
-   * renderer preference.
+   * has it closed, plus the ones with a draft half typed. The caller also owns the switch and the
+   * model pick, so a user who turned the feature off makes no call at all and main never needs
+   * to read a renderer preference.
    *
    * Returns null for every failure, and for every reply that produced nothing worth offering.
    * None of it reaches the conversation: a hint that could not be generated is cosmetic, and an
@@ -4073,7 +4179,7 @@ export class ChatService {
    * input with it only when the user presses Tab; sending is still Enter, on whatever is
    * actually in the box. There is no path from here to a sent message.
    */
-  async suggestNextPrompt(sessionId: string): Promise<string | null> {
+  async suggestNextPrompt(sessionId: string, preferredModel: string | null = null): Promise<string | null> {
     if (!isValidSessionId(sessionId)) return null;
     // A turn is in flight, so the exchange this would be guessing from is not the last one yet.
     // The renderer calls on 'done', but a queued message starts the next reply immediately.
@@ -4104,10 +4210,14 @@ export class ChatService {
         .find(message => message.role === 'user' && !message.system && message.content.trim());
       if (!prompt) return null;
 
-      const model = pickSuggestionModel(this.deps.models?.cached() ?? []);
+      const available = this.deps.models?.cached() ?? (await this.listModels()).models;
+      const model = pickSuggestionModel(available, preferredModel);
       if (!model) return null;
 
-      timer = setTimeout(() => controller.abort(), SUGGESTION_TIMEOUT_MS);
+      timer = setTimeout(
+        () => controller.abort(),
+        isLocalModel(model) ? LOCAL_SUGGESTION_TIMEOUT_MS : SUGGESTION_TIMEOUT_MS
+      );
 
       const { endpoint } = await this.resolveServerConfig(api);
       let answer = '';
@@ -4115,7 +4225,7 @@ export class ChatService {
         api.getAxiosInstance(),
         endpoint,
         {
-          model,
+          model: model.id,
           messages: suggestionRequestMessages(prompt.content, reply.content),
           tools: [],
           maxTokens: SUGGESTION_MAX_TOKENS,

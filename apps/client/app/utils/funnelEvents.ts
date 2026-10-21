@@ -4,7 +4,7 @@
 // server/analytics/funnel.ts. Consent is handled upstream exactly as for those conversions: GA4
 // runs in consent mode, the pixels are consent-deferred, and attributionParams is consent-gated.
 
-import { checkoutSurfaceSchema } from '@client/lib/userSubscriptions/schemas';
+import { checkoutSurfaceSchema } from '@bike4mind/server-utils/lib/userSubscriptions/schemas';
 import { attributionParams } from './attributionCookies';
 import { trackMetaEvent } from './metaPixel';
 

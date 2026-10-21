@@ -19,8 +19,8 @@ vi.mock('axios', async importOriginal => {
   const actual = await importOriginal<typeof import('axios')>();
   return { ...actual, default: { ...actual.default, post: (...a: unknown[]) => mockSlackPost(...a) } };
 });
-vi.mock('@server/utils/config', async importOriginal => {
-  const actual = await importOriginal<typeof import('@server/utils/config')>();
+vi.mock('@bike4mind/server-utils/utils/config', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/server-utils/utils/config')>();
   return {
     ...actual,
     Config: { ...actual.Config, QA_ALARM_SLACK_WEBHOOKS: '{"product-a":"https://hooks.example.com/a"}' },

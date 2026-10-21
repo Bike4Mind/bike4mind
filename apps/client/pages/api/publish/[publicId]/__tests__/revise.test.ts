@@ -9,7 +9,7 @@ import {
 } from '@client/__tests__/utils/regexLinearity';
 
 vi.mock('@server/middlewares/baseApi', () => ({ baseApi: () => ({ post: () => () => undefined }) }));
-vi.mock('@server/utils/storage', () => ({ getPublishedArtifactsStorage: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getPublishedArtifactsStorage: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({ PublishedArtifact: {}, Annotation: {} }));
 vi.mock('@server/services/publish', () => ({
   validateBundle: vi.fn(),

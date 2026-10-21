@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { apiKeyUsageLogRepository } from '@bike4mind/database';
 import { API_KEY_COMPLETION_SOURCES, ApiKeyScope, type IPlatformEndpointUsageResponse } from '@bike4mind/common';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 
 /** ApiKeyUsageLog's 90-day TTL: no endpoint data exists beyond this. */

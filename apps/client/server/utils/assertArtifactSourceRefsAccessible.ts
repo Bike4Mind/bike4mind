@@ -1,5 +1,5 @@
 import type { artifactService } from '@bike4mind/services';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 /** Same type `artifactService.create` hands its `assertSourceRefsAccessible` adapter. */
 export type ArtifactSourceRefs = artifactService.ArtifactSourceRefs;

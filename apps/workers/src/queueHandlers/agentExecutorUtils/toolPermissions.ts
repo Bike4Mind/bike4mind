@@ -11,7 +11,7 @@
 
 import type { GatedToolCall } from '@bike4mind/agents';
 import { classifyToolPermission } from '@bike4mind/common';
-import { isHeadlessConnection } from '@server/utils/headlessConnection';
+import { isHeadlessConnection } from '@bike4mind/server-utils/utils/headlessConnection';
 
 export { classifyToolPermission, type ToolPermissionResult } from '@bike4mind/common';
 
@@ -481,16 +481,18 @@ export async function settleGatedCall(
 
   if (disposition === 'denied') {
     deps.logger.warn(`[Permission] Tool "${toolName}" is denied - failing execution`);
-    const deniedMessage = `Execution stopped: tool "${toolName}" is not permitted`;
+    const deniedMessage = `Execution stopped: tool "${toolName}" is not permitted.`;
     // `callerSafe`: this string names only a tool the caller already knows about, and
     // the public poll response is documented to name the gated tool - so it is
     // published verbatim rather than collapsed by the sanitizer.
     await deps.markFailed(executionId, { message: deniedMessage, callerSafe: true });
-    await deps.sendWs('failed', { executionId, reason: 'tool_denied', toolName });
+    // The same text the Quest persists below, so the client's prompt bubble does not
+    // change wording when the persisted Quest replaces it.
+    await deps.sendWs('failed', { executionId, reason: 'tool_denied', toolName, message: deniedMessage });
     // Settle the dispatch-time Quest so chat history shows the reason instead of a
     // permanently `pending` empty bubble - only `persistRunAsQuest` ever flips it to
     // `done`.
-    await deps.persistRunAsQuest(`${deniedMessage}.`);
+    await deps.persistRunAsQuest(deniedMessage);
     return 'denied';
   }
 

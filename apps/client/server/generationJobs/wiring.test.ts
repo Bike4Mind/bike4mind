@@ -25,8 +25,8 @@ vi.mock('sst', () => ({
     },
   },
 }));
-vi.mock('@server/utils/dlqRegistry', () => ({ getSourceQueueUrl }));
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({ getSourceQueueUrl }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: vi.fn(),
   getGeneratedImageStorage: vi.fn(),
 }));
@@ -42,7 +42,7 @@ vi.mock('@bike4mind/auth', async importOriginal => {
     },
   };
 });
-vi.mock('@server/utils/sqs', () => ({ sendToQueue }));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue }));
 vi.mock('@bike4mind/database', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/database')>();
   return { ...actual, userRepository: { ...actual.userRepository, findById: userFindById } };

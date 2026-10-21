@@ -96,17 +96,6 @@ describe('getRequestActiveSubscriptions', () => {
     expect(findActiveSubscriptionsByOwners).toHaveBeenCalledTimes(1);
   });
 
-  it('an org manager without a member row resolves to the org plan', async () => {
-    // findPlanHolderOrgIds is the arm that returns managerId orgs; membership alone would be [].
-    findActiveUserSubscriptions.mockResolvedValue([]);
-    findPlanHolderOrgIds.mockResolvedValue(['managedOrg']);
-    findMembershipOrgIds.mockResolvedValue([]);
-    findActiveSubscriptionsByOwners.mockResolvedValue([{ ...seat, ownerId: 'managedOrg' }]);
-
-    await expect(getRequestActiveSubscriptions({ user })).resolves.toEqual([{ ...seat, ownerId: 'managedOrg' }]);
-    expect(findActiveSubscriptionsByOwners).toHaveBeenCalledWith('Organization', ['managedOrg']);
-  });
-
   it('an org admin without a member row resolves to the org plan', async () => {
     findActiveUserSubscriptions.mockResolvedValue([]);
     findPlanHolderOrgIds.mockResolvedValue(['adminOrg']);

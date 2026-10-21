@@ -1,4 +1,4 @@
-import { readAcquisitionCookies } from '@client/lib/subscriptions/acquisition';
+import { readAcquisitionCookies } from '@bike4mind/server-utils/lib/subscriptions/acquisition';
 import { resolveConsent } from './consentRegion';
 
 function readCookie(name: string): string | undefined {

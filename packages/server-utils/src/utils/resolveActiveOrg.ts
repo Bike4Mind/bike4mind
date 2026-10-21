@@ -1,0 +1,71 @@
+import { ForbiddenError, NotFoundError, type IUserDocument } from '@bike4mind/common';
+import { organizationRepository } from '@bike4mind/database';
+
+/**
+ * Turns a client-supplied "active org" selection (the org id the caller sends with a request)
+ * into a TRUSTED org scope, AUTHORIZATION-VALIDATING it before it can be used.
+ *
+ * The active org is client-supplied, so it can never be trusted blindly: a caller must not be
+ * able to act as an org they don't belong to - whether that means scoping a data lake into
+ * another org's namespace, or billing another org's credit pool (the two current callers). We
+ * confirm membership via the same share-access gate the org read path uses
+ * (`shareable.findAccessibleById`, as `organizationService.get` does); admins pass through since
+ * the gates already grant them access to every org.
+ *
+ * Returns the validated org id when the caller supplied one they belong to, or `undefined` when
+ * none was supplied (personal scope - the default). For a non-admin, an org they can't access and
+ * an org that doesn't exist both throw `ForbiddenError` (`findAccessibleById` returns null for
+ * either), which also means the caller can't probe whether an org id exists. Only the admin branch
+ * throws `NotFoundError`, for a missing org. Both branches fail closed on a non-existent org, so a
+ * typo can never stamp a garbage `organizationId`.
+ *
+ * This is the ONE place a route turns a client-supplied active org into a trusted scope, so the
+ * callers (data-lake create/visibility, chat billing target) can't drift in how they validate it.
+ *
+ * NOTE: validation here uses the shareable ACL (findAccessibleById, which includes the groups
+ * arm) and is deliberately WIDER than the read-side membership set (findMembershipOrgIds, owner +
+ * users[] only, #1674) - a write-target validator and a read-membership resolver must not
+ * silently drift; see the design doc docs/superpowers/specs/2026-08-13-accesscontext-org-set-design.md.
+ *
+ * Keep-predicate mirrored in packages/scripts/src/clearStaleOrganizationPointers.ts (gradeOrg);
+ * change both together.
+ */
+export async function resolveActiveOrg(
+  // Only `user` is read; a structural type keeps the package free of the client's Express augmentation.
+  req: { user?: IUserDocument },
+  requestedOrgId: string | undefined | null
+): Promise<string | undefined> {
+  const orgId = requestedOrgId?.trim();
+  if (!orgId) return undefined; // no active org selected -> personal scope
+  // Every caller sits behind auth, which sets `user`; Express's own typing leaves it optional.
+  const user = req.user as IUserDocument;
+
+  // Admins can scope to any org, but the org must still exist - otherwise a typo in an admin
+  // flow would stamp a garbage organizationId. A membership read would wrongly reject an admin
+  // acting on behalf of an org, so verify existence instead.
+  if (user.isAdmin) {
+    let org;
+    try {
+      org = await organizationRepository.findById(orgId);
+    } catch (err) {
+      // BaseRepository.findById screens a non-ObjectId and reports `null`, so a malformed org id
+      // reaches the not-found exit below rather than this catch. Retained as a backstop for any
+      // other cast on this path; any non-cast error is a transient DB failure that must surface
+      // as a 5xx, not masquerade as a missing org.
+      if ((err as { name?: string })?.name !== 'CastError') throw err;
+      org = null;
+    }
+    if (!org) {
+      throw new NotFoundError('Organization not found.');
+    }
+    return orgId;
+  }
+
+  // Non-admins: the share-access gate grants only orgs they belong to and returns null for a
+  // non-existent org, so this both authorizes and fails closed on a bad id.
+  const org = await organizationRepository.shareable.findAccessibleById(user, orgId);
+  if (!org) {
+    throw new ForbiddenError('You are not a member of the selected organization.');
+  }
+  return orgId;
+}

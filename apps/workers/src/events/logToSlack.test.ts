@@ -10,7 +10,7 @@ const mockResolveFullConfig = vi.fn();
 const mockClassifyError = vi.fn();
 const mockNotifyEventLogsToSlack = vi.fn();
 
-vi.mock('@server/utils/sqs', () => ({
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({
   sendToQueue: (...args: unknown[]) => mockSendToQueue(...args),
 }));
 
@@ -21,7 +21,7 @@ vi.mock('sst', () => ({
   },
 }));
 
-vi.mock('@server/utils/config', () => ({
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: {
     STAGE: 'dev',
     MONGODB_URI: 'mongodb://localhost:27017/%STAGE%',

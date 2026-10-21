@@ -6,15 +6,37 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 let stored: Record<string, unknown> | null = null;
 const findOneAndUpdate = vi.fn();
 const deleteOne = vi.fn();
+const order = vi.hoisted(() => [] as string[]);
 
 vi.mock('@bike4mind/database/infra', () => ({
   AdminSettings: {
     findOne: () => ({ lean: () => Promise.resolve(stored) }),
-    findOneAndUpdate: (...args: unknown[]) => findOneAndUpdate(...args),
-    deleteOne: (...args: unknown[]) => deleteOne(...args),
+    findOneAndUpdate: (...args: unknown[]) => {
+      order.push('findOneAndUpdate');
+      return findOneAndUpdate(...args);
+    },
+    deleteOne: (...args: unknown[]) => {
+      order.push('deleteOne');
+      return deleteOne(...args);
+    },
   },
 }));
 vi.mock('@bike4mind/utils', () => ({ invalidateSettingsCache: vi.fn() }));
+vi.mock('@bike4mind/database', () => ({
+  withTransaction: async (fn: () => Promise<unknown>) => {
+    order.push('tx:start');
+    const result = await fn();
+    order.push('tx:end');
+    return result;
+  },
+}));
+const recordAdminActionFromRequest = vi.fn();
+vi.mock('@server/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: (...args: unknown[]) => {
+    order.push('record');
+    return recordAdminActionFromRequest(...args);
+  },
+}));
 // Deterministic stand-ins for the shared crypto. `enc:` marks ciphertext so the tests can
 // assert a value was encrypted at rest without depending on real AES output. update.ts pulls
 // encryptSecret/isEncrypted/isValidEncryptionKey through @bike4mind/server-utils/security/secretEncryption,
@@ -31,7 +53,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (handler: (...a: unknown[]) => unknown) => handler,
 }));
-vi.mock('@server/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: 'a'.repeat(64) } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: 'a'.repeat(64) } }));
 vi.mock('@server/utils/publicSettingsArtifact', () => ({
   materializePublicSettingsArtifactSafe: vi.fn(() => Promise.resolve()),
 }));
@@ -42,6 +64,7 @@ vi.mock('@server/utils/resolveDefaultEmbeddingModel', () => ({
 import handler from '../update';
 import { formatUsdPerCredit, MIN_PRICE_PER_CREDIT_USD, SENSITIVE_SETTING_MASK } from '@bike4mind/common';
 import { invalidateSettingsCache } from '@bike4mind/utils';
+import { adminAuditService } from '@bike4mind/services';
 
 /** Stage what findOneAndUpdate returns, mirroring a Mongoose doc (toObject + field access). */
 const stageWriteResult = (settingName: string, settingValue: unknown) => {
@@ -67,6 +90,7 @@ const runHandler = async (key: string, value: unknown, extra: Record<string, unk
 describe('settings/update sensitive value handling', () => {
   beforeEach(() => {
     stored = null;
+    recordAdminActionFromRequest.mockReset().mockResolvedValue(null);
     findOneAndUpdate.mockReset();
     vi.clearAllMocks();
   });
@@ -156,7 +180,7 @@ describe('settings/update sensitive value handling', () => {
   it('refuses to persist a sensitive value when no valid encryption key is configured', async () => {
     // Fail closed: a misconfigured stage must not silently store a provider key in plaintext.
     vi.stubGlobal('__noop__', undefined);
-    const { Config } = (await import('@server/utils/config')) as unknown as {
+    const { Config } = (await import('@bike4mind/server-utils/utils/config')) as unknown as {
       Config: { SECRET_ENCRYPTION_KEY: string };
     };
     const original = Config.SECRET_ENCRYPTION_KEY;
@@ -172,7 +196,7 @@ describe('settings/update sensitive value handling', () => {
   it('degrades to plaintext (does not fail closed) on self-host without a key, matching ApiKeyModel', async () => {
     // A self-host that has not run the openssl step must still be able to save a sensitive,
     // local-only setting like ollamaBackend, exactly as the per-user provider-key path allows.
-    const { Config } = (await import('@server/utils/config')) as unknown as {
+    const { Config } = (await import('@bike4mind/server-utils/utils/config')) as unknown as {
       Config: { SECRET_ENCRYPTION_KEY: string };
     };
     const originalKey = Config.SECRET_ENCRYPTION_KEY;
@@ -198,6 +222,8 @@ describe('settings/update sensitive value handling', () => {
 
 describe('settings/update cleared forced-retrieval absolute floor', () => {
   beforeEach(() => {
+    stored = null;
+    recordAdminActionFromRequest.mockReset().mockResolvedValue(null);
     findOneAndUpdate.mockReset();
     deleteOne.mockReset();
     vi.mocked(invalidateSettingsCache).mockClear();
@@ -330,5 +356,153 @@ describe('settings/update reviewer email list', () => {
       { $set: { settingValue: [] } },
       expect.anything()
     );
+  });
+});
+
+describe('settings/update admin audit trail', () => {
+  beforeEach(() => {
+    order.length = 0;
+    stored = null;
+    findOneAndUpdate.mockReset();
+    deleteOne.mockReset();
+    recordAdminActionFromRequest.mockReset().mockResolvedValue(null);
+  });
+
+  it('records the before and after of an upsert', async () => {
+    stored = { settingName: 'tagLineMain', settingValue: 'Old line' };
+    stageWriteResult('tagLineMain', 'Welcome aboard');
+    await runHandler('tagLineMain', 'Welcome aboard');
+
+    expect(recordAdminActionFromRequest).toHaveBeenCalledTimes(1);
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'settings.admin_settings.updated',
+        target: { kind: 'settings', id: 'tagLineMain', displayName: 'tagLineMain' },
+        changes: [{ field: 'tagLineMain', before: 'Old line', after: 'Welcome aboard' }],
+      })
+    );
+  });
+
+  it('writes and records an upsert inside one transaction', async () => {
+    stored = { settingName: 'tagLineMain', settingValue: 'Old line' };
+    stageWriteResult('tagLineMain', 'Welcome aboard');
+    await runHandler('tagLineMain', 'Welcome aboard');
+
+    expect(order).toEqual(['tx:start', 'findOneAndUpdate', 'record', 'tx:end']);
+  });
+
+  it('deletes and records a clear inside one transaction', async () => {
+    stored = { settingName: 'forcedRetrievalMinSimilarityPct', settingValue: 60 };
+    await runHandler('forcedRetrievalMinSimilarityPct', '');
+
+    expect(order).toEqual(['tx:start', 'deleteOne', 'record', 'tx:end']);
+  });
+
+  it('records a null before when the setting was never stored', async () => {
+    stageWriteResult('tagLineMain', 'Welcome aboard');
+    await runHandler('tagLineMain', 'Welcome aboard');
+
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ changes: [{ field: 'tagLineMain', before: null, after: 'Welcome aboard' }] })
+    );
+  });
+
+  it('records a clear that deletes the row with the old value and a null after', async () => {
+    stored = { settingName: 'forcedRetrievalMinSimilarityPct', settingValue: 60 };
+    await runHandler('forcedRetrievalMinSimilarityPct', '');
+
+    expect(deleteOne).toHaveBeenCalledTimes(1);
+    expect(recordAdminActionFromRequest).toHaveBeenCalledTimes(1);
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'settings.admin_settings.updated',
+        summary: 'cleared forcedRetrievalMinSimilarityPct',
+        changes: [{ field: 'forcedRetrievalMinSimilarityPct', before: 60, after: null }],
+      })
+    );
+  });
+
+  it('never records the value of a sensitive setting, before or after', async () => {
+    stored = { settingName: 'anthropicDemoKey', settingValue: 'enc:sk-ant-api03-original' };
+    stageWriteResult('anthropicDemoKey', 'enc:sk-ant-api03-brandnew');
+    await runHandler('anthropicDemoKey', 'sk-ant-api03-brandnew');
+
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        changes: [{ field: 'anthropicDemoKey', before: '[REDACTED]', after: '[REDACTED]' }],
+      })
+    );
+    const serialized = JSON.stringify(recordAdminActionFromRequest.mock.calls.map(([, entry]) => entry));
+    expect(serialized).not.toContain('sk-ant-api03');
+  });
+
+  it('records only the changed sub-keys of an object setting, and the writer redacts secret ones', async () => {
+    stored = {
+      settingName: 'sreAgentConfig',
+      settingValue: { enabled: true, label: 'a', webhookSecret: 'enc:old', callbackToken: 'enc:old' },
+    };
+    const next = { enabled: true, label: 'b', webhookSecret: 'enc:new', callbackToken: 'enc:new' };
+    stageWriteResult('sreAgentConfig', next);
+    await runHandler('sreAgentConfig', next);
+
+    const { changes } = recordAdminActionFromRequest.mock.calls[0][1] as {
+      changes: { field: string; before: unknown; after: unknown }[];
+    };
+    expect(changes.map(change => change.field).sort()).toEqual([
+      'sreAgentConfig.callbackToken',
+      'sreAgentConfig.label',
+      'sreAgentConfig.webhookSecret',
+    ]);
+    expect(changes.find(change => change.field === 'sreAgentConfig.label')).toEqual({
+      field: 'sreAgentConfig.label',
+      before: 'a',
+      after: 'b',
+    });
+    const written = JSON.stringify(changes.map(adminAuditService.redactChange));
+    expect(written).not.toContain('enc:');
+  });
+
+  it('falls back to one whole-value change when no sub-key differs', async () => {
+    stored = { settingName: 'sreAgentConfig', settingValue: { enabled: true } };
+    stageWriteResult('sreAgentConfig', { enabled: true });
+    await runHandler('sreAgentConfig', { enabled: true });
+
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        changes: [{ field: 'sreAgentConfig', before: { enabled: true }, after: { enabled: true } }],
+      })
+    );
+  });
+
+  it('records a deliberate clear of a sensitive setting as redacted too', async () => {
+    stored = { settingName: 'anthropicDemoKey', settingValue: 'enc:sk-ant-api03-original' };
+    stageWriteResult('anthropicDemoKey', '');
+    await runHandler('anthropicDemoKey', '', { confirmClear: true });
+
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        changes: [{ field: 'anthropicDemoKey', before: '[REDACTED]', after: '[REDACTED]' }],
+      })
+    );
+  });
+
+  it('records nothing when a mask is written back and the stored secret is kept', async () => {
+    stored = { settingName: 'anthropicDemoKey', settingValue: 'enc:sk-ant-api03-original' };
+    await runHandler('anthropicDemoKey', `${SENSITIVE_SETTING_MASK}inal`);
+
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('fails the write when the audit entry cannot be written', async () => {
+    stageWriteResult('tagLineMain', 'Welcome aboard');
+    recordAdminActionFromRequest.mockRejectedValue(new Error('audit down'));
+
+    await expect(runHandler('tagLineMain', 'Welcome aboard')).rejects.toThrow('audit down');
   });
 });

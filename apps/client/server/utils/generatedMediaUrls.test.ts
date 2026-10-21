@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const getSignedUrl = vi.hoisted(() => vi.fn());
 const getGeneratedImageStorage = vi.hoisted(() => vi.fn(() => ({ getSignedUrl })));
-vi.mock('@server/utils/storage', () => ({ getGeneratedImageStorage }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getGeneratedImageStorage }));
 
 import { signGeneratedMediaUrls } from './generatedMediaUrls';
 

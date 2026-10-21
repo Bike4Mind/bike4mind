@@ -9,7 +9,7 @@ import { KnowledgeType } from '@bike4mind/common';
 // buildKnowledgeModerationDeps calls getFilesStorage() at build time, which otherwise reaches for
 // SST-provisioned S3 config these tests never boot; none of the claim-guard behaviour under test
 // touches storage.
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ download: vi.fn(), downloadRange: vi.fn() }),
 }));
 

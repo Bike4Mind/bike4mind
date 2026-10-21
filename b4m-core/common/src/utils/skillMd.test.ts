@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import YAML from 'yaml';
 import {
   b4mOnlyHints,
@@ -100,6 +100,13 @@ describe('parseSkillMd', () => {
     ['[pr #123]', '[pr #123]'],
     ['<file #line>', '<file #line>'],
     ['[pr] # note', '[pr]'],
+    ['[pr #123] [priority] # note', '[pr #123] [priority]'],
+    ['<file #line> # note', '<file #line>'],
+    ['a: b # c', 'a: b'],
+    ['a: b#c', 'a: b#c'],
+    ['plain # note', 'plain'],
+    ['"a: b # c"', 'a: b # c'],
+    ["'a: b # c'", 'a: b # c'],
   ])('keeps an unquoted Claude Code argument-hint %j verbatim', (raw, hint) => {
     const result = parseSkillMd(`---\nname: review\nargument-hint: ${raw}\n---\nDo it.\n`);
     expect(result).toEqual({ ok: true, fields: { name: 'review', argumentHint: hint, body: 'Do it.' }, dropped: [] });
@@ -164,6 +171,43 @@ describe('frontmatterHasSourceStamp', () => {
     expect(frontmatterHasSourceStamp('---\nname: a\n---\n# Bike4Mind-Source: https://x\n')).toBe(false);
     expect(frontmatterHasSourceStamp('# Bike4Mind-Source: https://x\n')).toBe(false);
   });
+
+  it('recognizes a stamp in the leading comment header', () => {
+    const text = '---\n\n# Exported skill\n  # Bike4Mind-Source: https://x/skills/1\nname: a\n---\nbody';
+    expect(frontmatterHasSourceStamp(text)).toBe(true);
+    const result = parseSkillMd(text);
+    expect(result.ok && result.source).toEqual({ url: 'https://x/skills/1', thirdParty: false });
+  });
+
+  it('recognizes header stamps with a BOM, CRLF, and tab indentation', () => {
+    expect(
+      frontmatterHasSourceStamp(
+        '\uFEFF---\r\n\r\n# Header\r\n\t#\tBike4Mind-Source:\thttps://x\r\nname: a\r\n---\r\nbody'
+      )
+    ).toBe(true);
+  });
+
+  it('still identifies an empty source stamp but not a comment header without one', () => {
+    expect(frontmatterHasSourceStamp('---\n# Bike4Mind-Source:\nname: a\n---\nbody')).toBe(true);
+    expect(frontmatterHasSourceStamp('---\n# Header\n\nname: a\n---\nbody')).toBe(false);
+  });
+
+  it('only recognizes the header convention, not a source comment after YAML data', () => {
+    expect(frontmatterHasSourceStamp('---\nname: a\n# Bike4Mind-Source: https://x\n---\nbody')).toBe(false);
+  });
+
+  it.each([
+    'description: |\n  # Bike4Mind-Source: https://x/skills/1',
+    'description: >\n  # Bike4Mind-Source: https://x/skills/1',
+    'description: "a description\n  # Bike4Mind-Source: https://x/skills/1\n  continued"',
+    "description: 'a description\n  # Bike4Mind-Source: https://x/skills/1\n  continued'",
+  ])('does not mistake scalar content for a source stamp: %s', frontmatter => {
+    const text = `---\n${frontmatter}\n---\nbody`;
+    expect(frontmatterHasSourceStamp(text)).toBe(false);
+    const result = parseSkillMd(text);
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.source).toBeUndefined();
+  });
 });
 
 describe('b4mOnlyHints', () => {
@@ -208,15 +252,30 @@ describe('buildClaudeCodeInstallCommand', () => {
     expect(() => buildClaudeCodeInstallCommand('a b', content)).toThrow();
   });
 
-  it.each([['\u0003'], ['\r'], ['\u001b'], ['\u007f'], ['\u009b']])(
+  it('retries when a generated heredoc delimiter occurs in the content', () => {
+    const randomValues = vi
+      .spyOn(globalThis.crypto, 'getRandomValues')
+      .mockReturnValueOnce(new Uint8Array(6))
+      .mockReturnValueOnce(new Uint8Array(6).fill(1));
+    try {
+      const command = buildClaudeCodeInstallCommand('tricky', 'B4M_SKILL_000000000000\nbody\n');
+      expect(randomValues).toHaveBeenCalledTimes(2);
+      expect(command.split('\n').at(-1)).toBe('B4M_SKILL_010101010101');
+      expect(command).toContain('\nB4M_SKILL_000000000000\nbody\n');
+    } finally {
+      randomValues.mockRestore();
+    }
+  });
+
+  it.each([['\t'], ['\u0003'], ['\r'], ['\u001b'], ['\u007f'], ['\u009b']])(
     'rejects content with the control byte %j',
     byte => {
       expect(() => buildClaudeCodeInstallCommand('tricky', `${content}${byte}`)).toThrow();
     }
   );
 
-  it('accepts tabs and newlines', () => {
-    expect(() => buildClaudeCodeInstallCommand('tricky', 'a\tb\nc')).not.toThrow();
+  it('accepts newlines', () => {
+    expect(() => buildClaudeCodeInstallCommand('tricky', 'a b\nc')).not.toThrow();
   });
 
   let hasBash = true;

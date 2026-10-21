@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { transformBatchRepository } from '@bike4mind/database';
 import { AnthropicBatchService, type BatchTransformRequest } from '@bike4mind/llm-adapters';
 import type { MessageParam } from '@anthropic-ai/sdk/resources/messages';

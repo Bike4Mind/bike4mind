@@ -32,7 +32,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: { findById: h.orgFindById } }));
-vi.mock('@server/utils/resolveActiveOrg', () => ({ resolveActiveOrg: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/resolveActiveOrg', () => ({ resolveActiveOrg: vi.fn() }));
 vi.mock('@server/integrations/github/dataLake/lakeAppClient', () => ({ getGitHubLakeAppConfig: vi.fn() }));
 // resolveConnectableLake is the REAL one: it is the connect route's org gate, and stubbing it would
 // leave the POST refusal for an appointed admin unproven.
@@ -82,7 +82,12 @@ const run = (req: unknown, res: unknown) => (handler as (req: unknown, res: unkn
 describe('/api/data-lakes/[id]/github-connection - appointed org admin', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    h.orgFindById.mockResolvedValue({ id: ORG, userId: OWNER, managerId: MANAGER, adminUserIds: [APPOINTED_ADMIN] });
+    h.orgFindById.mockResolvedValue({
+      id: ORG,
+      userId: OWNER,
+      adminUserIds: [APPOINTED_ADMIN, MANAGER],
+      users: [{ userId: MANAGER, permissions: ['read'] }],
+    });
     h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: ORG, datalakeTag: 'datalake:lake1' });
     h.connFindByDataLakeIdAny.mockResolvedValue({ id: 'conn1', organizationId: ORG });
   });

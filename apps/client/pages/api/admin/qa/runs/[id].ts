@@ -1,6 +1,6 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ensureAdmin, NotFoundError } from '@server/utils/errors';
+import { ensureAdmin, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { getQaRunDetail } from '@server/qa/reads';
 import { qaMediaStorage } from '@server/qa/storage';
 import { signQaReportToken } from '@server/qa/reportToken';

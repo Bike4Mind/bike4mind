@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { resolvePyodideMirrorOrigin } from '@client/app/utils/pyodideDistribution';
-import { getTrustedHeaderClientIp } from '@client/server/utils/trustedClientIpHeaders';
+import { getTrustedHeaderClientIp } from '@bike4mind/server-utils/utils/trustedClientIpHeaders';
 import type { NextRequest } from 'next/server';
 
 // Blocks path traversal and null-byte injection before reaching the ISR cache layer (#7190)

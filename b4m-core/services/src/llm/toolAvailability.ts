@@ -27,6 +27,7 @@ import {
   type GetEffectiveLLMApiKeysAdapters,
 } from '../apiKeyService';
 import { resolveWebSearchProvider } from './tools/implementation/websearch';
+import { getDecisionProviderRegistry, hasCallableDecisionModel } from './decisionProviders';
 
 /**
  * Presence-only availability for tools that need an external API key/config.
@@ -118,6 +119,7 @@ const GATED_TOOLS: readonly B4MLLMTools[] = [
   'edit_image',
   'audio_generation',
   'search_knowledge_base',
+  'decide',
 ];
 
 /**
@@ -271,6 +273,10 @@ export async function resolveToolAvailability(
         hasEmbeddingKey || isLocalEmbedderAvailable() || hasKeylessCloudEmbedder(),
         taint.llmKeys
       ),
+      // The registry-plus-keys rule the runner and GET /api/v1/decision-models apply, so a model this
+      // gate offers is one the runner can actually reach - including the case where a provider has a
+      // usable key but registers no model for this deployment.
+      decide: maybeFailOpen(hasCallableDecisionModel(getDecisionProviderRegistry().models(), llmKeys), taint.llmKeys),
     };
   } catch (err) {
     // Last-resort safety net for anything outside the per-lookup Promise.allSettled above (this

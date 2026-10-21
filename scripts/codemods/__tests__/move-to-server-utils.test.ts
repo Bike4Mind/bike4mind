@@ -223,8 +223,95 @@ describe('move-to-server-utils', () => {
     });
   });
 
-  it('rejects a path outside apps/client/server', () => {
-    expect(() => toMove('apps/workers/src/foo.ts')).toThrow(/Not a source file under apps\/client\/server/);
+  describe('a file outside apps/client/server', () => {
+    const OUTSIDE = [
+      toMove('apps/client/lib/agentOrchestration.ts'),
+      toMove('apps/client/shared/replyUtils.ts'),
+      toMove('apps/client/config/activityType.ts'),
+      toMove('apps/client/services/whatsNewConfigService.ts'),
+      toMove('apps/client/app/utils/chartSchemas.ts'),
+      toMove('apps/client/server/utils/errors.ts'),
+    ];
+    const rewriteOutside = (source: string, file: string) => rewriteSource(source, file, OUTSIDE);
+
+    it('keeps its client-relative path in the package, while server/ drops its prefix', () => {
+      expect(OUTSIDE.map(m => m.to)).toEqual([
+        'packages/server-utils/src/lib/agentOrchestration',
+        'packages/server-utils/src/shared/replyUtils',
+        'packages/server-utils/src/config/activityType',
+        'packages/server-utils/src/services/whatsNewConfigService',
+        'packages/server-utils/src/app/utils/chartSchemas',
+        'packages/server-utils/src/utils/errors',
+      ]);
+    });
+
+    it.each([
+      [
+        'apps/workers/src/a.ts',
+        "import { o } from '@client/lib/agentOrchestration';",
+        "import { o } from '@bike4mind/server-utils/lib/agentOrchestration';",
+      ],
+      [
+        'apps/client/app/components/Reply.tsx',
+        "import { r } from '@/shared/replyUtils';",
+        "import { r } from '@bike4mind/server-utils/shared/replyUtils';",
+      ],
+      [
+        'apps/client/app/components/Chart/Chart.tsx',
+        "import { c } from '../../utils/chartSchemas';",
+        "import { c } from '@bike4mind/server-utils/app/utils/chartSchemas';",
+      ],
+      [
+        'apps/client/pages/api/activity.test.ts',
+        "vi.mock('@client/config/activityType', () => ({}));",
+        "vi.mock('@bike4mind/server-utils/config/activityType', () => ({}));",
+      ],
+      [
+        'apps/client/server/services/whatsNew.ts',
+        "import { w } from '../../services/whatsNewConfigService';",
+        "import { w } from '@bike4mind/server-utils/services/whatsNewConfigService';",
+      ],
+    ])('rewrites an importer in %s', (file, input, expected) => {
+      expect(rewriteOutside(input, file)).toBe(expected);
+    });
+
+    it('turns an import between a moved lib/ file and a moved server/utils file into a relative path', () => {
+      expect(
+        rewriteOutside(
+          "import { E } from '@server/utils/errors';",
+          'packages/server-utils/src/lib/agentOrchestration.ts'
+        )
+      ).toBe("import { E } from '../utils/errors';");
+      expect(
+        rewriteOutside("import { o } from '../../lib/agentOrchestration';", 'packages/server-utils/src/utils/errors.ts')
+      ).toBe("import { o } from '../lib/agentOrchestration';");
+    });
+
+    it('warns about a template specifier whose head points into a moved non-server dir', () => {
+      const warnings: string[] = [];
+      const input = 'const m = await import(`@client/lib/${name}`);';
+      expect(rewriteSource(input, 'apps/workers/src/a.ts', OUTSIDE, warnings)).toBe(input);
+      expect(warnings).toEqual([
+        "apps/workers/src/a.ts: dynamic specifier starting '@client/lib/' may point at a moved file; update by hand",
+      ]);
+    });
+
+    it('throws when a moved lib/ file imports a client file left behind', () => {
+      expect(() =>
+        rewriteOutside("import { h } from './helper';", 'packages/server-utils/src/lib/agentOrchestration.ts')
+      ).toThrow(/stays in apps\/client\/lib\/helper/);
+    });
+
+    it.each([
+      'apps/client/app/components/x.ts',
+      'apps/client/app/x.ts',
+      'apps/client/pages/api/x.ts',
+      'apps/client/utils/x.ts',
+      'apps/client/libs/x.ts',
+      'apps/workers/src/foo.ts',
+    ])('refuses %s', oldPath => {
+      expect(() => toMove(oldPath)).toThrow(/Not a source file under apps\/client\/\{server,lib,shared/);
+    });
   });
 
   it.each(['chatCompletion/selfhostSstAlias.mjs', 'memory/foo.tsx', 'memory/foo.mts', 'memory/types.d.ts'])(
@@ -334,6 +421,46 @@ describe('move-to-server-utils', () => {
       expect(() => run(root, ['apps/client/server/memory/factCipher.ts'])).toThrow(/stays in apps\/client/);
       expect(read('apps/workers/src/a.ts')).toBe("import { x } from '@server/memory/factCipher';\n");
       expect(read('apps/client/server/memory/b.test.ts')).toBe("vi.mock('./factCipher');\n");
+    });
+
+    it('throws before writing when two paths map to the same package path', () => {
+      write('packages/server-utils/src/services/x.ts', 'export const x = 1;\n');
+      write('apps/workers/src/b.ts', "import { x } from '@client/services/x';\n");
+
+      expect(() => run(root, ['apps/client/services/x.ts', 'apps/client/server/services/x.ts'])).toThrow(
+        /apps\/client\/services\/x\.ts and apps\/client\/server\/services\/x\.ts would both move to/
+      );
+      expect(read('apps/workers/src/b.ts')).toBe("import { x } from '@client/services/x';\n");
+    });
+
+    it('throws before writing when the package path belongs to another file', () => {
+      // An earlier run moved server/services/x there; this one's git mv never happened.
+      write('packages/server-utils/src/services/x.ts', 'export const x = 1;\n');
+      write('apps/client/services/x.ts', 'export const y = 2;\n');
+      write('apps/workers/src/b.ts', "import { y } from '@client/services/x';\n");
+
+      expect(() => run(root, ['apps/client/services/x.ts'])).toThrow(/apps\/client\/services\/x\.ts still exists/);
+      expect(read('apps/workers/src/b.ts')).toBe("import { y } from '@client/services/x';\n");
+    });
+
+    it('re-runs cleanly when the old path holds a re-export shim of the moved file', () => {
+      write(
+        'apps/client/server/memory/factCipher.ts',
+        "// The premium overlays still import this path.\nexport * from '@bike4mind/server-utils/memory/factCipher';\nexport { default } from '@bike4mind/server-utils/memory/factCipher';\n"
+      );
+      run(root, ['apps/client/server/memory/factCipher.ts']);
+      expect(read('apps/workers/src/a.ts')).toBe("import { x } from '@bike4mind/server-utils/memory/factCipher';\n");
+
+      write('apps/client/server/memory/factCipher.ts', "export * from '@bike4mind/server-utils/memory/other';\n");
+      expect(() => run(root, ['apps/client/server/memory/factCipher.ts'])).toThrow(/still exists/);
+    });
+
+    it('does not take an empty or comment-only old path for a shim', () => {
+      write('apps/client/server/memory/factCipher.ts', '');
+      expect(() => run(root, ['apps/client/server/memory/factCipher.ts'])).toThrow(/still exists/);
+
+      write('apps/client/server/memory/factCipher.ts', '// nothing here\n');
+      expect(() => run(root, ['apps/client/server/memory/factCipher.ts'])).toThrow(/still exists/);
     });
 
     it('refuses to run before the file has been moved', () => {

@@ -18,7 +18,7 @@ import {
   IUserApiKeyDocument,
   UserApiKeyEvents,
 } from '@bike4mind/common';
-import { BadRequestError, ForbiddenError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { USER_API_KEY_SCOPE_VALUES, isApiKeyScopeOffered } from '@client/app/constants/apiKeyScopes';
 import { resolveApiKeyScopeAccess } from '@server/entitlements/apiKeyScopeAccess';
 import { Request } from 'express';

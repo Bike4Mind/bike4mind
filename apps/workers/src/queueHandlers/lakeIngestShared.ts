@@ -24,9 +24,10 @@ import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { createFabFile } from '@server/managers/fabFileManager';
 import { adjustOwnerStorageInSession } from '@bike4mind/server-utils/s3/storageCharge';
 import { evaluateConnectorCopyDeletion } from '@bike4mind/server-utils/integrations/google/drive/connectorCopyGate';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { lakeMembershipAuditDb } from '@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb';
 import { finalizeBatchIfComplete } from '@server/dataLakes/dataLakeBatchProgress';
+import { storageOwnerTransferDb } from '@server/files/storageOwnerTransferDb';
 
 // Shared by the connector ingests: driveLakeIngest.ts and githubLakeIngest.ts (via githubLakeSlice.ts).
 
@@ -139,7 +140,7 @@ export function createLakeIngestRetirer(ctx: LakeIngestRetirerContext) {
       membershipActor,
       lake,
       staleCopy.id,
-      { db: { fabFiles: fabFileRepository, ...lakeMembershipAuditDb }, logger },
+      { db: { ...storageOwnerTransferDb, ...lakeMembershipAuditDb }, logger },
       { origin: 'connector' }
     );
 

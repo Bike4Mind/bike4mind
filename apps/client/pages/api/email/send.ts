@@ -1,7 +1,7 @@
 import { sessionRepository, fabFileRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { EmailSendRequestSchema } from '../../../types/api';
-import { getFilesStorage } from '@server/utils/storage';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { notebookCurationService } from '@bike4mind/services';
 import { Permission, isImageServeable } from '@bike4mind/common';
 import { z } from 'zod';

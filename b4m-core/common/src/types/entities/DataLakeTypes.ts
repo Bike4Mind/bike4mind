@@ -803,8 +803,8 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    *
    * `ctx.administeredOrgIds` is the org-ADMIN arm and is not interchangeable with
    * `ctx.organizationIds`: it grants no more than the single gate already grants (`canManageLake`
-   * rung 4 admits the same principal, and manage implies read), it exists so the succession roles -
-   * team manager, appointed admin - can DISCOVER the org lakes they may already manage. Absent or
+   * rung 4 admits the same principal, and manage implies read), it exists so the succession role -
+   * an org manager (`adminUserIds`) - can DISCOVER the org lakes they may already manage. Absent or
    * empty simply adds no arm.
    */
   findAccessible(
@@ -1644,6 +1644,12 @@ export interface DataLakeDocumentPurgeReceipt {
    * `filePath` so the row it keeps stays addressable, and counts that un-attempted key here too.
    */
   storageObjectsRemaining: number;
+  /**
+   * The file is a moderation evidence hold (see isModerationEvidenceHold), so the sweep kept its row
+   * and every stored object on purpose. `verified` is false, but a retry cannot change that until the
+   * hold is cleared - a caller must not present it as a failure to retry. Absent on legacy receipts.
+   */
+  heldForModeration?: boolean;
   /**
    * What happened to the separate retrieval index. NOT read back - the port has no read operation.
    * `purged`: a wired index accepted the removal without throwing. `collocated`: this deployment

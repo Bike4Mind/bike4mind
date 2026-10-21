@@ -33,7 +33,7 @@ vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({
   encryptSecret: (value: string) => `enc(${value})`,
 }));
 vi.mock('@server/utils/orgAccess', () => ({ verifyOrgOwner: h.verifyOrgOwner }));
-vi.mock('@server/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: 'test-key' } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: 'test-key' } }));
 
 await import('../rotate-secret');
 

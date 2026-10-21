@@ -12,7 +12,7 @@ import type {
   IFabFileRepository,
   IFabFileChunkRepository,
 } from '@bike4mind/common';
-import { isLegalHoldError } from '@bike4mind/common';
+import { isLegalHoldError, isModerationEvidenceHold } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { type ManageActor } from './manageRule';
 import { resolveCanManageLake } from './authorizeLakeManage';
@@ -20,13 +20,15 @@ import { lakeMembershipScope } from './lakeMembershipScope';
 import { lakeMembershipSignals } from './lakeMembership';
 import { warnOnPrefixCollision } from './tagPrefixCollision';
 import { strictIndexRemove, type RetrievalIndexPort } from './ports';
+import { reassignStorageOwner, type StorageOwnerTransferDb } from '../fabFileService/reassignStorageOwner';
 
 interface CleanupDeletedDataLakeAdapters {
   purgeClaimId?: string;
   // Optional for existing callers of the published service. Queue consumers must supply both adapters.
   beginPurge?: () => Promise<boolean>;
   deleteFileAndChunks?: (id: string) => Promise<void>;
-  db: {
+  // StorageOwnerTransferDb: a spared survivor leaving an org lake moves its bytes to its next owner.
+  db: StorageOwnerTransferDb & {
     dataLakes: Pick<IDataLakeRepository, 'findById' | 'delete' | 'find'>;
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'removeAllForLake'>;
     /**
@@ -281,18 +283,28 @@ export const cleanupDeletedDataLake = async (
   const isStorageKey = (path: unknown): path is string => typeof path === 'string' && path.length > 0;
   // Keyed per slice, loaded in `beforeSlice`. Not `findById`: every id here is a soft-deleted row,
   // which the soft-delete plugin hides from it, so it would return null and delete nothing.
-  let storageKeysById = new Map<string, { filePath?: string; versions?: { filePath?: string }[] }>();
+  let storageKeysById = new Map<
+    string,
+    { filePath?: string; versions?: { filePath?: string }[]; moderationStatus?: string; blockReason?: string }
+  >();
   await inChunks(
     fileIds,
     chunkSize,
     async id => {
-      // EVERY stored key, not just the current one - an AI-edited file's earlier revisions each sit
-      // under their own object key (see purgeDataLakeDocument.ts, the single-document sibling this
-      // mirrors). Deliberately UNCAUGHT: a throw here aborts the sweep before this row goes, so the
-      // id stays resolvable by findIdsByDataLakeTag on a DLQ retry instead of the row being
-      // hard-deleted over an object that was never removed.
-      if (storage) {
-        const file = storageKeysById.get(id);
+      // An evidence-held file keeps its bytes: the row delete below is refused for it anyway, so
+      // deleting first would leave a held row over objects that are gone (same rule as
+      // fabFileService/deleteStoredObjects.ts).
+      const file = storageKeysById.get(id);
+      if (file && isModerationEvidenceHold(file)) {
+        logger?.warn('[dataLake] keeping the stored objects of a blocked file (legal hold)', { fabFileId: id });
+        // Keep the whole snapshot together even if moderation clears before the row delete.
+        return;
+      } else if (storage) {
+        // EVERY stored key, not just the current one - an AI-edited file's earlier revisions each sit
+        // under their own object key (see purgeDataLakeDocument.ts, the single-document sibling this
+        // mirrors). Deliberately UNCAUGHT: a throw here aborts the sweep before this row goes, so the
+        // id stays resolvable by findIdsByDataLakeTag on a DLQ retry instead of the row being
+        // hard-deleted over an object that was never removed.
         const currentKey = isStorageKey(file?.filePath) ? file.filePath : null;
         const versionKeys = Array.from(
           new Set((file?.versions ?? []).map(version => version?.filePath).filter(isStorageKey))
@@ -324,10 +336,8 @@ export const cleanupDeletedDataLake = async (
       }
     },
     async slice => {
-      if (storage) {
-        const rows = await db.fabFiles.findStorageKeysByIds(slice);
-        storageKeysById = new Map(rows.map(row => [row.id, row]));
-      }
+      const rows = await db.fabFiles.findStorageKeysByIds(slice);
+      storageKeysById = new Map(rows.map(row => [row.id, row]));
       await db.dataLakeFindings?.deleteForPurgedDocuments(slice);
     }
   );
@@ -347,7 +357,12 @@ export const cleanupDeletedDataLake = async (
   await inChunks(survivors, chunkSize, async id => {
     const file = await db.fabFiles.findById(id);
     const { inLake, tagsToPull } = lakeMembershipSignals(existing, file);
-    if (file && inLake) await db.fabFiles.pullTagsByFabFileId(file.id, tagsToPull);
+    if (!file || !inLake) return;
+    // Restamped before the pull as well as after: a redelivery no longer lists this file once the pull
+    // lands, and this lake (deleted or purging) is already ignored by the owner resolution.
+    await reassignStorageOwner(file.id, db);
+    await db.fabFiles.pullTagsByFabFileId(file.id, tagsToPull);
+    await reassignStorageOwner(file.id, db);
   });
 
   // 4. Delete the lake's batches (chunked, same rationale as the chunk sweep above).

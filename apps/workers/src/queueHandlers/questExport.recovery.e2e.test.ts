@@ -29,7 +29,7 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
     getSignedUrl = async (key: string) => `http://download.test/${key}`;
   },
 }));
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ download: async (key: string) => h.objects.get(key) }),
   getGeneratedImageStorage: () => ({ download: async (key: string) => h.objects.get(key) }),
 }));

@@ -6,7 +6,7 @@ import { decryptAtRest } from '@bike4mind/utils/security';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
 import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@server/auth/mfaEnforcement';
-import { ForbiddenError, NotFoundError, UnauthorizedError } from '@server/utils/errors';
+import { ForbiddenError, NotFoundError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import jwt from 'jsonwebtoken';
 
 /**

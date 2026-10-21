@@ -132,18 +132,18 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
   },
 }));
 
-vi.mock('@server/utils/storage', () => ({
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ download: h.filesDownload }),
   getGeneratedImageStorage: () => ({ download: h.generatedDownload }),
 }));
 
-vi.mock('@server/utils/generatedImageAccess', () => ({
+vi.mock('@bike4mind/server-utils/utils/generatedImageAccess', () => ({
   userCanAccessGeneratedImage: h.canAccessGeneratedImage,
 }));
 
 vi.mock('@server/websocket/utils', () => ({ sendToClient: h.progress }));
 
-vi.mock('@client/shared/subQuestStatusPresentation', () => ({ getSubQuestStatusIcon: () => '' }));
+vi.mock('@bike4mind/server-utils/shared/subQuestStatusPresentation', () => ({ getSubQuestStatusIcon: () => '' }));
 
 vi.mock('./createZipBuffer', () => ({ createZipBuffer: h.createZipBuffer }));
 

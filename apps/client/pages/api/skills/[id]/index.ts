@@ -12,7 +12,7 @@ import {
   validateSkillArgumentHint,
   validateSkillAllowedTools,
 } from '@server/utils/skillValidation';
-import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
+import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 import {
   ShareableSkill,
   SkillActor,

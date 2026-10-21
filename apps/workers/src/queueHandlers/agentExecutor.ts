@@ -75,6 +75,7 @@ import { Logger } from '@bike4mind/observability';
 import { Permission, OPTI_SURFACE } from '@bike4mind/common';
 import { accessibleBy } from '@casl/mongoose';
 import { lakeWriteToolDb } from '@server/dataLakes/lakeWriteToolDb';
+import { runDecisionTool } from '@server/decisions/runDecisionTool';
 import { executionTurnAuth } from '@server/auth/turnAuth';
 import defineAbilitiesFor from '@server/auth/ability';
 import { missionChatTools, MISSION_CHAT_TOOL_NAMES } from '@workers/deepAgent/missionChatTools';
@@ -116,7 +117,7 @@ import {
   inheritedArtifactFields,
   resolveAgentArtifactEmissionPrompt,
   resolveAgentArtifactGate,
-} from '@server/utils/artifactGate';
+} from '@bike4mind/server-utils/utils/artifactGate';
 import { resolveExecutionQuestId } from './agentExecutor.resolveQuestId';
 import {
   shouldWithholdToolCall,
@@ -162,7 +163,7 @@ import {
   runHasAttachments,
   sessionDeniedTools,
 } from './agentExecutor.sessionToolPolicy';
-import { toUserFacingFailureMessage } from '@server/utils/agentFailureMessage';
+import { toUserFacingFailureMessage } from '@bike4mind/server-utils/utils/agentFailureMessage';
 import { buildReActAgentRuntimeConfig } from './agentExecutor.reActAgentConfig';
 // Per-iteration billing (delta math + #657 context-window guard + tool-internal
 // spend fold, #630) lives in its own side-effect-free module so the guard and the
@@ -205,15 +206,15 @@ import {
 } from './agentExecutor.schemas';
 import { enforceCheckpointDepth } from './agentExecutor.checkpointDepth';
 import { runIterationWithDeadlineGuard } from './agentExecutor.iterationDeadline';
-import { Config } from '@server/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
-import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
-import { emitMetric } from '@server/utils/cloudwatch';
+import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
 import { publishRunPendingAction } from './agentExecutor.pendingAction';
-import { createAgentToolEchoMarker, persistedExecutionSteps } from '@server/utils/markAgentToolEchoes';
-import { isHeadlessConnection } from '@server/utils/headlessConnection';
-import { extractFinalAnswer } from '@server/utils/extractFinalAnswer';
+import { createAgentToolEchoMarker, persistedExecutionSteps } from '@bike4mind/server-utils/utils/markAgentToolEchoes';
+import { isHeadlessConnection } from '@bike4mind/server-utils/utils/headlessConnection';
+import { extractFinalAnswer } from '@bike4mind/server-utils/utils/extractFinalAnswer';
 import { resolveAndPublishMementoCompletion } from '@server/utils/publishMementoCompletion';
 import { resolveAndBuildMementosPreamble } from '@workers/utils/getFirstIterationMementosPreamble';
 import { resolveExecutionMementoGates } from '@server/utils/resolveExecutionMementoGates';
@@ -1671,6 +1672,9 @@ async function processExecution(
       attachedFileIds: attachedFileIdsForRun(execution, session.knowledgeIds),
       fullyInlinedAttachmentIds,
       onToolLlmUsage: usage => addToolUsage(pendingToolUsage, usage),
+      // The `decide` tool's seam: same runner, hold and retry as the public route, attributed to
+      // the agent surface, preserving the run's principal and active billing account.
+      decide: params => runDecisionTool({ ...params, source: 'agent' }),
       db: {
         // usageEvents is deliberately absent: onToolLlmUsage already folds tool COGS into the
         // agent_execution event (billIteration), so wiring it would make
@@ -3549,6 +3553,8 @@ async function processSubagentDispatch(
       sessionIncludeLibraryFiles: libraryFlagForScope(session),
       // Without it a library-off session's delegated agent cannot open the files attached to it.
       attachedFileIds: attachedFileIdsForRun(parentRun ?? undefined, session.knowledgeIds),
+      // Same seam as the parent run: a subagent's decision bills through the shared runner.
+      decide: params => runDecisionTool({ ...params, source: 'agent' }),
       // Manage-but-not-member admission, threaded unvetted: the ownership gate above already
       // confirmed the session belongs to this run before this ToolBuilderDeps is built.
       sessionPreauthorizedLakeIds: session.preauthorizedLakeIds,

@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { canTrustTool, commandTextOf, isReadOnlyTool, toolCategory, writePathOf } from './toolPolicy.js';
+import {
+  canTrustTool,
+  commandTextOf,
+  isReadOnlyTool,
+  sandboxedCommandArg,
+  toolCategory,
+  writePathOf,
+} from './toolPolicy.js';
 import type { ToolDescriptor, ToolEffect } from './toolDescriptor.js';
 
 function descriptor(overrides: Partial<ToolDescriptor> = {}): ToolDescriptor {
@@ -85,5 +92,29 @@ describe('commandTextOf / writePathOf', () => {
     expect(writePathOf(descriptor(), { path: 'a.txt' })).toBeUndefined();
     expect(writePathOf(descriptor({ writePathArg: 'path' }), { path: '' })).toBeUndefined();
     expect(writePathOf(descriptor({ writePathArg: 'path' }), 'a.txt')).toBeUndefined();
+  });
+});
+
+describe('sandboxedCommandArg', () => {
+  const sandboxed = { commandArg: 'command', sandbox: 'command' } as const;
+
+  it('returns the command argument for a core tool that declares the sandbox', () => {
+    expect(sandboxedCommandArg(descriptor(sandboxed))).toBe('command');
+  });
+
+  it('is undefined without a declaration or a command argument', () => {
+    expect(sandboxedCommandArg(descriptor({ commandArg: 'command' }))).toBeUndefined();
+    expect(sandboxedCommandArg(descriptor({ sandbox: 'command' }))).toBeUndefined();
+    expect(sandboxedCommandArg(undefined)).toBeUndefined();
+  });
+
+  it.each([
+    ['plugin', { kind: 'plugin', packageName: 'p' }],
+    ['mcp', { kind: 'mcp', server: 's' }],
+    ['hook', { kind: 'hook' }],
+    ['cli', { kind: 'cli' }],
+    ['builtin-module', { kind: 'builtin-module', module: 'm' }],
+  ] as const)('strips the declaration from a %s source', (_label, source) => {
+    expect(sandboxedCommandArg(descriptor({ ...sandboxed, source }))).toBeUndefined();
   });
 });

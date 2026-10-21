@@ -1,7 +1,7 @@
 import { userRepository, subscriberRepository, emailPreferencesRepository } from '@bike4mind/database';
 import { ApiKeyScope, EmailCategory, IEmailRecipientFilter } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { randomUUID } from 'crypto';
 
 interface PreviewRecipient {
