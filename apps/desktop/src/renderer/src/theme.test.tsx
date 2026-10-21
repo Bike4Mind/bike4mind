@@ -9,7 +9,7 @@ import MenuButton from '@mui/joy/MenuButton';
 import MenuItem from '@mui/joy/MenuItem';
 import Tooltip from '@mui/joy/Tooltip';
 import { avoidPageModifier } from './chat/agentBrowser';
-import { desktopTheme, TOOLTIP_MAX_WIDTH } from './theme';
+import { DARK_PALETTE, desktopTheme, TOOLTIP_MAX_WIDTH } from './theme';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -70,5 +70,54 @@ describe('the desktop theme', () => {
     );
     expect(new Set(placed)).toEqual(new Set(['tooltip', 'menu']));
     avoid.mockRestore();
+  });
+});
+
+type Rgb = [number, number, number];
+
+const hexToRgb = (hex: string): Rgb => {
+  const value = Number.parseInt(hex.slice(1), 16);
+  return [(value >> 16) & 255, (value >> 8) & 255, value & 255];
+};
+
+/** A Joy text token: a hex, or the `rgba(r g b / a)` the theme writes its ink steps as. */
+const composite = (token: string, ground: Rgb): Rgb => {
+  if (token.startsWith('#')) return hexToRgb(token);
+  const [r, g, b, a] = (token.match(/[\d.]+/g) ?? []).map(Number);
+  return [r, g, b].map((channel, index) => channel * a + ground[index] * (1 - a)) as Rgb;
+};
+
+const luminance = (rgb: Rgb): number => {
+  const [r, g, b] = rgb.map(channel => {
+    const c = channel / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+};
+
+const contrast = (a: Rgb, b: Rgb): number => {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+};
+
+describe('the desktop dark palette', () => {
+  const { palette } = desktopTheme.colorSchemes.dark;
+
+  it('no longer paints the page pure black', () => {
+    expect(palette.background.body).toBe(DARK_PALETTE.page);
+    expect(palette.background.body.toLowerCase()).not.toMatch(/^#0{3}(0{3})?$/);
+  });
+
+  it.each(['primary', 'secondary', 'tertiary'] as const)('sets text.%s at 4.5:1 or better on every ground', step => {
+    for (const ground of [DARK_PALETTE.page, DARK_PALETTE.panel, DARK_PALETTE.raised]) {
+      const base = hexToRgb(ground);
+      expect(contrast(composite(palette.text[step], base), base)).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it('keeps the prompt bubble text readable at rest and when pressed', () => {
+    for (const fill of [palette.primary.softBg, palette.primary.softActiveBg]) {
+      expect(contrast(hexToRgb(DARK_PALETTE.ink), hexToRgb(fill))).toBeGreaterThanOrEqual(4.5);
+    }
   });
 });

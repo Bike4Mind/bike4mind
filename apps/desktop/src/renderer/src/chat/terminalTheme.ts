@@ -42,7 +42,8 @@ const ANSI: Record<'light' | 'dark', ITheme> = {
 
 const FALLBACK = {
   light: { background: '#fbfcfe', foreground: '#171a1c', selection: '#c7dff7' },
-  dark: { background: '#0b0d0e', foreground: '#f0f4f8', selection: '#0a2744' },
+  // Mirrors DARK_PALETTE in theme.ts (panel, ink, selected).
+  dark: { background: '#13181c', foreground: '#d1e4f4', selection: '#1b4b7a' },
 };
 
 /**
