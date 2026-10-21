@@ -120,6 +120,7 @@ test.describe('Admin - User CRUD', () => {
       await adminPage.clickUserAdminButton(EDITED_NAME);
       await adminPage.typeDeleteConfirmation();
       await adminPage.clickDeleteUserButton();
+      await adminPage.fillDeleteReason();
       await adminPage.confirmDeleteUser();
 
       // Verify user no longer appears in search

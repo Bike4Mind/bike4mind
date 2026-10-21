@@ -36,6 +36,7 @@ vi.mock('@client/app/components/AudioStudio/AudioGallery', () => ({
 vi.mock('@client/app/components/AudioStudio/useGenerateAudio', () => ({
   useGenerateAudio: () => ({ generate: vi.fn(), isGenerating: false, result: null }),
 }));
+vi.mock('@client/app/components/Credits/GenerationPayerNote', () => ({ default: () => null }));
 vi.mock('@client/app/components/Session/AISettings/AudioGenerationSettings', () => ({
   AudioGenerationSettings: () => <div data-testid="audio-settings-stub" />,
 }));

@@ -95,6 +95,28 @@ const weeklyUserActivityReport = runsScheduledJobs
     })
   : undefined;
 
+const signupBaselineReport = runsScheduledJobs
+  ? new sst.aws.Cron('signupBaselineReport', {
+      schedule: 'cron(0 6 ? * MON *)',
+      enabled: $app.stage === 'production',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/signupBaselineReport.handler',
+        runtime: 'nodejs24.x',
+        timeout: '10 minutes',
+        link: [...allSecrets],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+          SIGNUP_BASELINE_SINCE: process.env.SIGNUP_BASELINE_SINCE || '',
+          ANALYTICS_TEST_PATTERN: process.env.ANALYTICS_TEST_PATTERN || '',
+        },
+        logging: {
+          retention: '1 week',
+        },
+      },
+    })
+  : undefined;
+
 const secretRotationNotifierCron = runsScheduledJobs
   ? new sst.aws.Cron('secretRotationNotifier', {
       // Daily check at 9am UTC (4am EST)
@@ -1146,6 +1168,7 @@ export {
   modelDiscoveryCronEnabled,
   dailyUserActivityReport,
   weeklyUserActivityReport,
+  signupBaselineReport,
   secretRotationNotifierCron,
   scheduleTaskCron,
   apiKeyBaselineCalculation,
