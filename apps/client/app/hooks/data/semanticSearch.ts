@@ -8,6 +8,7 @@ import { useMutation } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { useAdvancedSearch, SemanticSearchDebugInfo } from '@client/app/hooks/useAdvancedSearch';
 import { useShallow } from 'zustand/react/shallow';
+import { getInsufficientCreditsMessage } from '@client/app/utils/error';
 
 interface SemanticSearchRequest {
   query: string;
@@ -105,7 +106,8 @@ export const useSemanticSearch = () => {
       setIsSemanticSearching(false);
     },
     onError: error => {
-      const errorMessage = error instanceof Error ? error.message : 'Semantic search failed';
+      const errorMessage =
+        getInsufficientCreditsMessage(error) ?? (error instanceof Error ? error.message : 'Semantic search failed');
       setSemanticSearchError(errorMessage);
       setIsSemanticSearching(false);
       setSemanticResults(null);
