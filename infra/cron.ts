@@ -110,6 +110,9 @@ const signupBaselineReport = runsScheduledJobs
           SIGNUP_BASELINE_SINCE: process.env.SIGNUP_BASELINE_SINCE || '',
           ANALYTICS_TEST_PATTERN: process.env.ANALYTICS_TEST_PATTERN || '',
         },
+        logging: {
+          retention: '1 week',
+        },
       },
     })
   : undefined;
