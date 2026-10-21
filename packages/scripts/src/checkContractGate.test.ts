@@ -23,7 +23,7 @@ afterEach(() => {
   while (sandboxes.length) fs.rmSync(sandboxes.pop()!, { recursive: true, force: true });
 });
 
-function makeTree(): { dir: string; v1Dir: string; allowlist: string } {
+function makeTree(): { dir: string; v1Dir: string; allowlist: string; apiKeyAllowlist: string } {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cg-test-'));
   sandboxes.push(dir);
   const v1Dir = path.join(dir, 'apps', 'client', 'pages', 'api', 'v1');
@@ -31,8 +31,22 @@ function makeTree(): { dir: string; v1Dir: string; allowlist: string } {
   const allowlist = path.join(dir, 'scripts', 'contract-gate-allowlist.txt');
   fs.mkdirSync(path.dirname(allowlist), { recursive: true });
   fs.writeFileSync(allowlist, '# header-only\n', 'utf8');
-  return { dir, v1Dir, allowlist };
+  const apiKeyAllowlist = path.join(dir, 'scripts', 'contract-gate-api-key-allowlist.txt');
+  fs.writeFileSync(apiKeyAllowlist, '# header-only\n', 'utf8');
+  return { dir, v1Dir, allowlist, apiKeyAllowlist };
 }
+
+// Writes a handler relative to pages/api (not pages/api/v1); returns its repo-relative path.
+function writeApiHandler(dir: string, rel: string, content: string): string {
+  const repoRel = path.join('apps', 'client', 'pages', 'api', rel);
+  const full = path.join(dir, repoRel);
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  fs.writeFileSync(full, content, 'utf8');
+  return repoRel;
+}
+
+const JWT_ONLY = `export default baseApi({ auth: 'jwtOnly' }).get((req, res) => res.json({}));\n`;
+const API_KEY = `export default baseApi({ requiredScopes: ['read:data'] }).get((req, res) => res.json({}));\n`;
 
 function writeHandler(v1Dir: string, rel: string, content: string): string {
   const full = path.join(v1Dir, rel);
@@ -105,6 +119,14 @@ describe('check-contract-gate.sh', () => {
   it('exits 1 when the allowlist file is missing', () => {
     const { dir } = makeTree();
     fs.rmSync(path.join(dir, 'scripts', 'contract-gate-allowlist.txt'));
+    const r = runGuard(dir);
+    expect(r.status).toBe(1);
+    expect(r.stdout).toMatch(/ERROR.*Allowlist not found/);
+  });
+
+  it('exits 1 when the api-key allowlist file is missing', () => {
+    const { dir } = makeTree();
+    fs.rmSync(path.join(dir, 'scripts', 'contract-gate-api-key-allowlist.txt'));
     const r = runGuard(dir);
     expect(r.status).toBe(1);
     expect(r.stdout).toMatch(/ERROR.*Allowlist not found/);
@@ -183,12 +205,113 @@ describe('check-contract-gate.sh', () => {
       expect(r.stdout).toContain('OK');
     });
 
-    it('does not flag files in a premium-* subdirectory', () => {
-      const { dir, v1Dir } = makeTree();
-      writeHandler(v1Dir, 'premium-overlay/bad.ts', VIOLATING);
+    it('does not flag files under the top-level pages/api/premium-* stubs', () => {
+      const { dir } = makeTree();
+      writeApiHandler(dir, 'premium-overlay/bad.ts', API_KEY);
       const r = runGuard(dir);
       expect(r.status).toBe(0);
       expect(r.stdout).toContain('OK');
+    });
+
+    it('still flags a premium-* directory nested below pages/api/v1', () => {
+      const { dir, v1Dir } = makeTree();
+      const rel = writeHandler(v1Dir, 'sub/premium-overlay/bad.ts', VIOLATING);
+      const r = runGuard(dir);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain(rel);
+    });
+
+    it.each(['bad.js', 'bad.jsx'])('flags a v1 %s that lacks nextRouteForContract', (name) => {
+      const { dir, v1Dir } = makeTree();
+      const rel = writeHandler(v1Dir, name, VIOLATING);
+      const r = runGuard(dir);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain(rel);
+    });
+
+    it('ignores non-routable extensions such as .mjs', () => {
+      const { dir, v1Dir } = makeTree();
+      writeHandler(v1Dir, 'bad.mjs', VIOLATING);
+      expect(runGuard(dir).status).toBe(0);
+    });
+  });
+
+  describe('outside-v1 jwtOnly ratchet', () => {
+    it('flags a non-jwtOnly handler outside v1 and reports its path', () => {
+      const { dir } = makeTree();
+      const rel = writeApiHandler(dir, 'foo.ts', API_KEY);
+      const r = runGuard(dir);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain(rel);
+      expect(r.stdout).toContain('::error::');
+    });
+
+    it.each([
+      ["baseApi({ auth: 'jwtOnly' })"],
+      ['baseApi({ auth: "jwtOnly" })'],
+      ["baseApi({auth:'jwtOnly'})"],
+    ])('passes a jwtOnly handler outside v1: %s', (call) => {
+      const { dir } = makeTree();
+      writeApiHandler(dir, 'foo.ts', `export default ${call};\n`);
+      expect(runGuard(dir).status).toBe(0);
+    });
+
+    it('does not accept the bare word jwtOnly in a comment', () => {
+      const { dir } = makeTree();
+      const rel = writeApiHandler(dir, 'foo.ts', `// TODO: make jwtOnly\n${API_KEY}`);
+      const r = runGuard(dir);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain(rel);
+    });
+
+    it.each(['foo.js', 'foo.jsx', 'nested/deep/foo.tsx'])('scans %s', (name) => {
+      const { dir } = makeTree();
+      const rel = writeApiHandler(dir, name, API_KEY);
+      const r = runGuard(dir);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain(rel);
+    });
+
+    it('ignores .mjs and files under __tests__/', () => {
+      const { dir } = makeTree();
+      writeApiHandler(dir, 'foo.mjs', API_KEY);
+      writeApiHandler(dir, 'sub/__tests__/foo.test.ts', API_KEY);
+      expect(runGuard(dir).status).toBe(0);
+    });
+
+    it('does not apply the jwtOnly rule to v1 files (no double-gating)', () => {
+      const { dir, v1Dir } = makeTree();
+      writeHandler(v1Dir, 'clean.ts', EXEMPT);
+      expect(runGuard(dir).status).toBe(0);
+    });
+
+    it('passes an allowlisted handler', () => {
+      const { dir, apiKeyAllowlist } = makeTree();
+      const rel = writeApiHandler(dir, 'legacy.ts', API_KEY);
+      fs.writeFileSync(apiKeyAllowlist, `# header\n${rel}  # reason\n`, 'utf8');
+      const r = runGuard(dir);
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain('OK');
+    });
+
+    it('reports a stale entry (now jwtOnly) as INFO and exits 0', () => {
+      const { dir, apiKeyAllowlist } = makeTree();
+      const rel = writeApiHandler(dir, 'converted.ts', JWT_ONLY);
+      fs.writeFileSync(apiKeyAllowlist, `# header\n${rel}\n`, 'utf8');
+      const r = runGuard(dir);
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain('INFO');
+      expect(r.stdout).toContain(rel);
+    });
+
+    it('fails on both scans in one run', () => {
+      const { dir, v1Dir } = makeTree();
+      const v1Rel = writeHandler(v1Dir, 'bad.ts', VIOLATING);
+      const outRel = writeApiHandler(dir, 'foo.ts', API_KEY);
+      const r = runGuard(dir);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain(v1Rel);
+      expect(r.stdout).toContain(outRel);
     });
   });
 

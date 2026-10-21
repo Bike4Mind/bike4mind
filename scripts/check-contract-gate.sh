@@ -1,73 +1,133 @@
 #!/usr/bin/env bash
-# CI gate: every file under pages/api/v1/** must use nextRouteForContract.
-# "Public" = API-key-callable and OpenAPI-registered (CONVENTIONS.md).
+# CI gate over apps/client/pages/api, two scans:
+#   1. every file under pages/api/v1/** must use nextRouteForContract.
+#      "Public" = API-key-callable and OpenAPI-registered (CONVENTIONS.md).
+#   2. every file OUTSIDE pages/api/v1 must declare `auth: 'jwtOnly'` (the api-key chain is
+#      never installed in that mode, see server/middlewares/baseApi.ts), or be on the frozen
+#      baseline. A new handler that accepts API keys must go through a v1 contract instead.
 # Exits 1 on any unacknowledged violation.
 #
-# ALLOWLIST (scripts/contract-gate-allowlist.txt)
-#   Legitimate permanent exceptions (static v1 routes that are not API handlers).
-#   Not migration debt: do not add real API handlers here.
+# ALLOWLISTS
+#   scripts/contract-gate-allowlist.txt (scan 1)
+#     Legitimate permanent exceptions (static v1 routes that are not API handlers).
+#     Not migration debt: do not add real API handlers here.
+#   scripts/contract-gate-api-key-allowlist.txt (scan 2)
+#     Frozen baseline of handlers that predate the ratchet. It only shrinks.
 
 set -euo pipefail
 
 ALLOWLIST="scripts/contract-gate-allowlist.txt"
-API_DIR="apps/client/pages/api/v1"
+ALLOWLIST_API_KEY="scripts/contract-gate-api-key-allowlist.txt"
+API_ROOT="apps/client/pages/api"
+API_DIR="$API_ROOT/v1"
 
-if [ ! -f "$ALLOWLIST" ]; then
-  echo "ERROR: Allowlist not found at $ALLOWLIST"
-  exit 1
-fi
+for f in "$ALLOWLIST" "$ALLOWLIST_API_KEY"; do
+  if [ ! -f "$f" ]; then
+    echo "ERROR: Allowlist not found at $f"
+    exit 1
+  fi
+done
 
 if [ ! -d "$API_DIR" ]; then
   echo "ERROR: API directory not found at $API_DIR"
   exit 1
 fi
 
-# v1 files that do not call nextRouteForContract(...).
+tmp=$(mktemp)
+trap 'rm -f "$tmp"' EXIT
+
+# Routable handler files under the given roots, NUL-delimited into $tmp.
+# Extensions must stay in sync with pageExtensions in apps/client/next.config.*.
+# premium-* codegen stubs are pruned only at $API_ROOT/premium-* (anchored): grep's
+# --exclude-dir would match that name at any depth and silently skip a real v1 directory.
+# A find failure (e.g. an unreadable directory) must fail the gate, not read as "no files".
+list_files() {
+  local status=0
+  find "$@" \( -name __tests__ -o -path "$API_ROOT/premium-*" \) -prune -o -type f \
+    \( -name '*.ts' -o -name '*.tsx' -o -name '*.js' -o -name '*.jsx' \) -print0 > "$tmp" || status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "::error::find failed (exit ${status}) while scanning ${API_ROOT}"
+    echo "ERROR: Could not scan ${API_ROOT}; refusing to report a clean result."
+    exit 1
+  fi
+}
+
+# Print (sorted) the files in $tmp that do not match the ERE $1.
+# grep -q exits 1 on "no match" (a violator) but 2 on a real error, which must fail the gate.
+files_missing() {
+  local f rc
+  while IFS= read -r -d '' f; do
+    rc=0
+    grep -qE -- "$1" "$f" || rc=$?
+    if [ "$rc" -eq 1 ]; then
+      printf '%s\n' "$f"
+    elif [ "$rc" -gt 1 ]; then
+      echo "::error::grep failed (exit ${rc}) on ${f}" >&2
+      exit 1
+    fi
+  done < "$tmp" | sort
+}
+
+# Entries of an allowlist file, comments stripped, sorted.
+# || true: grep -v '^$' exits 1 on a header-only (empty) allowlist.
+read_allowlist() {
+  { grep -v '^#' "$1" | grep -v '^$' | sed 's/[[:space:]]*#.*//' | sed 's/[[:space:]]*$//' | sort; } || true
+}
+
+# Diff violators ($2) against an allowlist ($1); print INFO for stale entries and, if any
+# violator is new, the error block ($3 = summary, $4 = fix hint). Returns 1 on new violators.
+report() {
+  local allowed violators stale fresh count
+  allowed=$(read_allowlist "$1")
+  violators=$2
+  stale=$(comm -23 <(echo "$allowed") <(echo "$violators") | grep -v '^$' || true)
+  fresh=$(comm -23 <(echo "$violators") <(echo "$allowed") | grep -v '^$' || true)
+
+  if [ -n "$stale" ]; then
+    echo "INFO: These allowlist entries in $1 no longer need exemption -- remove them:"
+    echo "$stale" | sed 's/^/  /'
+    echo ""
+  fi
+  [ -z "$fresh" ] && return 0
+
+  count=$(echo "$fresh" | grep -c '.' || true)
+  echo "::error::${count} file(s) ${3} -- see job log"
+  echo ""
+  echo "ERROR: ${count} file(s) ${3}:"
+  echo ""
+  echo "$fresh" | sed 's/^/  /'
+  echo ""
+  echo "$4"
+  echo ""
+  return 1
+}
+
+failed=0
+
+# Scan 1: v1 files that do not call nextRouteForContract(...).
 # Matching the call (with the open paren) rather than the bare identifier means a
 # "// TODO: port to nextRouteForContract" comment does not satisfy the check.
 # Known limit: nextRouteForContract( inside a string literal also satisfies it.
 # Under-enforcement rather than over-enforcement; acceptable for this gate.
-# -Z/-0: null-delimit filenames so spaces or quotes in paths cannot confuse xargs.
-# grep -rLZ exits 1 when every file matches (fully compliant = goal state) but 2 on a real
-# error such as an unreadable directory; the latter must fail the gate rather than read as
-# "no violators". Output goes through a file because command substitution drops the NULs.
-scan_output=$(mktemp)
-trap 'rm -f "$scan_output"' EXIT
-scan_status=0
-grep -rLZ "nextRouteForContract(" "$API_DIR" --include="*.ts" --include="*.tsx" --exclude-dir='__tests__' --exclude-dir='premium-*' \
-  > "$scan_output" || scan_status=$?
-if [ "$scan_status" -gt 1 ]; then
-  echo "::error::grep failed (exit ${scan_status}) while scanning ${API_DIR}"
-  echo "ERROR: Could not scan ${API_DIR}; refusing to report a clean result."
-  exit 1
-fi
-violators=$(xargs -0 printf '%s\n' < "$scan_output" | sort)
+list_files "$API_DIR"
+v1_violators=$(files_missing 'nextRouteForContract\(')
+report "$ALLOWLIST" "$v1_violators" \
+  "under pages/api/v1 are missing nextRouteForContract" \
+  "Fix: route through nextRouteForContract (see b4m-core/common/src/api-contract/README.md).
+Do NOT add to the allowlist -- this file is for permanent exceptions, not new handlers." || failed=1
 
-# || true: grep -v '^$' exits 1 on a header-only (empty) allowlist.
-allowed=$(grep -v '^#' "$ALLOWLIST" | grep -v '^$' | sed 's/[[:space:]]*#.*//' | sed 's/[[:space:]]*$//' | sort || true)
+# Scan 2: files outside v1 that do not declare auth: 'jwtOnly'. Same known limit as scan 1:
+# the literal inside a comment or string also satisfies it. Contract-routed jwtOnly handlers
+# have no literal in the handler file and live on the baseline.
+list_files "$API_ROOT" -path "$API_DIR" -prune -o
+outside_violators=$(files_missing "auth:[[:space:]]*['\"]jwtOnly['\"]")
+report "$ALLOWLIST_API_KEY" "$outside_violators" \
+  "outside pages/api/v1 accept API keys (not auth: 'jwtOnly')" \
+  "Fix: add auth: 'jwtOnly' to the handler, or, if it is a genuinely public endpoint, expose it
+under /api/v1 behind a contract (CONVENTIONS.md: unversioned /api/* is frozen).
+Last resort: add it to $ALLOWLIST_API_KEY with a trailing '# reason'." || failed=1
 
-stale_entries=$(comm -23 <(echo "$allowed") <(echo "$violators") | grep -v '^$' || true)
-new_violators=$(comm -23 <(echo "$violators") <(echo "$allowed") | grep -v '^$' || true)
-
-if [ -n "$stale_entries" ]; then
-  echo "INFO: These allowlist entries no longer need exemption -- remove them:"
-  echo "$stale_entries" | sed 's/^/  /'
-  echo ""
-fi
-
-if [ -z "$new_violators" ]; then
+if [ "$failed" -eq 0 ]; then
   echo "OK: No contract-gate violations."
-  exit 0
 fi
-
-new_count=$(echo "$new_violators" | grep -c '.' || true)
-echo "::error::${new_count} file(s) under pages/api/v1 are missing nextRouteForContract -- see job log"
-echo ""
-echo "ERROR: The following v1 files must use nextRouteForContract:"
-echo ""
-echo "$new_violators" | sed 's/^/  /'
-echo ""
-echo "Fix: route through nextRouteForContract (see b4m-core/common/src/api-contract/README.md)."
-echo "Do NOT add to the allowlist -- this file is for permanent exceptions, not new handlers."
-
-exit 1
+exit "$failed"
