@@ -104,7 +104,10 @@ const DOOR_SITE = new RegExp(String.raw`\bbaseApi\(\s*\{[^{}]*?\brequiredScopes\
 /** Resolves a gate expression to its scopes: literals, shared lists and lists declared in `code`. */
 function listResolver(code: string) {
   const localLists = new Map<string, string>();
-  for (const [, name, literal] of code.matchAll(/\bconst ([A-Za-z_$][\w$]*)(?:\s*:[^=]+)?\s*=\s*(\[[^[\]]*\])/g)) {
+  // A list the declaration goes on to transform (`].filter(`, `].concat(`) is left unresolved.
+  const declarations =
+    /\bconst ([A-Za-z_$][\w$]*)(?:\s*:[^=]+)?\s*=\s*(\[[^[\]]*\])(?!(?:\s*as const)?\s*[.?[(+\-*/|&!<>=])/g;
+  for (const [, name, literal] of code.matchAll(declarations)) {
     localLists.set(name, literal);
   }
   const resolve = (expr: string, seen = new Set<string>()): Set<ApiKeyScope> => {
@@ -393,6 +396,11 @@ describe('the gate rule itself', () => {
   it('resolves a scope list declared in the route file itself', () => {
     const code = 'const WRITE = [ApiKeyScope.HEARTH_WRITE];\nassertApiKeyScope(req, WRITE, "no");';
     expect(gatesIn(code, HELPERS)).toEqual([new Set([ApiKeyScope.HEARTH_WRITE])]);
+  });
+
+  it('leaves a same-file list unresolved when its declaration transforms it', () => {
+    const code = 'const WRITE = [ApiKeyScope.HEARTH_WRITE].filter(Boolean);\nassertApiKeyScope(req, WRITE, "no");';
+    expect(gatesIn(code, HELPERS)).toEqual([]);
   });
 
   it('fails a claim on a verb the route file does not serve', () => {
