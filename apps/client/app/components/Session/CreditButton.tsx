@@ -10,11 +10,12 @@ import CreditsExplanationModal from '../subscription/CreditsExplanationModal';
 import { useEffectiveCredits } from '@client/app/hooks/useEffectiveCredits';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { formatCreditBalance } from '@client/app/utils/formatCredits';
-import { LOW_CREDITS_THRESHOLD_DEFAULT } from '@bike4mind/common';
+import { FirstRunEvents, LOW_CREDITS_THRESHOLD_DEFAULT } from '@bike4mind/common';
 import { useLowCreditsThreshold } from '@client/app/hooks/data/teamPlanSettings';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { estimateAnswerCount, typicalAnswerCredits } from '@client/app/utils/creditEstimate';
+import { useLogEvent } from '@client/app/hooks/data/analytics';
 
 /**
  * Default threshold below which credits are considered "low". The live value is the
@@ -145,6 +146,7 @@ const CreditBalanceChip: FC<{ session?: ISessionDocument | null }> = ({ session 
   const answerCost = selected ? typicalAnswerCredits(selected) : null;
   const answersLeft = answerCost ? estimateAnswerCount(credits, answerCost) : null;
   const [isOpen, setIsOpen] = useState(false);
+  const { mutate: logEvent } = useLogEvent();
 
   if (!enforceCredits) return null;
 
@@ -153,7 +155,10 @@ const CreditBalanceChip: FC<{ session?: ISessionDocument | null }> = ({ session 
       <CreditBalanceChipView
         credits={credits}
         lowCreditsThreshold={lowCreditsThreshold}
-        onClick={() => setIsOpen(true)}
+        onClick={() => {
+          logEvent({ type: FirstRunEvents.CREDITS_CHIP_CLICKED });
+          setIsOpen(true);
+        }}
         answersLeft={answersLeft}
         modelName={selected?.name}
         payerNote={payerNote}

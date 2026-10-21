@@ -1,5 +1,33 @@
 # @bike4mind/llm-adapters
 
+## 1.5.1
+
+### Patch Changes
+
+- [#5069](https://github.com/Bike4Mind/bike4mind/pull/5069) [`fe5147e`](https://github.com/Bike4Mind/bike4mind/commit/fe5147e64e18b78e9d28198f3d94bbae546ad963) Thanks [@jarlacut](https://github.com/jarlacut)! - apply Bedrock lifecycle to served inference-profile ids
+
+- Updated dependencies [[`a68d013`](https://github.com/Bike4Mind/bike4mind/commit/a68d013d2a4c7a59268f3bfbb2ed9b343a0a36c0), [`4eb04ce`](https://github.com/Bike4Mind/bike4mind/commit/4eb04ce7df80bc724b0ff957eab4d9bc18a62360), [`20f9362`](https://github.com/Bike4Mind/bike4mind/commit/20f9362014343fde166c09acc72c3b759ddfd61d), [`2d33506`](https://github.com/Bike4Mind/bike4mind/commit/2d33506efd4f95460139dedb554780ac544be23c), [`a6a458e`](https://github.com/Bike4Mind/bike4mind/commit/a6a458ee96a84759072f7388e77c66be8a8f9be8), [`7bc69c7`](https://github.com/Bike4Mind/bike4mind/commit/7bc69c780cf2e3def64cd650fb82412c6fa91a53), [`a0b5f42`](https://github.com/Bike4Mind/bike4mind/commit/a0b5f429fc8e0b4bcb7968d88513ffd4c71c2d2c), [`847b65f`](https://github.com/Bike4Mind/bike4mind/commit/847b65f4347c32e825b705244902a223bbbf4d3a)]:
+  - @bike4mind/common@19.0.0
+
+## 1.5.0
+
+### Minor Changes
+
+- [#5134](https://github.com/Bike4Mind/bike4mind/pull/5134) [`d1d146c`](https://github.com/Bike4Mind/bike4mind/commit/d1d146c73a2adebe4bd3ecf54facccd7a8514e14) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - accept mid-conversation tool changes on Anthropic models
+
+### Patch Changes
+
+- [#5011](https://github.com/Bike4Mind/bike4mind/pull/5011) [`cf07686`](https://github.com/Bike4Mind/bike4mind/commit/cf0768653624d972a13256138132cb45ac183b8e) Thanks [@jarlacut](https://github.com/jarlacut)! - honor max_tokens on Gemini thinking models via thinkingConfig
+
+- [#5024](https://github.com/Bike4Mind/bike4mind/pull/5024) [`0ff8025`](https://github.com/Bike4Mind/bike4mind/commit/0ff80253dc13b74255b32727c873ed915764372f) Thanks [@jarlacut](https://github.com/jarlacut)! - align Bedrock limits and errors, remove prompt logs, filter models
+
+- [#5140](https://github.com/Bike4Mind/bike4mind/pull/5140) [`acf5d1e`](https://github.com/Bike4Mind/bike4mind/commit/acf5d1e06542b3b28748b8fcaae825eb9aa299dc) Thanks [@ktdejesus](https://github.com/ktdejesus)! - bill us. Bedrock Sonnet 4.5 and Haiku 4.5 at the regional rate
+
+- [#5151](https://github.com/Bike4Mind/bike4mind/pull/5151) [`a60a44b`](https://github.com/Bike4Mind/bike4mind/commit/a60a44b8b1e8e62d2178a45451c5dfc760675349) Thanks [@ktdejesus](https://github.com/ktdejesus)! - default adaptive-thinking Claude models to medium effort on the CLI path
+
+- Updated dependencies [[`78b942f`](https://github.com/Bike4Mind/bike4mind/commit/78b942fdac1e4a65ebb59e9aa8467b87eee53c75), [`9f6f66b`](https://github.com/Bike4Mind/bike4mind/commit/9f6f66b28964425db2fa7b1fecee47fcc5fc2aaa), [`3eeea1b`](https://github.com/Bike4Mind/bike4mind/commit/3eeea1b92b1cb3af52cdade73680c946389a9eee), [`0dcbad1`](https://github.com/Bike4Mind/bike4mind/commit/0dcbad11c888e1792484de1b5cc4235c75a9661f), [`a43e39d`](https://github.com/Bike4Mind/bike4mind/commit/a43e39da24f846df42f1c8de8631736e89bfc753), [`88476d1`](https://github.com/Bike4Mind/bike4mind/commit/88476d1a5aa9fceec132d7abc452f9ba0b18ad54), [`d1d146c`](https://github.com/Bike4Mind/bike4mind/commit/d1d146c73a2adebe4bd3ecf54facccd7a8514e14), [`4e05df4`](https://github.com/Bike4Mind/bike4mind/commit/4e05df42da2be56f4b2633fad440f41d9d24e570)]:
+  - @bike4mind/common@18.0.0
+
 ## 1.4.1
 
 ### Patch Changes

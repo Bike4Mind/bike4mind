@@ -25,6 +25,8 @@ import {
 import type { GenerateImageToolCall, AudioGenerationToolCall, IChatHistoryItem } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { credentialExecutionFields, type ApiKeyCredential } from '@server/dataLakes/dataLakeScopes';
+import type { ApiKeyInfo } from '@server/cli/auth';
+import { apiKeyBillingOrgId, resolveApiKeyBillingOrg } from '@server/billing/apiKeyBillingOrg';
 import { MAX_CONCURRENT_EXECUTIONS_PER_USER, STALE_ACTIVE_MS } from '@server/utils/executionLimits';
 import {
   dispatchAgentExecution,
@@ -88,6 +90,10 @@ export type StartAgentExecutionInput = {
   model: string;
   /** `HEADLESS_CONNECTION_ID` (`@bike4mind/server-utils/utils/headlessConnection`) when there is no WS peer. */
   connectionId: string;
+  /**
+   * The org to bill, or omitted for the caller personally. An org-billed `apiKeyInfo` overrides it:
+   * the key's org pays, and naming any other org is refused (`billing_organization_mismatch`).
+   */
   organizationId?: string;
   /**
    * Persisted IAgent id. When present the executor resolves that agent's orchestration
@@ -111,7 +117,7 @@ export type StartAgentExecutionInput = {
    * `scopeDeniedTools` and `apiKeyId` are all derived from it here so a door cannot forward one
    * without the others.
    */
-  apiKeyInfo: ApiKeyCredential | undefined;
+  apiKeyInfo: (ApiKeyCredential & Pick<ApiKeyInfo, 'billingOwnerType' | 'organizationId'>) | undefined;
   maxIterations?: number;
   messageFileIds?: string[];
   /**
@@ -143,7 +149,12 @@ export type StartAgentExecutionInput = {
 
 /** Why a start was refused. Callers map these onto their own transport's errors. */
 export type StartAgentExecutionFailureReason =
-  'session_not_found' | 'organization_not_found' | 'concurrent_limit' | 'dispatch_failed';
+  | 'session_not_found'
+  | 'organization_not_found'
+  | 'billing_organization_mismatch'
+  | 'billing_key_stale'
+  | 'concurrent_limit'
+  | 'dispatch_failed';
 
 export type StartAgentExecutionResult =
   | {
@@ -174,21 +185,9 @@ export async function startAgentExecution(
     return { ok: false, reason: 'session_not_found', message: 'Session not found or unauthorized' };
   }
 
-  // Validate organization membership. Without this, a caller could pass another
-  // tenant's organizationId and bill executions to that org's credit pool.
-  if (input.organizationId) {
-    const org = await organizationRepository.findById(input.organizationId);
-    const isOwner = org?.userId === userId;
-    const isManager = org?.managerId === userId;
-    const isMember = org?.users?.some(u => u.userId === userId) ?? false;
-    if (!org || (!isOwner && !isManager && !isMember)) {
-      logger.warn('[Start] Organization membership validation failed', {
-        organizationId: input.organizationId,
-        userId,
-      });
-      return { ok: false, reason: 'organization_not_found', message: 'Organization not found or unauthorized' };
-    }
-  }
+  const billing = await resolveRunBillingOrg(input, logger);
+  if (!billing.ok) return billing;
+  const { organizationId } = billing;
 
   // Sweep stale active executions before counting - `pending` / `running` /
   // `continuing` / `awaiting_permission` / `paused` that the executor never
@@ -292,7 +291,7 @@ export async function startAgentExecution(
 
   const execution = await agentExecutionRepository.create({
     userId,
-    organizationId: input.organizationId,
+    organizationId,
     sessionId: input.sessionId,
     questId: input.questId,
     query: input.query,
@@ -419,7 +418,7 @@ export async function startAgentExecution(
         query: input.query,
         model: input.model,
         connectionId: input.connectionId,
-        organizationId: input.organizationId,
+        organizationId,
         agentId: input.agentId,
         enabledTools: input.enabledTools,
         enabledToolsAreAmbient: input.enabledToolsAreAmbient,
@@ -473,4 +472,58 @@ export async function startAgentExecution(
 
   logger.info('[Start] Executor dispatched', { executionId });
   return { ok: true, executionId, questId: persistedQuestId };
+}
+
+type RunBillingOrg =
+  { ok: true; organizationId: string | undefined } | Extract<StartAgentExecutionResult, { ok: false }>;
+
+/**
+ * The org a run bills, or undefined for the caller personally.
+ *
+ * An org-billed API key bills its own org on every transport, whether or not the start names one, by
+ * the same rule as the v1 media routes (resolveApiKeyBillingOrg). Anyone else bills the org they
+ * name, which must be one they belong to: without this, a caller could pass another tenant's
+ * organizationId and bill that org's credit pool.
+ */
+async function resolveRunBillingOrg(input: StartAgentExecutionInput, logger: Logger): Promise<RunBillingOrg> {
+  const { userId } = input;
+
+  // Also decides whether the user read below is needed: only an org-billed key can fail on billing
+  // before the membership check, and resolveApiKeyBillingOrg applies the same key test.
+  if (apiKeyBillingOrgId(input.apiKeyInfo)) {
+    const user = await userRepository.findById(userId);
+    const billing = await resolveApiKeyBillingOrg({
+      apiKeyInfo: input.apiKeyInfo,
+      user: { id: userId, isAdmin: user?.isAdmin ?? false },
+      requestedOrgId: input.organizationId,
+    });
+    switch (billing.kind) {
+      case 'org':
+        return { ok: true, organizationId: billing.organizationId };
+      case 'mismatch':
+        return { ok: false, reason: 'billing_organization_mismatch', message: billing.message };
+      case 'stale':
+        logger.warn('[Start] Org-billed API key no longer speaks for its organization', {
+          userId,
+          keyId: input.apiKeyInfo?.keyId,
+        });
+        return { ok: false, reason: 'billing_key_stale', message: billing.message };
+      case 'not_org_billed':
+        break;
+    }
+  }
+
+  if (!input.organizationId) return { ok: true, organizationId: undefined };
+
+  const org = await organizationRepository.findById(input.organizationId);
+  const isOwner = org?.userId === userId;
+  const isMember = org?.users?.some(u => u.userId === userId) ?? false;
+  if (!org || (!isOwner && !isMember)) {
+    logger.warn('[Start] Organization membership validation failed', {
+      organizationId: input.organizationId,
+      userId,
+    });
+    return { ok: false, reason: 'organization_not_found', message: 'Organization not found or unauthorized' };
+  }
+  return { ok: true, organizationId: input.organizationId };
 }

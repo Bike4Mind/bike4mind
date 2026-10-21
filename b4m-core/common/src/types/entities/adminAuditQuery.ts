@@ -4,8 +4,8 @@ import {
   AdminAuditCategorySchema,
   AdminAuditSeveritySchema,
   AuditActorSchema,
-  AuditContextSchema,
   AuditTargetSchema,
+  StoredAuditContextSourceSchema,
   type AuditEntry,
 } from './AdminAuditLogTypes';
 
@@ -36,7 +36,7 @@ export const AuditLogFiltersSchema = z.object({
   actorUserId: z.string().min(1).optional(),
   targetKind: AuditTargetSchema.shape.kind.optional(),
   targetId: z.string().min(1).optional(),
-  source: AuditContextSchema.shape.source.optional(),
+  source: StoredAuditContextSourceSchema.optional(),
   actorScope: AuditActorSchema.shape.scope.optional(),
   from: z.iso.datetime().optional(),
   to: z.iso.datetime().optional(),
@@ -52,7 +52,14 @@ export type AuditLogPage = { entries: AuditEntry[]; nextCursor: string | null };
 export type AuditSummary = {
   windowDays: AuditSummaryWindow;
   since: string;
-  creditGrants: { count: number; topGranters: Array<{ userId: string | null; name: string; count: number }> };
+  creditGrants: {
+    /** Credit-category entries, excluding denied attempts. */
+    count: number;
+    /** Sums of the signed `details.credits` stamp: positive amounts, and the magnitude of negative ones. */
+    grantedCredits: number;
+    deductedCredits: number;
+    topGranters: Array<{ userId: string | null; name: string; count: number }>;
+  };
   /** Category 'access', excluding impersonation actions. */
   permissionChanges: number;
   impersonations: number;

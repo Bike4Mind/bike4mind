@@ -74,7 +74,6 @@ const ORG = {
   id: 'org1',
   name: 'Acme',
   userId: 'owner1',
-  managerId: null,
   personal: false,
   adminUserIds: [],
   seats: 5,

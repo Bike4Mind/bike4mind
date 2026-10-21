@@ -1,5 +1,43 @@
 # @bike4mind/workers
 
+## 0.0.16
+
+### Patch Changes
+
+- Updated dependencies [[`a68d013`](https://github.com/Bike4Mind/bike4mind/commit/a68d013d2a4c7a59268f3bfbb2ed9b343a0a36c0), [`4eb04ce`](https://github.com/Bike4Mind/bike4mind/commit/4eb04ce7df80bc724b0ff957eab4d9bc18a62360), [`c060285`](https://github.com/Bike4Mind/bike4mind/commit/c060285611b6d4abdafb701fa8c0010afb1be30c), [`fe5147e`](https://github.com/Bike4Mind/bike4mind/commit/fe5147e64e18b78e9d28198f3d94bbae546ad963), [`20f9362`](https://github.com/Bike4Mind/bike4mind/commit/20f9362014343fde166c09acc72c3b759ddfd61d), [`a3f3802`](https://github.com/Bike4Mind/bike4mind/commit/a3f3802a916aa37c354deeba9ad5cde19c20fff3), [`2d33506`](https://github.com/Bike4Mind/bike4mind/commit/2d33506efd4f95460139dedb554780ac544be23c), [`a6a458e`](https://github.com/Bike4Mind/bike4mind/commit/a6a458ee96a84759072f7388e77c66be8a8f9be8), [`7bc69c7`](https://github.com/Bike4Mind/bike4mind/commit/7bc69c780cf2e3def64cd650fb82412c6fa91a53), [`6edd9d0`](https://github.com/Bike4Mind/bike4mind/commit/6edd9d0def28d3689f2d974cd968c911f8873536), [`a0b5f42`](https://github.com/Bike4Mind/bike4mind/commit/a0b5f429fc8e0b4bcb7968d88513ffd4c71c2d2c), [`c90d3c5`](https://github.com/Bike4Mind/bike4mind/commit/c90d3c59eeab038d8e84b6bba0a655c64b28ee5b), [`847b65f`](https://github.com/Bike4Mind/bike4mind/commit/847b65f4347c32e825b705244902a223bbbf4d3a), [`a68d013`](https://github.com/Bike4Mind/bike4mind/commit/a68d013d2a4c7a59268f3bfbb2ed9b343a0a36c0)]:
+  - @bike4mind/common@19.0.0
+  - @bike4mind/services@20.0.0
+  - @bike4mind/llm-adapters@1.5.1
+  - @bike4mind/utils@8.1.4
+  - @bike4mind/agents@1.2.9
+  - @bike4mind/auth@1.1.9
+  - @bike4mind/db-core@0.8.9
+  - @bike4mind/fab-pipeline@2.1.9
+  - @bike4mind/slack@4.0.6
+  - @bike4mind/database@0.4.20
+  - @bike4mind/scripts@0.1.96
+  - @bike4mind/server-utils@0.0.10
+
+## 0.0.15
+
+### Patch Changes
+
+- Updated dependencies [[`cf07686`](https://github.com/Bike4Mind/bike4mind/commit/cf0768653624d972a13256138132cb45ac183b8e), [`0ff8025`](https://github.com/Bike4Mind/bike4mind/commit/0ff80253dc13b74255b32727c873ed915764372f), [`78b942f`](https://github.com/Bike4Mind/bike4mind/commit/78b942fdac1e4a65ebb59e9aa8467b87eee53c75), [`4e05df4`](https://github.com/Bike4Mind/bike4mind/commit/4e05df42da2be56f4b2633fad440f41d9d24e570), [`9f6f66b`](https://github.com/Bike4Mind/bike4mind/commit/9f6f66b28964425db2fa7b1fecee47fcc5fc2aaa), [`3eeea1b`](https://github.com/Bike4Mind/bike4mind/commit/3eeea1b92b1cb3af52cdade73680c946389a9eee), [`db1a07e`](https://github.com/Bike4Mind/bike4mind/commit/db1a07e9762528e01405d608bcc79ad3a62de014), [`0dcbad1`](https://github.com/Bike4Mind/bike4mind/commit/0dcbad11c888e1792484de1b5cc4235c75a9661f), [`ac0b050`](https://github.com/Bike4Mind/bike4mind/commit/ac0b050304bf47fd8e62833de7b52be004b0fc19), [`a43e39d`](https://github.com/Bike4Mind/bike4mind/commit/a43e39da24f846df42f1c8de8631736e89bfc753), [`88476d1`](https://github.com/Bike4Mind/bike4mind/commit/88476d1a5aa9fceec132d7abc452f9ba0b18ad54), [`d1d146c`](https://github.com/Bike4Mind/bike4mind/commit/d1d146c73a2adebe4bd3ecf54facccd7a8514e14), [`acf5d1e`](https://github.com/Bike4Mind/bike4mind/commit/acf5d1e06542b3b28748b8fcaae825eb9aa299dc), [`e6cf558`](https://github.com/Bike4Mind/bike4mind/commit/e6cf558f5be37f0d2bef61ee278eaf2f82321133), [`a60a44b`](https://github.com/Bike4Mind/bike4mind/commit/a60a44b8b1e8e62d2178a45451c5dfc760675349), [`9acd1df`](https://github.com/Bike4Mind/bike4mind/commit/9acd1df001f711b28be3667f742773f6186291e4), [`4e05df4`](https://github.com/Bike4Mind/bike4mind/commit/4e05df42da2be56f4b2633fad440f41d9d24e570)]:
+  - @bike4mind/llm-adapters@1.5.0
+  - @bike4mind/utils@8.1.3
+  - @bike4mind/common@18.0.0
+  - @bike4mind/fab-pipeline@2.1.8
+  - @bike4mind/resource@1.0.1
+  - @bike4mind/services@19.2.0
+  - @bike4mind/slack@4.0.5
+  - @bike4mind/infra@4.2.0
+  - @bike4mind/agents@1.2.8
+  - @bike4mind/database@0.4.19
+  - @bike4mind/scripts@0.1.95
+  - @bike4mind/server-utils@0.0.9
+  - @bike4mind/auth@1.1.8
+  - @bike4mind/db-core@0.8.8
+
 ## 0.0.14
 
 ### Patch Changes

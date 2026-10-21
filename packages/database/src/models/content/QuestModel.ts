@@ -1074,8 +1074,10 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
       // Include suggestedChoices so history can re-attach a turn's stored choices (see
       // withStoredChoices in @bike4mind/utils).
       // Include pinned: IChatHistoryItemDocument types it, so omitting it hands every caller undefined.
+      // Include status so history can skip a prompt stopped before any reply (see isStoppedBeforeReply
+      // in @bike4mind/utils).
       .select(
-        'sessionId timestamp type prompt reply replies structuredReplies toolResults promptMeta images fabFileIds researchModeResults jupyterNotebook oob suggestedChoices pinned _id'
+        'sessionId timestamp type prompt reply replies structuredReplies toolResults promptMeta images fabFileIds researchModeResults jupyterNotebook oob suggestedChoices pinned status _id'
       )
       .sort({ timestamp: -1 })
       .limit(limit)
@@ -1086,6 +1088,12 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     return result
       .filter(doc => doc._id != null)
       .map(doc => ({ ...doc, id: doc._id.toString() }) as IChatHistoryItemDocument);
+  }
+
+  async countBySessionId(sessionId: string) {
+    // Explicit deletedAt, like getMostRecentChatHistory, so the window math counts exactly the quests
+    // that query can return. Covered by deletedAt_sessionId_timestamp_desc: an index-only count.
+    return this.model.countDocuments({ sessionId, deletedAt: null });
   }
 
   async findByIdWithStatus(id: string) {

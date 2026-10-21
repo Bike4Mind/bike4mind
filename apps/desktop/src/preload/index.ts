@@ -202,6 +202,16 @@ const api: DesktopApi = {
     importListing: request => ipcRenderer.invoke(IPC_CHANNELS.skillMarketImport, request),
     imports: () => ipcRenderer.invoke(IPC_CHANNELS.skillMarketImports),
     openOnWeb: target => ipcRenderer.invoke(IPC_CHANNELS.skillMarketOpenOnWeb, target),
+    readLocalSkill: ref => ipcRenderer.invoke(IPC_CHANNELS.skillMarketReadLocal, ref),
+    pickUploadSource: () => ipcRenderer.invoke(IPC_CHANNELS.skillMarketPickUpload),
+    saveSkill: request => ipcRenderer.invoke(IPC_CHANNELS.skillMarketSave, request),
+    organizations: () => ipcRenderer.invoke(IPC_CHANNELS.skillMarketOrgs),
+    publish: request => ipcRenderer.invoke(IPC_CHANNELS.skillMarketPublish, request),
+    submitVersion: request => ipcRenderer.invoke(IPC_CHANNELS.skillMarketSubmitVersion, request),
+    mine: () => ipcRenderer.invoke(IPC_CHANNELS.skillMarketMine),
+    withdraw: listingId => ipcRenderer.invoke(IPC_CHANNELS.skillMarketWithdraw, listingId),
+    copyShareLink: listingId => ipcRenderer.invoke(IPC_CHANNELS.skillMarketCopyShareLink, listingId),
+    openSource: url => ipcRenderer.invoke(IPC_CHANNELS.skillMarketOpenSource, url),
   },
   browser: {
     setPane: (request: BrowserPaneRequest) => ipcRenderer.invoke(IPC_CHANNELS.browserSetPane, request),
@@ -268,6 +278,11 @@ const api: DesktopApi = {
     getAccess: () => ipcRenderer.invoke(IPC_CHANNELS.toolsGetAccess),
     grantAccess: () => ipcRenderer.invoke(IPC_CHANNELS.toolsGrantAccess),
     revokeAccess: (root: string) => ipcRenderer.invoke(IPC_CHANNELS.toolsRevokeAccess, root),
+  },
+  permissions: {
+    getState: () => ipcRenderer.invoke(IPC_CHANNELS.permissionsGetState),
+    setRules: (scope, lists) => ipcRenderer.invoke(IPC_CHANNELS.permissionsSetRules, scope, lists),
+    setSharing: (share: boolean) => ipcRenderer.invoke(IPC_CHANNELS.permissionsSetSharing, share),
   },
   pullRequests: {
     watch: (sessionId: string | null) => ipcRenderer.invoke(IPC_CHANNELS.prWatch, sessionId),

@@ -1,0 +1,176 @@
+import { describe, it, expect, vi } from 'vitest';
+import type { FabFileNotice } from '@bike4mind/utils';
+import { scrubStaleProjectFiles, scrubStaleSystemFiles } from './scrubStaleFileReferences';
+
+const GONE = '507f1f77bcf86cd799439001';
+const DELETED = '507f1f77bcf86cd799439002';
+const LIVE = '507f1f77bcf86cd799439003';
+const USER = '507f1f77bcf86cd7994390bb';
+const PROJECT = '507f1f77bcf86cd7994390cc';
+
+const logger = { info: vi.fn(), warn: vi.fn() } as never;
+
+const unresolved = (fabFileId: string): FabFileNotice => ({
+  fabFileId,
+  fileName: fabFileId,
+  band: 'unresolved',
+  message: 'not found',
+  delivered: false,
+});
+
+// Read-only by construction: the fake exposes only the two existence probes, so any attempt to
+// write to a file document would fail to compile and to run.
+const fabFiles = () => ({
+  findExistingIdsIncludingDeletedByIds: vi.fn(async (ids: string[]) => ids.filter(id => id !== GONE)),
+  findExistingIdsByIds: vi.fn(async (ids: string[]) => ids.filter(id => id === LIVE)),
+});
+
+describe('scrubStaleSystemFiles', () => {
+  it('removes system files whose file is gone or soft-deleted from the caller only', async () => {
+    const users = { pullSystemFilesForUsers: vi.fn(async () => undefined) };
+    const removed = await scrubStaleSystemFiles(
+      USER,
+      [GONE, DELETED, LIVE],
+      [unresolved(GONE), unresolved(DELETED), unresolved(LIVE)],
+      { db: { fabFiles: fabFiles(), users }, logger }
+    );
+
+    expect(removed).toEqual([GONE, DELETED]);
+    expect(users.pullSystemFilesForUsers).toHaveBeenCalledWith([USER], [GONE, DELETED]);
+  });
+
+  it('keeps a system file whose file is live, even when this turn could not read it', async () => {
+    const users = { pullSystemFilesForUsers: vi.fn(async () => undefined) };
+    const removed = await scrubStaleSystemFiles(USER, [LIVE], [unresolved(LIVE)], {
+      db: { fabFiles: fabFiles(), users },
+      logger,
+    });
+
+    expect(removed).toEqual([]);
+    expect(users.pullSystemFilesForUsers).not.toHaveBeenCalled();
+  });
+
+  it('ignores files that were delivered or dropped for a reason other than resolution', async () => {
+    const users = { pullSystemFilesForUsers: vi.fn(async () => undefined) };
+    const files = fabFiles();
+    const removed = await scrubStaleSystemFiles(USER, [GONE], [{ ...unresolved(GONE), band: 'audio' }], {
+      db: { fabFiles: files, users },
+      logger,
+    });
+
+    expect(removed).toEqual([]);
+    expect(files.findExistingIdsIncludingDeletedByIds).not.toHaveBeenCalled();
+  });
+
+  it('never throws when the write fails', async () => {
+    const users = { pullSystemFilesForUsers: vi.fn(async () => Promise.reject(new Error('write failed'))) };
+    await expect(
+      scrubStaleSystemFiles(USER, [GONE], [unresolved(GONE)], { db: { fabFiles: fabFiles(), users }, logger })
+    ).resolves.toEqual([]);
+  });
+});
+
+const OWNER = '507f1f77bcf86cd7994390dd';
+const COLLABORATOR = '507f1f77bcf86cd7994390ee';
+
+describe('scrubStaleProjectFiles', () => {
+  const project = (over: { fileIds?: string[]; systemPrompts?: { fileId: string }[] } = {}) => ({
+    id: PROJECT,
+    userId: OWNER,
+    fileIds: [GONE, LIVE],
+    systemPrompts: [{ fileId: DELETED }],
+    ...over,
+  });
+
+  it("removes gone and soft-deleted files from fileIds and systemPrompts on the owner's turn", async () => {
+    const projects = { pullFileReferences: vi.fn(async () => undefined) };
+    const removed = await scrubStaleProjectFiles(
+      project(),
+      [unresolved(GONE), unresolved(DELETED)],
+      { db: { fabFiles: fabFiles(), projects }, logger },
+      OWNER
+    );
+
+    expect(removed).toEqual([GONE, DELETED]);
+    expect(projects.pullFileReferences).toHaveBeenCalledWith([GONE, DELETED], { projectId: PROJECT });
+  });
+
+  it("removes only gone files on a collaborator's turn, keeping a soft-deleted one a restore can revive", async () => {
+    const projects = { pullFileReferences: vi.fn(async () => undefined) };
+    const removed = await scrubStaleProjectFiles(
+      project(),
+      [unresolved(GONE), unresolved(DELETED)],
+      { db: { fabFiles: fabFiles(), projects }, logger },
+      COLLABORATOR
+    );
+
+    expect(removed).toEqual([GONE]);
+    expect(projects.pullFileReferences).toHaveBeenCalledWith([GONE], { projectId: PROJECT });
+  });
+
+  it("writes nothing on a collaborator's turn when the only stale file is soft-deleted", async () => {
+    const projects = { pullFileReferences: vi.fn(async () => undefined) };
+    const removed = await scrubStaleProjectFiles(
+      project({ fileIds: [], systemPrompts: [{ fileId: DELETED }] }),
+      [unresolved(DELETED)],
+      { db: { fabFiles: fabFiles(), projects }, logger },
+      COLLABORATOR
+    );
+
+    expect(removed).toEqual([]);
+    expect(projects.pullFileReferences).not.toHaveBeenCalled();
+  });
+
+  it('keeps a project file that is live but unreadable by the collaborator whose turn this is', async () => {
+    const projects = { pullFileReferences: vi.fn(async () => undefined) };
+    const removed = await scrubStaleProjectFiles(
+      project({ fileIds: [LIVE], systemPrompts: [] }),
+      [unresolved(LIVE)],
+      { db: { fabFiles: fabFiles(), projects }, logger },
+      COLLABORATOR
+    );
+
+    expect(removed).toEqual([]);
+    expect(projects.pullFileReferences).not.toHaveBeenCalled();
+  });
+
+  it('ignores unresolved ids the project does not reference', async () => {
+    // Project turns also resolve the project's notebooks' knowledge; those belong to the sessions.
+    const projects = { pullFileReferences: vi.fn(async () => undefined) };
+    const removed = await scrubStaleProjectFiles(
+      project({ fileIds: [LIVE], systemPrompts: [] }),
+      [unresolved(GONE)],
+      { db: { fabFiles: fabFiles(), projects }, logger },
+      OWNER
+    );
+
+    expect(removed).toEqual([]);
+    expect(projects.pullFileReferences).not.toHaveBeenCalled();
+  });
+
+  it('never throws when the file lookup fails', async () => {
+    const projects = { pullFileReferences: vi.fn(async () => undefined) };
+    const failingLookup = {
+      findExistingIdsIncludingDeletedByIds: vi.fn(async () => Promise.reject(new Error('db down'))),
+      findExistingIdsByIds: vi.fn(async () => Promise.reject(new Error('db down'))),
+    };
+
+    await expect(
+      scrubStaleProjectFiles(
+        project(),
+        [unresolved(GONE)],
+        { db: { fabFiles: failingLookup, projects }, logger },
+        OWNER
+      )
+    ).resolves.toEqual([]);
+    expect(projects.pullFileReferences).not.toHaveBeenCalled();
+  });
+
+  it('never throws when the project write fails', async () => {
+    const projects = { pullFileReferences: vi.fn(async () => Promise.reject(new Error('write failed'))) };
+
+    await expect(
+      scrubStaleProjectFiles(project(), [unresolved(GONE)], { db: { fabFiles: fabFiles(), projects }, logger }, OWNER)
+    ).resolves.toEqual([]);
+  });
+});

@@ -34,6 +34,7 @@ import Bike4MindUserDetails from '../Details/Bike4MindUserDetails';
 import LoginDetails from '../Details/LoginDetails';
 import UserDetails from '../Details/UserDetails';
 import UserSubscriptionStatus from '../Details/UserSubscriptionStatus';
+import { UserActivityTabPanel, UserViewTabs, type UserViewTab } from '../Activity/UserViewTabs';
 import SpicyUserActions from '../SpicyUserActions';
 import { useComplianceModal } from '../ComplianceModal';
 import UserPermissions from '../UserPermissions';
@@ -41,7 +42,8 @@ import ProductAccess from '../ProductAccess';
 import SystemMessageModal from '../SystemMessageModal';
 import { useFullUserViewModal } from '@client/app/components/admin/Users/Views/FullUserViewModal';
 import { useDeleteUser, useUpdateUser, useLoginAsUser } from '@client/app/hooks/data/user';
-import { IUserDocument, UserLevelType } from '@bike4mind/common';
+import { IUserDocument, UserLevelType, isValidAdminActionReason } from '@bike4mind/common';
+import { AdminReasonField } from '@client/app/components/admin/shared/AdminReasonField';
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useShallow } from 'zustand/shallow';
@@ -77,7 +79,7 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal, 
   const updateUser = useUpdateUser();
   const loginAsUser = useLoginAsUser();
   const queryClient = useQueryClient();
-  const setFullUserViewUserId = useFullUserViewModal(state => state.setUserId);
+  const { setUserId: setFullUserViewUserId } = useFullUserViewModal();
   const setComplianceUserId = useComplianceModal(state => state.setUserId);
   const { currentUser, setCurrentUser } = useUser(
     useShallow(s => ({ currentUser: s.currentUser, setCurrentUser: s.setCurrentUser }))
@@ -88,15 +90,19 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal, 
 
   const [editedFields, setEditedFields] = useState<EditedFieldsState>({});
   const [formState, setFormState] = useState<AdminUserListItem>({ ...user });
-  // Optional reason for a manual credit change; persisted on the audit record
+  // Required reason for a manual credit change; persisted on the audit record
   // (see adminUpdateUser) only when currentCredits is actually edited.
   const [creditReason, setCreditReason] = useState('');
+  const [roleConfirmOpen, setRoleConfirmOpen] = useState(false);
+  const [roleChangeReason, setRoleChangeReason] = useState('');
+  const [loginAsReason, setLoginAsReason] = useState('');
   const [tempUserLevel, setTempUserLevel] = useState<UserLevelType>(user.level);
   const [systemMessageModalOpen, setSystemMessageModalOpen] = useState(false);
   const [loginAsMfaModalOpen, setLoginAsMfaModalOpen] = useState(false);
   const [loginAsMfaToken, setLoginAsMfaToken] = useState('');
   const [loginAsMfaRequiredOpen, setLoginAsMfaRequiredOpen] = useState(false);
   const [mobileExpanded, setMobileExpanded] = useState(false);
+  const [activeTab, setActiveTab] = useState<UserViewTab>('overview');
 
   useEffect(() => {
     setFormState({ ...user });
@@ -134,9 +140,27 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal, 
     setEditedFields(prev => stageFieldEdit(prev, key, value, user));
   };
 
-  const handleDeleteUser = async (userId: string) => {
-    deleteUser.mutate({ id: userId });
+  const handleDeleteUser = async (userId: string, reason: string) => {
+    deleteUser.mutate({ id: userId, reason });
   };
+
+  const closeRoleConfirm = () => {
+    setRoleConfirmOpen(false);
+    setRoleChangeReason('');
+  };
+
+  const closeLoginAsModal = () => {
+    setLoginAsMfaModalOpen(false);
+    setLoginAsReason('');
+  };
+
+  const submitLoginAs = () => {
+    loginAsUser.mutate({ id: user.id, mfaToken: loginAsMfaToken.trim(), reason: loginAsReason.trim() });
+    closeLoginAsModal();
+  };
+
+  const canSubmitLoginAs = !!loginAsMfaToken.trim() && isValidAdminActionReason(loginAsReason);
+  const creditReasonMissing = !!editedFields.currentCredits && !isValidAdminActionReason(creditReason);
 
   const getNextLevel = (currentLevel: string) => {
     switch (currentLevel) {
@@ -161,23 +185,34 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal, 
     handleFormFieldChange('level', newLevelValue);
   };
 
-  const handleSaveChanges = async () => {
-    const data = Object.entries(editedFields).reduce<Partial<IUserDocument> & { creditReason?: string }>(
-      (acc, [key, value]) => {
-        if (value) {
-          // formState carries admin-editable fields beyond the list projection, so index it
-          // structurally rather than through AdminUserListItem's narrower keys.
-          (acc as Record<string, unknown>)[key] = (formState as Record<string, unknown>)[key];
-        }
-        return acc;
-      },
-      {}
-    );
+  // A role change is routed through a confirm dialog that collects the reason first.
+  const handleUpdateClick = () => {
+    if (editedFields.isAdmin) {
+      setRoleConfirmOpen(true);
+      return;
+    }
+    handleSaveChanges();
+  };
+
+  const handleSaveChanges = async (roleReason?: string) => {
+    const data = Object.entries(editedFields).reduce<
+      Partial<IUserDocument> & { creditReason?: string; roleChangeReason?: string }
+    >((acc, [key, value]) => {
+      if (value) {
+        // formState carries admin-editable fields beyond the list projection, so index it
+        // structurally rather than through AdminUserListItem's narrower keys.
+        (acc as Record<string, unknown>)[key] = (formState as Record<string, unknown>)[key];
+      }
+      return acc;
+    }, {});
 
     // Attach the reason only when credits actually changed - the server ignores
     // it otherwise, and it should never leak onto an unrelated profile edit.
     if (editedFields.currentCredits && creditReason.trim()) {
       data.creditReason = creditReason.trim();
+    }
+    if (editedFields.isAdmin && roleReason) {
+      data.roleChangeReason = roleReason.trim();
     }
 
     updateUser.mutate(
@@ -188,6 +223,7 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal, 
           // just saved); refresh them so its chips aren't stale after a save.
           queryClient.invalidateQueries({ queryKey: ['admin', 'user-entitlements', user.id] });
           setCreditReason('');
+          closeRoleConfirm();
           // Surface the just-written adjustment in the Credit Analysis audit views.
           queryClient.invalidateQueries({ queryKey: ['admin', 'credit-adjustments'] });
           queryClient.invalidateQueries({ queryKey: ['admin', 'user-credit-adjustments', user.id] });
@@ -275,6 +311,7 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal, 
                     return;
                   }
                   setLoginAsMfaToken('');
+                  setLoginAsReason('');
                   setLoginAsMfaModalOpen(true);
                 }}
                 loading={loginAsUser.isPending}
@@ -299,8 +336,10 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal, 
                   size="sm"
                   color="success"
                   startDecorator={<SaveIcon />}
-                  onClick={handleSaveChanges}
+                  onClick={handleUpdateClick}
                   loading={updateUser.isPending}
+                  disabled={creditReasonMissing}
+                  data-testid="user-update-btn"
                   sx={{ width: { xs: '100%', sm: 'auto' } }}
                 >
                   Update
@@ -310,8 +349,10 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal, 
           </Stack>
         </Box>
 
+        <UserViewTabs value={activeTab} onChange={setActiveTab} />
+
         {/* Main content */}
-        <Box sx={{ p: { xs: 1, sm: 2 } }}>
+        <Box sx={{ p: { xs: 1, sm: 2 }, display: activeTab === 'overview' ? 'block' : 'none' }}>
           <Grid container spacing={3}>
             {/* User Details Section */}
             <Grid xs={12} sm={6} md={2}>
@@ -451,6 +492,7 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal, 
             </Grid>
           </Grid>
         </Box>
+        {activeTab === 'activity' && <UserActivityTabPanel userId={user.id} />}
       </Box>
 
       {/* System Message Modal */}
@@ -499,8 +541,50 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal, 
         </ModalDialog>
       </Modal>
 
+      {/* Role change confirmation: the reason is required and audited */}
+      <Modal open={roleConfirmOpen} onClose={closeRoleConfirm}>
+        <ModalDialog data-testid="role-change-confirm-modal">
+          <ModalClose />
+          <Typography level="title-md" startDecorator={<SecurityIcon />}>
+            Confirm Role Change
+          </Typography>
+          <Typography level="body-sm" sx={{ mb: 1 }}>
+            {formState.isAdmin ? (
+              <>
+                You are about to grant <strong>Super Admin</strong> to <strong>{user.name || user.email}</strong>. They
+                will have full administrative access.
+              </>
+            ) : (
+              <>
+                You are about to remove <strong>Super Admin</strong> from <strong>{user.name || user.email}</strong>.
+                They will lose administrative access.
+              </>
+            )}
+          </Typography>
+          <AdminReasonField
+            value={roleChangeReason}
+            onChange={setRoleChangeReason}
+            data-testid="role-change-reason-input"
+          />
+          <Stack direction="row" spacing={1} justifyContent="flex-end" sx={{ mt: 1 }}>
+            <Button variant="plain" color="neutral" onClick={closeRoleConfirm}>
+              Cancel
+            </Button>
+            <Button
+              color="danger"
+              disabled={!isValidAdminActionReason(roleChangeReason)}
+              loading={updateUser.isPending}
+              onClick={() => handleSaveChanges(roleChangeReason)}
+              data-testid="role-change-confirm-btn"
+            >
+              Confirm Role Change
+            </Button>
+          </Stack>
+        </ModalDialog>
+      </Modal>
+
       {/* MFA verification modal for loginAs */}
-      <Modal open={loginAsMfaModalOpen} onClose={() => setLoginAsMfaModalOpen(false)}>
+      <Modal open={loginAsMfaModalOpen} onClose={closeLoginAsModal}>
         <ModalDialog data-testid="login-as-mfa-modal">
           <ModalClose />
           <Typography level="title-md" startDecorator={<SecurityIcon />}>
@@ -517,27 +601,24 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal, 
               value={loginAsMfaToken}
               onChange={e => setLoginAsMfaToken(e.target.value)}
               onKeyDown={e => {
-                if (e.key === 'Enter' && loginAsMfaToken.trim()) {
-                  setLoginAsMfaModalOpen(false);
-                  loginAsUser.mutate({ id: user.id, mfaToken: loginAsMfaToken.trim() });
+                if (e.key === 'Enter' && canSubmitLoginAs) {
+                  submitLoginAs();
                 }
               }}
               data-testid="login-as-mfa-input"
               slotProps={{ input: { maxLength: 10 } }}
             />
           </FormControl>
+          <AdminReasonField value={loginAsReason} onChange={setLoginAsReason} data-testid="login-as-reason-input" />
           <Stack direction="row" spacing={1} justifyContent="flex-end" sx={{ mt: 1 }}>
-            <Button variant="plain" color="neutral" onClick={() => setLoginAsMfaModalOpen(false)}>
+            <Button variant="plain" color="neutral" onClick={closeLoginAsModal}>
               Cancel
             </Button>
             <Button
               color="primary"
-              disabled={!loginAsMfaToken.trim()}
+              disabled={!canSubmitLoginAs}
               loading={loginAsUser.isPending}
-              onClick={() => {
-                setLoginAsMfaModalOpen(false);
-                loginAsUser.mutate({ id: user.id, mfaToken: loginAsMfaToken.trim() });
-              }}
+              onClick={submitLoginAs}
               data-testid="login-as-mfa-confirm-btn"
             >
               Confirm

@@ -90,7 +90,7 @@ export interface ChatMedia {
 }
 
 /**
- * An outcome of a server-backed tool that costs money, surfaced on its own rather than folded
+ * A tool outcome or failed permission save, surfaced on its own rather than folded
  * into the result text.
  *
  * Both of these are things the user is entitled to see without expanding a tool call:
@@ -99,7 +99,7 @@ export interface ChatMedia {
  * are about to hear.
  */
 export interface ChatToolNotice {
-  kind: 'insufficient-credits' | 'provider-substituted';
+  kind: 'insufficient-credits' | 'provider-substituted' | 'permissions-save-failed';
   text: string;
 }
 
@@ -194,6 +194,11 @@ export interface ChatToolCall {
    * what is being granted.
    */
   approvalAlwaysFull?: string;
+  /**
+   * Set with `approvalId` when the call can be allowed in every session: the permission rules
+   * (Claude Code syntax) that "Always, in every session" saves. Never on an irreversible call.
+   */
+  approvalRules?: string[];
   /**
    * Set with `approvalId` when the call can be allowed in more than one way, so the card draws
    * a split button rather than a plain "allow". The chosen option is folded into `input` before
@@ -339,6 +344,11 @@ export interface ChatApprovalAnswer {
    * they are never put back on the call, in the transcript, or in anything the model reads.
    */
   secrets?: { env?: Record<string, string>; headers?: Record<string, string> };
+  /**
+   * With decision 'always': also save the card's `approvalRules` as user-level allow rules, for
+   * every later session. Main saves the rules it derived itself; this only says yes to them.
+   */
+  everywhere?: boolean;
 }
 
 /**

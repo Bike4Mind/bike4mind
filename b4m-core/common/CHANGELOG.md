@@ -1,5 +1,62 @@
 # @bike4mind/common
 
+## 19.0.0
+
+### Major Changes
+
+- [#4939](https://github.com/Bike4Mind/bike4mind/pull/4939) [`4eb04ce`](https://github.com/Bike4Mind/bike4mind/commit/4eb04ce7df80bc724b0ff957eab4d9bc18a62360) Thanks [@onoya](https://github.com/onoya)! - move a file's billed bytes when its lake membership changes
+
+### Minor Changes
+
+- [#5191](https://github.com/Bike4Mind/bike4mind/pull/5191) [`a68d013`](https://github.com/Bike4Mind/bike4mind/commit/a68d013d2a4c7a59268f3bfbb2ed9b343a0a36c0) Thanks [@jjmarfa](https://github.com/jjmarfa)! - Add the `decide` server tool to the CLI and shared tool schemas, with deployment-aware availability and permission handling.
+
+- [#5083](https://github.com/Bike4Mind/bike4mind/pull/5083) [`20f9362`](https://github.com/Bike4Mind/bike4mind/commit/20f9362014343fde166c09acc72c3b759ddfd61d) Thanks [@onoya](https://github.com/onoya)! - close admin audit gaps for roles, deletion, impersonation, MFA and settings
+
+- [#5154](https://github.com/Bike4Mind/bike4mind/pull/5154) [`2d33506`](https://github.com/Bike4Mind/bike4mind/commit/2d33506efd4f95460139dedb554780ac544be23c) Thanks [@julsanchez](https://github.com/julsanchez)! - export skills to Claude Code as SKILL.md and import SKILL.md into new skills
+
+- [#5155](https://github.com/Bike4Mind/bike4mind/pull/5155) [`a6a458e`](https://github.com/Bike4Mind/bike4mind/commit/a6a458ee96a84759072f7388e77c66be8a8f9be8) Thanks [@onoya](https://github.com/onoya)! - typed response schemas for core data lake routes
+
+- [#5189](https://github.com/Bike4Mind/bike4mind/pull/5189) [`847b65f`](https://github.com/Bike4Mind/bike4mind/commit/847b65f4347c32e825b705244902a223bbbf4d3a) Thanks [@jjmarfa](https://github.com/jjmarfa)! - show confidence-gate pauses with Proceed/Stop
+
+### Patch Changes
+
+- [#5173](https://github.com/Bike4Mind/bike4mind/pull/5173) [`7bc69c7`](https://github.com/Bike4Mind/bike4mind/commit/7bc69c780cf2e3def64cd650fb82412c6fa91a53) Thanks [@onoya](https://github.com/onoya)! - bill an org-billed API key's organization on agent runs and /api/ai/llm
+
+- [#5182](https://github.com/Bike4Mind/bike4mind/pull/5182) [`a0b5f42`](https://github.com/Bike4Mind/bike4mind/commit/a0b5f429fc8e0b4bcb7968d88513ffd4c71c2d2c) Thanks [@ktdejesus](https://github.com/ktdejesus)! - keep the Claude prompt cache stable across turns in long sessions
+
+## 18.0.0
+
+### Major Changes
+
+- [#5034](https://github.com/Bike4Mind/bike4mind/pull/5034) [`4e05df4`](https://github.com/Bike4Mind/bike4mind/commit/4e05df42da2be56f4b2633fad440f41d9d24e570) Thanks [@julsanchez](https://github.com/julsanchez)! - Bind voice credit holds to their payer in the session repository contract.
+
+  Repository implementations must accept `payerId` in `openVoiceHold` and return
+  `payerId: string | null` from successful `claimVoiceHold` calls. Use `null` when a
+  legacy hold has no recorded payer. Pass the user funding the reserve when opening
+  a hold.
+
+  The unused `restoreVoiceHold` repository method and `VoiceHoldMarkers` export have
+  been removed. Consumers must remove those references; settlement rollback belongs
+  inside the transaction that claims the hold and moves credits.
+
+### Minor Changes
+
+- [#5127](https://github.com/Bike4Mind/bike4mind/pull/5127) [`a43e39d`](https://github.com/Bike4Mind/bike4mind/commit/a43e39da24f846df42f1c8de8631736e89bfc753) Thanks [@onoya](https://github.com/onoya)! - edit an organization's storage limit
+
+- [#5134](https://github.com/Bike4Mind/bike4mind/pull/5134) [`d1d146c`](https://github.com/Bike4Mind/bike4mind/commit/d1d146c73a2adebe4bd3ecf54facccd7a8514e14) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - accept mid-conversation tool changes on Anthropic models
+
+### Patch Changes
+
+- [#5029](https://github.com/Bike4Mind/bike4mind/pull/5029) [`78b942f`](https://github.com/Bike4Mind/bike4mind/commit/78b942fdac1e4a65ebb59e9aa8467b87eee53c75) Thanks [@aflordelis](https://github.com/aflordelis)! - move the shared h0 leaves of server/utils, lib, shared, app/utils, services and config
+
+- [#5038](https://github.com/Bike4Mind/bike4mind/pull/5038) [`9f6f66b`](https://github.com/Bike4Mind/bike4mind/commit/9f6f66b28964425db2fa7b1fecee47fcc5fc2aaa) Thanks [@julsanchez](https://github.com/julsanchez)! - bind uploads to their measured size and moderate every animation frame
+
+- [#5062](https://github.com/Bike4Mind/bike4mind/pull/5062) [`3eeea1b`](https://github.com/Bike4Mind/bike4mind/commit/3eeea1b92b1cb3af52cdade73680c946389a9eee) Thanks [@aflordelis](https://github.com/aflordelis)! - keep a held file's stored objects through a lake purge
+
+- [#5088](https://github.com/Bike4Mind/bike4mind/pull/5088) [`0dcbad1`](https://github.com/Bike4Mind/bike4mind/commit/0dcbad11c888e1792484de1b5cc4235c75a9661f) Thanks [@erikbethke](https://github.com/erikbethke)! - let verified partner-domain emails register on invite-only instances
+
+- [#5129](https://github.com/Bike4Mind/bike4mind/pull/5129) [`88476d1`](https://github.com/Bike4Mind/bike4mind/commit/88476d1a5aa9fceec132d7abc452f9ba0b18ad54) Thanks [@dea0030](https://github.com/dea0030)! - point HELP_CENTER_PROMPT at Help Center entry points that exist
+
 ## 17.1.0
 
 ### Minor Changes

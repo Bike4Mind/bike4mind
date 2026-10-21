@@ -6,10 +6,18 @@ const h = vi.hoisted(() => ({
   findById: vi.fn(),
 }));
 
-vi.mock('@bike4mind/database', () => ({ adminAuditLogRepository: { append: h.append } }));
+vi.mock('@bike4mind/database', () => ({
+  adminAuditLogRepository: { append: h.append },
+  adminSettingsRepository: { findAll: async () => [], findBySettingNames: async () => [] },
+}));
 vi.mock('@bike4mind/database/auth', () => ({ userRepository: { findById: h.findById } }));
 
-import { recordAdminActionFromRequest, systemAuditActor, type RecordAdminActionFromRequestInput } from './adminAudit';
+import {
+  denySelfAdminAction,
+  recordAdminActionFromRequest,
+  systemAuditActor,
+  type RecordAdminActionFromRequestInput,
+} from './adminAudit';
 
 type RequestOverrides = {
   user?: Record<string, unknown>;
@@ -194,5 +202,26 @@ describe('recordAdminActionFromRequest', () => {
 describe('systemAuditActor', () => {
   it('builds a platform system actor', () => {
     expect(systemAuditActor('cron')).toEqual({ kind: 'system', scope: 'platform', name: 'cron', wasAdmin: false });
+  });
+});
+
+describe('denySelfAdminAction', () => {
+  const denied = { action: 'user.mfa.denied', attempted: 'user.mfa.reset', target: baseInput.target } as const;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.append.mockImplementation(async (entry: Record<string, unknown>) => ({ id: 'entry-1', ...entry }));
+  });
+
+  it('throws the generic 403 message by default', async () => {
+    await expect(denySelfAdminAction(buildRequest(), denied)).rejects.toThrow(
+      'Admins cannot perform this action on their own account.'
+    );
+  });
+
+  it('throws a caller-supplied message', async () => {
+    await expect(denySelfAdminAction(buildRequest(), { ...denied, message: 'Use settings.' })).rejects.toThrow(
+      'Use settings.'
+    );
   });
 });

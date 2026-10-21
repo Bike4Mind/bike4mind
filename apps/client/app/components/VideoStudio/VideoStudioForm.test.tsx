@@ -3,6 +3,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IFabFileDocument, VideoModel } from '@bike4mind/common';
 import { estimateVideoCostCredits, VIDEO_MODEL_CATALOG } from '@bike4mind/common';
+import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { formatCredits } from '@client/app/utils/formatUsd';
 
@@ -39,6 +40,11 @@ vi.mock('@client/app/components/Agent/ImageBrowserModal', () => ({
 import { discreteModel, optionalAudioModel, rangeModel } from '@client/app/hooks/data/__test__/videoGenerationFixtures';
 import VideoStudioForm from './VideoStudioForm';
 
+const settings = vi.hoisted(() => ({ enforceCredits: true }));
+vi.mock('@client/app/hooks/data/settings', () => ({
+  useGetSettingsValue: (key: string) => (key === 'enforceCredits' ? settings.enforceCredits : undefined),
+}));
+
 const appTheme = extendTheme({ ...getThemeConfig() });
 const onSubmit = vi.fn();
 
@@ -66,7 +72,11 @@ const grokEstimate = (durationSeconds: number) =>
     })
   );
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  settings.enforceCredits = true;
+  useSelectedAccount.setState({ selectedAccount: null });
+});
 
 describe('VideoStudioForm duration control', () => {
   it('renders a slider bounded by a range model', () => {
@@ -166,5 +176,34 @@ describe('VideoStudioForm submit', () => {
     expect(onSubmit).toHaveBeenCalledWith(
       expect.objectContaining({ mode: 'image_to_video', input_image_file_id: 'img-1' })
     );
+  });
+});
+
+describe('video form payer note', () => {
+  const select = (name: string, personal: boolean) =>
+    useSelectedAccount.setState({ selectedAccount: { id: 'acct-1', name, personal, credits: 100 } });
+
+  it('names the selected organization', () => {
+    select('Acme', false);
+    render(tree([discreteModel, rangeModel]));
+    expect(screen.getByTestId('video-form-payer-note')).toHaveTextContent('Paid from Acme credits');
+  });
+
+  it('names personal credits', () => {
+    select('Me', true);
+    render(tree([discreteModel, rangeModel]));
+    expect(screen.getByTestId('video-form-payer-note')).toHaveTextContent('Paid from your personal credits');
+  });
+
+  it('is hidden with no selection', () => {
+    render(tree([discreteModel, rangeModel]));
+    expect(screen.queryByTestId('video-form-payer-note')).not.toBeInTheDocument();
+  });
+
+  it('is hidden when credits are not enforced', () => {
+    settings.enforceCredits = false;
+    select('Acme', false);
+    render(tree([discreteModel, rangeModel]));
+    expect(screen.queryByTestId('video-form-payer-note')).not.toBeInTheDocument();
   });
 });

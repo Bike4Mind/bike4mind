@@ -36,11 +36,15 @@ export const AgentExecutionStartRequestSchema = z.object({
    * is what reproduces the product UI's Agent Mode toggle.
    */
   agent_id: z.string().optional(),
-  /**
-   * Bill this run to an organization's credit pool. The caller must belong to it; a
-   * non-member gets 404. Omit to bill the caller personally.
-   */
-  organization_id: z.string().optional(),
+  organization_id: z
+    .string()
+    .optional()
+    .describe(
+      'The organization whose credit pool pays for this run. You must belong to it; a non-member gets 404. ' +
+        'Omit it to bill your personal credits. An organization-billed API key always bills its own ' +
+        "organization: omit this or set it to the key's; any other value is a 403 " +
+        '(`errorCode: billing_organization_mismatch`).'
+    ),
   /**
    * Tool-id allowlist for the run. Omit to use the resolved profile's own list.
    *

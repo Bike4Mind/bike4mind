@@ -67,7 +67,7 @@ import {
 } from './tools/ToolBuilder';
 import type { VideoToolConfig } from './tools/implementation/videoGeneration';
 import type { MusicToolConfig } from './tools/implementation/musicGeneration';
-import { SYSTEM_PROMPT_PRIORITY } from './systemPromptSources';
+import { SYSTEM_PROMPT_PRIORITY, TURN_CONTEXT_END, TURN_CONTEXT_HEADER } from './systemPromptSources';
 import { SkillsFeature } from './features/SkillsFeature';
 import { LakeMemoryFeature } from './ChatCompletionFeatures';
 import type { ISkill, IDataLakeDocument } from '@bike4mind/common';
@@ -596,6 +596,90 @@ describe('ChatCompletionProcess', () => {
     return { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
   };
 
+  describe('stale attachment scrub', () => {
+    const SOFT_DELETED = '507f1f77bcf86cd799439201';
+    const GONE_SYSTEM_FILE = '507f1f77bcf86cd799439202';
+    const GLOBAL_GONE = '507f1f77bcf86cd799439203';
+
+    const unresolved = (fabFileId: string): FabFileNotice => ({
+      fabFileId,
+      fileName: fabFileId,
+      band: 'unresolved',
+      message: 'not found',
+      delivered: false,
+    });
+
+    const wireDataSources = (over: Record<string, unknown>) =>
+      vi.spyOn(service as any, 'buildDataSources').mockResolvedValue({
+        urlMessages: [],
+        remainingUserPrompt: 'Hello',
+        fabMessages: [],
+        convertedFabFiles: [],
+        globalSystemFileIds: [],
+        enabledSystemFileIds: [],
+        allFileIdsBeforeDedup: [],
+        dedupedFileIds: [],
+        featureContextMessages: [],
+        actuallyInlinedKnowledgeIds: [],
+        fullyInlinedAttachmentIds: [],
+        attachmentNotices: [],
+        attachmentDelivery: undefined,
+        fileNotices: [],
+        ...over,
+      });
+
+    it('detaches a soft-deleted pinned knowledge id from this session and a gone system file from the user', async () => {
+      const fabfileProbes = {
+        findExistingIdsIncludingDeletedByIds: vi.fn(async (ids: string[]) => ids.filter(id => id === SOFT_DELETED)),
+        findExistingIdsByIds: vi.fn(async () => []),
+      };
+      mockSession.userId = 'user1';
+      mockSession.knowledgeIds = [SOFT_DELETED];
+      mockDb.fabfiles = fabfileProbes;
+      mockDb.sessions.pullKnowledgeIdsFromSession = vi.fn().mockResolvedValue(true);
+      mockDb.users.pullSystemFilesForUsers = vi.fn().mockResolvedValue(undefined);
+      (service as any).user = {
+        id: 'user1',
+        currentCredits: 10000,
+        systemFiles: [{ fileId: GONE_SYSTEM_FILE, enabled: true }],
+      };
+      (service as any).systemFilesCache = new Map([['system-files-user1', [['global'], [GONE_SYSTEM_FILE]]]]);
+      wireDataSources({
+        enabledSystemFileIds: [GONE_SYSTEM_FILE],
+        fileNotices: [unresolved(SOFT_DELETED), unresolved(GONE_SYSTEM_FILE)],
+      });
+
+      await service.process({ body: wireMinimalTurn(), logger: mockLogger });
+
+      // The session id is what scopes a soft-deleted id to this notebook alone.
+      expect(mockDb.sessions.pullKnowledgeIdsFromSession).toHaveBeenCalledWith('session1', [SOFT_DELETED]);
+      expect(mockDb.users.pullSystemFilesForUsers).toHaveBeenCalledWith(['user1'], [GONE_SYSTEM_FILE]);
+      expect((service as any).user.systemFiles).toEqual([]);
+      expect((service as any).systemFilesCache.has('system-files-user1')).toBe(false);
+    });
+
+    it('warns about unresolved ids in the admin-wide SystemFiles setting without writing to it', async () => {
+      mockSession.userId = 'user1';
+      mockDb.sessions.pullKnowledgeIdsFromSession = vi.fn().mockResolvedValue(true);
+      mockDb.users.pullSystemFilesForUsers = vi.fn().mockResolvedValue(undefined);
+      (service as any).user = { id: 'user1', currentCredits: 10000, systemFiles: [] };
+      wireDataSources({
+        globalSystemFileIds: [GLOBAL_GONE],
+        fileNotices: [unresolved(GLOBAL_GONE)],
+      });
+
+      await service.process({ body: wireMinimalTurn(), logger: mockLogger });
+
+      // The turn logs through the logger it was constructed with, not the per-call one.
+      expect((service as any).logger.warn).toHaveBeenCalledWith(
+        'The SystemFiles admin setting lists files that did not resolve',
+        { count: 1 }
+      );
+      expect(mockDb.users.pullSystemFilesForUsers).not.toHaveBeenCalled();
+      expect(mockDb.sessions.pullKnowledgeIdsFromSession).not.toHaveBeenCalled();
+    });
+  });
+
   describe('a deprecated-model redirect', () => {
     const successor = {
       id: ChatModels.GPT4_1,
@@ -1075,6 +1159,70 @@ describe('ChatCompletionProcess', () => {
       const errorCalls = mockLogger.error.mock.calls.flat();
       expect(errorCalls.some(a => a instanceof ResponsesStreamTruncatedError)).toBe(false);
       expect(mockLogger.warn).toHaveBeenCalledWith(expect.any(ResponsesStreamTruncatedError));
+    });
+  });
+
+  // A trailing throttled publish reads `quest` at fire time, so without cancelling it at the
+  // terminal flip it publishes a `done` frame while the terminal save is still in flight.
+  describe('terminal status ordering', () => {
+    // Keep in sync with THROTTLE_INTERVAL in ChatCompletionProcess.ts.
+    const THROTTLE_INTERVAL_MS = 100;
+    const isTerminal = (status?: string) => status === 'done' || status === 'stopped';
+
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    it('publishes the first terminal frame only after the terminal save completes', async () => {
+      mockSession.userId = 'user1';
+      const body = wireMinimalTurn();
+      // Two chunks inside one throttle window: the second arms the trailing call.
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+          await cb(['Hel']);
+          await cb(['lo']);
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as any); // any: minimal backend shape, as elsewhere in this file
+
+      let releaseSave!: () => void;
+      const saveHeld = new Promise<void>(resolve => {
+        releaseSave = resolve;
+      });
+      let signalSaveEntered!: () => void;
+      const saveEntered = new Promise<void>(resolve => {
+        signalSaveEntered = resolve;
+      });
+      let held = false;
+      mockDb.quests.update.mockImplementation(async (doc: { status?: string }) => {
+        if (!held && isTerminal(doc?.status)) {
+          held = true;
+          signalSaveEntered();
+          await saveHeld;
+        }
+        return undefined;
+      });
+
+      const frames: Array<string | undefined> = [];
+      vi.mocked(service.sendStatusUpdate).mockImplementation(async (quest, _status, options) => {
+        if (!options?.silent) frames.push(quest?.status);
+      });
+
+      const processPromise = service.process({ body, logger: mockLogger });
+      await saveEntered;
+
+      // The settlement window is open and the throttle interval has elapsed:
+      // a trailing publish here would be a terminal frame ahead of the save.
+      await vi.advanceTimersByTimeAsync(THROTTLE_INTERVAL_MS * 2);
+      expect(frames.filter(isTerminal)).toHaveLength(0);
+
+      releaseSave();
+      await processPromise;
+      await vi.advanceTimersByTimeAsync(THROTTLE_INTERVAL_MS * 2);
+
+      const terminalFrames = frames.filter(isTerminal);
+      expect(terminalFrames).toHaveLength(1);
+      expect(frames.at(-1)).toBe(terminalFrames[0]);
     });
   });
 
@@ -2019,6 +2167,97 @@ describe('ChatCompletionProcess', () => {
       );
     });
 
+    describe('data-source status copy', () => {
+      // Literal copy, not the module constants: this pins what the user reads.
+      const processStatusTurn = async (
+        messageFileIds: string[] = [],
+        { message = 'Hello', fabFileIds = [] }: { message?: string; fabFileIds?: string[] } = {}
+      ) => {
+        mockedGetLlmByModel.mockReturnValue({
+          complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+            await cb(['Hi!']);
+          }),
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: ChatModels.GPT4,
+        });
+        mockedGetAvailableModels.mockResolvedValue([
+          {
+            id: ChatModels.GPT4,
+            type: 'text',
+            name: 'GPT-4',
+            backend: ModelBackend.OpenAI,
+            max_tokens: 100,
+            contextWindow: 1000,
+            can_stream: false,
+            pricing: {},
+            supportsImageVariation: false,
+          },
+        ]);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: message }],
+          messageTruncation: null,
+        });
+        mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+        mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: message });
+
+        await service.process({
+          body: {
+            ...startQuestParams,
+            message,
+            messageFileIds,
+            fabFileIds,
+            tools: [],
+            projectId: undefined,
+            organizationId: undefined,
+          },
+          logger: mockLogger,
+        });
+
+        return vi.mocked(service.sendStatusUpdate).mock.calls.map(([, status]) => status);
+      };
+
+      it('sends neutral copy, never the data-source copy, on a source-free turn', async () => {
+        const statuses = await processStatusTurn();
+
+        expect(statuses).toContain('Preparing context...');
+        expect(statuses).not.toContain('Gathering data sources...');
+      });
+
+      it('sends the data-source copy when the turn has an attached file', async () => {
+        const statuses = await processStatusTurn(['file-a']);
+
+        expect(statuses).toContain('Gathering data sources...');
+      });
+
+      it('sends the data-source copy when the session has knowledge attached', async () => {
+        // No file ids: session knowledge is the only source signal, so this pins the call site's
+        // knowledgeIds wiring - passing [] there would flip the status with every other test green.
+        mockSession.knowledgeIds = ['knowledge-a'];
+        const statuses = await processStatusTurn();
+
+        expect(statuses).toContain('Gathering data sources...');
+      });
+
+      it('sends the data-source copy when only session fab files are attached', async () => {
+        const statuses = await processStatusTurn([], { fabFileIds: ['file-a'] });
+
+        expect(statuses).toContain('Gathering data sources...');
+      });
+
+      it('sends the data-source copy when only forced retrieval is enabled', async () => {
+        mockSession.forceKnowledgeRetrieval = true;
+        const statuses = await processStatusTurn();
+
+        expect(statuses).toContain('Gathering data sources...');
+      });
+
+      it('sends the data-source copy when only the prompt contains a URL', async () => {
+        const statuses = await processStatusTurn([], { message: 'Summarize https://example.com' });
+
+        expect(statuses).toContain('Gathering data sources...');
+      });
+    });
+
     it('skips a prefetched quest that invoke already saved as an error', async () => {
       const complete = vi.fn();
       mockedGetLlmByModel.mockReturnValue({ complete, getModelInfo: vi.fn(), currentModel: ChatModels.GPT4 });
@@ -2566,6 +2805,33 @@ describe('ChatCompletionProcess', () => {
             completionInfo: undefined,
           },
         ]);
+      });
+
+      it('sends the relocated per-turn context to each configuration', async () => {
+        const complete = vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+          await cb(['Answer']);
+        });
+        mockedGetLlmByModel.mockReturnValue({ complete, getModelInfo: vi.fn().mockResolvedValue([]) } as any);
+        mockedGetAvailableModels.mockResolvedValue(availableModels() as any);
+        service.features.set('mementos', {
+          getContextMessages: async () => [{ role: 'system' as const, content: 'MEMENTO-FACT' }],
+        } as any);
+        mockedBuildAndSortMessages.mockImplementation(async (_prev: any, context: any[], prompt: any[]) => ({
+          messages: [...context, ...prompt],
+          currentTurnMessageCount: prompt.length,
+          messageTruncation: null,
+        }));
+        mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+        mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+        await service.process({ body: researchBody() as any, logger: mockLogger });
+
+        const [, messages] = complete.mock.calls[0];
+        expect(messages.at(-1)).toEqual({
+          role: 'user',
+          content: `${TURN_CONTEXT_HEADER}MEMENTO-FACT${TURN_CONTEXT_END}Hello`,
+        });
+        expect(JSON.stringify(messages.filter((m: IMessage) => m.role === 'system'))).not.toContain('MEMENTO-FACT');
       });
     });
 
@@ -8573,6 +8839,9 @@ describe('ChatCompletionProcess', () => {
       // once the reserved recovery budget lands too small - the first build still carries a system
       // message, every rebuild after it does not.
       dropSystemMessagesOnRebuild?: boolean;
+      // Appends an attachment to the current turn, so the volatile part of the payload is more than
+      // the bare prompt and an anchor placed by counting back from the end lands on it.
+      turnAttachment?: boolean;
     }): Promise<any> => {
       const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue(manyMcpTools as any);
       const buildToolPromptSpy = vi.spyOn(ToolBuilder.prototype, 'buildToolPrompt').mockResolvedValue(null);
@@ -8591,16 +8860,22 @@ describe('ChatCompletionProcess', () => {
       mockedUsdToCredits.mockImplementation(realUsdToCredits);
       mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
 
+      const complete = vi.fn().mockImplementation(async (_m: any, _msgs: any, _opts: any, cb: any) => {
+        await cb(['Hi!'], { inputTokens: 100, outputTokens: 50 });
+      });
       mockedGetLlmByModel.mockReturnValue({
-        complete: vi.fn().mockImplementation(async (_m: any, _msgs: any, _opts: any, cb: any) => {
-          await cb(['Hi!'], { inputTokens: 100, outputTokens: 50 });
-        }),
+        complete,
         getModelInfo: vi.fn().mockResolvedValue([]),
         currentModel: ChatModels.GPT4,
       } as any);
       mockedGetAvailableModels.mockResolvedValue([smallContextModel] as any);
       const userOnlyBuild = { messages: [{ role: 'user', content: 'Hello' }], messageTruncation: null };
-      if (opts.dropSystemMessagesOnRebuild) {
+      if (opts.turnAttachment) {
+        mockedBuildAndSortMessages.mockImplementation(async (prev: any[], _context: any[], prompt: any[]) => ({
+          messages: [...(prev ?? []), { role: 'user', content: 'attached file' }, ...prompt],
+          messageTruncation: null,
+        }));
+      } else if (opts.dropSystemMessagesOnRebuild) {
         mockedBuildAndSortMessages
           .mockResolvedValueOnce({
             messages: [
@@ -8623,8 +8898,29 @@ describe('ChatCompletionProcess', () => {
       buildToolPromptSpy.mockRestore();
 
       const updateCall = mockDb.quests.update.mock.calls.at(-1)?.[0];
-      return { updateCall, buildCalls: mockedBuildAndSortMessages.mock.calls };
+      return {
+        updateCall,
+        buildCalls: mockedBuildAndSortMessages.mock.calls,
+        completeCall: complete.mock.calls.at(-1),
+      };
     };
+
+    it('places the history anchor on the recovered payload, not by counting back from the end', async () => {
+      // The rebuild sheds the oldest turn, and the current turn carries an attachment, so the last
+      // history message is two places from the end rather than one.
+      const { completeCall } = await runRecoveryScenario({
+        recoveryTokenCounts: [100, 50],
+        turnAttachment: true,
+      });
+
+      const sent = completeCall![1] as IMessage[];
+      // Recovered history is [turn two, reply two, turn three, reply three], then the attachment and
+      // the prompt.
+      expect(sent.map(m => m.content).slice(0, 4)).toEqual(['turn two', 'reply two', 'turn three', 'reply three']);
+      expect(sent.find(m => m.cache === true)?.content).toBe('reply three');
+      expect(sent.at(-1)?.cache).toBeUndefined();
+      expect(sent.at(-2)?.cache).toBeUndefined();
+    });
 
     it('reserves toolSchemaTokens before rebuilding, so a rebuild that reports "fits" actually fits', async () => {
       // One shed turn is enough: effectiveTotalTokens(100) + toolSchemaTokens(3000) = 3100, comfortably
@@ -9144,6 +9440,349 @@ describe('ChatCompletionProcess', () => {
       expect(mockLogger.warn).toHaveBeenCalledWith(
         expect.stringContaining('Skipping the context-overflow guard: input tokens are an estimate')
       );
+    });
+  });
+
+  // The provider's prompt cache matches on a prefix (tools, system, messages), so anything that
+  // changes between turns in front of the history re-writes the whole conversation. These pin the
+  // three per-turn inputs the process controls: the history count, where per-turn context rides,
+  // and the session-sticky tool set.
+  describe('prompt-cache stability', () => {
+    const wireTurn = (opts: { builderReturnsContext?: boolean } = {}) => {
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_m: any, _msgs: any, _opts: any, cb: any) => {
+          await cb(['Hi!'], { inputTokens: 100, outputTokens: 50 });
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as any);
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ] as any);
+      if (opts.builderReturnsContext) {
+        // The admitted system messages BY REFERENCE, as the real builder emits them, then the
+        // window's history, then the current turn - the shape and count the real builder reports.
+        mockedBuildAndSortMessages.mockImplementation(async (prev: any, context: any[], prompt: any[]) => {
+          return {
+            messages: [...context, ...(prev ?? []), ...prompt],
+            currentTurnMessageCount: prompt.length,
+            messageTruncation: null,
+          } as any;
+        });
+      } else {
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: 'Hello' }],
+          messageTruncation: null,
+        } as any);
+      }
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue(
+        opts.builderReturnsContext
+          ? ([[{ role: 'assistant', content: 'Earlier answer' }], 0, {}] as any)
+          : ([[], 0, {}] as any)
+      );
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
+      return { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+    };
+
+    const lastComplete = () => {
+      const complete = vi.mocked(mockedGetLlmByModel.mock.results.at(-1)!.value.complete);
+      return complete.mock.calls.at(-1)!;
+    };
+
+    const systemText = (messages: IMessage[]) =>
+      messages
+        .filter(m => m.role === 'system')
+        .map(m => m.content)
+        .join('\n');
+
+    describe('history count', () => {
+      it.each([
+        [30, 30],
+        [80, 60],
+      ])('requested %i resolves to %i whatever the query complexity', async (requested, expected) => {
+        const resolved: number[] = [];
+        for (const queryComplexity of ['simple', 'contextual', 'complex']) {
+          const body = { ...wireTurn(), historyCount: requested, queryComplexity };
+          await service.process({ body, logger: mockLogger });
+          resolved.push(mockedFetchAndProcessPreviousMessages.mock.calls.at(-1)![1] as number);
+        }
+
+        expect(resolved).toEqual([expected, expected, expected]);
+      });
+    });
+
+    describe('per-turn context', () => {
+      const VOLATILE = ['MEMENTO-FACT', 'RETRIEVED-PASSAGE', 'LAKE-FACT', '[Current View Context]'];
+      const memento = { role: 'system' as const, content: 'MEMENTO-FACT' };
+      const retrieval = { role: 'system' as const, content: 'RETRIEVED-PASSAGE' };
+      const lakeFact = { role: 'system' as const, content: 'LAKE-FACT' };
+      const identity = { role: 'system' as const, content: '[ADMIN_PROMPT:bike4mind_identity]\nIdentity' };
+      const viewContext = {
+        role: 'system' as const,
+        content: '[Current View Context] User is on the Admin dashboard.',
+        perTurn: true as const,
+      };
+
+      const runWithContext = async (extra: Record<string, unknown> = {}) => {
+        mockSession.contextSummary = 'RUNNING-SUMMARY';
+        const body = {
+          ...wireTurn({ builderReturnsContext: true }),
+          extraContextMessages: [identity, viewContext],
+          ...extra,
+        };
+        service.features.set('mementos', { getContextMessages: async () => [memento] } as any);
+        service.features.set('knowledgeRetrieval', { getContextMessages: async () => [retrieval] } as any);
+        service.features.set('lakeMemory', { getContextMessages: async () => [lakeFact] } as any);
+        await service.process({ body, logger: mockLogger });
+        const [, messages, options] = lastComplete();
+        return { messages: messages as IMessage[], options: options as any };
+      };
+
+      it('carries the volatile sources in the last user message, delimited, and not in system', async () => {
+        const { messages } = await runWithContext();
+
+        for (const volatile of VOLATILE) expect(systemText(messages)).not.toContain(volatile);
+
+        const last = messages.at(-1)!;
+        expect(last.role).toBe('user');
+        const text = last.content as string;
+        expect(text.startsWith(TURN_CONTEXT_HEADER)).toBe(true);
+        for (const volatile of VOLATILE) expect(text).toContain(volatile);
+        // The user's own words follow the delimiter, untouched.
+        expect(text.endsWith(`${TURN_CONTEXT_END}Hello`)).toBe(true);
+      });
+
+      it('keeps the session-stable sources in system', async () => {
+        const { messages } = await runWithContext();
+
+        expect(systemText(messages)).toContain('RUNNING-SUMMARY');
+        expect(systemText(messages)).toContain('[ADMIN_PROMPT:bike4mind_identity]');
+        expect(systemText(messages)).toContain('Current date:');
+      });
+
+      it('flags the last history message as the cache breakpoint, ahead of the current turn', async () => {
+        const { messages, options } = await runWithContext();
+
+        expect(messages.find(m => m.content === 'Earlier answer')?.cache).toBe(true);
+        expect(messages.at(-1)!.cache).toBeUndefined();
+        // The flag is the breakpoint; the adapter's own end-of-array anchor would land on the
+        // volatile current turn.
+        expect(options.cacheStrategy.cacheConversationHistory).toBe(false);
+        expect(options.cacheStrategy).not.toHaveProperty('historyCacheExcludeTrailingCount');
+      });
+
+      it('leaves the adapter its own anchor when the message before the turn cannot carry the flag', async () => {
+        const body = wireTurn({ builderReturnsContext: true });
+        // An unanswered question: flagging it would stop the adapter merging it with the prompt.
+        mockedFetchAndProcessPreviousMessages.mockResolvedValue([
+          [{ role: 'user', content: 'Unanswered' }],
+          0,
+          {},
+        ] as any);
+
+        await service.process({ body, logger: mockLogger });
+
+        expect(lastComplete()[2].cacheStrategy.cacheConversationHistory).toBe(true);
+        expect(lastComplete()[2].cacheStrategy).not.toHaveProperty('historyCacheExcludeTrailingCount');
+      });
+
+      it('carries the relocated context exactly once through the tool-pairing retry', async () => {
+        const body = wireTurn({ builderReturnsContext: true });
+        service.features.set('mementos', {
+          getContextMessages: async () => [{ role: 'system' as const, content: 'MEMENTO-FACT' }],
+        } as any);
+        const complete = vi
+          .fn()
+          .mockRejectedValueOnce(new Error('messages: unexpected tool_use_id in tool_result'))
+          .mockImplementation(async (_m: any, _msgs: any, _opts: any, cb: any) => {
+            await cb(['Hi!'], { inputTokens: 100, outputTokens: 50 });
+          });
+        mockedGetLlmByModel.mockReturnValue({
+          complete,
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: ChatModels.GPT4,
+        } as any);
+
+        await service.process({ body: body as any, logger: mockLogger });
+
+        expect(complete).toHaveBeenCalledTimes(2);
+        const retryMessages = complete.mock.calls[1][1] as IMessage[];
+        const relocated = retryMessages.filter(
+          m => typeof m.content === 'string' && m.content.includes('MEMENTO-FACT')
+        );
+        expect(relocated).toHaveLength(1);
+        expect((relocated[0].content as string).startsWith(TURN_CONTEXT_HEADER)).toBe(true);
+        expect(retryMessages.some(m => m.cache === true)).toBe(true);
+      });
+
+      it('relocates only what the token budget kept', async () => {
+        const body = { ...wireTurn({ builderReturnsContext: true }), extraContextMessages: [identity, viewContext] };
+        // The builder sheds the memento under budget pressure, as the real one drops low-priority context.
+        mockedBuildAndSortMessages.mockImplementation(async (prev: any, context: any[], prompt: any[]) => ({
+          messages: [...context.filter(m => m !== memento), ...(prev ?? []), ...prompt],
+          currentTurnMessageCount: prompt.length,
+          messageTruncation: null,
+        }));
+        service.features.set('mementos', { getContextMessages: async () => [memento] } as any);
+        service.features.set('knowledgeRetrieval', { getContextMessages: async () => [retrieval] } as any);
+
+        await service.process({ body, logger: mockLogger });
+        const messages = lastComplete()[1] as IMessage[];
+
+        expect(JSON.stringify(messages)).not.toContain('MEMENTO-FACT');
+        const last = messages.at(-1)!.content as string;
+        expect(last.startsWith(TURN_CONTEXT_HEADER)).toBe(true);
+        expect(last).toContain('RETRIEVED-PASSAGE');
+      });
+
+      it('hands onComplete features the system-role form, not the relocated request', async () => {
+        const onComplete = vi.fn().mockResolvedValue(undefined);
+        mockSession.contextSummary = 'RUNNING-SUMMARY';
+        const body = { ...wireTurn({ builderReturnsContext: true }), extraContextMessages: [identity, viewContext] };
+        service.features.set('mementos', { getContextMessages: async () => [memento], onComplete } as any);
+
+        await service.process({ body, logger: mockLogger });
+
+        expect(onComplete).toHaveBeenCalled();
+        const persisted = onComplete.mock.calls[0][0].messages as IMessage[];
+        expect(persisted).toContainEqual(memento);
+        expect(persisted.some(m => typeof m.content === 'string' && m.content.includes(TURN_CONTEXT_HEADER))).toBe(
+          false
+        );
+        expect(persisted.at(-1)).toEqual({ role: 'user', content: 'Hello' });
+      });
+
+      it('does not persist the injected context on the quest', async () => {
+        await runWithContext();
+
+        expect(mockQuest.prompt ?? '').not.toContain('MEMENTO-FACT');
+        expect(mockQuest.promptMeta.prompt).toBe('Hello');
+        expect(JSON.stringify(mockDb.quests.update.mock.calls)).not.toContain(TURN_CONTEXT_HEADER);
+      });
+
+      it('leaves every source in system under a promptMode, which asked for the request it supplied', async () => {
+        const { messages } = await runWithContext({ promptMode: 'grounded' });
+
+        expect(messages.at(-1)).toEqual({ role: 'user', content: 'Hello' });
+        expect(systemText(messages)).toContain('[Current View Context]');
+      });
+
+      // The disclosure has to answer "what did the model actually see, and where" - a relocated
+      // source reported as system would claim an authority it was deliberately moved out of.
+      it('reports each source where it was sent, not where it was assembled', async () => {
+        await runWithContext({ includeSystemPrompt: true });
+
+        const blocks = service.systemPromptText?.blocks ?? [];
+        expect(blocks.find(b => b.name === 'mementos')?.placement).toBe('user_turn');
+        // Mementos and the flagged view context move; the rest of that channel stays.
+        expect(blocks.find(b => b.name === 'extra_context')?.placement).toBe('mixed');
+        expect(blocks.find(b => b.name === 'date_time_context')?.placement).toBe('system');
+      });
+    });
+
+    describe('auto-added tools', () => {
+      const toolNames = () =>
+        (lastComplete()[2].tools ?? []).map((t: { toolSchema: { name: string } }) => t.toolSchema.name);
+
+      afterEach(() => {
+        delete (service as any).user.isAdmin;
+        delete (service as any).user.blogIntegration;
+      });
+
+      it('persists a tool the turn triggered onto the session', async () => {
+        (service as any).user.isAdmin = true;
+        const addAutoAddedTools = vi.fn().mockResolvedValue(undefined);
+        mockDb.sessions.addAutoAddedTools = addAutoAddedTools;
+        const body = { ...wireTurn(), message: 'Turn this conversation into a blog post' };
+
+        await service.process({ body, logger: mockLogger });
+
+        expect(toolNames()).toContain('blog_draft');
+        expect(addAutoAddedTools).toHaveBeenCalledWith('session1', ['blog_draft']);
+      });
+
+      it('keeps a persisted tool on a later turn with no trigger, without rewriting it', async () => {
+        (service as any).user.isAdmin = true;
+        const addAutoAddedTools = vi.fn().mockResolvedValue(undefined);
+        mockDb.sessions.addAutoAddedTools = addAutoAddedTools;
+        mockSession.autoAddedTools = ['blog_draft'];
+        const body = { ...wireTurn(), message: 'thanks, that works' };
+
+        await service.process({ body, logger: mockLogger });
+
+        expect(toolNames()).toContain('blog_draft');
+        expect(addAutoAddedTools).not.toHaveBeenCalled();
+      });
+
+      // The tool and its prompt section travel together: a carried-over blog_draft whose
+      // content-transform guidance is withheld leaves the model holding a tool it does not know how
+      // to use, on exactly the follow-up turns the stickiness exists for.
+      it('gives a carried-over blog_draft its content-transform prompt section', async () => {
+        (service as any).user.isAdmin = true;
+        mockSession.autoAddedTools = ['blog_draft'];
+        const buildToolPromptSpy = vi.spyOn(ToolBuilder.prototype, 'buildToolPrompt').mockResolvedValue(null);
+        try {
+          await service.process({ body: { ...wireTurn(), message: 'thanks' }, logger: mockLogger });
+
+          expect(buildToolPromptSpy.mock.calls.at(-1)?.[0]).toEqual(
+            expect.objectContaining({ hasContentTransform: true })
+          );
+        } finally {
+          buildToolPromptSpy.mockRestore();
+        }
+      });
+
+      // A failed persist costs stickiness on the next turn, never this one.
+      it('completes the turn and still offers the tool when persisting it fails', async () => {
+        (service as any).user.isAdmin = true;
+        mockDb.sessions.addAutoAddedTools = vi.fn().mockRejectedValue(new Error('db down'));
+        const body = { ...wireTurn(), message: 'Turn this conversation into a blog post' };
+
+        await expect(service.process({ body, logger: mockLogger })).resolves.not.toThrow();
+
+        expect(toolNames()).toContain('blog_draft');
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          '[AutoAddedTools] Failed to persist auto-added tools on the session',
+          expect.objectContaining({ tools: ['blog_draft'] })
+        );
+      });
+
+      it('lists the same set in the same order whatever order the session stored it in', async () => {
+        (service as any).user.isAdmin = true;
+        (service as any).user.blogIntegration = true;
+        const lists: string[][] = [];
+        for (const stored of [
+          ['blog_publish', 'blog_draft', 'blog_edit'],
+          ['blog_edit', 'blog_publish', 'blog_draft'],
+        ]) {
+          mockSession.autoAddedTools = stored;
+          const body = { ...wireTurn(), message: 'thanks' };
+          await service.process({ body, logger: mockLogger });
+          lists.push(toolNames().filter((name: string) => name.startsWith('blog_')));
+        }
+
+        expect(lists[0]).toEqual(['blog_draft', 'blog_edit', 'blog_publish']);
+        expect(lists[1]).toEqual(lists[0]);
+      });
+
+      it('does not offer a persisted blog tool to a user who is not an admin', async () => {
+        mockSession.autoAddedTools = ['blog_draft', 'blog_publish', 'blog_edit'];
+        const body = { ...wireTurn(), message: 'thanks' };
+
+        await service.process({ body, logger: mockLogger });
+
+        expect(toolNames().filter((name: string) => name.startsWith('blog_'))).toEqual([]);
+      });
     });
   });
 

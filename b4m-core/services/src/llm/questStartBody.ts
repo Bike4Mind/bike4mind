@@ -96,6 +96,8 @@ export const QuestStartBodySchema = z
           role: z.enum(['user', 'assistant', 'system', 'function', 'tool']),
           content: z.union([z.string(), z.array(z.any())]),
           fabFileIds: z.array(z.string()).optional(),
+          /** See the same field on the public request schema: send in the current user turn. */
+          perTurn: z.boolean().optional(),
         })
       )
       .optional(),

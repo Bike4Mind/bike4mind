@@ -8,6 +8,9 @@ import { CURRENT_POLICY_VERSION, USERNAME_RULES_MESSAGE } from '@bike4mind/commo
 import en from '@client/app/locales/en.json';
 import { ExternalLinks } from '@client/app/utils/externalLinks';
 import { useCookieSettings } from '@client/app/components/CookieConsentBanner';
+
+const mockLogEvent = vi.hoisted(() => vi.fn());
+vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: mockLogEvent }) }));
 import MultiStepLogin from './MultiStepLogin';
 
 type MfaHookOptions = {
@@ -190,6 +193,7 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
     );
     // Ad-conversion signal fires exactly once for the freshly created account.
     expect(mocks.trackSignupConversion).toHaveBeenCalledTimes(1);
+    expect(mockLogEvent).toHaveBeenCalledWith({ type: 'policies_accepted', metadata: { path: 'inline_registration' } });
   });
 
   it('keeps Create account disabled until BOTH acceptance checkboxes are checked', async () => {

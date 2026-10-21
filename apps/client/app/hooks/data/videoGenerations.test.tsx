@@ -11,7 +11,7 @@ const h = vi.hoisted(() => ({
   readyState: 1,
   toastSuccess: vi.fn(),
   toastError: vi.fn(),
-  selectedAccount: null as { id: string; personal: boolean } | null,
+  selectedAccount: null as { id: string; name?: string; personal: boolean } | null,
 }));
 
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: h.get, post: h.post } }));
@@ -357,6 +357,43 @@ describe('useCreateVideoGeneration', () => {
     });
     expect(h.toastError).toHaveBeenCalledWith('This model has been turned off. Pick another model.');
   });
+
+  it('names the account billed at submit when credits run out', async () => {
+    h.selectedAccount = { id: 'org-1', name: 'Acme', personal: false };
+    h.post.mockRejectedValue(
+      new AxiosError('Request failed', undefined, undefined, undefined, {
+        status: 422,
+        data: { errorCode: 'insufficient_credits' },
+      } as never)
+    );
+    const { result } = renderHook(() => useCreateVideoGeneration(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync(body).catch(() => undefined);
+    });
+    expect(h.toastError).toHaveBeenCalledWith('Acme does not have enough credits for this video.');
+  });
+
+  it('names the account selected at submit even if the switcher moves before the rejection', async () => {
+    h.selectedAccount = { id: 'org-1', name: 'Acme', personal: false };
+    let rejectCreate: (reason: unknown) => void = () => undefined;
+    h.post.mockReturnValue(new Promise((_resolve, reject) => (rejectCreate = reject)));
+    const { result } = renderHook(() => useCreateVideoGeneration(), { wrapper });
+    let submitted: Promise<unknown> = Promise.resolve();
+    act(() => {
+      submitted = result.current.mutateAsync(body).catch(() => undefined);
+    });
+    h.selectedAccount = { id: 'user-1', name: 'Me', personal: true };
+    await act(async () => {
+      rejectCreate(
+        new AxiosError('Request failed', undefined, undefined, undefined, {
+          status: 422,
+          data: { errorCode: 'insufficient_credits' },
+        } as never)
+      );
+      await submitted;
+    });
+    expect(h.toastError).toHaveBeenCalledWith('Acme does not have enough credits for this video.');
+  });
 });
 
 describe('useCancelVideoGeneration', () => {
@@ -383,6 +420,16 @@ describe('useCancelVideoGeneration', () => {
       await result.current.mutateAsync('job-1').catch(() => undefined);
     });
     expect(h.toastError).toHaveBeenCalledWith('Too many requests. Wait a moment and try again.');
+  });
+
+  it('keeps the cancel fallback on a 403 even while an organization account is selected', async () => {
+    h.selectedAccount = { id: 'org-1', name: 'Acme', personal: false };
+    h.post.mockRejectedValue(Object.assign(new AxiosError('Request failed'), { response: { status: 403, data: {} } }));
+    const { result } = renderHook(() => useCancelVideoGeneration(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync('job-1').catch(() => undefined);
+    });
+    expect(h.toastError).toHaveBeenCalledWith('Could not cancel the video. Try again.');
   });
 });
 

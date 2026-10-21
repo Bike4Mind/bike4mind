@@ -108,6 +108,7 @@ const baseProps = {
   handleStopMessage: vi.fn(),
   pendingAutoSubmitGoal: null,
   sendBlockedReason: null,
+  onVoiceSendBlocked: vi.fn(),
   isModelsLoading: false,
   isVoiceSessionEnabled: false,
   voiceEngine: null,
@@ -119,6 +120,7 @@ beforeEach(() => {
   mocks.voiceRecordingEnds.length = 0;
   mocks.voiceRecordingStarts.length = 0;
   mocks.rowCompact = false;
+  baseProps.onVoiceSendBlocked.mockClear();
   useConversationalVoiceStore.setState({ phase: 'idle' });
 });
 
@@ -231,6 +233,7 @@ describe('SessionToolbar - voice transcript gate', () => {
 
     expect(handleSendClick).not.toHaveBeenCalled();
     expect(setChatInputValue).toHaveBeenCalledWith('spoken words');
+    expect(baseProps.onVoiceSendBlocked).toHaveBeenCalledExactlyOnceWith('reconnecting');
   });
 
   it('sends when the gate cleared while recording', async () => {
@@ -247,6 +250,7 @@ describe('SessionToolbar - voice transcript gate', () => {
     });
 
     expect(handleSendClick).toHaveBeenCalledWith('spoken words');
+    expect(baseProps.onVoiceSendBlocked).not.toHaveBeenCalled();
   });
 
   it('appends a blocked transcript after text already typed instead of replacing it', async () => {
@@ -261,6 +265,7 @@ describe('SessionToolbar - voice transcript gate', () => {
     });
 
     expect(setChatInputValue).toHaveBeenCalledWith('typed draft and spoken');
+    expect(baseProps.onVoiceSendBlocked).toHaveBeenCalledExactlyOnceWith('uploading');
   });
 });
 

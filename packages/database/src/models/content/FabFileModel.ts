@@ -3711,6 +3711,36 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return prior ? prior.toJSON() : null;
   }
 
+  async setOwnerOrganizationIfUnchanged(
+    fabFileId: string,
+    expected: Pick<IFabFileDocument, 'organizationId' | 'fileSize' | 'storageChargedAt' | 'status' | 'tags'>,
+    nextOrganizationId: string | undefined
+  ): Promise<boolean> {
+    // `null` matches a missing field; status alone also accepts missing, since a hydrated read fills
+    // in the schema's 'pending' default for a legacy row. Tombstones are excluded (already refunded).
+    // The owner derives from the tags, so the stored tag-name set must still equal the read, or a
+    // removal could unstamp a file a concurrent join just put in another lake of the same org.
+    const tagNames = [
+      ...new Set(
+        (expected.tags ?? []).map(tag => tag?.name).filter((name): name is string => typeof name === 'string')
+      ),
+    ];
+    const result = await this.fabFileModel.updateOne(
+      {
+        _id: fabFileId,
+        ...(expected.organizationId ? { organizationId: expected.organizationId } : PERSONAL_STORAGE_FILTER),
+        fileSize: expected.fileSize ?? null,
+        storageChargedAt: expected.storageChargedAt ?? null,
+        status: expected.status === 'pending' ? { $in: ['pending', null] } : (expected.status ?? null),
+        // `$all: []` matches nothing, so an untagged read relies on the $not arm alone.
+        ...(tagNames.length ? { 'tags.name': { $all: tagNames } } : {}),
+        tags: { $not: { $elemMatch: { name: { $type: 'string', $nin: tagNames } } } },
+      },
+      nextOrganizationId ? { $set: { organizationId: nextOrganizationId } } : { $unset: { organizationId: '' } }
+    );
+    return result.modifiedCount > 0;
+  }
+
   async pullTagsByFabFileId(fabFileId: string, tagNames: string[]): Promise<number> {
     // The schema has timestamps, so an empty $in would still rewrite updatedAt and report a
     // modification for a write that removes nothing.

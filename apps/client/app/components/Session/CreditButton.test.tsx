@@ -4,8 +4,9 @@ import { render, screen, fireEvent, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
-const { state } = vi.hoisted(() => ({
+const { state, logEvent } = vi.hoisted(() => ({
   state: { enforceCredits: true, credits: 9982.6, payerNote: null as string | null, model: 'model-a', compact: false },
+  logEvent: vi.fn(),
 }));
 
 vi.mock('../subscription/CreditsExplanationModal', () => ({
@@ -51,6 +52,7 @@ vi.mock('@client/app/hooks/data/useModelInfo', () => ({
     ],
   }),
 }));
+vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: logEvent }) }));
 
 import CreditBalanceChip from './CreditButton';
 
@@ -69,6 +71,7 @@ describe('CreditBalanceChip', () => {
     state.payerNote = null;
     state.model = 'model-a';
     state.compact = false;
+    logEvent.mockClear();
   });
 
   it('shows answers as the primary unit and opens the explanation instead of Billing', () => {
@@ -79,6 +82,7 @@ describe('CreditBalanceChip', () => {
     expect(screen.queryByTestId('credits-explanation-open')).not.toBeInTheDocument();
     fireEvent.click(chip);
     expect(screen.getByTestId('credits-explanation-open')).toBeInTheDocument();
+    expect(logEvent).toHaveBeenCalledWith({ type: 'credits_chip_clicked' });
   });
 
   it('keeps credits secondary in the accessible explanation', () => {
@@ -104,7 +108,9 @@ describe('CreditBalanceChip', () => {
   it('marks the count as approximate', () => {
     renderChip();
     expect(screen.getByTestId('credit-balance-chip').textContent).toMatch(/^~[\d,]+ answers$/);
-    expect(screen.getByTestId('credit-balance-chip')).toHaveAccessibleName(/about [\d,]+ typical answers left on Model A/);
+    expect(screen.getByTestId('credit-balance-chip')).toHaveAccessibleName(
+      /about [\d,]+ typical answers left on Model A/
+    );
   });
 
   it('says 0 answers at a zero or negative balance', () => {

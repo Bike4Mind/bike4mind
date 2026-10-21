@@ -13,7 +13,7 @@ import {
 import type { IntegrationName } from '@bike4mind/database';
 import { getHealthSummary, runAllProbes, runProbe } from '@server/services/integrationHealthService';
 import { getStatus } from '@bike4mind/server-utils/services/integrationCircuitBreaker';
-import { getAllBreakerStates } from '@server/services/mcpCircuitBreakers';
+import { flushBreakerMetrics, getAllBreakerStates } from '@server/services/mcpCircuitBreakers';
 import { rateLimit } from '@server/middlewares/rateLimit';
 
 const timeRangeSchema = z.enum(['24h', '7d', '30d']).default('24h');
@@ -62,6 +62,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     const since = new Date(Date.now() - hours * 60 * 60 * 1000);
 
     const inMemoryBreakerStates = getAllBreakerStates();
+    // Reading state can move an OPEN breaker to HALF_OPEN, which starts a transition metric.
+    await flushBreakerMetrics();
     const healthSummaries = await getHealthSummary(new Logger());
 
     const integrations = await Promise.all(

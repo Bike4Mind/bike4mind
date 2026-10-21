@@ -1,6 +1,26 @@
-import { describe, it, expect, vi } from 'vitest';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
+import { CREDITS_PER_USD_COST } from '@bike4mind/common';
 import { ToolBuilder, type ToolBuilderConfig } from './ToolBuilder';
 import { estimateAudioCredits } from '../../audioCost';
+
+// The real stochastic rounding, with its draw pinned so the reserved charge is assertable.
+const { settlementDraw } = vi.hoisted(() => ({ settlementDraw: vi.fn(() => 0.5) }));
+vi.mock('@bike4mind/common', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/common')>();
+  return {
+    ...actual,
+    usdToCreditsStochastic: (usd: number) => actual.usdToCreditsStochastic(usd, () => settlementDraw()),
+  };
+});
+// Wrapped so a test can price one call off-table (the speech and sfx rates never land on a half credit).
+vi.mock('../../audioCost', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../audioCost')>();
+  return { ...actual, estimateAudioCredits: vi.fn(actual.estimateAudioCredits) };
+});
+beforeEach(() => {
+  settlementDraw.mockReturnValue(0.5);
+});
+const usdFor = (credits: number) => credits / CREDITS_PER_USD_COST;
 
 // Drives the real audio_generation credit branches (gateAudioCredits / settleAudioCredits)
 // that ToolBuilder's onToolStart/onToolFinish delegate to, against a fake toolCreditsMap and
@@ -116,6 +136,47 @@ describe('ToolBuilder audio credit branches', () => {
       builder.gateAudioCredits({ kind: 'speech', provider: 'openai', model: 'tts-1', characters: 1000 }, true)
     ).not.toThrow();
     expect(toolCreditsMap.has('audio_generation')).toBe(false);
+  });
+});
+
+describe('ToolBuilder audio charge rounding', () => {
+  it.each([
+    [0.25, 41],
+    [0.75, 40],
+  ])('settle charges N or N+1 for a cost of N + 0.5 credits (draw %s -> %s)', (draw, expected) => {
+    settlementDraw.mockReturnValue(draw);
+    vi.mocked(estimateAudioCredits).mockReturnValueOnce({ requiredCredits: 41, usdCost: usdFor(40.5), units: 1000 });
+    const { builder, toolCreditsMap, record } = makeBuilder();
+    const q = quest();
+
+    builder.settleAudioCredits(q, speechFinish('a.mp3'), true);
+
+    expect(toolCreditsMap.get('audio_generation')).toEqual([expected]);
+    expect(q.creditsUsed).toBe(expected);
+    expect(record.mock.calls[0][0]).toMatchObject({ creditsCharged: expected });
+  });
+
+  it('settle can charge 0 for a tiny clip: it is still delivered and its usage event written, with no charging model', () => {
+    vi.mocked(estimateAudioCredits).mockReturnValueOnce({ requiredCredits: 1, usdCost: 0.00001, units: 3 });
+    const { builder, toolCreditsMap, toolCreditModels, record } = makeBuilder();
+    const q = quest();
+
+    builder.settleAudioCredits(q, speechFinish('a.mp3'), true);
+
+    expect(toolCreditsMap.get('audio_generation')).toEqual([0]);
+    expect(q.creditsUsed).toBe(0);
+    expect(q.images).toEqual(['a.mp3']);
+    expect(record.mock.calls[0][0]).toMatchObject({ creditsCharged: 0, costUsd: 0.00001 });
+    expect(toolCreditModels.size).toBe(0);
+  });
+
+  it('gate still requires the round-up: 40 credits cannot start a call whose charge is 40 or 41', () => {
+    const input = { kind: 'speech', provider: 'openai', model: 'tts-1', characters: 1000 } as const;
+    const priced = { requiredCredits: 41, usdCost: usdFor(40.5), units: 1000 };
+    vi.mocked(estimateAudioCredits).mockReturnValueOnce(priced).mockReturnValueOnce(priced);
+
+    expect(() => makeBuilder({ credits: 40 }).builder.gateAudioCredits(input, true)).toThrow();
+    expect(() => makeBuilder({ credits: 41 }).builder.gateAudioCredits(input, true)).not.toThrow();
   });
 });
 

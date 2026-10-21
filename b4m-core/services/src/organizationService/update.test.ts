@@ -129,7 +129,7 @@ describe('organizationService - update', () => {
     expect(updateCall).not.toHaveProperty('seats');
   });
 
-  it('should update currentCredits when provided by admin user', async () => {
+  it('never writes currentCredits, even for an admin', async () => {
     const updateParams = {
       id: 'org1',
       currentCredits: 5000,
@@ -137,14 +137,10 @@ describe('organizationService - update', () => {
 
     const result = await update(mockAdminUser as IUserDocument, updateParams, mockAdapters);
 
-    expect(result.currentCredits).toBe(5000);
-
-    expect(mockAdapters.db.organizations.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: 'org1',
-        currentCredits: 5000,
-      })
-    );
+    // An admin balance change goes through the ledger in the route, never this $set.
+    expect(result.currentCredits).toBe(1000);
+    const persisted = mockAdapters.db.organizations.update.mock.calls[0][0];
+    expect(persisted).not.toHaveProperty('currentCredits');
   });
 
   it('should not update currentCredits when provided by non-admin user', async () => {

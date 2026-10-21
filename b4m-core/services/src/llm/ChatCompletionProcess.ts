@@ -132,7 +132,9 @@ import { buildToolEchoSources } from './toolEchoSources';
 import { appendStreamedChunk, shouldStampFirstVisibleToken } from './streamedReplyAccumulator';
 import { buildSystemPromptSourceFiles } from './buildSystemPromptSourceFiles';
 import { resolveCorrectionContext } from './buildCorrectionContext';
+import { resolveDataSourceStatus } from './dataSourceStatus';
 import { scrubMissingKnowledgeIds } from '../sessionService/scrubMissingKnowledgeIds';
+import { scrubStaleSystemFiles } from '../sessionService/scrubStaleFileReferences';
 import { LATTICE_TOOL_NAMES } from './tools';
 import { createWebSearchBudget, MAX_WEB_SEARCHES_PER_TURN } from './tools/implementation/websearch';
 import { createToolFailureGuard } from './tools/toolFailureGuard';
@@ -171,7 +173,7 @@ import type { MusicToolConfig } from './tools/implementation/musicGeneration';
 import { applyModerationHit, MODERATION_POLICY, moderationThrottleKey } from '../userService/moderationPolicy';
 import { ToolDefinition } from './tools/base/types';
 import { ServerAgentStore } from './agents/ServerAgentStore';
-import throttle from 'lodash/throttle.js';
+import { createStreamingStatusSender } from './streamingStatusSender';
 import {
   AutoNameSessionFeature,
   ChatCompletionFeature,
@@ -199,11 +201,14 @@ import {
   buildTaggedContextMessages,
   filterByPromptMode,
   filterFeaturesByPromptMode,
+  isPerTurnContext,
+  markHistoryCacheAnchor,
   markShareablePrefixBoundary,
   PROMPT_MODE_SOURCES,
   PROMPT_SOURCE_METADATA,
   resolveForcedRetrieval,
   SYSTEM_PROMPT_PRIORITY,
+  relocatePerTurnContext,
   resolveSkipAutoOffers,
   lakeContentTokens,
   toPromptDetails,
@@ -249,6 +254,7 @@ import {
 } from './systemPromptFloorTelemetry';
 import { buildArtifactEmissionMessages, resolveArtifactsEnabled } from './artifactGating';
 import {
+  resolveStickyAutoAddedTools,
   shouldOfferBlogTools,
   shouldOfferDataLakeTools,
   shouldOfferDelegation,
@@ -388,16 +394,11 @@ export function dropOldestHistoryTurn(history: IMessage[]): IMessage[] | null {
 }
 
 /**
- * Conservative fallback for simple query max history.
- * Used before model info is available.
+ * Conservative cap on a requested history count, applied before model info is available. The same for
+ * every query: a count that varied with per-turn complexity moved the history window's start each
+ * turn, which re-writes the provider's prompt cache (see HISTORY_WINDOW_STEP).
  */
-const SIMPLE_QUERY_FALLBACK_MAX = 25;
-
-/**
- * Conservative fallback for complex query max history.
- * Used before model info is available.
- */
-const COMPLEX_QUERY_FALLBACK_MAX = 60;
+const HISTORY_COUNT_FALLBACK_MAX = 60;
 
 /**
  * Calculate optimal history count based on model context window.
@@ -429,31 +430,6 @@ function calculateOptimalHistoryCount(contextWindow: number): number {
 }
 
 /**
- * Get maximum history for simple queries.
- * Simple queries need less context but should still scale with model capacity.
- *
- * @param contextWindow - Model's context window size in tokens
- * @returns Maximum history messages for simple queries
- */
-function getSimpleQueryMaxHistory(contextWindow: number): number {
-  // Simple queries get 40% of the optimal history count
-  const optimal = calculateOptimalHistoryCount(contextWindow);
-  return Math.max(MIN_HISTORY_COUNT, Math.floor(optimal * 0.4));
-}
-
-/**
- * Get maximum history for complex queries.
- * Complex queries benefit from more context.
- *
- * @param contextWindow - Model's context window size in tokens
- * @returns Maximum history messages for complex queries
- */
-function getComplexQueryMaxHistory(contextWindow: number): number {
-  // Complex queries get the full optimal history count
-  return calculateOptimalHistoryCount(contextWindow);
-}
-
-/**
  * Narrow a requested history count to what the model's context window supports.
  *
  * Unlimited is an intent rather than a count, so it returns before any arithmetic. The marker is
@@ -466,19 +442,15 @@ function getComplexQueryMaxHistory(contextWindow: number): number {
 export function resolveModelAwareHistoryCount({
   historyCount,
   contextWindow,
-  isSimpleQuery,
 }: {
   historyCount: number;
   contextWindow: number;
-  isSimpleQuery: boolean;
 }): number {
   if (isUnlimitedHistory(historyCount)) return historyCount;
 
-  const modelAwareMax = isSimpleQuery
-    ? getSimpleQueryMaxHistory(contextWindow)
-    : getComplexQueryMaxHistory(contextWindow);
-
-  return Math.min(historyCount, modelAwareMax);
+  // Per model, never per query: it has to hold still across a session's turns (see
+  // HISTORY_COUNT_FALLBACK_MAX).
+  return Math.min(historyCount, calculateOptimalHistoryCount(contextWindow));
 }
 
 /**
@@ -1080,6 +1052,7 @@ export class ChatCompletionProcess {
   private _bedrockSvc: Map<string, BedrockGuardrailsService> = new Map();
   private onReplyStream?: IChatCompletionServiceOptions['onReplyStream'];
   private onToolPreamble?: IChatCompletionServiceOptions['onToolPreamble'];
+  private decide?: IChatCompletionServiceOptions['decide'];
   private verbose: boolean = false;
   // Per-name queue of each tool call's reserved credits, in call order (see
   // ToolBuilder.reserveToolCredits). Settled per-call below so a tool invoked more
@@ -1145,6 +1118,7 @@ export class ChatCompletionProcess {
     this.gpcSignalDetected = options.gpcSignalDetected ?? false;
     this.onReplyStream = options.onReplyStream;
     this.onToolPreamble = options.onToolPreamble;
+    this.decide = options.decide;
     this.statusManager = null;
     this.userAbility = null;
     this.systemFilesCache = null;
@@ -2029,41 +2003,22 @@ export class ChatCompletionProcess {
         enableAgents = false;
       }
 
-      // Reduce history for simple queries to optimize cost and performance
-      // Use conservative fallback here; dynamic adjustment happens after modelInfo is available
-      // Unlimited carries no count to cap, so leave it for buildAndSortMessages to interpret.
-      if (!isUnlimitedHistory(historyCount)) {
-        const originalHistoryCount = historyCount;
-        historyCount = Math.min(historyCount, SIMPLE_QUERY_FALLBACK_MAX);
-
-        if (originalHistoryCount > historyCount) {
-          logger.info(`📉 [SIMPLE_QUERY] History pruned for simple query optimization`, {
-            original: originalHistoryCount,
-            reduced: historyCount,
-            sessionId,
-          });
-        }
-      }
-
+      // History is deliberately NOT reduced for simple queries: the count sets where the history
+      // window starts, and one that changed with each turn's complexity rewrote the prompt cache.
       logger.info(
-        `🚀 [SIMPLE_QUERY] Optimizations: QuestMaster=${enableQuestMaster ? 'ON (explicit)' : 'OFF'}, Mementos=OFF, Agents=${enableAgents ? 'ON' : 'OFF'}, History=${
-          isUnlimitedHistory(historyCount) ? 'unlimited' : historyCount
-        }`
+        `[SIMPLE_QUERY] Optimizations: QuestMaster=${enableQuestMaster ? 'ON (explicit)' : 'OFF'}, Mementos=OFF, Agents=${enableAgents ? 'ON' : 'OFF'}`
       );
-    } else {
-      // For complex queries, apply conservative cap before model info is available
-      // Dynamic model-aware adjustment happens after modelInfo is fetched
-      if (!isUnlimitedHistory(historyCount) && historyCount > COMPLEX_QUERY_FALLBACK_MAX) {
-        logger.info(
-          `📊 [COMPLEX_QUERY] Initial cap at ${COMPLEX_QUERY_FALLBACK_MAX} messages (will adjust based on model)`,
-          {
-            original: historyCount,
-            capped: COMPLEX_QUERY_FALLBACK_MAX,
-            sessionId,
-          }
-        );
-        historyCount = COMPLEX_QUERY_FALLBACK_MAX;
-      }
+    }
+
+    // Conservative cap before model info is available; the model-aware adjustment happens after
+    // modelInfo is fetched. Same for every query, whatever its complexity.
+    if (!isUnlimitedHistory(historyCount) && historyCount > HISTORY_COUNT_FALLBACK_MAX) {
+      logger.info(`[HISTORY_CAP] Initial cap at ${HISTORY_COUNT_FALLBACK_MAX} messages (will adjust based on model)`, {
+        original: historyCount,
+        capped: HISTORY_COUNT_FALLBACK_MAX,
+        sessionId,
+      });
+      historyCount = HISTORY_COUNT_FALLBACK_MAX;
     }
 
     logger.info(`⏱️ [${Date.now() - processStartTime}ms] === PROGRESSIVE LOADING PHASE START ===`);
@@ -2072,6 +2027,14 @@ export class ChatCompletionProcess {
     let finalQuest: IChatHistoryItemDocument | null = null;
     let cancelWatcherInterval: NodeJS.Timeout | null = null;
     let streamingHeartbeatInterval: NodeJS.Timeout | null = null;
+    // Assigned once the streaming sender exists. A pending trailing send reads `quest` at fire
+    // time, so it must be dropped before any terminal write or it publishes `done`/`stopped`
+    // ahead of settlement and the terminal save.
+    let cancelPendingStreamingSend: (() => void) | null = null;
+    const setTerminalQuestStatus = (target: IChatHistoryItemDocument, status: 'done' | 'stopped') => {
+      cancelPendingStreamingSend?.();
+      target.status = status;
+    };
     // Replaced once the turn's deliverable baselines exist; until then nothing can have answered.
     let clearStaleFallbackInfoIfNoAnswer = () => {
       quest.fallbackInfo = null;
@@ -2139,7 +2102,7 @@ export class ChatCompletionProcess {
 
       if (!loadedSession) {
         // Try to clean up the quest if session doesn't exist
-        quest.status = 'stopped';
+        setTerminalQuestStatus(quest, 'stopped');
         quest.replies = ['Session not found. Please create a new session or refresh the page.'];
         await saveQuest(quest);
         return;
@@ -2156,7 +2119,7 @@ export class ChatCompletionProcess {
       const latestQuestStatus = await this.db.quests.findByIdWithStatus(questId);
       if (latestQuestStatus?.status === 'stopped') {
         logger.info(`Quest ${questId} was stopped before processing started`);
-        quest.status = 'stopped';
+        setTerminalQuestStatus(quest, 'stopped');
         return;
       }
       quest.status = 'running';
@@ -2294,15 +2257,12 @@ export class ChatCompletionProcess {
       // The invisible-failure warning ("caller has knowledge but no knowledge tool offered")
       // moved to after buildTools, where the authoritative post-build tool list is known.
 
-      const throttledSend = DISABLE_SERVER_THROTTLING
-        ? () => this.sendStatusUpdate(quest, null) // No throttling - direct send
-        : throttle(
-            () => {
-              return this.sendStatusUpdate(quest, null);
-            },
-            THROTTLE_INTERVAL,
-            { leading: true }
-          );
+      const throttledSend = createStreamingStatusSender(
+        () => this.sendStatusUpdate(quest, null),
+        THROTTLE_INTERVAL,
+        DISABLE_SERVER_THROTTLING
+      );
+      cancelPendingStreamingSend = () => throttledSend.cancel();
 
       // Streaming heartbeat: persist quest state to MongoDB every 10s during streaming.
       // Without this, quest.replies and quest.updatedAt stay stale until completion, so a mid-stream
@@ -2499,10 +2459,8 @@ export class ChatCompletionProcess {
           historyFetchLimit: resolveHistoryFetchLimit(historyCount),
         });
       } else {
-        const modelAwareMax = isSimpleQuery
-          ? getSimpleQueryMaxHistory(contextWindow)
-          : getComplexQueryMaxHistory(contextWindow);
-        const adjustedHistoryCount = resolveModelAwareHistoryCount({ historyCount, contextWindow, isSimpleQuery });
+        const modelAwareMax = calculateOptimalHistoryCount(contextWindow);
+        const adjustedHistoryCount = resolveModelAwareHistoryCount({ historyCount, contextWindow });
 
         if (adjustedHistoryCount < historyCount) {
           logger.info(`📊 [DYNAMIC_HISTORY] Adjusting history based on model context window`, {
@@ -2890,28 +2848,27 @@ export class ChatCompletionProcess {
       // of when it was added to enabledTools.
       let hasContentTransform = false;
       if (!skipAutoOffers) {
+        // Tools this turn's signals call for that the request did not already name. They join the
+        // session's persisted set below, so the tool list never shrinks again once a tool appears.
+        const triggered: string[] = [];
+        const trigger = (tool: string) => {
+          if (!enabledTools.includes(tool)) triggered.push(tool);
+        };
+
         const blogGates = shouldOfferBlogTools({
           isAdmin: this.user.isAdmin,
           hasBlogIntegration: Boolean(this.user.blogIntegration),
           message,
           priorToolNames,
         });
-        if (blogGates.publish && !enabledTools.includes('blog_publish')) {
-          enabledTools.push('blog_publish');
-        }
-        if (blogGates.edit && !enabledTools.includes('blog_edit')) {
-          enabledTools.push('blog_edit');
-        }
-        if (blogGates.draft && !enabledTools.includes('blog_draft')) {
-          enabledTools.push('blog_draft');
-        }
-        hasContentTransform = blogGates.draft;
+        if (blogGates.publish) trigger('blog_publish');
+        if (blogGates.edit) trigger('blog_edit');
+        if (blogGates.draft) trigger('blog_draft');
 
         // The only honest gate for `skill` is whether this user has a model-invocable skill - a
         // user with zero skills used to pay ~161 tokens for a tool whose every call returns "you
         // have no LLM-invocable skills defined", with no catalog in the prompt to name one.
         if (
-          !enabledTools.includes('skill') &&
           shouldOfferSkillTool({
             hasSkillRepository: Boolean(this.db.skills),
             invocableSkillCount: (quest as QuestWithSkillCatalog)._skillCatalog?.length ?? 0,
@@ -2919,19 +2876,42 @@ export class ChatCompletionProcess {
             priorToolNames,
           })
         ) {
-          enabledTools.push('skill');
+          trigger('skill');
         }
 
-        if (
-          await shouldOfferDataLakeTools({
-            message,
-            priorToolNames,
-            dataLakesEnabled: async () => Boolean(await this.db.adminSettings.getSettingsValue('EnableDataLakes')),
-          })
-        ) {
-          for (const tool of DATA_LAKE_TOOL_NAMES) {
-            if (!enabledTools.includes(tool)) enabledTools.push(tool);
-          }
+        const dataLakesEnabled = async () => Boolean(await this.db.adminSettings.getSettingsValue('EnableDataLakes'));
+        if (await shouldOfferDataLakeTools({ message, priorToolNames, dataLakesEnabled })) {
+          DATA_LAKE_TOOL_NAMES.forEach(trigger);
+        }
+
+        const sticky = await resolveStickyAutoAddedTools({
+          persisted: session.autoAddedTools,
+          triggered,
+          eligibility: {
+            isAdmin: Boolean(this.user.isAdmin),
+            hasBlogIntegration: Boolean(this.user.blogIntegration),
+            hasSkillRepository: Boolean(this.db.skills),
+            dataLakesEnabled,
+          },
+        });
+        // Sorted, so a given set always reaches the provider in the same order.
+        for (const tool of sticky.tools) {
+          if (!enabledTools.includes(tool)) enabledTools.push(tool);
+        }
+        // Read off the final set, not this turn's regex: a blog_draft carried over from an earlier
+        // turn needs its tool-prompt section just as much as the turn that triggered it.
+        hasContentTransform = blogGates.draft || sticky.tools.includes('blog_draft');
+
+        if (sticky.newlyTriggered.length > 0) {
+          session.autoAddedTools = [...new Set([...(session.autoAddedTools ?? []), ...sticky.newlyTriggered])];
+          // A failed write costs stickiness on the next turn, never this one.
+          await this.db.sessions.addAutoAddedTools?.(session.id, sticky.newlyTriggered).catch(error => {
+            logger.warn('[AutoAddedTools] Failed to persist auto-added tools on the session', {
+              sessionId: session.id,
+              tools: sticky.newlyTriggered,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
         }
       }
 
@@ -2996,7 +2976,17 @@ export class ChatCompletionProcess {
 
       // Step 3: Fetching and Converting Fab Files (Feature contexts already loaded above)
       timer.phase('data_sources');
-      this.sendStatusUpdate(quest, 'Gathering data sources...', { statusAt: new Date() });
+      this.sendStatusUpdate(
+        quest,
+        resolveDataSourceStatus({
+          message,
+          sessionFabFileIds,
+          messageFileIds,
+          knowledgeIds: session.knowledgeIds,
+          forceKnowledgeRetrieval: forcedRetrievalEnabled,
+        }),
+        { statusAt: new Date() }
+      );
       // Input-window limits, needed BEFORE building messages because the amount of
       // attached-file content we extract has to be derived from them.
       const contextLimit = effectiveContextWindow(modelInfo);
@@ -3100,14 +3090,38 @@ export class ChatCompletionProcess {
       // inline (audio, an image on a vision-less model, a held or oversized image), and detaching
       // those would destroy notebook contents as a side effect of an ordinary prompt. The helper
       // re-checks both halves; see its docstring for the two gates.
-      const scrubbed = await scrubMissingKnowledgeIds(session.knowledgeIds ?? [], dataSources.fileNotices, {
-        db: { fabFiles: this.db.fabfiles, sessions: this.db.sessions },
-        logger: this.logger,
-      });
+      const scrubbed = await scrubMissingKnowledgeIds(
+        session.knowledgeIds ?? [],
+        dataSources.fileNotices,
+        { db: { fabFiles: this.db.fabfiles, sessions: this.db.sessions }, logger: this.logger },
+        session.id
+      );
       if (scrubbed.length > 0) {
         // Keep the in-memory copy in step so later reads in this run see the cleaned set.
         const removed = new Set(scrubbed);
         session.knowledgeIds = (session.knowledgeIds ?? []).filter((id: string) => !removed.has(id));
+      }
+      // The same ghost can live in the user's own system files, which are re-sent on every prompt of
+      // every session. Same gates; the admin-wide list is only reported, never edited from a turn.
+      const scrubbedSystemFiles = await scrubStaleSystemFiles(
+        this.user.id,
+        dataSources.enabledSystemFileIds,
+        dataSources.fileNotices,
+        { db: { fabFiles: this.db.fabfiles, users: this.db.users }, logger: this.logger }
+      );
+      if (scrubbedSystemFiles.length > 0) {
+        const removed = new Set(scrubbedSystemFiles);
+        this.user.systemFiles = (this.user.systemFiles ?? []).filter(entry => !removed.has(entry.fileId));
+        this.systemFilesCache?.delete(`system-files-${this.user.id}`);
+      }
+      const globalSystemFileIdSet = new Set(dataSources.globalSystemFileIds);
+      const unresolvedGlobalSystemFiles = dataSources.fileNotices.filter(
+        notice => notice.band === 'unresolved' && globalSystemFileIdSet.has(notice.fabFileId)
+      ).length;
+      if (unresolvedGlobalSystemFiles > 0) {
+        this.logger.warn('The SystemFiles admin setting lists files that did not resolve', {
+          count: unresolvedGlobalSystemFiles,
+        });
       }
 
       // Persisted before the completion runs: an attachment that failed to arrive is worth showing
@@ -3169,6 +3183,7 @@ export class ChatCompletionProcess {
         subagentTelemetryData: this.subagentTelemetryData,
         sendStatusUpdate: (q, status, options) => this.sendStatusUpdate(q, status, options),
         onToolPreamble: this.onToolPreamble,
+        decide: this.decide,
       });
 
       const { mcpToolsByServer, serverAgentConfig } = await toolBuilder.buildMcpTools({
@@ -3754,6 +3769,17 @@ export class ChatCompletionProcess {
       // to translate it (Anthropic-family does, the others ignore it per the field's contract),
       // and the cacheStrategy built later in this method still governs the other breakpoints.
       markShareablePrefixBoundary(admittedContextMessages);
+      // The per-turn sources that ride in the current user turn instead of system (see
+      // PER_TURN_CONTEXT_SOURCES). Not under a promptMode: those callers asked for a request
+      // they can compare against the bare model, and moving their own system messages would alter it.
+      // `extraContext` moves only where the producer flagged it: the same channel carries the real
+      // system prompt of voice, Slack and programmatic launches.
+      const perTurnExtraContext = new Set<IMessage>(extraContextMessages.filter(m => m.perTurn === true) as IMessage[]);
+      const perTurnContextMessages = new Set<IMessage>(
+        promptMode
+          ? []
+          : admittedContextMessages.filter(t => isPerTurnContext(t, perTurnExtraContext)).map(t => t.message)
+      );
       const contextAndSystemMessages: IMessage[] = admittedContextMessages.map(t => t.message);
       // Carries each message's source across into the builder, which sees only an IMessage[] and so
       // could otherwise decide what to drop on array position alone. Keyed by reference, which survives
@@ -3793,6 +3819,9 @@ export class ChatCompletionProcess {
         buildOptions
       );
       let messages = firstBuild.messages;
+      // Where the cache breakpoint belongs: the last message the next turn will reproduce as history.
+      // Reassigned by the overflow-recovery rebuild below, which sheds turns and rebuilds `messages`.
+      let lastHistoryMessage = previousMessages.at(-1);
       const messageTruncationInfo = firstBuild.messageTruncation;
       // Unlike messageTruncationInfo, this DOES get refreshed by the overflow-recovery rebuild below -
       // that rebuild produces fresh message identities, so pinning to the first build would report
@@ -3952,6 +3981,7 @@ export class ChatCompletionProcess {
             const trimmed = dropOldestHistoryTurn(recoveryHistory);
             if (!trimmed) break; // only the most-recent turn left: system/tools/prompt itself is oversized
             recoveryHistory = trimmed;
+            lastHistoryMessage = recoveryHistory.at(-1);
             // messageTruncationInfo is deliberately not refreshed here - it stays pinned to the first build.
             // Reserve toolSchemaTokens up front: this loop recomputes inputTokens as effectiveTotalTokens
             // + toolSchemaTokens at the bottom of every iteration, so budgeting this rebuild on the raw
@@ -4157,7 +4187,8 @@ export class ChatCompletionProcess {
             admittedContextMessages,
             deliveredMessages,
             undefined,
-            injectedBlocks
+            injectedBlocks,
+            perTurnContextMessages
           );
         } catch (promptTextError) {
           logger.warn(`📊 Failed to itemize the effective system prompt:`, promptTextError);
@@ -4644,6 +4675,21 @@ export class ChatCompletionProcess {
       // Start the cancellation watcher
       startCancellationWatcher();
 
+      // The request body. Per-turn context moves from the system prompt into the front of the current
+      // user message here, last: budgeting, delivery telemetry and overflow recovery above all work
+      // on the system-role form, and `messages` stays that form for everything persisted from it.
+      // The history breakpoint is flagged on the message itself, before relocation, so both the
+      // adapter's same-role merge and the tool rounds below see the same object.
+      const anchoredMessages = markHistoryCacheAnchor(messages, lastHistoryMessage);
+      const turnContext = relocatePerTurnContext(
+        anchoredMessages,
+        perTurnContextMessages,
+        currentUserPromptMessages[0]
+      );
+      let outboundMessages = turnContext.messages;
+      // The adapter's own end-of-array anchor would only add a breakpoint on the volatile current turn.
+      const historyAnchorMarked = anchoredMessages !== messages;
+
       // Check if Research Mode is enabled and handle parallel processing
       if (isResearchMode) {
         logger.info(
@@ -4655,7 +4701,7 @@ export class ChatCompletionProcess {
         // Handle Research Mode parallel processing
         const researchResults = await researchModeService.processResearchMode(
           researchMode,
-          messages,
+          outboundMessages,
           options as ICompletionOptions,
           async (configId: string, streamedTexts: (string | null | undefined)[], completionInfo?: unknown) => {
             // Handle streaming for each configuration
@@ -4668,7 +4714,7 @@ export class ChatCompletionProcess {
         // abort the controller, so the terminal status has to reflect that rather than
         // unconditionally claiming the turn finished.
         quest.researchModeResults = researchResults;
-        quest.status = successStatus();
+        setTerminalQuestStatus(quest, successStatus());
 
         // This branch returns before the normal settlement, so each configuration's usage settles
         // the hold here; one that streamed nothing (failed or cancelled up front) costs nothing.
@@ -4863,21 +4909,23 @@ export class ChatCompletionProcess {
             });
 
             // Determine cache strategy (enable for multi-turn conversations with 2+ messages)
-            const messageCount = messages.length;
+            const messageCount = outboundMessages.length;
             const hasTools = !!options.tools?.length;
 
             // Count message types for debugging
             const messageBreakdown = {
-              system: messages.filter(m => m.role === 'system').length,
-              user: messages.filter(m => m.role === 'user').length,
-              assistant: messages.filter(m => m.role === 'assistant').length,
+              system: outboundMessages.filter(m => m.role === 'system').length,
+              user: outboundMessages.filter(m => m.role === 'user').length,
+              assistant: outboundMessages.filter(m => m.role === 'assistant').length,
             };
 
             const cacheStrategy: ICacheStrategy = {
               enableCaching: messageCount >= 2, // Enable caching for multi-turn conversations
               cacheSystemPrompt: true, // Always cache system prompts
               cacheTools: hasTools, // Cache tools if present
-              cacheConversationHistory: messageCount >= 2, // Cache history for multi-turn
+              // A flagged history message already closes the cached prefix; asking the adapter for
+              // its own end-of-array anchor would cache the current turn as well.
+              cacheConversationHistory: !historyAnchorMarked && messageCount >= 2, // Cache history for multi-turn
               cacheTTL: '5m', // Use 5-minute TTL for active conversations
               conversationId: quest.id, // Use quest ID for xAI cache affinity
             };
@@ -4912,7 +4960,7 @@ export class ChatCompletionProcess {
             if (
               process.env.E2E_ENDPOINTS_ENABLED === 'true' &&
               (currentModel.backend === ModelBackend.Bedrock || currentModel.backend === ModelBackend.Anthropic) &&
-              JSON.stringify(messages).includes(FORCE_FALLBACK_TEST_MARKER)
+              JSON.stringify(outboundMessages).includes(FORCE_FALLBACK_TEST_MARKER)
             ) {
               const forced = new Error(
                 `ServiceUnavailableException: simulated ${currentModel.backend} outage for fallback testing (preview only)`
@@ -4923,7 +4971,7 @@ export class ChatCompletionProcess {
 
             await currentLlm.complete(
               currentModel.id,
-              messages,
+              outboundMessages,
               {
                 ...options,
                 // The preference is set from a selector shown only for OpenAI-style reasoning models, so
@@ -5125,7 +5173,11 @@ export class ChatCompletionProcess {
             // the last error-severity log on the abort path; the backends and the
             // formatted summary below were already downgraded. Real failures still dump
             // at error with the full stack.
-            if (isAbortError(lastError) || lastError instanceof ResponsesStreamTruncatedError) {
+            if (
+              isAbortError(lastError) ||
+              isStreamIdleTimeoutError(lastError) ||
+              lastError instanceof ResponsesStreamTruncatedError
+            ) {
               logger.warn(lastError);
             } else {
               logger.error(lastError);
@@ -5178,6 +5230,7 @@ export class ChatCompletionProcess {
                 `🔧 [Tool Pairing Recovery] Detected tool pairing error, stripping tool blocks from history and retrying`
               );
               messages = stripAllToolBlocks(messages, logger);
+              outboundMessages = stripAllToolBlocks(outboundMessages, logger);
 
               resetStreamStateForRetry();
 
@@ -5378,7 +5431,7 @@ export class ChatCompletionProcess {
 
         // Mark quest as done when all the replies are received
         const finalStatus = successStatus();
-        quest.status = finalStatus;
+        setTerminalQuestStatus(quest, finalStatus);
         clearStaleFallbackInfoIfNoAnswer();
         const visibleCharsBeforeStrip = countVisibleChars(quest.replies);
         // A Stop that resolves ends the stream wherever it was, same as the rejecting Stop below.
@@ -5417,8 +5470,11 @@ export class ChatCompletionProcess {
           });
         }
 
+        // Widen explicitly: the terminal flip happens inside setTerminalQuestStatus, so control
+        // flow analysis still believes status is 'running' at this point.
+        const statusAtEnd = quest.status as IChatHistoryItemDocument['status'];
         const incompleteAnswerNotice = buildIncompleteAnswerNotice({
-          stopped: quest.status === 'stopped',
+          stopped: statusAtEnd === 'stopped',
           toolCallCount: toolCallsSeen,
           visibleCharsAfterLastToolCall: countVisibleChars(quest.replies) - visibleCharsAtLastToolCall,
           stopReason: actualTokenUsage.stopReason,
@@ -5434,7 +5490,7 @@ export class ChatCompletionProcess {
         });
         // When the reply ended on a stripped call, say why in place of the generic notice. An answer
         // written after the call gets no notice: "try again" next to it would read as "you got nothing".
-        const narratedCallLeftNoAnswer = narratedStrip.endsOnCall && quest.status !== 'stopped';
+        const narratedCallLeftNoAnswer = narratedStrip.endsOnCall && statusAtEnd !== 'stopped';
         const turnNotice = narratedCallLeftNoAnswer ? NARRATED_TOOL_CALL_NOTICE : incompleteAnswerNotice;
         if (incompleteAnswerNotice && !narratedCallLeftNoAnswer) {
           logger.warn('[IncompleteAnswer] Turn ended without an answer after its last tool call', {
@@ -6226,7 +6282,7 @@ export class ChatCompletionProcess {
           quest.promptMeta.warnings = [...(quest.promptMeta.warnings ?? []), earlyStopStamp.warning];
         }
 
-        quest.status = successStatus();
+        setTerminalQuestStatus(quest, successStatus());
         clearStaleFallbackInfoIfNoAnswer();
 
         // Context Telemetry: Finalize and attach to promptMeta
@@ -6430,7 +6486,7 @@ export class ChatCompletionProcess {
           }
         }
 
-        quest.status = successStatus();
+        setTerminalQuestStatus(quest, successStatus());
         clearStaleFallbackInfoIfNoAnswer();
 
         timer.phase('save');
@@ -6536,7 +6592,7 @@ export class ChatCompletionProcess {
         // Post-streaming processing failed, but the reply is already streamed.
         // Do NOT overwrite quest.reply, quest.replies, or quest.status - keep status as 'done'.
         logger.error(`❌ [POST_PROCESS] Error in post-streaming processing for quest ${questId}:`, postProcessError);
-        quest.status = successStatus();
+        setTerminalQuestStatus(quest, successStatus());
         clearStaleFallbackInfoIfNoAnswer();
         // Ensure quest is persisted as 'done' even if the error occurred before the normal save
         await saveQuest(quest);
@@ -6593,7 +6649,7 @@ export class ChatCompletionProcess {
         isAbortError(err) && (await this.db.quests.findByIdWithStatus(questId).catch(() => null))?.status === 'stopped';
       if (stoppedByUser) {
         logger.log(`Chat completion was stopped by user for quest ${questId}`);
-        quest.status = 'stopped';
+        setTerminalQuestStatus(quest, 'stopped');
         // Same rules as the success path, so an abort that rejects and one that resolves persist alike.
         flagNarratedToolCalls(applyNarratedToolCallStrip(quest, turnOfferedToolNames, { truncated: true }).toolNames);
         clearStaleFallbackInfoIfNoAnswer();
@@ -6618,7 +6674,7 @@ export class ChatCompletionProcess {
       };
       setErrorReply((err as Error).message);
       quest.type = 'error';
-      quest.status = 'done';
+      setTerminalQuestStatus(quest, 'done');
       // A turn can switch models and still fail; no model answered it, so it must not claim one did.
       quest.fallbackInfo = null;
       // Classifier for the client's "Add Credits" CTA. Chat reservation throws
@@ -6644,7 +6700,7 @@ export class ChatCompletionProcess {
         logger.log(`Chat completion was stopped by user for quest ${questId}: ${err.message}`);
         setErrorReply('The request was interrupted. Please try sending your message again.');
         quest.type = 'error';
-        quest.status = 'done';
+        setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);
         return;
       } else if (err instanceof ResponsesStreamTruncatedError) {
@@ -6653,7 +6709,7 @@ export class ChatCompletionProcess {
         logger.warn(`[Truncated] Quest ${questId}: ${err.message}`);
         setErrorReply('The request was interrupted. Please try sending your message again.');
         quest.type = 'error';
-        quest.status = 'done';
+        setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);
         return;
       } else if (
@@ -6668,7 +6724,7 @@ export class ChatCompletionProcess {
         logger.warn(`[Timeout] Quest ${questId}: ${err.message}`);
         setErrorReply('The AI service is currently experiencing high demand. Please try again in a few minutes.');
         quest.type = 'error';
-        quest.status = 'done';
+        setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);
         return;
       } else if (err instanceof Error && isToolPairingError(err)) {
@@ -6676,14 +6732,14 @@ export class ChatCompletionProcess {
         logger.error(`[Tool Pairing Error] Quest ${questId}: ${err.message}`);
         setErrorReply('I encountered an issue with the conversation history. Please try again or start a new session.');
         quest.type = 'error';
-        quest.status = 'done';
+        setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);
         return;
       } else if (err instanceof Error && isOverloadedError(err)) {
         logger.error(`[Overloaded Error] Quest ${questId}: ${err.message}`);
         setErrorReply('The AI service is currently experiencing high demand. Please try again in a few minutes.');
         quest.type = 'error';
-        quest.status = 'done';
+        setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);
         return;
       } else if (err instanceof Error && err.message.startsWith('Your request is too large for')) {
@@ -6693,6 +6749,9 @@ export class ChatCompletionProcess {
       }
       throw err;
     } finally {
+      // A throw inside the catch can reach here before any terminal write, so the pending
+      // trailing send is dropped here too - the publish below is the only terminal frame.
+      cancelPendingStreamingSend?.();
       if (cancelWatcherInterval) {
         clearInterval(cancelWatcherInterval);
       }

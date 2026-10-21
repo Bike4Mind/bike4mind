@@ -387,8 +387,9 @@ export const ScopeForbiddenErrorSchema = ApiErrorSchema.extend({
 });
 
 /**
- * 403 on the v1 media create routes: the scope refusal above, or an organization-billed API key sent with
- * another billing organization (apps/client/server/billing/resolveMediaBillingOrgId.ts).
+ * 403 on the v1 media create routes and POST /api/v1/agent-executions: the scope refusal above, or an
+ * organization-billed API key sent with another billing organization
+ * (apps/client/server/billing/resolveMediaBillingOrgId.ts).
  */
 export const BillingOrganizationForbiddenErrorSchema = ScopeForbiddenErrorSchema.extend({
   errorCode: z.literal(BILLING_ORGANIZATION_MISMATCH_ERROR_CODE).optional(),

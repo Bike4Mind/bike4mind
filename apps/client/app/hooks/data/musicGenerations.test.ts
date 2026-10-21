@@ -11,7 +11,7 @@ const h = vi.hoisted(() => ({
   post: vi.fn(),
   toastSuccess: vi.fn(),
   toastError: vi.fn(),
-  selectedAccount: null as { id: string; personal: boolean } | null,
+  selectedAccount: null as { id: string; name?: string; personal: boolean } | null,
 }));
 
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: h.get, post: h.post } }));
@@ -182,6 +182,7 @@ describe('useCancelMusicGeneration', () => {
   beforeEach(() => {
     h.post.mockReset();
     h.toastError.mockReset();
+    h.selectedAccount = null;
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   });
 
@@ -235,6 +236,16 @@ describe('useCancelMusicGeneration', () => {
     });
     expect(h.toastError).toHaveBeenCalledWith('Could not cancel the song. Try again.');
     expect(invalidate).not.toHaveBeenCalled();
+  });
+
+  it('keeps the cancel fallback on a 403 even while an organization account is selected', async () => {
+    h.selectedAccount = { id: 'org-1', name: 'Acme', personal: false };
+    h.post.mockRejectedValue(Object.assign(new AxiosError('Request failed'), { response: { status: 403, data: {} } }));
+    const { result } = renderHook(() => useCancelMusicGeneration(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync('job-1').catch(() => undefined);
+    });
+    expect(h.toastError).toHaveBeenCalledWith('Could not cancel the song. Try again.');
   });
 });
 
@@ -310,6 +321,33 @@ describe('music Studio hooks', () => {
       await result.current.mutateAsync({ model: 'test-music', prompt: 'a song' }).catch(() => undefined);
     });
     expect(h.toastError).toHaveBeenCalledWith('Remove the lyrics, or turn off Instrumental.');
+  });
+
+  it('names the account billed at submit when credits run out', async () => {
+    h.selectedAccount = { id: 'org-1', name: 'Acme', personal: false };
+    h.post.mockRejectedValue(axiosError(422, { errorCode: 'insufficient_credits' }));
+    const { result } = renderHook(() => useCreateMusicGeneration(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync({ model: 'test-music', prompt: 'a song' }).catch(() => undefined);
+    });
+    expect(h.toastError).toHaveBeenCalledWith('Acme does not have enough credits for this song.');
+  });
+
+  it('names the account selected at submit even if the switcher moves before the rejection', async () => {
+    h.selectedAccount = { id: 'org-1', name: 'Acme', personal: false };
+    let rejectCreate: (reason: unknown) => void = () => undefined;
+    h.post.mockReturnValue(new Promise((_resolve, reject) => (rejectCreate = reject)));
+    const { result } = renderHook(() => useCreateMusicGeneration(), { wrapper });
+    let submitted: Promise<unknown> = Promise.resolve();
+    act(() => {
+      submitted = result.current.mutateAsync({ model: 'test-music', prompt: 'a song' }).catch(() => undefined);
+    });
+    h.selectedAccount = { id: 'user-1', name: 'Me', personal: true };
+    await act(async () => {
+      rejectCreate(axiosError(422, { errorCode: 'insufficient_credits' }));
+      await submitted;
+    });
+    expect(h.toastError).toHaveBeenCalledWith('Acme does not have enough credits for this song.');
   });
 
   it('useCancelMusicGeneration writes the job into the gallery row', async () => {

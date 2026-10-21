@@ -27,6 +27,7 @@ import {
 import IterationStep from './IterationStep';
 import AbortButton from './AbortButton';
 import PermissionCard from './PermissionCard';
+import ConfidenceGateCard from './ConfidenceGateCard';
 import CreditCounter from './CreditCounter';
 import SubagentStepNest from './SubagentStepNest';
 import { copyForRunningTool, THINKING_COPY } from './loadingCopy';
@@ -251,7 +252,7 @@ const IterationStream: FC<IterationStreamProps> = ({
           rendering a bare "Starting..." chip alone reads as visual noise.
           We still surface the header during active runs (status pill + abort
           button) so the user has feedback and a way to bail out. */}
-      {(isActive || visibleIterationCount > 0 || execution.pendingPermission) && (
+      {(isActive || visibleIterationCount > 0 || execution.pendingPermission || execution.pendingGate) && (
         <Stack direction="row" alignItems="center" spacing={1} sx={{ flexWrap: 'wrap', mt: 0.5 }}>
           {execution.isAborting ? (
             // Aborting: credits on the left, red "Aborting…" text. No spinner
@@ -467,6 +468,7 @@ const IterationStream: FC<IterationStreamProps> = ({
           latest activity the user is reading instead of detached up top. The
           card self-gates (renders null unless pendingPermission is set). */}
       <PermissionCard executionId={executionId} />
+      <ConfidenceGateCard executionId={executionId} />
     </Box>
   );
 };

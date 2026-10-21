@@ -17,7 +17,9 @@
  * (`/api/users/`). Both are here for distinct reasons - do not conflate them.
  */
 export const POLICY_CONSENT_ALLOWLIST = [
-  { path: '/api/user/accept-policies', methods: ['POST'] }, // the recording endpoint
+  // The recording endpoint. The prefix also admits POST /api/user/accept-policies/shown (the
+  // interstitial impression); any other POST added under it is open pre-consent too.
+  { path: '/api/user/accept-policies', methods: ['POST'] },
   { path: '/api/identify', methods: ['GET'] }, // interstitial + app bootstrap read the current user
   // auth/success bootstraps currentUser via GET /api/users/:id (self). Prefix+GET also admits
   // GET /api/users/<anyId> pre-consent, but the gate is not the authz control there - each users

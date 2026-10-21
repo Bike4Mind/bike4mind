@@ -144,6 +144,7 @@ describe('emailVerifiedGrants', () => {
         currentCredits: 150,
         joinedOrganizationId: 'org-partner',
         tagsApplied: ['Partner'],
+        subscriptionCreditsGranted: 20,
       });
 
       await expect(applyEmailVerifiedGrants(params)).resolves.toEqual({
@@ -151,6 +152,7 @@ describe('emailVerifiedGrants', () => {
         currentCredits: 150,
         tags: ['Customer'],
         joinedOrganizationId: 'org-partner',
+        subscriptionCreditsGranted: 20,
         tagsApplied: ['Partner'],
       });
     });
@@ -218,6 +220,7 @@ describe('emailVerifiedGrants', () => {
         currentCredits: 100,
         tags: ['Customer'],
         joinedOrganizationId: null,
+        subscriptionCreditsGranted: 0,
         tagsApplied: [],
       });
       expect(mockLoggerError).toHaveBeenCalledWith(

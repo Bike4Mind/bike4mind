@@ -10,6 +10,7 @@ import { getLogoUrl, buildEmailLogoImg } from '@bike4mind/server-utils/utils/mai
 import { Config } from '@bike4mind/server-utils/utils/config';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
+import { emitSignupFunnelEvents, recordSyntheticIdentity } from '@server/analytics/funnel';
 
 const createUserSchema = z.object({
   username: usernameSchema,
@@ -87,6 +88,14 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
           },
         }
       );
+
+      const isSynthetic = await recordSyntheticIdentity(newUser);
+      await emitSignupFunnelEvents({
+        user: { id: newUser.id, isSynthetic },
+        method: 'admin',
+        emailVerified: newUser.emailVerified === true,
+        creditsGranted: newUser.currentCredits ?? validatedData.initialCredits,
+      });
 
       // Send OTC welcome email so the new user knows how to sign in.
       // Failures are non-fatal - the user is created regardless.

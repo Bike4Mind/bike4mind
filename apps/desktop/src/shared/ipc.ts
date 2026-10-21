@@ -47,6 +47,7 @@ import type { ShareDirectoryResult } from './directoryRequest';
 import type { PrActionResult, PrBarState, PrOption, PrSummaryEvent } from './pullRequest';
 import type { SidebarSectionsState } from './sidebarSections';
 import type { SkillsState } from './skills';
+import type { PermissionMutationResult, PermissionRuleLists, PermissionScope, PermissionsState } from './permissions';
 import type {
   SkillMarketDetailResult,
   SkillMarketFilters,
@@ -56,6 +57,16 @@ import type {
   SkillMarketListingRef,
   SkillMarketPage,
   SkillMarketWebTarget,
+  SkillActionResult,
+  SkillLocalRef,
+  SkillMarketOrgsResult,
+  SkillMyListingsResult,
+  SkillPublishRequest,
+  SkillSaveRequest,
+  SkillSaveResult,
+  SkillSubmitResult,
+  SkillSubmitVersionRequest,
+  SkillUploadPreview,
 } from './skillMarket';
 import type {
   TerminalAttachment,
@@ -186,6 +197,17 @@ export const IPC_CHANNELS = {
   skillMarketImport: 'skills:market-import',
   skillMarketImports: 'skills:market-imports',
   skillMarketOpenOnWeb: 'skills:market-open-on-web',
+  skillMarketReadLocal: 'skills:market-read-local',
+  skillMarketPickUpload: 'skills:market-pick-upload',
+  /** The writes below run only from a click in the upload dialog or My listings. */
+  skillMarketSave: 'skills:market-save',
+  skillMarketOrgs: 'skills:market-orgs',
+  skillMarketPublish: 'skills:market-publish',
+  skillMarketSubmitVersion: 'skills:market-submit-version',
+  skillMarketMine: 'skills:market-mine',
+  skillMarketWithdraw: 'skills:market-withdraw',
+  skillMarketCopyShareLink: 'skills:market-copy-share-link',
+  skillMarketOpenSource: 'skills:market-open-source',
   mcpGetServers: 'mcp:get-servers',
   mcpAddServer: 'mcp:add-server',
   mcpUpdateServer: 'mcp:update-server',
@@ -197,6 +219,13 @@ export const IPC_CHANNELS = {
   toolsGetAccess: 'tools:get-access',
   toolsGrantAccess: 'tools:grant-access',
   toolsRevokeAccess: 'tools:revoke-access',
+  /**
+   * Standing permission rules. Renderer -> main only, from Settings: like toolsGrantAccess,
+   * nothing the MODEL can reach may write a rule.
+   */
+  permissionsGetState: 'permissions:get-state',
+  permissionsSetRules: 'permissions:set-rules',
+  permissionsSetSharing: 'permissions:set-sharing',
   updateGetState: 'update:get-state',
   updateCheck: 'update:check',
   updateDownload: 'update:download',
@@ -733,6 +762,24 @@ export interface DesktopApi {
     imports(): Promise<SkillMarketImportsResult>;
     /** Open a market page on the web. False when there was nothing valid to open. */
     openOnWeb(target: SkillMarketWebTarget): Promise<boolean>;
+    /**
+     * Publishing. Main reads only a skill Customize listed for this session, or what the user
+     * picks in the native dialog. Every write runs only from an explicit click, never from chat.
+     */
+    readLocalSkill(ref: SkillLocalRef): Promise<SkillUploadPreview>;
+    pickUploadSource(): Promise<SkillUploadPreview>;
+    /** `create` answers `name_taken` rather than overwrite; `update` replaces `targetSkillId`. */
+    saveSkill(request: SkillSaveRequest): Promise<SkillSaveResult>;
+    organizations(): Promise<SkillMarketOrgsResult>;
+    publish(request: SkillPublishRequest): Promise<SkillSubmitResult>;
+    /** Writes `fields` to the listing's source skill (when given), then submits a version of it. */
+    submitVersion(request: SkillSubmitVersionRequest): Promise<SkillSubmitResult>;
+    mine(): Promise<SkillMyListingsResult>;
+    withdraw(listingId: string): Promise<SkillActionResult>;
+    /** Copies an unlisted listing's share link; main builds it so the token stays there. */
+    copyShareLink(listingId: string): Promise<SkillActionResult>;
+    /** Opens an exported file's source link. False when the link is not openable. */
+    openSource(url: string): Promise<boolean>;
   };
   /**
    * The agent's browser, as something the user can watch.
@@ -814,6 +861,12 @@ export interface DesktopApi {
     /** Opens the OS folder picker. Resolves unchanged if the user cancels. */
     grantAccess(): Promise<ToolAccessState>;
     revokeAccess(root: string): Promise<ToolAccessState>;
+  };
+  permissions: {
+    getState(): Promise<PermissionsState>;
+    /** Replaces one scope's lists. Refused, with the reason, when any rule does not parse. */
+    setRules(scope: PermissionScope, lists: PermissionRuleLists): Promise<PermissionMutationResult>;
+    setSharing(share: boolean): Promise<PermissionsState>;
   };
   pullRequests: {
     /**

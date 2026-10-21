@@ -1,9 +1,28 @@
-import { describe, it, expect, vi } from 'vitest';
-import { ImageModels, ModelBackend, usdToCredits, type ModelInfo } from '@bike4mind/common';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
+import { CREDITS_PER_USD_COST, ImageModels, ModelBackend, type ModelInfo } from '@bike4mind/common';
 import { ToolBuilder, type ToolBuilderConfig } from './ToolBuilder';
 import { resolveAggregateToolModel } from '../settleToolCredits';
 import { estimateImageCredits } from '../../imageCost';
 import { estimateGeneratedMediaUsd } from '../agentToolMediaCost';
+
+// The real stochastic rounding, with its draw pinned so the reserved charge is assertable.
+const { settlementDraw } = vi.hoisted(() => ({ settlementDraw: vi.fn(() => 0.5) }));
+vi.mock('@bike4mind/common', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/common')>();
+  return {
+    ...actual,
+    usdToCreditsStochastic: (usd: number) => actual.usdToCreditsStochastic(usd, () => settlementDraw()),
+  };
+});
+beforeEach(() => {
+  settlementDraw.mockReturnValue(0.5);
+});
+
+// What a draw of 0.5 settles for an exact USD cost: the floor, plus 1 when the fraction exceeds the draw.
+const settledAtHalf = (usd: number) => {
+  const raw = usd * CREDITS_PER_USD_COST;
+  return Math.floor(raw) + (0.5 < raw - Math.floor(raw) ? 1 : 0);
+};
 
 // Drives the REAL settleImageCredits -> estimateImageCredits -> computeImageUsdCostPerImage
 // chain that onToolFinish delegates to (and gateImageCredits -> validateUserCredits at onToolStart). The edit_image tool's own tests mock context.onStart,
@@ -54,8 +73,8 @@ describe('ToolBuilder.settleImageCredits - edit_image billing targets', () => {
       AVAILABLE_MODELS
     );
 
-    expect(toolCreditsMap.get('edit_image')).toEqual([usdToCredits(0.05)]);
-    expect((q as unknown as { creditsUsed: number }).creditsUsed).toBe(usdToCredits(0.05));
+    expect(toolCreditsMap.get('edit_image')).toEqual([settledAtHalf(0.05)]);
+    expect((q as unknown as { creditsUsed: number }).creditsUsed).toBe(settledAtHalf(0.05));
   });
 
   it('records the usage event against the rendering model, not the generation model', () => {
@@ -90,10 +109,8 @@ describe('ToolBuilder.settleImageCredits - edit_image billing targets', () => {
       AVAILABLE_MODELS
     );
 
-    // Mirrors the production order of operations (per-image USD scaled by n, THEN
-    // converted): 0.05 * 3 is not exactly 0.15 in binary float, and usdToCredits rounds
-    // up, so usdToCredits(0.05 * 3) is one credit above usdToCredits(0.15).
-    expect(toolCreditsMap.get('image_generation')).toEqual([usdToCredits(0.05 * 3)]);
+    // Mirrors the production order of operations: per-image USD scaled by n, THEN drawn on.
+    expect(toolCreditsMap.get('image_generation')).toEqual([settledAtHalf(0.05 * 3)]);
   });
 
   it('prices the OpenAI edit fallback too, so neither fallback branch can throw', () => {
@@ -123,8 +140,38 @@ describe('ToolBuilder.settleImageCredits - edit_image billing targets', () => {
     builder.settleImageCredits(toolName, quest(), { ...data, paths: [] }, true, null, AVAILABLE_MODELS);
 
     const expected = estimateImageCredits(AVAILABLE_MODELS[2], 1, { ...data, inputImageCount } as never);
-    expect(toolCreditsMap.get(toolName)).toEqual([expected.requiredCredits]);
+    expect(toolCreditsMap.get(toolName)).toEqual([settledAtHalf(expected.usdCost)]);
     expect(estimateGeneratedMediaUsd(toolName, data, AVAILABLE_MODELS)).toBe(expected.usdCost);
+  });
+});
+
+// gpt-image-1.5, low quality, 1024x1024, one input image: 27.296 credits at the default rate.
+describe('ToolBuilder image charge rounding', () => {
+  const data = { model: ImageModels.GPT_IMAGE_1_5, n: 1, quality: 'low', size: '1024x1024' };
+
+  it.each([
+    [0.25, 28],
+    [0.5, 27],
+  ])('charges the floor or the round-up of a fractional cost (draw %s -> %s)', (draw, expected) => {
+    settlementDraw.mockReturnValue(draw);
+    const { builder, toolCreditsMap, record } = makeBuilder();
+    const q = quest();
+
+    builder.settleImageCredits('edit_image', q, { ...data, paths: [] }, true, null, AVAILABLE_MODELS);
+
+    expect(toolCreditsMap.get('edit_image')).toEqual([expected]);
+    expect((q as unknown as { creditsUsed: number }).creditsUsed).toBe(expected);
+    expect(record.mock.calls[0][0]).toMatchObject({ creditsCharged: expected });
+  });
+
+  it('still gates on the round-up: 27 credits cannot start a call whose charge is 27 or 28', async () => {
+    const { builder: short } = makeBuilder({ credits: 27 });
+    const { builder: enough } = makeBuilder({ credits: 28 });
+
+    await expect(short.gateImageCredits('edit_image', data, true, null, AVAILABLE_MODELS)).rejects.toThrow(
+      /enough personal credits/
+    );
+    await expect(enough.gateImageCredits('edit_image', data, true, null, AVAILABLE_MODELS)).resolves.toBeUndefined();
   });
 });
 

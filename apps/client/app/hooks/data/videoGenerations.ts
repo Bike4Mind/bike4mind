@@ -5,6 +5,7 @@ import type { CreateVideoGenerationBody, VideoGeneration, VideoModel } from '@bi
 import { api } from '@client/app/contexts/ApiContext';
 import { ReadyState, useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { hasGenerationCreditSettlementChanged, invalidateGenerationCreditBalances } from './generationCreditBalances';
+import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { switcherBillingTarget } from './generationBillingTarget';
 import {
   prependVideoGeneration,
@@ -118,7 +119,12 @@ export function useCreateVideoGeneration() {
       void invalidateGenerationCreditBalances(queryClient);
       toast.success('Video generation started');
     },
-    onError: error => toast.error(describeVideoGenerationError(error, 'Could not start the video. Try again.')),
+    // Snapshot the billed account at submit so an error names who was charged even if the switcher moves meanwhile.
+    onMutate: () => ({ billingAccount: useSelectedAccount.getState().selectedAccount }),
+    onError: (error, _body, context) =>
+      toast.error(
+        describeVideoGenerationError(error, 'Could not start the video. Try again.', context?.billingAccount ?? null)
+      ),
   });
 }
 

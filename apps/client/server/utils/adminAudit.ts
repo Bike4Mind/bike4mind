@@ -1,9 +1,22 @@
 import type { Request } from 'express';
-import type { AuditActor, AuditContext, AuditEntry } from '@bike4mind/common';
-import { adminAuditLogRepository } from '@bike4mind/database';
+import {
+  ADMIN_AUDIT_CREDIT_GRANT_ACTIONS,
+  ADMIN_AUDIT_DEFAULT_CRITICAL_GRANT_CREDITS,
+  ADMIN_AUDIT_DEFAULT_DAILY_GRANT_CREDITS,
+  AdminActionReasonSchema,
+  BadRequestError,
+  ForbiddenError,
+  type AdminAuditAction,
+  type AuditActor,
+  type AuditEntry,
+  type AuditTarget,
+  type StoredAuditContext,
+} from '@bike4mind/common';
+import { adminAuditLogRepository, adminSettingsRepository } from '@bike4mind/database';
 import { userRepository } from '@bike4mind/database/auth';
 import { adminAuditService } from '@bike4mind/services';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
+import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 
 // Typed routes pass Request<unknown, ...>; this accepts those as well as the express default.
 type AuditRequest = Request<unknown, unknown, unknown, unknown, Record<string, unknown>>;
@@ -14,7 +27,7 @@ export type RecordAdminActionFromRequestInput = Omit<adminAuditService.RecordAdm
 
 type ActorIdentity = Pick<NonNullable<Request['user']>, 'id' | 'username' | 'name' | 'email' | 'isAdmin'>;
 
-const toUserActor = (user: ActorIdentity, scope: AuditActor['scope']): AuditActor => ({
+export const toUserActor = (user: ActorIdentity, scope: AuditActor['scope']): AuditActor => ({
   kind: 'user',
   scope,
   userId: user.id,
@@ -56,12 +69,42 @@ const resolveActor = async (req: AuditRequest, scope: AuditActor['scope']): Prom
   return apiKeyInfo ? { ...base, kind: 'apiKey', apiKeyId: apiKeyInfo.keyId } : base;
 };
 
-const buildContext = (req: AuditRequest): AuditContext => ({
+const buildContext = (req: AuditRequest): StoredAuditContext => ({
   ip: getClientIp(req),
   userAgent: req.headers['user-agent'],
   requestId: req.requestId,
   route: req.url.split('?')[0],
   source: req.apiKeyInfo ? 'api_key' : 'admin_ui',
+});
+
+/** Reads the grant thresholds from AdminSettings; recordAdminAction escalates a grant above either. */
+export const loadCreditGrantPolicy = async (): Promise<adminAuditService.CreditGrantPolicy> => {
+  const settings = await getSettingsMap(
+    { adminSettings: adminSettingsRepository },
+    { names: ['AdminAuditCriticalGrantCredits', 'AdminAuditDailyGrantCredits'] }
+  );
+  return {
+    singleGrantCredits: getSettingsValue(
+      'AdminAuditCriticalGrantCredits',
+      settings,
+      ADMIN_AUDIT_DEFAULT_CRITICAL_GRANT_CREDITS
+    ),
+    dailyTotalCredits: getSettingsValue(
+      'AdminAuditDailyGrantCredits',
+      settings,
+      ADMIN_AUDIT_DEFAULT_DAILY_GRANT_CREDITS
+    ),
+    sumCreditsGranted: (actorUserId, since) => adminAuditLogRepository.sumCreditsGranted(actorUserId, since),
+  };
+};
+
+const writerAdapters = async (
+  req: AuditRequest,
+  action: AdminAuditAction
+): Promise<adminAuditService.RecordAdminActionAdapters> => ({
+  db: { adminAuditLog: adminAuditLogRepository },
+  creditGrantPolicy: ADMIN_AUDIT_CREDIT_GRANT_ACTIONS.includes(action) ? await loadCreditGrantPolicy() : undefined,
+  logger: req.logger,
 });
 
 export const recordAdminActionFromRequest = async (
@@ -70,8 +113,59 @@ export const recordAdminActionFromRequest = async (
 ): Promise<AuditEntry | null> =>
   adminAuditService.recordAdminAction(
     { ...input, actor: await resolveActor(req, actorScope ?? 'platform'), context: buildContext(req) },
-    { db: { adminAuditLog: adminAuditLogRepository }, logger: req.logger }
+    await writerAdapters(req, input.action)
   );
+
+/** For routes with no req.user (returnToAdmin authenticates by cookie): the caller names the actor. */
+export const recordAdminActionForActor = async (
+  req: AuditRequest,
+  actor: AuditActor,
+  input: Omit<adminAuditService.RecordAdminActionInput, 'actor' | 'context'>
+): Promise<AuditEntry | null> =>
+  adminAuditService.recordAdminAction(
+    { ...input, actor, context: buildContext(req) },
+    await writerAdapters(req, input.action)
+  );
+
+/** Validates a reason-required admin action's reason; a missing or short reason is a 400. */
+export const parseAdminActionReason = (value: unknown): string => {
+  const parsed = AdminActionReasonSchema.safeParse(value);
+  if (!parsed.success) throw new BadRequestError(parsed.error.issues[0]?.message ?? 'A reason is required');
+  return parsed.data;
+};
+
+// Ids compare case-insensitively: Mongo resolves an upper-case hex id to the same user.
+export const isSameUserId = (left: string, right: string) => left.toLowerCase() === right.toLowerCase();
+
+// Under impersonation req.user is the impersonated account, so the real admin must be checked too.
+export const isSelfOrImpersonator = (user: { id: string }, targetId: string): boolean => {
+  const { impersonatedBy } = user as typeof user & { impersonatedBy?: string };
+  return isSameUserId(user.id, targetId) || (!!impersonatedBy && isSameUserId(impersonatedBy, targetId));
+};
+
+type DeniedAction = Extract<AdminAuditAction, `${string}.denied`>;
+
+/**
+ * No self-service privilege: records the attempt as a critical `*.denied` entry, then throws a 403.
+ * The denied entry is best-effort, so a failed write never turns the 403 into a 500.
+ */
+export const denySelfAdminAction = async (
+  req: AuditRequest,
+  {
+    action,
+    attempted,
+    target,
+    message = 'Admins cannot perform this action on their own account.',
+  }: { action: DeniedAction; attempted: AdminAuditAction; target: AuditTarget; message?: string }
+): Promise<never> => {
+  await recordAdminActionFromRequest(req, {
+    action,
+    target,
+    summary: `blocked ${attempted} on their own account`,
+    details: { attemptedAction: attempted },
+  });
+  throw new ForbiddenError(message);
+};
 
 export const systemAuditActor = (name: string): AuditActor => ({
   kind: 'system',

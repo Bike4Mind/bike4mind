@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-10-15T07:24:50.287Z",
-  "notice": "Fallback defaults last maintained on 2026-10-15. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
+  "generatedAt": "2026-10-20T14:08:23.950Z",
+  "notice": "Fallback defaults last maintained on 2026-10-20. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
   "entries": [
     {
       "modelId": "anthropic.claude-3-5-sonnet-20240620-v1:0",
@@ -4048,7 +4048,8 @@
         "supportsTools": true,
         "supportsImageVariation": false,
         "lifecycle": {
-          "status": "active"
+          "status": "deprecated",
+          "deprecationDate": "2026-10-08"
         },
         "description": "Anthropic's most intelligent model hosted in AWS Bedrock. Delivers exceptional performance across coding, analysis, and complex reasoning tasks with improved speed and efficiency. Ideal for production workloads requiring both power and reliability.",
         "logoFile": "Anthropic_logo.png",
