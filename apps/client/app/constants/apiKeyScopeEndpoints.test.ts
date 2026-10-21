@@ -15,8 +15,9 @@ vi.mock('@server/auth/turnAuth', () => ({}));
 
 /**
  * Every endpoint a scope CLAIMS must be gated by a check that admits it and nothing that makes the
- * claim misleading; routes a scope opens without listing them are not checked. In-handler checks
- * are read per FILE from source, so a check guarding one verb vouches for every verb the file serves.
+ * claim misleading; routes a scope opens without listing them are not checked. Who else claims a
+ * route is counted per verb, but in-handler checks are read per FILE from source, so a narrow check
+ * on one verb's branch still vouches for that scope on every verb the file serves.
  */
 
 const CLIENT_DIR = path.resolve(__dirname, '../..');
@@ -51,6 +52,14 @@ const HELPER_SOURCES = [
  */
 const IMPLIED_BY: Partial<Record<ApiKeyScope, readonly ApiKeyScope[]>> = {
   [ApiKeyScope.DATALAKE_READ]: dataLakeScopes.DATA_LAKE_READ_SCOPES,
+  // No shared list for Hearth; every Hearth door that admits read also admits write (pinned below).
+  [ApiKeyScope.HEARTH_READ]: [ApiKeyScope.HEARTH_WRITE],
+};
+
+// Helpers that check scopes by hand (`.includes` + throw) rather than through an enforcing site, so
+// they cannot be derived; each is pinned below to throw and to name exactly these scopes.
+const HAND_HELPERS: Record<string, { file: string; scopes: readonly ApiKeyScope[] }> = {
+  assertHearthWriteScope: { file: 'server/utils/hearthWire.ts', scopes: [ApiKeyScope.HEARTH_WRITE, ApiKeyScope.ADMIN] },
 };
 
 type Gate = ReadonlySet<ApiKeyScope>;
@@ -138,7 +147,9 @@ function loadHelpers(): Map<string, Gate> {
   }
   // A helper may delegate to another (assertDataLakeTagWriteScope -> assertDataLakeWriteScope), so
   // resolve until nothing new settles.
-  const helpers = new Map<string, Gate>();
+  const helpers = new Map<string, Gate>(
+    Object.entries(HAND_HELPERS).map(([name, { scopes }]) => [name, new Set(scopes)])
+  );
   for (let settled = -1; settled !== helpers.size;) {
     settled = helpers.size;
     for (const [name, body] of bodies) {
@@ -213,8 +224,8 @@ function routeOf(claim: Claim): Route {
   const file = offPages ? path.join(CLIENT_DIR, offPages) : resolvePageFile(claim.path);
   const source = file ? stripComments(readFileSync(file, 'utf8')) : '';
   const fileGates = file ? gatesIn(source, HELPERS) : [];
-  // A contract's scopes are the door; the handler behind it may narrow a scope the door admits
-  // (POST /api/v1/sessions lets ai:generate in, then requires notebooks:write for most bodies).
+  // A contract's scopes are the door; the handler behind it may add an enforcing check of its own,
+  // which counts too. (A `holdsApiKeyScope` probe plus a hand-thrown 403 does not.)
   if (contract) {
     return { key: `contract ${contract.operationId}`, gates: [new Set(contract.scopes ?? []), ...fileGates] };
   }
@@ -250,11 +261,14 @@ const isOverlay = (p: string) => OVERLAY_PATH_PREFIXES.some(prefix => p.startsWi
 const CLAIMS = claimsOf([...USER_API_KEY_SCOPES, ...ADMIN_ONLY_API_KEY_SCOPES]);
 const CHECKED = CLAIMS.filter(c => !isOverlay(c.path)).map(claim => ({ claim, route: routeOf(claim) }));
 
+// Keyed per verb, not per file: in a mixed read/write door the read claim on GET must not let the
+// broad door alone vouch for the write claim on POST.
+const claimantsKey = (claim: Claim, routeKey: string) => `${routeKey} ${claim.method}`;
 const CLAIMANTS = new Map<string, Set<ApiKeyScope>>();
 for (const { claim, route } of CHECKED) {
   if (route.key === undefined) continue;
-  const set = CLAIMANTS.get(route.key) ?? new Set<ApiKeyScope>();
-  CLAIMANTS.set(route.key, set.add(claim.scope));
+  const key = claimantsKey(claim, route.key);
+  CLAIMANTS.set(key, (CLAIMANTS.get(key) ?? new Set<ApiKeyScope>()).add(claim.scope));
 }
 
 describe('apiKeyScopes endpoint claims', () => {
@@ -294,7 +308,9 @@ describe('apiKeyScopes endpoint claims', () => {
     (_scope, _endpoint, claim, route) => {
       if (OPEN_TO_ANY_KEY.has(`${claim.method} ${claim.path}`)) return;
       const problem =
-        route.key === undefined ? route.problem : verifyGates(claim.scope, route.gates, CLAIMANTS.get(route.key)!);
+        route.key === undefined
+          ? route.problem
+          : verifyGates(claim.scope, route.gates, CLAIMANTS.get(claimantsKey(claim, route.key))!);
       expect(problem, `${claim.scope} claims "${claim.endpoint}"`).toBeUndefined();
     }
   );
@@ -365,8 +381,37 @@ describe('the gate rule itself', () => {
     expect(verifyGates(share, gatesIn(`${door}\n${narrow}`, HELPERS), new Set([share]))).toBeUndefined();
   });
 
-  it('rejects the broad door alone, so deleting the narrow check fails the claim', () => {
+  it('rejects the broad door alone when no other scope claims the same verb', () => {
     expect(verifyGates(share, gatesIn(door, HELPERS), new Set([share]))).toMatch(/also admits/);
+  });
+
+  it('counts claimants per verb, so a read claim on GET cannot vouch for a write claim on POST', () => {
+    const post = [...CLAIMANTS].find(([key]) => key === 'pages/api/projects/index.ts POST')?.[1];
+    expect(post).toContain(ApiKeyScope.WRITE_PROJECTS);
+    expect(post).not.toContain(ApiKeyScope.READ_PROJECTS);
+    const door = 'requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES';
+    expect(verifyGates(ApiKeyScope.WRITE_PROJECTS, gatesIn(door, HELPERS), post!)).toMatch(/also admits/);
+  });
+
+  it.each(Object.entries(HAND_HELPERS))('%s throws and checks exactly the scopes it is credited with', (name, h) => {
+    const code = stripComments(readFileSync(path.join(CLIENT_DIR, h.file), 'utf8'));
+    const body = new RegExp(String.raw`export (?:async )?function ${name}\b[\s\S]*?(?=\nexport |$)`).exec(code)?.[0];
+    expect(body, `${name} not found in ${h.file}`).toBeDefined();
+    expect(body).toMatch(/\bthrow\b/);
+    const named = [...body!.matchAll(/\bApiKeyScope\.([A-Z_]+)\b/g)].map(([, m]) => scopeOf(m));
+    expect(new Set(named)).toEqual(new Set(h.scopes));
+  });
+
+  it('keeps hearth:write admitted wherever hearth:read is, which IMPLIED_BY relies on', () => {
+    const dir = path.join(PAGES_DIR, 'api/hearth');
+    const files = readdirSync(dir).filter(f => /\.tsx?$/.test(f));
+    const readGates = files.flatMap(f =>
+      gatesIn(stripComments(readFileSync(path.join(dir, f), 'utf8')), HELPERS).filter(g =>
+        g.has(ApiKeyScope.HEARTH_READ)
+      )
+    );
+    expect(readGates.length).toBeGreaterThan(0);
+    for (const gate of readGates) expect(gate).toContain(ApiKeyScope.HEARTH_WRITE);
   });
 
   it('accepts a door every member of which claims the route or implies the scope', () => {
