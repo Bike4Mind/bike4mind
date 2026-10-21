@@ -79,7 +79,9 @@ describe('/api/auth/saml/callback - OAuth client source tag', () => {
       emailVerified: true,
       signupCreditsGranted: 0,
     });
-    const response = await runCallback(new URLSearchParams({ idp: 'idp-1', redirectTo: AUTHORIZE_REDIRECT }).toString());
+    const response = await runCallback(
+      new URLSearchParams({ idp: 'idp-1', redirectTo: AUTHORIZE_REDIRECT }).toString()
+    );
     expect(mockStampSourceTag).toHaveBeenCalledWith('u-new', 'b4m_sat_0123abcd');
     expect(mockEmitSignupFunnelEvents).toHaveBeenCalledTimes(1);
     expect(mockEmitSignupFunnelEvents).toHaveBeenCalledWith(
