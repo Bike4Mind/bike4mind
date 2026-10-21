@@ -100,6 +100,21 @@ describe('/api/skills/[id] PUT — edit permission', () => {
     expect(mockUpdate).toHaveBeenCalled();
   });
 
+  it('persists an explicitly cleared argument hint as an empty string', async () => {
+    mockFindById.mockResolvedValue(skillDoc({ argumentHint: '<previous>' }));
+    const { req, res } = makeReqRes('PUT', OWNER, { argumentHint: '' });
+    await handler(req, res);
+    expect(mockUpdate).toHaveBeenCalledWith({ id: 'skill-1', argumentHint: '' }, { new: true });
+    expect(res._getJSONData()).toMatchObject({ argumentHint: '' });
+  });
+
+  it('leaves an omitted argument hint out of a partial update', async () => {
+    mockFindById.mockResolvedValue(skillDoc({ argumentHint: '<previous>' }));
+    const { req, res } = makeReqRes('PUT', OWNER, { description: 'new' });
+    await handler(req, res);
+    expect(mockUpdate).toHaveBeenCalledWith({ id: 'skill-1', description: 'new' }, { new: true });
+  });
+
   it('allows a share-recipient with update permission to edit', async () => {
     const { req, res } = makeReqRes('PUT', SHARED_UPDATE, { description: 'new' });
     await handler(req, res);

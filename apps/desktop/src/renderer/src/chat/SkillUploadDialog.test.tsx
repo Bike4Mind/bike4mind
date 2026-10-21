@@ -3,7 +3,12 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SkillSaveResult, SkillSubmitResult, SkillUploadPreview } from '@shared/skillMarket';
+import type {
+  SkillMarketOrgsResult,
+  SkillSaveResult,
+  SkillSubmitResult,
+  SkillUploadPreview,
+} from '@shared/skillMarket';
 import { SkillUploadDialog } from './SkillUploadDialog';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -54,7 +59,9 @@ const market = {
   saveSkill: vi.fn<(request: unknown) => Promise<SkillSaveResult>>(),
   publish: vi.fn<(request: unknown) => Promise<SkillSubmitResult>>(),
   submitVersion: vi.fn<(request: unknown) => Promise<SkillSubmitResult>>(),
-  organizations: vi.fn(async () => ({ organizations: [{ id: 'o1', name: 'Acme' }] })),
+  organizations: vi.fn<() => Promise<SkillMarketOrgsResult>>(async () => ({
+    organizations: [{ id: 'o1', name: 'Acme' }],
+  })),
   openSource: vi.fn(async () => true),
   openOnWeb: vi.fn(async () => true),
   copyShareLink: vi.fn(async () => ({ ok: true as const })),
@@ -231,6 +238,44 @@ describe('SkillUploadDialog', () => {
     expect($('skill-publish-findings')?.textContent).toContain('Uses web_fetch');
     await click('skill-listing-copy-link-btn');
     expect(market.copyShareLink).toHaveBeenCalledWith('l9');
+  });
+
+  it('shows an organization lookup failure instead of silently reporting no memberships', async () => {
+    market.saveSkill.mockResolvedValueOnce({ ok: true, skill: { id: 's1', name: 'tester-guide' } });
+    market.organizations.mockResolvedValueOnce({ organizations: [], error: 'Organization lookup failed.' });
+    render(<SkillUploadDialog preview={preview()} onClose={() => {}} />);
+
+    await click('skill-upload-publish-btn');
+    expect($('skill-upload-error')?.textContent).toBe('Organization lookup failed.');
+    expect(market.publish).not.toHaveBeenCalled();
+  });
+
+  it('refreshes dependent lists after publishing, separately from the account save', async () => {
+    const onSaved = vi.fn();
+    market.saveSkill.mockResolvedValueOnce({ ok: true, skill: { id: 's1', name: 'tester-guide' } });
+    market.publish.mockResolvedValueOnce(published);
+    render(<SkillUploadDialog preview={preview()} onClose={() => {}} onSaved={onSaved} />);
+
+    await click('skill-upload-publish-btn');
+    expect(onSaved).toHaveBeenCalledTimes(1);
+
+    await click('skill-publish-submit-btn');
+    expect($('skill-publish-result')).not.toBeNull();
+    expect(onSaved).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not refresh dependent lists when publishing fails', async () => {
+    const onSaved = vi.fn();
+    market.saveSkill.mockResolvedValueOnce({ ok: true, skill: { id: 's1', name: 'tester-guide' } });
+    market.publish.mockResolvedValueOnce({ ok: false, error: 'Publication failed.' });
+    render(<SkillUploadDialog preview={preview()} onClose={() => {}} onSaved={onSaved} />);
+
+    await click('skill-upload-publish-btn');
+    expect(onSaved).toHaveBeenCalledTimes(1);
+
+    await click('skill-publish-submit-btn');
+    expect($('skill-upload-error')?.textContent).toBe('Publication failed.');
+    expect(onSaved).toHaveBeenCalledTimes(1);
   });
 
   it('turns an already-listed refusal into a new-version step', async () => {

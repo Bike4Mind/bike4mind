@@ -164,6 +164,33 @@ describe('parseSkillMd', () => {
 });
 
 describe('frontmatterHasSourceStamp', () => {
+  it.each([
+    'description: "hello\n# Bike4Mind-Source: https://x/skills/1\nworld"',
+    "description: 'hello\n# Bike4Mind-Source: https://x/skills/1\nworld'",
+  ])('does not inspect marker text after YAML values begin: %s', frontmatter => {
+    expect(frontmatterHasSourceStamp(`---\n${frontmatter}\n---\nbody`)).toBe(false);
+  });
+
+  it('recognizes a stamp after leading blank lines and other comments', () => {
+    expect(
+      frontmatterHasSourceStamp(
+        '---\n\n# Exported skill\n  # Another comment\n# Bike4Mind-Source: https://x\nname: local\n---\nbody'
+      )
+    ).toBe(true);
+  });
+
+  it.each([
+    ['a description block scalar', 'description: |\n  Example export:\n  # Bike4Mind-Source: https://x/skills/1'],
+    ['an empty marker', '# Bike4Mind-Source:'],
+    ['a whitespace-only marker', '# Bike4Mind-Source:   '],
+  ])('does not mistake %s for an export stamp', (_label, frontmatter) => {
+    const text = `---\nname: local\n${frontmatter}\n---\nbody`;
+    expect(frontmatterHasSourceStamp(text)).toBe(false);
+    const result = parseSkillMd(text);
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.source).toBeUndefined();
+  });
+
   it('only matches the stamp inside the frontmatter fence', () => {
     expect(frontmatterHasSourceStamp('---\n# Bike4Mind-Source: https://x/skills/1\nname: a\n---\nbody')).toBe(true);
     expect(frontmatterHasSourceStamp('\uFEFF---\n# Bike4Mind-Source: https://x\n---\nbody')).toBe(true);

@@ -56,7 +56,7 @@ const handler = baseApi()
     if (body.name !== undefined) patch.name = validateSkillName(body.name);
     if (body.description !== undefined) patch.description = validateSkillDescription(body.description);
     if (body.body !== undefined) patch.body = validateSkillBody(body.body);
-    if (body.argumentHint !== undefined) patch.argumentHint = validateSkillArgumentHint(body.argumentHint);
+    if (body.argumentHint !== undefined) patch.argumentHint = validateSkillArgumentHint(body.argumentHint) ?? '';
     if (body.allowedTools !== undefined) patch.allowedTools = validateSkillAllowedTools(body.allowedTools);
     if (body.disableModelInvocation !== undefined) {
       patch.disableModelInvocation = Boolean(body.disableModelInvocation);

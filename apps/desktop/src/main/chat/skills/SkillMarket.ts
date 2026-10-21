@@ -469,7 +469,7 @@ function toFields(value: unknown): SkillUploadFields | null {
     name: fields.name,
     description: fields.description,
     body: fields.body,
-    ...(typeof fields.argumentHint === 'string' && fields.argumentHint ? { argumentHint: fields.argumentHint } : {}),
+    argumentHint: typeof fields.argumentHint === 'string' ? fields.argumentHint : '',
     disableModelInvocation: fields.disableModelInvocation === true,
   };
 }

@@ -353,9 +353,50 @@ describe('SkillMarket', () => {
       expect(get).toHaveBeenCalledWith('/api/skills', { params: { query: 'tester-guide', limit: '100' } });
       const [url, body] = post.mock.calls[0];
       expect(url).toBe('/api/skills');
-      expect(Object.keys(body).sort()).toEqual(['body', 'description', 'disableModelInvocation', 'name']);
+      expect(Object.keys(body).sort()).toEqual([
+        'argumentHint',
+        'body',
+        'description',
+        'disableModelInvocation',
+        'name',
+      ]);
       expect(catalog.invalidateAccount).toHaveBeenCalled();
     });
+
+    it.each([undefined, '', '<topic>'])('sends the argument hint on create: %s', async argumentHint => {
+      get.mockResolvedValueOnce({ data: { data: [] } });
+      post.mockResolvedValueOnce({ data: { id: 's1' } });
+      expect(await market.saveSkill({ fields: { ...FIELDS, argumentHint }, mode: 'create' })).toMatchObject({
+        ok: true,
+      });
+      expect(post).toHaveBeenCalledWith('/api/skills', expect.objectContaining({ argumentHint: argumentHint ?? '' }));
+    });
+
+    it.each([undefined, '', '<topic>'])('replaces the previous argument hint on update: %s', async argumentHint => {
+      get
+        .mockResolvedValueOnce({ data: { id: 's1', userId: 'me', argumentHint: '<previous>' } })
+        .mockResolvedValueOnce(mineBody([]));
+      expect(
+        await market.saveSkill({ fields: { ...FIELDS, argumentHint }, mode: 'update', targetSkillId: 's1' })
+      ).toMatchObject({ ok: true });
+      expect(put).toHaveBeenCalledWith('/api/skills/s1', expect.objectContaining({ argumentHint: argumentHint ?? '' }));
+    });
+
+    it.each([undefined, '', '<topic>'])(
+      'sends the edited argument hint before submitting a version: %s',
+      async argumentHint => {
+        get.mockResolvedValue(mineBody([{ id: 'l1', name: 'x', sourceSkillId: 'src', status: 'approved' }]));
+        post.mockResolvedValueOnce(created());
+        expect(await market.submitVersion({ listingId: 'l1', fields: { ...FIELDS, argumentHint } })).toMatchObject({
+          ok: true,
+        });
+        expect(put).toHaveBeenCalledWith(
+          '/api/skills/src',
+          expect.objectContaining({ argumentHint: argumentHint ?? '' })
+        );
+        expect(put.mock.invocationCallOrder[0]).toBeLessThan(post.mock.invocationCallOrder[0]);
+      }
+    );
 
     it('answers name_taken instead of overwriting, from the lookup or a raced 400', async () => {
       get.mockResolvedValueOnce({

@@ -290,7 +290,7 @@ export function SkillUploadDialog({
   /** The chat session, so a project skill's local copy counts when saying what takes precedence. */
   sessionId?: string | null;
   onClose: () => void;
-  /** An account skill was written, so lists showing account skills should reload. */
+  /** An account skill or market listing changed, so dependent lists should reload. */
   onSaved?: () => void;
 }) {
   const [fields, setFields] = useState<SkillUploadFields>(preview.fields);
@@ -314,7 +314,9 @@ export function SkillUploadDialog({
     if (step.kind !== 'publish') return;
     let live = true;
     void window.b4m.skillMarket.organizations().then(result => {
-      if (live) setOrgs(result.organizations);
+      if (!live) return;
+      setOrgs(result.organizations);
+      if (result.error) setError(result.error);
     });
     return () => {
       live = false;
@@ -384,8 +386,10 @@ export function SkillUploadDialog({
       ...(visibility === 'organization' ? { organizationId } : {}),
       tags,
     });
-    if (result.ok) setStep({ kind: 'result', result });
-    else if (result.code === 'already_listed' && result.listingId) {
+    if (result.ok) {
+      onSaved?.();
+      setStep({ kind: 'result', result });
+    } else if (result.code === 'already_listed' && result.listingId) {
       setStep({ kind: 'version', listingId: result.listingId, message: result.error });
     } else setError(result.error);
   };
