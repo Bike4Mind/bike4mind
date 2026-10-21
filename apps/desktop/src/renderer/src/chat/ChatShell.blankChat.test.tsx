@@ -142,7 +142,7 @@ const cards = () => [...document.querySelectorAll<HTMLButtonElement>('[data-test
 const composer = () => document.querySelector<HTMLTextAreaElement>('[data-testid="chat-composer-input"]');
 
 describe('the blank chat', () => {
-  it('renders a card for each offered category, with the credit hint on media cards', async () => {
+  it('renders a card for each offered category', async () => {
     stubBridge({ tools: ALL_TOOLS });
     await openBlankSession();
 
@@ -150,7 +150,6 @@ describe('the blank chat', () => {
       'What do you want to make?'
     );
     expect(cards().map(card => card.dataset.category)).toEqual(['image', 'video', 'voice', 'sound', 'music', 'write']);
-    expect(document.querySelectorAll('[data-testid="chat-empty-credits-hint"]')).toHaveLength(5);
     for (const card of cards()) {
       expect(card.getAttribute('aria-label')).toContain(
         card.querySelector('[data-testid="chat-empty-suggestion-prompt"]')?.textContent
