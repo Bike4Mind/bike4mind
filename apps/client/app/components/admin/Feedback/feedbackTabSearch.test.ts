@@ -45,6 +45,20 @@ describe('the status param', () => {
   });
 });
 
+describe('the order param', () => {
+  const parseOrder = FEEDBACK_SEARCH_PARSERS.feedbackOrder;
+
+  it('reads asc as ascending and desc as the default direction', () => {
+    expect(feedbackViewFromSearch({ feedbackOrder: 'asc' }).sortAscending).toBe(true);
+    expect(feedbackViewFromSearch({ feedbackOrder: 'desc' }).sortAscending).toBe(false);
+  });
+
+  it.each([['true'], [true], ['ASC'], [''], [1], [undefined]])('rejects %j', value => {
+    expect(parseOrder(value)).toBeUndefined();
+    expect(feedbackViewFromSearch({ feedbackOrder: value }).sortAscending).toBe(false);
+  });
+});
+
 describe('feedbackViewFromSearch', () => {
   it('is the default view for a bare feedback URL', () => {
     expect(feedbackViewFromSearch({ tab: 'feedback' })).toEqual(DEFAULT_FEEDBACK_VIEW);
@@ -56,13 +70,13 @@ describe('feedbackViewFromSearch', () => {
     });
   });
 
-  it('reads every view param, tolerating quoted numbers and booleans from a hand-typed link', () => {
+  it('reads every view param, tolerating quoted numbers from a hand-typed link', () => {
     expect(
       feedbackViewFromSearch({
         feedbackStatus: 'none',
         feedbackSubject: 'turn',
         feedbackOrg: 'Acme',
-        asc: 'true',
+        feedbackOrder: 'asc',
         feedbackPage: '3',
         feedbackLimit: '50',
       })
@@ -82,7 +96,7 @@ describe('feedbackViewFromSearch', () => {
         feedbackStatus: 'Open',
         feedbackSubject: 'everything',
         feedbackOrg: [],
-        asc: 'yes',
+        feedbackOrder: 'yes',
         feedbackPage: 0,
         feedbackLimit: 1000,
       })
@@ -112,7 +126,7 @@ describe('feedbackViewToSearch', () => {
       feedbackStatus: 'New,Closed',
       feedbackSubject: 'product',
       feedbackOrg: ['Acme', 'Globex'],
-      asc: true,
+      feedbackOrder: 'asc',
       feedbackPage: 2,
       feedbackLimit: 100,
     });
@@ -121,7 +135,7 @@ describe('feedbackViewToSearch', () => {
 
   it('sets every default param to undefined so a write removes it from the URL', () => {
     expect(Object.keys(feedbackViewToSearch(DEFAULT_FEEDBACK_VIEW)).sort()).toEqual(
-      ['asc', 'feedbackLimit', 'feedbackOrg', 'feedbackPage', 'feedbackStatus', 'feedbackSubject'].sort()
+      ['feedbackLimit', 'feedbackOrder', 'feedbackOrg', 'feedbackPage', 'feedbackStatus', 'feedbackSubject'].sort()
     );
   });
 });

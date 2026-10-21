@@ -19,7 +19,7 @@ import { FEEDBACK_PAGE_SIZE_OPTIONS } from './constants';
 export const FEEDBACK_STATUS_PARAM = 'feedbackStatus';
 export const FEEDBACK_SUBJECT_PARAM = 'feedbackSubject';
 export const FEEDBACK_ORG_PARAM = 'feedbackOrg';
-export const FEEDBACK_ASC_PARAM = 'asc';
+export const FEEDBACK_ORDER_PARAM = 'feedbackOrder';
 export const FEEDBACK_PAGE_PARAM = 'feedbackPage';
 export const FEEDBACK_LIMIT_PARAM = 'feedbackLimit';
 
@@ -28,7 +28,7 @@ const FEEDBACK_VIEW_PARAMS = [
   FEEDBACK_STATUS_PARAM,
   FEEDBACK_SUBJECT_PARAM,
   FEEDBACK_ORG_PARAM,
-  FEEDBACK_ASC_PARAM,
+  FEEDBACK_ORDER_PARAM,
   FEEDBACK_PAGE_PARAM,
   FEEDBACK_LIMIT_PARAM,
 ] as const;
@@ -44,11 +44,14 @@ const FEEDBACK_STATUS_ORDER = [FeedbackStatus.New, FeedbackStatus.InProgress, Fe
 const STATUS_SEPARATOR = ',';
 const NO_STATUS_TOKEN = 'none';
 
+const FEEDBACK_ORDERS = ['asc', 'desc'] as const;
+type FeedbackOrder = (typeof FEEDBACK_ORDERS)[number];
+
 export type FeedbackSearch = {
   [FEEDBACK_STATUS_PARAM]?: string;
   [FEEDBACK_SUBJECT_PARAM]?: FeedbackSubject;
   [FEEDBACK_ORG_PARAM]?: string[];
-  [FEEDBACK_ASC_PARAM]?: true;
+  [FEEDBACK_ORDER_PARAM]?: FeedbackOrder;
   [FEEDBACK_PAGE_PARAM]?: number;
   [FEEDBACK_LIMIT_PARAM]?: number;
 };
@@ -107,8 +110,8 @@ const parseLimit = (value: unknown): number | undefined => {
   return FEEDBACK_PAGE_SIZE_OPTIONS.includes(limit) ? limit : undefined;
 };
 
-// Only ever written as `true`; the default (newest first) is the param's absence.
-const parseAscending = (value: unknown): true | undefined => (value === true || value === 'true' ? true : undefined);
+// Only ever written as 'asc'; the default (newest first) is the param's absence.
+const parseOrder = oneOf(FEEDBACK_ORDERS);
 
 /** Per-key coercion for the route's `validateSearch`; anything invalid becomes undefined. */
 export const FEEDBACK_SEARCH_PARSERS: {
@@ -117,7 +120,7 @@ export const FEEDBACK_SEARCH_PARSERS: {
   [FEEDBACK_STATUS_PARAM]: parseStatus,
   [FEEDBACK_SUBJECT_PARAM]: oneOf(FEEDBACK_SUBJECTS),
   [FEEDBACK_ORG_PARAM]: parseStringList,
-  [FEEDBACK_ASC_PARAM]: parseAscending,
+  [FEEDBACK_ORDER_PARAM]: parseOrder,
   [FEEDBACK_PAGE_PARAM]: parsePage,
   [FEEDBACK_LIMIT_PARAM]: parseLimit,
 };
@@ -129,7 +132,7 @@ export function feedbackViewFromSearch(search: Record<string, unknown>): Feedbac
     statusFilters: statuses ? toStatusFilters(statuses) : DEFAULT_FEEDBACK_VIEW.statusFilters,
     subject: FEEDBACK_SEARCH_PARSERS[FEEDBACK_SUBJECT_PARAM](search[FEEDBACK_SUBJECT_PARAM]),
     organizations: parseStringList(search[FEEDBACK_ORG_PARAM]) ?? DEFAULT_FEEDBACK_VIEW.organizations,
-    sortAscending: parseAscending(search[FEEDBACK_ASC_PARAM]) ?? DEFAULT_FEEDBACK_VIEW.sortAscending,
+    sortAscending: search[FEEDBACK_ORDER_PARAM] === 'asc',
     page: parsePage(search[FEEDBACK_PAGE_PARAM]) ?? DEFAULT_FEEDBACK_VIEW.page,
     limit: parseLimit(search[FEEDBACK_LIMIT_PARAM]) ?? DEFAULT_FEEDBACK_VIEW.limit,
   };
@@ -148,7 +151,7 @@ export function feedbackViewToSearch(view: FeedbackView): {
     [FEEDBACK_STATUS_PARAM]: statuses === defaultStatuses ? undefined : statuses,
     [FEEDBACK_SUBJECT_PARAM]: FEEDBACK_SEARCH_PARSERS[FEEDBACK_SUBJECT_PARAM](view.subject),
     [FEEDBACK_ORG_PARAM]: parseStringList(view.organizations),
-    [FEEDBACK_ASC_PARAM]: view.sortAscending ? true : undefined,
+    [FEEDBACK_ORDER_PARAM]: view.sortAscending ? 'asc' : undefined,
     [FEEDBACK_PAGE_PARAM]: view.page === DEFAULT_FEEDBACK_VIEW.page ? undefined : parsePage(view.page),
     [FEEDBACK_LIMIT_PARAM]: view.limit === DEFAULT_FEEDBACK_VIEW.limit ? undefined : parseLimit(view.limit),
   };

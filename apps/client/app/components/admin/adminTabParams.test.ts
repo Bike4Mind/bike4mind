@@ -94,7 +94,7 @@ describe('Feedback tab params', () => {
     feedbackStatus: 'New,Closed',
     feedbackSubject: 'turn',
     feedbackOrg: ['Acme'],
-    asc: true,
+    feedbackOrder: 'asc',
     feedbackPage: 2,
     feedbackLimit: 50,
     [FEEDBACK_ID_PARAM]: 'feedback-1',
@@ -106,7 +106,7 @@ describe('Feedback tab params', () => {
         feedbackStatus: 'Closed,New',
         feedbackSubject: 'nope',
         feedbackOrg: 'Acme',
-        asc: 'false',
+        feedbackOrder: 'sideways',
         feedbackPage: '2',
         feedbackLimit: 7,
       })
@@ -114,7 +114,7 @@ describe('Feedback tab params', () => {
       feedbackStatus: 'New,Closed',
       feedbackSubject: undefined,
       feedbackOrg: ['Acme'],
-      asc: undefined,
+      feedbackOrder: undefined,
       feedbackPage: 2,
       feedbackLimit: undefined,
     });

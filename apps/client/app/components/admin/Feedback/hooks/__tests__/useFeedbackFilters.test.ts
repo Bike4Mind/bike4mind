@@ -239,7 +239,7 @@ describe('useFeedbackFilters', () => {
       tab: 'feedback',
       feedbackStatus: 'InProgress,Closed',
       feedbackOrg: ['Acme'],
-      asc: true,
+      feedbackOrder: 'asc',
     });
   });
 
