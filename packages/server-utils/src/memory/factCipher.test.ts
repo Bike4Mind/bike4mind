@@ -178,12 +178,29 @@ describe('encryptVector / decryptVector', () => {
 });
 
 describe('deployed memory key safety', () => {
-  it('refuses raw DEK minting without a master key, even with no stage name', () => {
+  it('refuses raw DEK minting without a master key, even with no stage name', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     vi.stubEnv('MEMORY_KEY_SECRET', 'not-configured');
     try {
       const { keyring } = makeKeyring();
-      expect(() => createKeyProvider(keyring)).toThrow('MEMORY_KEY_SECRET');
+      await expect(createKeyProvider(keyring).getOrCreateDek(user, 'u1', WORK_STARTED)).rejects.toThrow(
+        'MEMORY_KEY_SECRET'
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('still destroys a principal key without a master key, so deletion keeps working', async () => {
+    // Shredding reads nothing: refusing it on a misconfigured stage would leave data in place that
+    // the user asked to delete, which is worse than the missing key it is complaining about.
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('MEMORY_KEY_SECRET', 'not-configured');
+    try {
+      const { keyring, store } = makeKeyring();
+      store.set('user:u1', 'raw:' + Buffer.alloc(32, 7).toString('base64'));
+      await expect(createKeyProvider(keyring).destroyDek(user)).resolves.toBeUndefined();
+      expect(store.has('user:u1')).toBe(false);
     } finally {
       vi.unstubAllEnvs();
     }

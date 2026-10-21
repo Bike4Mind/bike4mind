@@ -163,10 +163,13 @@ export function resolveMasterKey(secret?: string): Buffer | undefined {
     }
   }
   if (!secret || secret === 'not-configured') return undefined;
-  return secret ? createHash('sha256').update(secret).digest() : undefined;
+  return createHash('sha256').update(secret).digest();
 }
 
-/** True outside local dev - a raw DEK here is a real backup-confidentiality hole, not a dev convenience. */
+/**
+ * True outside local dev - a raw DEK here is a real backup-confidentiality hole, not a dev
+ * convenience. A preview/test stage is still a deployed stage: its database backups are real.
+ */
 const isDeployedEnv = (): boolean => {
   const stage = process.env.SST_STAGE ?? process.env.STAGE ?? '';
   return process.env.NODE_ENV === 'production' || (stage !== '' && !['dev', 'local', 'test'].includes(stage));
@@ -178,15 +181,17 @@ const isDeployedEnv = (): boolean => {
  * - still SHRED-safe (deletion destroys the key), but NOT confidential against a full DB/backup read.
  *
  * Running a deployed stage without the secret voids the "unreadable even in backups" promise -
- * the raw DEK would sit next to the ciphertext. Refuse to create a provider in that state.
+ * the raw DEK would sit next to the ciphertext - so MINTING a key refuses there. Reads refuse on
+ * their own (`unwrapDek` cannot open a wrapped DEK without the key), and shredding never needs the
+ * key at all: "delete my memory" must work even on a stage whose key is missing.
  */
 export function createKeyProvider(keyring: Keyring, masterKey = resolveMasterKey()): KeyProvider {
-  if (!masterKey && isDeployedEnv()) {
-    throw new Error('MEMORY_KEY_SECRET is required to mint memory principal keys in deployed stages');
-  }
   const store = (dek: Buffer): string => (masterKey ? wrapDek(masterKey, dek) : RAW + dek.toString('base64'));
   return {
     async getOrCreateDek(principal, ownerUserId, startedAt) {
+      if (!masterKey && isDeployedEnv()) {
+        throw new Error('MEMORY_KEY_SECRET is required to mint memory principal keys in deployed stages');
+      }
       const stored = await keyring.getOrCreate(
         principal.kind,
         principal.id,
