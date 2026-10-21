@@ -123,7 +123,7 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
   const { selectedAccount } = useSelectedAccount();
   const isOrgAccount = !!selectedAccount && !selectedAccount.personal;
   const { mutate: logEvent } = useLogEvent();
-  const openedMetadataRef = useRef<{ entry: BillingEntry; focus: string } | null>(null);
+  const openedMetadataRef = useRef<{ entry: BillingEntry; focus: string; account: 'org' | 'personal' } | null>(null);
   const purchasedRef = useRef(false);
   const paymentPendingRef = useRef(false);
   const leftForUsageRef = useRef(false);
@@ -144,13 +144,14 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
       return;
     }
     if (openedMetadataRef.current) return;
-    openedMetadataRef.current = { entry, focus: focus ?? 'overview' };
+    // Org accounts can't buy personal packs, so their closes are not purchase abandonment.
+    openedMetadataRef.current = { entry, focus: focus ?? 'overview', account: isOrgAccount ? 'org' : 'personal' };
     if (consumeBillingCheckoutReturn()) {
       purchasedRef.current = true;
       return;
     }
     logEvent({ type: FirstRunEvents.BILLING_OPENED, metadata: openedMetadataRef.current });
-  }, [open, entry, focus, logEvent]);
+  }, [open, entry, focus, isOrgAccount, logEvent]);
 
   // The shared display rule (lib/subscriptions/types), so this header and the plan card agree on the row.
   const currentSubscription = useMemo(() => pickDisplayedSubscription(subscriptions.data ?? []), [subscriptions.data]);

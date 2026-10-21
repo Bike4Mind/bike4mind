@@ -137,7 +137,7 @@ describe('BillingModal', () => {
     );
     expect(logEvent).toHaveBeenCalledWith({
       type: 'billing_opened',
-      metadata: { entry: 'credits_chip', focus: 'credits' },
+      metadata: { entry: 'credits_chip', focus: 'credits', account: 'personal' },
     });
     fireEvent.click(screen.getByTestId('billing-modal-close'));
     expect(onClose).toHaveBeenCalled();
@@ -148,7 +148,26 @@ describe('BillingModal', () => {
     );
     expect(logEvent).toHaveBeenCalledWith({
       type: 'billing_closed_without_purchase',
-      metadata: { entry: 'credits_chip', focus: 'credits' },
+      metadata: { entry: 'credits_chip', focus: 'credits', account: 'personal' },
+    });
+  });
+
+  it('tags the open and close with an org account, which cannot buy personal packs', () => {
+    state.account = { personal: false };
+    const content = (open: boolean) => (
+      <TestWrapper>
+        <BillingModal open={open} entry="credits_chip" onClose={vi.fn()} />
+      </TestWrapper>
+    );
+    const { rerender } = render(content(true));
+    rerender(content(false));
+    expect(logEvent).toHaveBeenCalledWith({
+      type: 'billing_opened',
+      metadata: { entry: 'credits_chip', focus: 'overview', account: 'org' },
+    });
+    expect(logEvent).toHaveBeenCalledWith({
+      type: 'billing_closed_without_purchase',
+      metadata: { entry: 'credits_chip', focus: 'overview', account: 'org' },
     });
   });
 
