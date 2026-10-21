@@ -342,6 +342,8 @@ export const createMockCreditTransactionRepository = (): MockedObject<ICreditTra
     findByOwnerWithFilters: vi.fn(),
     queryLedgerPage: vi.fn(),
     queryAdminAdjustmentsPage: vi.fn(),
+    dailyNetCreditsForOwner: vi.fn(),
+    findAdminAdjustmentsForUser: vi.fn(),
     apiKeyUsageForOwner: vi.fn(),
     sourceUsageForOwner: vi.fn(),
   });
