@@ -8,11 +8,15 @@ import {
   scrubCustomerText,
 } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { holdsApiKeyScope } from '@server/middlewares/apiKeyScopeGate';
 import { deploymentMediaOrigins } from '@server/utils/deploymentMediaOrigins';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { loadDenylistOrThrow, noteOrThrow, toAdminReleaseNote } from '@server/releaseNotes/adminReleaseNotes';
+import {
+  isReleaseNotesWriteOnlyKey,
+  loadDenylistOrThrow,
+  noteOrThrow,
+  toAdminReleaseNote,
+} from '@server/releaseNotes/adminReleaseNotes';
 
 const EditSchema = z
   .object({
@@ -38,14 +42,18 @@ const handler = api.patch(async (req, res) => {
   if (!parsed.success) {
     throw new BadRequestError(parsed.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; '));
   }
-  // An API key without admin:* got here through release-notes:write, which may only set the video.
-  if (req.apiKeyInfo && !holdsApiKeyScope(req, [ApiKeyScope.ADMIN])) {
+  // release-notes:write may only set the video, and that write is the job's, not an admin edit:
+  // attachVideo leaves editedAt alone so the note is not marked edited and still regenerates.
+  if (isReleaseNotesWriteOnlyKey(req)) {
     const other = Object.entries(parsed.data)
       .filter(([field, value]) => field !== 'video' && value !== undefined)
       .map(([field]) => field);
     if (other.length > 0) {
       throw new ForbiddenError(`${ApiKeyScope.RELEASE_NOTES_WRITE} may only set video, not ${other.join(', ')}`);
     }
+    const { video } = parsed.data;
+    if (video === undefined) throw new BadRequestError('video: required');
+    return res.json(toAdminReleaseNote(noteOrThrow(await releaseNoteRepository.attachVideo(id, video))));
   }
 
   // Same scrub and denylist the generator applies (workers releaseNotes/finalize.ts), so an edit cannot

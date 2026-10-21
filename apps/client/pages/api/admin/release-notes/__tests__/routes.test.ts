@@ -9,6 +9,7 @@ import { createMocks } from 'node-mocks-http';
 const m = vi.hoisted(() => ({
   adminList: vi.fn(),
   edit: vi.fn(),
+  attachVideo: vi.fn(),
   hide: vi.fn(),
   unhide: vi.fn(),
   publishNow: vi.fn(),
@@ -37,6 +38,7 @@ vi.mock('@bike4mind/database', () => ({
   releaseNoteRepository: {
     adminList: m.adminList,
     edit: m.edit,
+    attachVideo: m.attachVideo,
     hide: m.hide,
     unhide: m.unhide,
     publishNow: m.publishNow,
@@ -155,6 +157,34 @@ describe('GET /api/admin/release-notes', () => {
     expect(body).toEqual({ data: [], next_cursor: null });
   });
 
+  it('refuses a release-notes:write key that browses without a tag', async () => {
+    const { error } = await call(listHandler, {
+      method: 'GET',
+      query: { status: 'hidden' },
+      keyScopes: ['release-notes:write'],
+    });
+    expect(error?.statusCode).toBe(403);
+    expect(m.adminList).not.toHaveBeenCalled();
+  });
+
+  it('lets a release-notes:write key look a note up by tag', async () => {
+    m.findOne.mockResolvedValue(note({ releaseTag: 'v2026.10.20.1' }));
+    const { error, body } = await call(listHandler, {
+      method: 'GET',
+      query: { tag: 'v2026.10.20.1' },
+      keyScopes: ['release-notes:write'],
+    });
+    expect(error).toBeUndefined();
+    expect(body.data[0]).toMatchObject({ releaseTag: 'v2026.10.20.1' });
+  });
+
+  it('leaves an admin:* key free to browse without a tag', async () => {
+    m.adminList.mockResolvedValue({ items: [], hasMore: false });
+    const { error } = await call(listHandler, { method: 'GET', query: {}, keyScopes: ['admin:*'] });
+    expect(error).toBeUndefined();
+    expect(m.adminList).toHaveBeenCalled();
+  });
+
   it('refuses a tag with a cursor', async () => {
     const { error } = await call(listHandler, { method: 'GET', query: { tag: 'v0', cursor: 'abc' } });
     expect(error?.statusCode).toBe(422);
@@ -264,19 +294,41 @@ describe('PATCH /api/admin/release-notes/[id] with a release-notes:write key', (
     expect(error?.statusCode).toBe(403);
     expect(error?.message).toContain('headline');
     expect(m.edit).not.toHaveBeenCalled();
+    expect(m.attachVideo).not.toHaveBeenCalled();
   });
 
-  it('sets the video', async () => {
-    m.edit.mockResolvedValue({ kind: 'ok', note: note({ video: null }) });
-    const { error, status } = await call(editHandler, {
+  it('sets the video through attachVideo, which leaves editedAt alone, never through edit', async () => {
+    const video = { landscapeUrl: 'https://d111.cloudfront.net/wide.mp4' };
+    m.attachVideo.mockResolvedValue({ kind: 'ok', note: note({ video, editedAt: null }) });
+    const { error, status, body } = await call(editHandler, {
+      method: 'PATCH',
+      query: { id: ID },
+      body: { video },
+      keyScopes: ['release-notes:write'],
+    });
+    expect(error).toBeUndefined();
+    expect(status).toBe(200);
+    expect(m.attachVideo).toHaveBeenCalledWith(ID, video);
+    expect(m.edit).not.toHaveBeenCalled();
+    expect(body.editedAt).toBeNull();
+  });
+
+  it('answers 404 when the note to attach a video to is gone', async () => {
+    m.attachVideo.mockResolvedValue({ kind: 'notFound' });
+    const { error } = await call(editHandler, {
       method: 'PATCH',
       query: { id: ID },
       body: { video: null },
       keyScopes: ['release-notes:write'],
     });
-    expect(error).toBeUndefined();
-    expect(status).toBe(200);
+    expect(error?.statusCode).toBe(404);
+  });
+
+  it('keeps a session admin video edit on edit, which marks the note edited', async () => {
+    m.edit.mockResolvedValue({ kind: 'ok', note: note({ video: null }) });
+    await call(editHandler, { method: 'PATCH', query: { id: ID }, body: { video: null } });
     expect(m.edit).toHaveBeenCalledWith(ID, { video: null });
+    expect(m.attachVideo).not.toHaveBeenCalled();
   });
 
   it('leaves an admin:* key free to edit the text', async () => {
