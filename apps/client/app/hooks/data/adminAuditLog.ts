@@ -18,9 +18,12 @@ const MAX_ENTRY_RETRIES = 3;
 const isNotFound = (error: unknown): boolean => isAxiosError(error) && error.response?.status === 404;
 
 /** JSON carries `occurredAt` as an ISO string; consumers expect the real `AuditEntry` Date. */
-type WireAuditEntry = Omit<AuditEntry, 'occurredAt'> & { occurredAt: string | Date };
+export type WireAuditEntry = Omit<AuditEntry, 'occurredAt'> & { occurredAt: string | Date };
 
-const reviveAuditEntry = (entry: WireAuditEntry): AuditEntry => ({ ...entry, occurredAt: new Date(entry.occurredAt) });
+export const reviveAuditEntry = (entry: WireAuditEntry): AuditEntry => ({
+  ...entry,
+  occurredAt: new Date(entry.occurredAt),
+});
 
 const definedFilterParams = (filters: AuditLogFilters): Record<string, string> =>
   Object.fromEntries(Object.entries(filters).filter(([, value]) => value !== undefined)) as Record<string, string>;

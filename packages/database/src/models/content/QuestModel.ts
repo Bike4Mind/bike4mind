@@ -1074,8 +1074,10 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
       // Include suggestedChoices so history can re-attach a turn's stored choices (see
       // withStoredChoices in @bike4mind/utils).
       // Include pinned: IChatHistoryItemDocument types it, so omitting it hands every caller undefined.
+      // Include status so history can skip a prompt stopped before any reply (see isStoppedBeforeReply
+      // in @bike4mind/utils).
       .select(
-        'sessionId timestamp type prompt reply replies structuredReplies toolResults promptMeta images fabFileIds researchModeResults jupyterNotebook oob suggestedChoices pinned _id'
+        'sessionId timestamp type prompt reply replies structuredReplies toolResults promptMeta images fabFileIds researchModeResults jupyterNotebook oob suggestedChoices pinned status _id'
       )
       .sort({ timestamp: -1 })
       .limit(limit)

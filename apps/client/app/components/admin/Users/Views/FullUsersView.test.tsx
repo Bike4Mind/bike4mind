@@ -23,6 +23,8 @@ vi.mock('../ComplianceModal', () => ({ useComplianceModal: () => vi.fn() }));
 vi.mock('@client/app/components/admin/Users/Views/FullUserViewModal', () => ({
   useFullUserViewModal: () => ({ setUserId: vi.fn() }),
 }));
+// The real panel is lazy-loaded; stub it so the tab wiring is what this file exercises.
+vi.mock('../Activity/UserActivityPanel', () => ({ default: () => <div data-testid="user-activity-panel" /> }));
 vi.mock('@client/app/hooks/data/user', () => ({
   useDeleteUser: () => ({ mutate: vi.fn() }),
   useUpdateUser: () => ({ mutate: mutations.updateMutate, isPending: false }),
@@ -63,6 +65,22 @@ const addCustomTag = (tag: string) => {
   fireEvent.change(screen.getByPlaceholderText('Input a custom tag'), { target: { value: tag } });
   fireEvent.click(screen.getByRole('button', { name: 'Add' }));
 };
+
+describe('FullUsersView - Overview and Activity tabs', () => {
+  it('keeps staged Overview edits when switching to Activity and back', async () => {
+    render(<FullUsersView index={0} user={savedUser()} inModal onUnsavedFieldsChange={vi.fn()} />, {
+      wrapper: TestWrapper,
+    });
+
+    addCustomTag('qa-tab-switch');
+
+    fireEvent.click(screen.getByTestId('user-view-activity-tab'));
+    expect(await screen.findByTestId('user-activity-panel')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('user-view-overview-tab'));
+    expect(screen.getByTestId('remove-tag-qa-tab-switch')).toBeInTheDocument();
+  });
+});
 
 describe('FullUsersView - unsaved field reporting', () => {
   it('reports nothing unsaved on a freshly opened card', () => {

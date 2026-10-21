@@ -173,7 +173,7 @@ import type { MusicToolConfig } from './tools/implementation/musicGeneration';
 import { applyModerationHit, MODERATION_POLICY, moderationThrottleKey } from '../userService/moderationPolicy';
 import { ToolDefinition } from './tools/base/types';
 import { ServerAgentStore } from './agents/ServerAgentStore';
-import throttle from 'lodash/throttle.js';
+import { createStreamingStatusSender } from './streamingStatusSender';
 import {
   AutoNameSessionFeature,
   ChatCompletionFeature,
@@ -201,11 +201,14 @@ import {
   buildTaggedContextMessages,
   filterByPromptMode,
   filterFeaturesByPromptMode,
+  isPerTurnContext,
+  markHistoryCacheAnchor,
   markShareablePrefixBoundary,
   PROMPT_MODE_SOURCES,
   PROMPT_SOURCE_METADATA,
   resolveForcedRetrieval,
   SYSTEM_PROMPT_PRIORITY,
+  relocatePerTurnContext,
   resolveSkipAutoOffers,
   lakeContentTokens,
   toPromptDetails,
@@ -2024,6 +2027,14 @@ export class ChatCompletionProcess {
     let finalQuest: IChatHistoryItemDocument | null = null;
     let cancelWatcherInterval: NodeJS.Timeout | null = null;
     let streamingHeartbeatInterval: NodeJS.Timeout | null = null;
+    // Assigned once the streaming sender exists. A pending trailing send reads `quest` at fire
+    // time, so it must be dropped before any terminal write or it publishes `done`/`stopped`
+    // ahead of settlement and the terminal save.
+    let cancelPendingStreamingSend: (() => void) | null = null;
+    const setTerminalQuestStatus = (target: IChatHistoryItemDocument, status: 'done' | 'stopped') => {
+      cancelPendingStreamingSend?.();
+      target.status = status;
+    };
     // Replaced once the turn's deliverable baselines exist; until then nothing can have answered.
     let clearStaleFallbackInfoIfNoAnswer = () => {
       quest.fallbackInfo = null;
@@ -2091,7 +2102,7 @@ export class ChatCompletionProcess {
 
       if (!loadedSession) {
         // Try to clean up the quest if session doesn't exist
-        quest.status = 'stopped';
+        setTerminalQuestStatus(quest, 'stopped');
         quest.replies = ['Session not found. Please create a new session or refresh the page.'];
         await saveQuest(quest);
         return;
@@ -2108,7 +2119,7 @@ export class ChatCompletionProcess {
       const latestQuestStatus = await this.db.quests.findByIdWithStatus(questId);
       if (latestQuestStatus?.status === 'stopped') {
         logger.info(`Quest ${questId} was stopped before processing started`);
-        quest.status = 'stopped';
+        setTerminalQuestStatus(quest, 'stopped');
         return;
       }
       quest.status = 'running';
@@ -2246,15 +2257,12 @@ export class ChatCompletionProcess {
       // The invisible-failure warning ("caller has knowledge but no knowledge tool offered")
       // moved to after buildTools, where the authoritative post-build tool list is known.
 
-      const throttledSend = DISABLE_SERVER_THROTTLING
-        ? () => this.sendStatusUpdate(quest, null) // No throttling - direct send
-        : throttle(
-            () => {
-              return this.sendStatusUpdate(quest, null);
-            },
-            THROTTLE_INTERVAL,
-            { leading: true }
-          );
+      const throttledSend = createStreamingStatusSender(
+        () => this.sendStatusUpdate(quest, null),
+        THROTTLE_INTERVAL,
+        DISABLE_SERVER_THROTTLING
+      );
+      cancelPendingStreamingSend = () => throttledSend.cancel();
 
       // Streaming heartbeat: persist quest state to MongoDB every 10s during streaming.
       // Without this, quest.replies and quest.updatedAt stay stale until completion, so a mid-stream
@@ -3761,6 +3769,17 @@ export class ChatCompletionProcess {
       // to translate it (Anthropic-family does, the others ignore it per the field's contract),
       // and the cacheStrategy built later in this method still governs the other breakpoints.
       markShareablePrefixBoundary(admittedContextMessages);
+      // The per-turn sources that ride in the current user turn instead of system (see
+      // PER_TURN_CONTEXT_SOURCES). Not under a promptMode: those callers asked for a request
+      // they can compare against the bare model, and moving their own system messages would alter it.
+      // `extraContext` moves only where the producer flagged it: the same channel carries the real
+      // system prompt of voice, Slack and programmatic launches.
+      const perTurnExtraContext = new Set<IMessage>(extraContextMessages.filter(m => m.perTurn === true) as IMessage[]);
+      const perTurnContextMessages = new Set<IMessage>(
+        promptMode
+          ? []
+          : admittedContextMessages.filter(t => isPerTurnContext(t, perTurnExtraContext)).map(t => t.message)
+      );
       const contextAndSystemMessages: IMessage[] = admittedContextMessages.map(t => t.message);
       // Carries each message's source across into the builder, which sees only an IMessage[] and so
       // could otherwise decide what to drop on array position alone. Keyed by reference, which survives
@@ -3800,6 +3819,9 @@ export class ChatCompletionProcess {
         buildOptions
       );
       let messages = firstBuild.messages;
+      // Where the cache breakpoint belongs: the last message the next turn will reproduce as history.
+      // Reassigned by the overflow-recovery rebuild below, which sheds turns and rebuilds `messages`.
+      let lastHistoryMessage = previousMessages.at(-1);
       const messageTruncationInfo = firstBuild.messageTruncation;
       // Unlike messageTruncationInfo, this DOES get refreshed by the overflow-recovery rebuild below -
       // that rebuild produces fresh message identities, so pinning to the first build would report
@@ -3959,6 +3981,7 @@ export class ChatCompletionProcess {
             const trimmed = dropOldestHistoryTurn(recoveryHistory);
             if (!trimmed) break; // only the most-recent turn left: system/tools/prompt itself is oversized
             recoveryHistory = trimmed;
+            lastHistoryMessage = recoveryHistory.at(-1);
             // messageTruncationInfo is deliberately not refreshed here - it stays pinned to the first build.
             // Reserve toolSchemaTokens up front: this loop recomputes inputTokens as effectiveTotalTokens
             // + toolSchemaTokens at the bottom of every iteration, so budgeting this rebuild on the raw
@@ -4164,7 +4187,8 @@ export class ChatCompletionProcess {
             admittedContextMessages,
             deliveredMessages,
             undefined,
-            injectedBlocks
+            injectedBlocks,
+            perTurnContextMessages
           );
         } catch (promptTextError) {
           logger.warn(`📊 Failed to itemize the effective system prompt:`, promptTextError);
@@ -4651,6 +4675,21 @@ export class ChatCompletionProcess {
       // Start the cancellation watcher
       startCancellationWatcher();
 
+      // The request body. Per-turn context moves from the system prompt into the front of the current
+      // user message here, last: budgeting, delivery telemetry and overflow recovery above all work
+      // on the system-role form, and `messages` stays that form for everything persisted from it.
+      // The history breakpoint is flagged on the message itself, before relocation, so both the
+      // adapter's same-role merge and the tool rounds below see the same object.
+      const anchoredMessages = markHistoryCacheAnchor(messages, lastHistoryMessage);
+      const turnContext = relocatePerTurnContext(
+        anchoredMessages,
+        perTurnContextMessages,
+        currentUserPromptMessages[0]
+      );
+      let outboundMessages = turnContext.messages;
+      // The adapter's own end-of-array anchor would only add a breakpoint on the volatile current turn.
+      const historyAnchorMarked = anchoredMessages !== messages;
+
       // Check if Research Mode is enabled and handle parallel processing
       if (isResearchMode) {
         logger.info(
@@ -4662,7 +4701,7 @@ export class ChatCompletionProcess {
         // Handle Research Mode parallel processing
         const researchResults = await researchModeService.processResearchMode(
           researchMode,
-          messages,
+          outboundMessages,
           options as ICompletionOptions,
           async (configId: string, streamedTexts: (string | null | undefined)[], completionInfo?: unknown) => {
             // Handle streaming for each configuration
@@ -4675,7 +4714,7 @@ export class ChatCompletionProcess {
         // abort the controller, so the terminal status has to reflect that rather than
         // unconditionally claiming the turn finished.
         quest.researchModeResults = researchResults;
-        quest.status = successStatus();
+        setTerminalQuestStatus(quest, successStatus());
 
         // This branch returns before the normal settlement, so each configuration's usage settles
         // the hold here; one that streamed nothing (failed or cancelled up front) costs nothing.
@@ -4870,21 +4909,23 @@ export class ChatCompletionProcess {
             });
 
             // Determine cache strategy (enable for multi-turn conversations with 2+ messages)
-            const messageCount = messages.length;
+            const messageCount = outboundMessages.length;
             const hasTools = !!options.tools?.length;
 
             // Count message types for debugging
             const messageBreakdown = {
-              system: messages.filter(m => m.role === 'system').length,
-              user: messages.filter(m => m.role === 'user').length,
-              assistant: messages.filter(m => m.role === 'assistant').length,
+              system: outboundMessages.filter(m => m.role === 'system').length,
+              user: outboundMessages.filter(m => m.role === 'user').length,
+              assistant: outboundMessages.filter(m => m.role === 'assistant').length,
             };
 
             const cacheStrategy: ICacheStrategy = {
               enableCaching: messageCount >= 2, // Enable caching for multi-turn conversations
               cacheSystemPrompt: true, // Always cache system prompts
               cacheTools: hasTools, // Cache tools if present
-              cacheConversationHistory: messageCount >= 2, // Cache history for multi-turn
+              // A flagged history message already closes the cached prefix; asking the adapter for
+              // its own end-of-array anchor would cache the current turn as well.
+              cacheConversationHistory: !historyAnchorMarked && messageCount >= 2, // Cache history for multi-turn
               cacheTTL: '5m', // Use 5-minute TTL for active conversations
               conversationId: quest.id, // Use quest ID for xAI cache affinity
             };
@@ -4919,7 +4960,7 @@ export class ChatCompletionProcess {
             if (
               process.env.E2E_ENDPOINTS_ENABLED === 'true' &&
               (currentModel.backend === ModelBackend.Bedrock || currentModel.backend === ModelBackend.Anthropic) &&
-              JSON.stringify(messages).includes(FORCE_FALLBACK_TEST_MARKER)
+              JSON.stringify(outboundMessages).includes(FORCE_FALLBACK_TEST_MARKER)
             ) {
               const forced = new Error(
                 `ServiceUnavailableException: simulated ${currentModel.backend} outage for fallback testing (preview only)`
@@ -4930,7 +4971,7 @@ export class ChatCompletionProcess {
 
             await currentLlm.complete(
               currentModel.id,
-              messages,
+              outboundMessages,
               {
                 ...options,
                 // The preference is set from a selector shown only for OpenAI-style reasoning models, so
@@ -5189,6 +5230,7 @@ export class ChatCompletionProcess {
                 `🔧 [Tool Pairing Recovery] Detected tool pairing error, stripping tool blocks from history and retrying`
               );
               messages = stripAllToolBlocks(messages, logger);
+              outboundMessages = stripAllToolBlocks(outboundMessages, logger);
 
               resetStreamStateForRetry();
 
@@ -5389,7 +5431,7 @@ export class ChatCompletionProcess {
 
         // Mark quest as done when all the replies are received
         const finalStatus = successStatus();
-        quest.status = finalStatus;
+        setTerminalQuestStatus(quest, finalStatus);
         clearStaleFallbackInfoIfNoAnswer();
         const visibleCharsBeforeStrip = countVisibleChars(quest.replies);
         // A Stop that resolves ends the stream wherever it was, same as the rejecting Stop below.
@@ -5428,8 +5470,11 @@ export class ChatCompletionProcess {
           });
         }
 
+        // Widen explicitly: the terminal flip happens inside setTerminalQuestStatus, so control
+        // flow analysis still believes status is 'running' at this point.
+        const statusAtEnd = quest.status as IChatHistoryItemDocument['status'];
         const incompleteAnswerNotice = buildIncompleteAnswerNotice({
-          stopped: quest.status === 'stopped',
+          stopped: statusAtEnd === 'stopped',
           toolCallCount: toolCallsSeen,
           visibleCharsAfterLastToolCall: countVisibleChars(quest.replies) - visibleCharsAtLastToolCall,
           stopReason: actualTokenUsage.stopReason,
@@ -5445,7 +5490,7 @@ export class ChatCompletionProcess {
         });
         // When the reply ended on a stripped call, say why in place of the generic notice. An answer
         // written after the call gets no notice: "try again" next to it would read as "you got nothing".
-        const narratedCallLeftNoAnswer = narratedStrip.endsOnCall && quest.status !== 'stopped';
+        const narratedCallLeftNoAnswer = narratedStrip.endsOnCall && statusAtEnd !== 'stopped';
         const turnNotice = narratedCallLeftNoAnswer ? NARRATED_TOOL_CALL_NOTICE : incompleteAnswerNotice;
         if (incompleteAnswerNotice && !narratedCallLeftNoAnswer) {
           logger.warn('[IncompleteAnswer] Turn ended without an answer after its last tool call', {
@@ -6237,7 +6282,7 @@ export class ChatCompletionProcess {
           quest.promptMeta.warnings = [...(quest.promptMeta.warnings ?? []), earlyStopStamp.warning];
         }
 
-        quest.status = successStatus();
+        setTerminalQuestStatus(quest, successStatus());
         clearStaleFallbackInfoIfNoAnswer();
 
         // Context Telemetry: Finalize and attach to promptMeta
@@ -6441,7 +6486,7 @@ export class ChatCompletionProcess {
           }
         }
 
-        quest.status = successStatus();
+        setTerminalQuestStatus(quest, successStatus());
         clearStaleFallbackInfoIfNoAnswer();
 
         timer.phase('save');
@@ -6547,7 +6592,7 @@ export class ChatCompletionProcess {
         // Post-streaming processing failed, but the reply is already streamed.
         // Do NOT overwrite quest.reply, quest.replies, or quest.status - keep status as 'done'.
         logger.error(`❌ [POST_PROCESS] Error in post-streaming processing for quest ${questId}:`, postProcessError);
-        quest.status = successStatus();
+        setTerminalQuestStatus(quest, successStatus());
         clearStaleFallbackInfoIfNoAnswer();
         // Ensure quest is persisted as 'done' even if the error occurred before the normal save
         await saveQuest(quest);
@@ -6604,7 +6649,7 @@ export class ChatCompletionProcess {
         isAbortError(err) && (await this.db.quests.findByIdWithStatus(questId).catch(() => null))?.status === 'stopped';
       if (stoppedByUser) {
         logger.log(`Chat completion was stopped by user for quest ${questId}`);
-        quest.status = 'stopped';
+        setTerminalQuestStatus(quest, 'stopped');
         // Same rules as the success path, so an abort that rejects and one that resolves persist alike.
         flagNarratedToolCalls(applyNarratedToolCallStrip(quest, turnOfferedToolNames, { truncated: true }).toolNames);
         clearStaleFallbackInfoIfNoAnswer();
@@ -6629,7 +6674,7 @@ export class ChatCompletionProcess {
       };
       setErrorReply((err as Error).message);
       quest.type = 'error';
-      quest.status = 'done';
+      setTerminalQuestStatus(quest, 'done');
       // A turn can switch models and still fail; no model answered it, so it must not claim one did.
       quest.fallbackInfo = null;
       // Classifier for the client's "Add Credits" CTA. Chat reservation throws
@@ -6655,7 +6700,7 @@ export class ChatCompletionProcess {
         logger.log(`Chat completion was stopped by user for quest ${questId}: ${err.message}`);
         setErrorReply('The request was interrupted. Please try sending your message again.');
         quest.type = 'error';
-        quest.status = 'done';
+        setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);
         return;
       } else if (err instanceof ResponsesStreamTruncatedError) {
@@ -6664,7 +6709,7 @@ export class ChatCompletionProcess {
         logger.warn(`[Truncated] Quest ${questId}: ${err.message}`);
         setErrorReply('The request was interrupted. Please try sending your message again.');
         quest.type = 'error';
-        quest.status = 'done';
+        setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);
         return;
       } else if (
@@ -6679,7 +6724,7 @@ export class ChatCompletionProcess {
         logger.warn(`[Timeout] Quest ${questId}: ${err.message}`);
         setErrorReply('The AI service is currently experiencing high demand. Please try again in a few minutes.');
         quest.type = 'error';
-        quest.status = 'done';
+        setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);
         return;
       } else if (err instanceof Error && isToolPairingError(err)) {
@@ -6687,14 +6732,14 @@ export class ChatCompletionProcess {
         logger.error(`[Tool Pairing Error] Quest ${questId}: ${err.message}`);
         setErrorReply('I encountered an issue with the conversation history. Please try again or start a new session.');
         quest.type = 'error';
-        quest.status = 'done';
+        setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);
         return;
       } else if (err instanceof Error && isOverloadedError(err)) {
         logger.error(`[Overloaded Error] Quest ${questId}: ${err.message}`);
         setErrorReply('The AI service is currently experiencing high demand. Please try again in a few minutes.');
         quest.type = 'error';
-        quest.status = 'done';
+        setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);
         return;
       } else if (err instanceof Error && err.message.startsWith('Your request is too large for')) {
@@ -6704,6 +6749,9 @@ export class ChatCompletionProcess {
       }
       throw err;
     } finally {
+      // A throw inside the catch can reach here before any terminal write, so the pending
+      // trailing send is dropped here too - the publish below is the only terminal frame.
+      cancelPendingStreamingSend?.();
       if (cancelWatcherInterval) {
         clearInterval(cancelWatcherInterval);
       }

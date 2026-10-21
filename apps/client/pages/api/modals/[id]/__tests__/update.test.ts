@@ -62,6 +62,8 @@ vi.mock('@bike4mind/services', () => ({
   MODAL_SAFE_DEFAULT_KEY: 'customer',
 }));
 
+import { WhatsNewDistributionService } from '@server/services/whatsNewDistribution';
+import { emitModalGenerationMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
 import '@pages/api/modals/[id]/update';
 
 const MODAL_ID = '507f1f77bcf86cd799439011';
@@ -102,6 +104,27 @@ describe('PUT /api/modals/[id] - S3 distribution repository metadata', () => {
     const [, , content] = mockRefs.updateExistingModalCall;
     const payload = JSON.parse(content);
     expect(payload.metadata.repositoryUrl).toBe('https://github.com/Bike4Mind/bike4mind');
+  });
+
+  // The response ends the Lambda invocation, so the failure metric emit must finish before it is sent.
+  it('waits for the S3SyncFailure metric before responding when the S3 sync fails', async () => {
+    let release!: () => void;
+    vi.mocked(WhatsNewDistributionService.updateExistingModal).mockRejectedValueOnce(new Error('s3 down'));
+    vi.mocked(emitModalGenerationMetrics).mockReturnValueOnce(
+      new Promise<void>(resolve => {
+        release = resolve;
+      })
+    );
+    const { req, res } = mocks({ title: 'Updated title' });
+    const pending = mockRefs.putHandler!(req, res);
+
+    await vi.waitFor(() => expect(emitModalGenerationMetrics).toHaveBeenCalled());
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(res._isEndCalled()).toBe(false);
+
+    release();
+    await pending;
+    expect(res._getStatusCode()).toBe(200);
   });
 });
 
