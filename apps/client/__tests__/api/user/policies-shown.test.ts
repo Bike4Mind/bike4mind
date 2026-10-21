@@ -22,10 +22,10 @@ vi.mock('@server/utils/analyticsLog', () => ({ logEvent: mocks.logEvent }));
 
 import handler from '../../../pages/api/user/accept-policies/shown';
 
-const makeRequest = (body: unknown = {}) => {
+const makeRequest = (body: unknown = {}, aupAcceptedVersion?: string) => {
   const request = createMocks<Request, Response>({ method: 'POST', body });
   request.req.body = body;
-  request.req.user = { id: 'user-1', aupAcceptedVersion: undefined } as Request['user'];
+  request.req.user = { id: 'user-1', aupAcceptedVersion } as Request['user'];
   return request;
 };
 
@@ -52,6 +52,13 @@ describe('POST /api/user/accept-policies/shown', () => {
       { type: 'policies_shown', userId: 'user-1', metadata: { path: 'interstitial' } },
       { ability: undefined }
     );
+  });
+
+  it('does not record the impression for a user who already accepted policies', async () => {
+    const { req, res } = makeRequest({}, '2026-01-01');
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(204);
+    expect(mocks.logEvent).not.toHaveBeenCalled();
   });
 
   it('rejects an unauthenticated request', async () => {

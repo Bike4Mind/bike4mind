@@ -1,4 +1,5 @@
 import { FirstRunEvents } from '@bike4mind/common';
+import { hasAcceptedPolicy } from '@bike4mind/server-utils/auth/consentGate';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { logEvent } from '@server/utils/analyticsLog';
@@ -13,6 +14,7 @@ const handler = baseApi({ auth: 'jwtOnly', allowedMethods: ['POST'] })
   .post(async (req, res) => {
     if (!req.user) return res.status(401).json({ error: 'Authentication required.' });
     shownBodySchema.parse(req.body);
+    if (hasAcceptedPolicy(req.user)) return res.status(204).send();
 
     await logEvent(
       { type: FirstRunEvents.POLICIES_SHOWN, userId: req.user.id, metadata: { path: 'interstitial' } },
