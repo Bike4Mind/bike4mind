@@ -37,6 +37,7 @@ import { registerAbandonedExecutionSweep } from './abandonedExecutionSweep';
 import { registerQuestTimeoutSweep } from './questTimeoutSweep';
 import { registerGenerationJobSweep } from './generationJobSweep';
 import { registerSkillMarketReviewSla } from './skillMarketReviewSla';
+import { registerAdminAuditAlerts } from './adminAuditAlerts';
 import { registerRealtimeConnectionSweep } from './realtimeConnectionSweep';
 import { registerLakeHealthSweep } from './lakeHealthSweep';
 import { registerGitHubLakeReconcile } from './githubLakeReconcile';
@@ -108,6 +109,7 @@ async function main() {
   registerQuestTimeoutSweep(worker);
   registerGenerationJobSweep(worker);
   registerSkillMarketReviewSla(worker);
+  registerAdminAuditAlerts(worker);
   registerRealtimeConnectionSweep(worker);
   registerLakeHealthSweep(worker);
   registerGitHubLakeReconcile(worker);

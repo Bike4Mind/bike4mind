@@ -87,6 +87,12 @@ describe('exclusions', () => {
     expect(exclusionReason({ email: 'a@customer.example' }, rules)).toBeNull();
   });
 
+  it('keeps flagged synthetic admins out of the internal activity series', () => {
+    const users = new Map([['synthetic', { isAdmin: true, isSynthetic: true }]]);
+    const activity: UserDayMap = new Map([['synthetic', daysOf('2026-10-10')]]);
+    expect(selectInternal(activity, users, rules).size).toBe(0);
+  });
+
   it('matches staff on the email domain only, not a substring', () => {
     expect(exclusionReason({ email: 'a@staff.example.com.evil.example' }, rules)).toBeNull();
   });
@@ -109,7 +115,7 @@ describe('exclusions', () => {
     const { external, excluded } = selectExternal(map, users, rules);
 
     expect([...external.keys()]).toEqual(['ext']);
-    expect(excluded).toEqual({ noUser: 1, admin: 1, staffDomain: 1, testPattern: 1 });
+    expect(excluded).toEqual({ noUser: 1, admin: 1, staffDomain: 1, testPattern: 1, synthetic: 0 });
   });
 
   it('selectExternalSignups maps external users with a createdAt to their UTC signup day, active or not', () => {
@@ -382,7 +388,7 @@ describe('buildReport internal users', () => {
 
     expect(result.internalUsers).toBe(2); // not tester, ghost or apiAdmin (API activity only)
     expect(result.externalApiUsers).toBe(0);
-    expect(result.excluded).toEqual({ noUser: 1, admin: 2, staffDomain: 1, testPattern: 1 });
+    expect(result.excluded).toEqual({ noUser: 1, admin: 2, staffDomain: 1, testPattern: 1, synthetic: 0 });
   });
 
   it('keeps internal users out of the per-source rows and the cohorts', () => {
@@ -482,7 +488,7 @@ describe('buildReport API users', () => {
       new Map([['staff', { email: 's@staff.example.com', createdAt: at('2026-01-05') }]])
     );
 
-    expect(result.excluded).toEqual({ noUser: 1, admin: 0, staffDomain: 1, testPattern: 0 });
+    expect(result.excluded).toEqual({ noUser: 1, admin: 0, staffDomain: 1, testPattern: 0, synthetic: 0 });
     expect(result.externalApiUsers).toBe(0);
     expect(result.apiUsers.every(r => r.users === 0)).toBe(true);
   });

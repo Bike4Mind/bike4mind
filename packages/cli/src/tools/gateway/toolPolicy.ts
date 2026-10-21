@@ -57,6 +57,16 @@ export function commandTextOf(descriptor: ToolDescriptor | undefined, args: unkn
   return stringArg(args, descriptor?.commandArg);
 }
 
+/**
+ * The argument holding the command the OS sandbox wraps, or undefined when the tool is not
+ * sandboxed. Only core tools may declare it: a sandboxed call can skip the prompt in
+ * auto-allow mode, so a plugin or MCP descriptor must not be able to claim it.
+ */
+export function sandboxedCommandArg(descriptor: ToolDescriptor | undefined): string | undefined {
+  if (descriptor?.sandbox !== 'command' || descriptor.source.kind !== 'core') return undefined;
+  return descriptor.commandArg;
+}
+
 /** The path a file-writing tool will write, when the tool declares one and `args` carries it. */
 export function writePathOf(descriptor: ToolDescriptor | undefined, args: unknown): string | undefined {
   const writePath = stringArg(args, descriptor?.writePathArg);

@@ -96,6 +96,9 @@ export const snipSession = async (userId: string, parameters: SnipSessionParamet
         retrievalExcludeFilenameMarkers: session.retrievalExcludeFilenameMarkers,
         retrievalVectorizedOnly: session.retrievalVectorizedOnly,
         enabledTools: session.enabledTools,
+        // Keeps the snipped session's tool list identical to the source's, which the provider's
+        // prompt cache keys on. Safe to carry: eligibility is re-checked against the reader every turn.
+        autoAddedTools: session.autoAddedTools,
         disabledTools: session.disabledTools,
         disableUserIntegrations: session.disableUserIntegrations,
         systemPromptId: session.systemPromptId,

@@ -13,7 +13,7 @@ const { lakes, selectedAccount, toastInfo, organizations, gitHubFlag, slugPrevie
       lakes: { current: [] as { id: string; name: string; organizationId?: string }[] },
       selectedAccount: { current: { id: 'me', personal: true } as { id: string; personal: boolean } | null },
       toastInfo: vi.fn(),
-      organizations: { current: [] as { id: string; userId: string; managerId?: string }[] },
+      organizations: { current: [] as { id: string; userId: string }[] },
       gitHubFlag: { current: true },
       slugPreview,
       slugPreviewMock: vi.fn((_name: string, _enabled: boolean) => ({

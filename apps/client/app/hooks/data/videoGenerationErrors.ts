@@ -1,4 +1,5 @@
 import { VIDEO_GENERATION_API_ERROR_CODES } from '@bike4mind/common';
+import type { PayerAccount } from './generationBillingTarget';
 import { describeGenerationError } from './generationErrors';
 
 type VideoGenerationApiErrorCode = (typeof VIDEO_GENERATION_API_ERROR_CODES)[number];
@@ -22,6 +23,16 @@ const MESSAGES: Record<VideoGenerationApiErrorCode, string> = {
   invalid_idempotency_key: 'The request could not be sent. Try again.',
 };
 
-export function describeVideoGenerationError(error: unknown, fallback: string): string {
-  return describeGenerationError(VIDEO_GENERATION_API_ERROR_CODES, MESSAGES, error, fallback);
+export function describeVideoGenerationError(
+  error: unknown,
+  fallback: string,
+  billingAccount?: PayerAccount | null
+): string {
+  return describeGenerationError(
+    VIDEO_GENERATION_API_ERROR_CODES,
+    MESSAGES,
+    error,
+    fallback,
+    billingAccount === undefined ? undefined : { noun: 'video', billingAccount }
+  );
 }

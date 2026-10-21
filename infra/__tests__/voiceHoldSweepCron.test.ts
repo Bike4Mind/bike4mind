@@ -19,7 +19,7 @@ const cut = (source: string, start: string, end: string) => {
 };
 
 describe('voiceHoldSweep cron', () => {
-  const cron = cut(CRON, "const voiceHoldSweepCron = new sst.aws.Cron('voiceHoldSweep'", '\n});');
+  const cron = cut(CRON, 'const voiceHoldSweepCron = runsScheduledJobs', '\n  : undefined;');
 
   it('runs the workers sweep handler every 5 minutes in the VPC, in production and dev', () => {
     expect(cron).toMatch(/schedule:\s*'rate\(5 minutes\)'/);
@@ -27,7 +27,7 @@ describe('voiceHoldSweep cron', () => {
     expect(cron).toMatch(/vpc:\s*lambdaVpc/);
     expect(cron).toMatch(/link:\s*\[\.\.\.allSecrets\]/);
     expect(cron).toMatch(/retries:\s*0/);
-    expect(cron).toMatch(/enabled:\s*\['production',\s*'dev'\]\.includes\(\$app\.stage\)/);
+    expect(cron).toMatch(/=\s*runsScheduledJobs\s*\?\s*new sst\.aws\.Cron\(/);
   });
 
   it('times out before the next run starts', () => {

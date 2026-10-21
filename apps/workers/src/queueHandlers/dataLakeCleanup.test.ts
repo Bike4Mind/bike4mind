@@ -22,6 +22,7 @@ const h = vi.hoisted(() => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {
+    findByDatalakeTags: vi.fn().mockResolvedValue([]),
     findById: h.findById,
     beginPurgeExecution: h.beginPurgeExecution,
     releasePurgingToDeleted: h.releasePurgingToDeleted,
@@ -38,7 +39,18 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeResearchRunRepository: {},
   lakeMembershipDecisionRepository: {},
   lakeSkippedFileRepository: {},
-  fabFileRepository: { hardDeleteWithChunks: h.hardDeleteWithChunks },
+  fabFileRepository: {
+    hardDeleteWithChunks: h.hardDeleteWithChunks,
+    setOwnerOrganizationIfUnchanged: vi.fn().mockResolvedValue(true),
+  },
+  userRepository: {
+    findById: vi.fn().mockResolvedValue(null),
+    incrementCurrentStorage: vi.fn().mockResolvedValue(undefined),
+  },
+  organizationRepository: {
+    findById: vi.fn().mockResolvedValue(null),
+    incrementCurrentStorage: vi.fn().mockResolvedValue(undefined),
+  },
   fabFileChunkRepository: {},
 }));
 vi.mock('@bike4mind/services', () => ({

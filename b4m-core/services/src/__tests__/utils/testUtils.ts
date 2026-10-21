@@ -60,6 +60,7 @@ export const createMockProjectRepository = (): IProjectRepository => ({
   searchAccessible: vi.fn(),
   listAccessibleAfterId: vi.fn(),
   removeSession: vi.fn(),
+  pullFileReferences: vi.fn(),
   findAllBySessionId: vi.fn(),
 });
 
@@ -111,6 +112,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   updateTagsByUserId: vi.fn(),
   dedupeTagByUserId: vi.fn(),
   pullTagsByFabFileId: vi.fn(),
+  setOwnerOrganizationIfUnchanged: vi.fn(),
   pushTagsByFabFileId: vi.fn(),
   pushTagReturningPriorState: vi.fn().mockResolvedValue(null),
   bulkUpdateTags: vi.fn(),
@@ -212,12 +214,16 @@ export const createMockSessionRepository = (): MockedObject<ISessionRepository> 
     incrementImageCount: vi.fn(),
     findAllWithKnowledgeId: vi.fn(),
     pullKnowledgeIds: vi.fn(),
+    pullKnowledgeIdsFromSession: vi.fn(),
+    pullKnowledgeIdsForUsers: vi.fn(),
     searchByUserId: vi.fn(),
     listByUserId: vi.fn(),
     findRecentlyUpdatedByUserId: vi.fn(),
     findAllByIds: vi.fn(),
     findSessionIdsByUserId: vi.fn(),
     attachAgent: vi.fn(),
+    // Returns a promise so the caller's `.catch(...)` on the auto-add write works in every test.
+    addAutoAddedTools: vi.fn().mockResolvedValue(undefined),
     detachAgent: vi.fn(),
     getAttachedAgents: vi.fn(),
     addArtifact: vi.fn(),
@@ -296,6 +302,7 @@ export const createMockUserRepository = (): MockedObject<IUserRepository> =>
     atomicEnableMfa: vi.fn(),
     findOrCreateByEmail: vi.fn(),
     recordModerationHit: vi.fn(),
+    pullSystemFilesForUsers: vi.fn(),
     setModerationStatus: vi.fn(),
     recordModerationAppeal: vi.fn(),
   });

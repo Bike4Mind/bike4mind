@@ -27,6 +27,14 @@ export interface PremiumRouteDescriptor {
   path: string;
   lazyImport: () => Promise<{ default: ComponentType }>;
   /**
+   * STRUCTURAL field: optional card on the admin landing page, linking to the literal `path`.
+   * `partitionPremiumRoutes` throws when it is set on a path with a `$param` segment.
+   */
+  adminDashboard?: {
+    label: string;
+    description: string;
+  };
+  /**
    * STRUCTURAL field (like `path`/`lazyImport`, NOT a gating prop - the
    * "gating fields map 1:1 to RestrictedPage" rule above does not apply to it).
    * Selects the route's parent in the SPA tree:
@@ -264,7 +272,10 @@ export type PremiumWorkspaceDeniedTools = WorkspaceDeniedToolsTable;
  * Contributed via `b4mContributions.workspaceSessionSettingsExport` (`{ "<surface id>": "<module>" }`,
  * each module exporting `workspaceSessionSettings: WorkspaceSessionSettingsEntry`). A fork, clone or
  * snip drops the owned fields and a move unsets them, so a session takes on its current workspace's
- * values. One overlay per workspace id.
+ * values. One overlay per workspace id. The id must be registered in `WORKSPACE_SURFACES` or in
+ * the same package's `b4mContributions.workspaceSurfaceIds` (an array of lowercase surface ids).
+ * Guarded workspaces declare their ids there so their identity stays out of shared core.
+ * Unknown ids fail codegen rather than silently emitting an entry no session can match.
  */
 export type PremiumWorkspaceSessionSettings = WorkspaceSessionSettingsTable;
 

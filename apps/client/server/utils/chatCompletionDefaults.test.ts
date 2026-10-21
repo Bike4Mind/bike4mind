@@ -10,6 +10,9 @@ const { getEffectiveLLMApiKeysMock, getAvailableModelsMock, getLlmByModelMock } 
   getLlmByModelMock: vi.fn(),
 }));
 
+const runDecisionToolMock = vi.hoisted(() => vi.fn());
+vi.mock('@server/decisions/runDecisionTool', () => ({ runDecisionTool: runDecisionToolMock }));
+
 vi.mock('@bike4mind/services', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/services')>();
   return {
@@ -113,6 +116,13 @@ describe('chatCompletionDefaults factory lazy contract', () => {
     const first = mod.getDefaultChatCompletionOptions();
     const second = mod.getDefaultChatCompletionOptions();
     expect(first).toBe(second);
+  }, 20000);
+
+  // Optional prop: dropping this line typechecks, and `decide` then refuses on the chat surface
+  // even though availability advertises it. Pinned here because the wire-up has no other caller.
+  it('wires the decide tool seam into the default options', async () => {
+    const mod = await import('./chatCompletionDefaults');
+    expect(typeof mod.getDefaultChatCompletionOptions().decide).toBe('function');
   }, 20000);
 });
 
@@ -346,7 +356,23 @@ describe('isChatModelUsable', () => {
 describe('getDefaultChatCompletionOptions', () => {
   beforeEach(() => {
     vi.resetModules();
+    runDecisionToolMock.mockReset();
   });
+
+  it('forwards the trusted key and active workspace into the decision host', async () => {
+    const { getDefaultChatCompletionOptions } = await import('./chatCompletionDefaults');
+    const params = {
+      userId: 'user-1',
+      user: { id: 'user-1' } as never,
+      logger: {} as never,
+      authOrigin: 'apiKey' as const,
+      apiKeyId: 'key-1',
+      organizationId: 'active-org',
+      request: { input: 'text', questions: [{ type: 'predicate' as const, name: 'urgent', instructions: 'Urgent?' }] },
+    };
+    await getDefaultChatCompletionOptions().decide!(params);
+    expect(runDecisionToolMock).toHaveBeenCalledWith({ ...params, source: 'api' });
+  }, 20000);
 
   it('wires the save_content_to_data_lake audit adapters', async () => {
     const { getDefaultChatCompletionOptions } = await import('./chatCompletionDefaults');

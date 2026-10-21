@@ -32,6 +32,8 @@ export type AuditEventTableProps = {
   emptyMessage?: string;
   /** Set when the query behind `entries` failed; replaces the rows and the empty state. */
   errorMessage?: string;
+  /** Prefix for every data-testid, so two tables on one page stay distinguishable. */
+  testIdPrefix?: string;
 };
 
 const COLUMN_COUNT = 6;
@@ -57,14 +59,17 @@ const FilterButton: React.FC<FilterButtonProps> = ({ testId, label, onClick }) =
 );
 
 const AuditRow: React.FC<
-  { entry: AuditEntry } & Pick<AuditEventTableProps, 'onSelectEntry' | 'onFilterActor' | 'onFilterTarget'>
-> = ({ entry, onSelectEntry, onFilterActor, onFilterTarget }) => {
+  { entry: AuditEntry; testIdPrefix: string } & Pick<
+    AuditEventTableProps,
+    'onSelectEntry' | 'onFilterActor' | 'onFilterTarget'
+  >
+> = ({ entry, testIdPrefix, onSelectEntry, onFilterActor, onFilterTarget }) => {
   const occurredAt = new Date(entry.occurredAt);
   const { userId } = entry.actor;
 
   return (
     <tr
-      data-testid={`audit-table-row-${entry.id}`}
+      data-testid={`${testIdPrefix}-row-${entry.id}`}
       onClick={() => onSelectEntry(entry)}
       tabIndex={0}
       onKeyDown={activateOnKey(() => onSelectEntry(entry))}
@@ -82,7 +87,7 @@ const AuditRow: React.FC<
           <AuditActorLabel actor={entry.actor} />
           {onFilterActor && userId && (
             <FilterButton
-              testId="audit-table-actor-filter-btn"
+              testId={`${testIdPrefix}-actor-filter-btn`}
               label="Filter by this actor"
               onClick={() => onFilterActor(userId)}
             />
@@ -93,12 +98,12 @@ const AuditRow: React.FC<
         <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap">
           <Typography level="body-sm">{entry.summary}</Typography>
           {entry.source !== 'admin' && (
-            <Chip size="sm" variant="outlined" data-testid="audit-table-source-chip">
+            <Chip size="sm" variant="outlined" data-testid={`${testIdPrefix}-source-chip`}>
               {entry.source}
             </Chip>
           )}
           {entry.backfilled && (
-            <Chip size="sm" variant="outlined" color="neutral" data-testid="audit-table-backfilled-chip">
+            <Chip size="sm" variant="outlined" color="neutral" data-testid={`${testIdPrefix}-backfilled-chip`}>
               Backfilled
             </Chip>
           )}
@@ -111,7 +116,7 @@ const AuditRow: React.FC<
           </Typography>
           {onFilterTarget && (
             <FilterButton
-              testId="audit-table-target-filter-btn"
+              testId={`${testIdPrefix}-target-filter-btn`}
               label="Filter by this target"
               onClick={() => onFilterTarget({ kind: entry.target.kind, id: entry.target.id })}
             />
@@ -143,13 +148,20 @@ const FullWidthRow: React.FC<{ testId: string; children: React.ReactNode }> = ({
 type BodyProps = Pick<
   AuditEventTableProps,
   'entries' | 'isLoading' | 'onSelectEntry' | 'onFilterActor' | 'onFilterTarget' | 'errorMessage'
-> & { emptyMessage: string };
+> & { emptyMessage: string; testIdPrefix: string };
 
-const AuditTableBody: React.FC<BodyProps> = ({ entries, isLoading, errorMessage, emptyMessage, ...rowProps }) => {
+const AuditTableBody: React.FC<BodyProps> = ({
+  entries,
+  isLoading,
+  errorMessage,
+  emptyMessage,
+  testIdPrefix,
+  ...rowProps
+}) => {
   if (errorMessage) {
     return (
-      <FullWidthRow testId="audit-table-error-row">
-        <Alert color="danger" variant="soft" data-testid="audit-table-error" sx={{ my: 1 }}>
+      <FullWidthRow testId={`${testIdPrefix}-error-row`}>
+        <Alert color="danger" variant="soft" data-testid={`${testIdPrefix}-error`} sx={{ my: 1 }}>
           {errorMessage}
         </Alert>
       </FullWidthRow>
@@ -157,7 +169,7 @@ const AuditTableBody: React.FC<BodyProps> = ({ entries, isLoading, errorMessage,
   }
   if (isLoading && entries.length === 0) {
     return (
-      <FullWidthRow testId="audit-table-loading">
+      <FullWidthRow testId={`${testIdPrefix}-loading`}>
         <Box sx={{ display: 'flex', justifyContent: 'center', py: 3 }}>
           <CircularProgress size="sm" aria-label="Loading audit events" />
         </Box>
@@ -166,7 +178,7 @@ const AuditTableBody: React.FC<BodyProps> = ({ entries, isLoading, errorMessage,
   }
   if (entries.length === 0) {
     return (
-      <FullWidthRow testId="audit-table-empty">
+      <FullWidthRow testId={`${testIdPrefix}-empty`}>
         <Typography level="body-sm" textAlign="center" sx={{ py: 3 }}>
           {emptyMessage}
         </Typography>
@@ -176,7 +188,7 @@ const AuditTableBody: React.FC<BodyProps> = ({ entries, isLoading, errorMessage,
   return (
     <>
       {entries.map(entry => (
-        <AuditRow key={entry.id} entry={entry} {...rowProps} />
+        <AuditRow key={entry.id} entry={entry} testIdPrefix={testIdPrefix} {...rowProps} />
       ))}
     </>
   );
@@ -193,12 +205,13 @@ export const AuditEventTable: React.FC<AuditEventTableProps> = ({
   onFilterTarget,
   emptyMessage = 'No audit events found',
   errorMessage,
+  testIdPrefix = 'audit-table',
 }) => (
   <Sheet variant="outlined" sx={{ borderRadius: 'md', overflow: 'auto' }}>
     <Table
       hoverRow
       stickyHeader
-      data-testid="audit-table"
+      data-testid={testIdPrefix}
       sx={{ '& tbody tr:focus-visible': { outline: '2px solid', outlineColor: 'primary.500', outlineOffset: -2 } }}
     >
       <thead>
@@ -217,6 +230,7 @@ export const AuditEventTable: React.FC<AuditEventTableProps> = ({
           isLoading={isLoading}
           errorMessage={errorMessage}
           emptyMessage={emptyMessage}
+          testIdPrefix={testIdPrefix}
           onSelectEntry={onSelectEntry}
           onFilterActor={onFilterActor}
           onFilterTarget={onFilterTarget}
@@ -230,7 +244,7 @@ export const AuditEventTable: React.FC<AuditEventTableProps> = ({
           color="neutral"
           loading={isFetchingMore}
           onClick={onLoadMore}
-          data-testid="audit-table-load-more-btn"
+          data-testid={`${testIdPrefix}-load-more-btn`}
         >
           Load more
         </Button>

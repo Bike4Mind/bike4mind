@@ -1629,7 +1629,8 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
     const update: Record<string, unknown> = {
       $set: {
         status: 'failed',
-        error: { message: opts.errorMessage },
+        // Our own denial text, so the trace API publishes it verbatim (see `toCallerSafeError`).
+        error: { message: opts.errorMessage, callerSafe: true },
         completedAt: new Date(),
       },
       $unset: { pendingPermission: '' },

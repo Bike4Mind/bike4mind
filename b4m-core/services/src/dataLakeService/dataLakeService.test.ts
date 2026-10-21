@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { BadRequestError } from '@bike4mind/utils';
 import { readFileSync } from 'node:fs';
+import { withStorageOwnerFakes } from '../__tests__/utils/storageOwnerTransferFakes';
 import { join } from 'node:path';
 import {
   DATA_LAKES,
@@ -1103,7 +1104,7 @@ describe('listDataLakes - pending proposal count is the queue discovery surface'
     };
 
     // administeredOrgIds ONLY, with an empty membership set - exactly the principal #2005 describes
-    // (a team manager or appointed admin who sits on no read/write users[] ACL row).
+    // (an org manager who sits on no read/write users[] ACL row).
     const result = await listDataLakes(ctx({ userId: 'manager', administeredOrgIds: ['org-a'] }), { db });
 
     expect(result.find(l => l.id === 'org-lake')?.canManage).toBe(true);
@@ -5467,7 +5468,7 @@ describe('removeFileFromDataLake - single-file removal', () => {
   };
 
   const makeAdapters = (file: unknown = fileInLake) => ({
-    db: {
+    db: withStorageOwnerFakes({
       dataLakes: { findById: vi.fn().mockResolvedValue(lake()), setStats: vi.fn(), activateIfDraft: vi.fn() },
       fabFiles: {
         findById: vi.fn().mockResolvedValue(file),
@@ -5478,7 +5479,7 @@ describe('removeFileFromDataLake - single-file removal', () => {
       // repo and the door's catch swallowed it, so every test here silently covered the degraded
       // path - invisible until `restoreTokenMinted` made the difference observable.
       lakeMembershipRemovals: { upsertRemoval: vi.fn().mockResolvedValue(undefined) },
-    },
+    }),
   });
 
   it('clears BOTH membership signals for this lake, keeps other lakes, and recomputes stats (owner)', async () => {

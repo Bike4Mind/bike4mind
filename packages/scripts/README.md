@@ -245,3 +245,65 @@ The `concurrent-cap` test aborts the 3 long-running parents as soon as the 4th's
 - **`delegate` is best-effort.** If the parent agent decides to answer directly without delegating, the test marks itself `SKIP` rather than `FAIL`. Adjust `--delegate-query` if needed.
 - **MongoDB inspection is out of scope.** The script prints the exact `db.agentExecutions.findOne(...)` queries to run for parent/child linkage and credit-rollup verification — these need direct DB access.
 - **MFA test users.** The script fails fast if the test user has MFA configured. Use a non-MFA account for automated testing.
+
+## Signup baseline and census
+
+`report:signup-baseline` is a read-only operator query pack. It emits JSON with signup and
+first-message counts, first-notebook sends, D7+ activity, signup-path breakdowns, Wilson 95%
+intervals, recorded signup grants, and a first-day event timeline per external account.
+Signup paths come from `acquisition.signupMethod`; missing consented acquisition data is reported
+as unknown rather than inferred from linked OAuth providers.
+Accounts without any activity stay in the signup denominator. Admins, flagged synthetic accounts, configured staff domains
+and test-email matches use the same exclusion functions as `report:external-active-users`.
+Staff domains are required; a missing configuration aborts the baseline instead of including staff.
+
+Run inside an SST shell with the agreed post-fix cutoff, retaining the JSON in private storage:
+
+```sh
+NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS=staff.example.org \
+  pnpm exec sst shell --stage production \
+  pnpm --filter @bike4mind/scripts report:signup-baseline \
+  --since 2026-10-20T00:00:00Z --until 2026-10-27T00:00:00Z
+```
+
+The dates above are examples, not an agreed production baseline. The signup window is
+`[since, until)`. `until` defaults to now; use explicit cutoffs for comparisons. D7+ is activity
+on or after UTC signup day + 7 through the last completed UTC day, among accounts old enough
+to observe that day. It is distinct from the exact-day D7 shown by the external activity report.
+Activity means successful usage events, original message attempts (including failed sends),
+or non-API agent activity. Logins and navigation events appear in the census timeline but do
+not count toward D7+ retention. Treat this definition as the post-fix baseline; exact comparison
+with older published numbers requires their original query definitions.
+A cohort can gain first messages and D7+ returners as observation time grows; compare cohorts
+with equivalent follow-up. Counts are descriptive, with cohort/path mix and concurrent changes
+printed as caveats. Do not attribute changes in retention to a rollout from these counts alone.
+
+Starting balances were not historically snapshotted. They are explicitly unknown. The pack
+separately groups known signup grants recorded in the first 24 hours by signup path, using
+`verify-grant:` and legacy `otc-register-grant:` transaction ids. Missing evidence is unknown,
+not zero; a later backfill cannot rewrite the observed first-day grant. This does not reconstruct
+balances from today's balance, infer unrecorded grants or prove that a grant reached the account.
+
+For the census, the first session is the earliest retained, non-API, non-cloned/forked notebook.
+The timeline covers account creation and allowlisted product events, notebook creation and
+original sent turns (including failed attempts) in the first 24 hours after signup (bounded by `until`). A first-session send
+must belong to that first notebook within this window. Product events lack a reliable session
+identifier, so their account-level window is explicit. Prompt/reply content, arbitrary event
+metadata and notebook names are never projected or emitted. Emails are read only for exclusion
+and never emitted. Missing telemetry, deleted
+records and activity-source classification gaps are disclosed; FlowProgress history will need
+wiring when that model exists.
+
+- **Cron.** The production-only `signupBaselineReport` cron runs Mondays at 06:00 UTC after
+  deployment, with the window ending at 00:00 UTC that day. It writes the summary and
+  per-account census to its Lambda logs (kept for one week), never to Slack or a public artifact. Operators can find
+  the function through the SST console and filter its logs on `signup-baseline`,
+  `signup-baseline-census` or `signup-baseline-event`. Reports include user ids, so keep logs and
+  CLI outputs private.
+- **Configuration.** Set `SIGNUP_BASELINE_SINCE` at deploy time to the agreed post-fix signup
+  start. Missing or invalid cutoffs fail before database access; there is no historical-window
+  fallback. Set `ANALYTICS_TEST_PATTERN` at deploy time (or `--test-pattern` for a CLI run) to
+  override the default test-email regex. Both cron and CLI require
+  `NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS`. No schedule or production query is executed by running
+  tests. The trailing-90-day external signup count flags the 300- and 1,000-signup measurement
+  thresholds, independently of the chosen baseline window.

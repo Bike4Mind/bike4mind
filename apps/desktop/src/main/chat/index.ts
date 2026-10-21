@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { copyFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { PERMISSION_LISTS, type PermissionRuleLists, type PermissionScope } from '@shared/permissions';
 import {
   app,
   BrowserWindow,
@@ -28,6 +29,16 @@ import type {
   UpdateProjectRequest,
 } from '@shared/chat';
 import type { CookieImportRequest } from '@shared/browserCookies';
+import type {
+  SkillMarketFilters,
+  SkillMarketImportRequest,
+  SkillMarketListingRef,
+  SkillMarketWebTarget,
+  SkillLocalRef,
+  SkillPublishRequest,
+  SkillSaveRequest,
+  SkillSubmitVersionRequest,
+} from '@shared/skillMarket';
 import type { ShareDirectoryResult } from '@shared/directoryRequest';
 import {
   IPC_CHANNELS,
@@ -52,6 +63,7 @@ import { AttachmentStore } from './AttachmentStore';
 import { BrowserManager, NO_PAGE } from './browser/BrowserManager';
 import { IMAGE_BYTE_CAP, isImageMediaType } from './attachments';
 import { ArtifactLibrary } from './artifacts/ArtifactLibrary';
+import { SkillMarket } from './skills/SkillMarket';
 import { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { SharePublisher } from './artifacts/SharePublisher';
 import { registerArtifactProtocol } from './artifacts/sandboxProtocol';
@@ -80,6 +92,9 @@ import {
 } from './project/git';
 import { accountSkillsProvider } from './skills/accountSkills';
 import { ProjectTrustStore } from './skills/ProjectTrustStore';
+import { ClaudeCodeSettings, MANAGED_SETTINGS_PATH } from './permissions/ClaudeCodeSettings';
+import { PermissionRuleStore } from './permissions/PermissionRuleStore';
+import { PermissionService } from './permissions/PermissionService';
 import { SkillCatalog } from './skills/SkillCatalog';
 import { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
@@ -156,6 +171,28 @@ function shrinkImage(bytes: Buffer, mediaType: string, maxEdge: number): { bytes
  * Every channel here is main-side work on purpose: sending a message needs the access token,
  * which never leaves this process, so the renderer asks for a turn and receives text.
  */
+function permissionScope(value: unknown): PermissionScope | null {
+  if (!value || typeof value !== 'object') return null;
+  const scope = value as { kind?: unknown; directory?: unknown };
+  if (scope.kind === 'user') return { kind: 'user' };
+  if (scope.kind === 'project' && typeof scope.directory === 'string' && isAbsolute(scope.directory)) {
+    return { kind: 'project', directory: scope.directory };
+  }
+  return null;
+}
+
+function permissionLists(value: unknown): PermissionRuleLists | null {
+  if (!value || typeof value !== 'object') return null;
+  const lists: PermissionRuleLists = { allow: [], ask: [], deny: [] };
+  for (const list of PERMISSION_LISTS) {
+    const entries = (value as Record<string, unknown>)[list];
+    if (entries === undefined) continue;
+    if (!Array.isArray(entries) || !entries.every(entry => typeof entry === 'string')) return null;
+    lists[list] = entries;
+  }
+  return lists;
+}
+
 export interface RegisteredChat {
   service: ChatService;
   /** Background processes, exposed so main/index.ts can tear them down on every quit path. */
@@ -296,16 +333,41 @@ export function registerChat(
   const recentFolders = new RecentFolderStore(join(userData, 'recent-folders.json'));
   // The trust file is its own file beside tool-access.json, and for the same reason: both record
   // a consent the user gave once and should not be asked for again on every launch.
-  const skills = new SkillCatalog(
-    new ProjectTrustStore(join(userData, 'project-skill-trust.json')),
-    accountSkillsProvider(auth, userData)
-  );
+  const projectTrust = new ProjectTrustStore(join(userData, 'project-skill-trust.json'));
+  const skills = new SkillCatalog(projectTrust, accountSkillsProvider(auth, userData));
+  // App-wide like approval-mode.json. Claude Code's files are only ever read; the protected roots
+  // are folders no allow rule may cover, since a call writing there would grant itself more.
+  const home = app.getPath('home');
+  const claudeCode = new ClaudeCodeSettings({ home, logger, onChange: () => permissions.invalidate() });
+  const permissions: PermissionService = new PermissionService({
+    store: new PermissionRuleStore(join(userData, 'permission-rules.json')),
+    claudeCode,
+    isTrusted: directory => projectTrust.isTrusted(directory),
+    home,
+    protectedRoots: [userData, join(home, '.claude'), dirname(MANAGED_SETTINGS_PATH)],
+    logger,
+  });
+  void permissions.start().catch(error => logger.warn(`PERMISSIONS: could not load rules: ${String(error)}`));
   const attachments = new AttachmentStore(join(userData, 'attachments'), logger, shrinkImage);
   const media = new MediaStore(join(userData, 'media'));
   registerMediaProtocol(media);
   registerArtifactProtocol();
   const artifacts = new ArtifactPublisher(() => auth.getApiClient(), logger);
   const artifactLibrary = new ArtifactLibrary(() => auth.getApiClient(), logger);
+  const skillMarket = new SkillMarket({
+    getApiClient: () => auth.getApiClient(),
+    getEnvironmentUrl: () => auth.getState().environment.url,
+    catalog: skills,
+    openExternal: url => shell.openExternal(url),
+    getUserId: () => auth.getState().user?.id ?? null,
+    // The same root listSkills resolves, so only a skill Customize could show is readable.
+    localSkill: async (sessionId, name) => {
+      const session = sessionId ? await store.get(sessionId) : null;
+      return skills.get(session?.project?.workingDirectory ?? null, name);
+    },
+    writeClipboard: text => clipboard.writeText(text),
+    logger,
+  });
   const models = new ModelCatalog({
     logger,
     getApiClient: () => auth.getApiClient(),
@@ -409,6 +471,7 @@ export function registerChat(
     preferredModel: PREFERRED_MODEL,
     modelMemory: modelPreference,
     approvals,
+    permissions,
     background,
     foreground,
     dependencies: new DependencyInstaller(background),
@@ -449,6 +512,43 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatSetProjectSkillsTrusted, (_event, sessionId: string, trusted: boolean) =>
     service.setProjectSkillsTrusted(sessionId, trusted === true)
   );
+  ipcMain.handle(IPC_CHANNELS.skillMarketBrowse, (_event, filters: SkillMarketFilters, page: number) =>
+    skillMarket.browse(filters, Number.isInteger(page) && page > 0 ? page : 1)
+  );
+  ipcMain.handle(IPC_CHANNELS.skillMarketRecommended, () => skillMarket.recommended());
+  ipcMain.handle(IPC_CHANNELS.skillMarketListing, (_event, ref: SkillMarketListingRef) =>
+    skillMarket.listing(ref ?? {})
+  );
+  ipcMain.handle(IPC_CHANNELS.skillMarketImport, (_event, request: SkillMarketImportRequest) =>
+    skillMarket.importListing(request)
+  );
+  ipcMain.handle(IPC_CHANNELS.skillMarketImports, () => skillMarket.imports());
+  ipcMain.handle(IPC_CHANNELS.skillMarketOpenOnWeb, (_event, target: SkillMarketWebTarget) =>
+    skillMarket.openOnWeb(target)
+  );
+  ipcMain.handle(IPC_CHANNELS.skillMarketReadLocal, (_event, ref: SkillLocalRef) => skillMarket.readLocalSkill(ref));
+  ipcMain.handle(IPC_CHANNELS.skillMarketPickUpload, event => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    return skillMarket.pickUploadSource(options =>
+      window
+        ? dialog.showOpenDialog(window, { ...options, defaultPath: pickerStart() })
+        : dialog.showOpenDialog(options)
+    );
+  });
+  ipcMain.handle(IPC_CHANNELS.skillMarketSave, (_event, request: SkillSaveRequest) => skillMarket.saveSkill(request));
+  ipcMain.handle(IPC_CHANNELS.skillMarketOrgs, () => skillMarket.organizations());
+  ipcMain.handle(IPC_CHANNELS.skillMarketPublish, (_event, request: SkillPublishRequest) =>
+    skillMarket.publish(request)
+  );
+  ipcMain.handle(IPC_CHANNELS.skillMarketSubmitVersion, (_event, request: SkillSubmitVersionRequest) =>
+    skillMarket.submitVersion(request)
+  );
+  ipcMain.handle(IPC_CHANNELS.skillMarketMine, () => skillMarket.mine());
+  ipcMain.handle(IPC_CHANNELS.skillMarketWithdraw, (_event, listingId: string) => skillMarket.withdraw(listingId));
+  ipcMain.handle(IPC_CHANNELS.skillMarketCopyShareLink, (_event, listingId: string) =>
+    skillMarket.copyShareLink(listingId)
+  );
+  ipcMain.handle(IPC_CHANNELS.skillMarketOpenSource, (_event, url: string) => skillMarket.openSourceUrl(url));
   ipcMain.handle(IPC_CHANNELS.chatSetSessionModel, (_event, sessionId: string, model: string) =>
     service.setSessionModel(sessionId, model)
   );
@@ -468,6 +568,17 @@ export function registerChat(
     mode === 'ask' || mode === 'auto' || mode === 'full' ? service.setApprovalMode(sessionId, mode) : null
   );
   ipcMain.handle(IPC_CHANNELS.chatListSessions, () => service.listSessions());
+  ipcMain.handle(IPC_CHANNELS.permissionsGetState, () => permissions.state());
+  // Shapes checked here: this is the only door a rule comes in by besides the approval card.
+  ipcMain.handle(IPC_CHANNELS.permissionsSetRules, (_event, scope: unknown, lists: unknown) => {
+    const parsedScope = permissionScope(scope);
+    const parsedLists = permissionLists(lists);
+    if (!parsedScope || !parsedLists) return { ok: false, error: 'Not a permission rule list.' };
+    return permissions.setRules(parsedScope, parsedLists);
+  });
+  ipcMain.handle(IPC_CHANNELS.permissionsSetSharing, (_event, share: unknown) =>
+    permissions.setShareClaudeCode(share === true)
+  );
   ipcMain.handle(IPC_CHANNELS.chatGetSessionStatuses, () => service.sessionStatuses());
   const rememberFolder = (directory: string | null): void => {
     if (!directory) return;

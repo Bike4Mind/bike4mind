@@ -88,4 +88,35 @@ export interface IAdminAuditLogRepository {
   ): Promise<{ entries: AuditEntry[]; nextCursor: AuditLogCursor | null }>;
   findById(id: string): Promise<AuditEntry | null>;
   summarize(since: Date): Promise<Omit<AuditSummary, 'windowDays' | 'since'>>;
+  /** Oldest first: entries strictly after `after` (or from the start) up to and including `until`. */
+  listAscending(page: { after: AuditLogCursor | null; until: Date; limit: number }): Promise<AuditEntry[]>;
+  /** Grants (positive `details.credits` on a grant action) by one actor with occurredAt in (from, to]. */
+  countCreditGrants(actorUserId: string, window: { from: Date; to: Date }): Promise<number>;
+  /** Total credits one actor granted with occurredAt at or after `since`. */
+  sumCreditsGranted(actorUserId: string, since: Date): Promise<number>;
 }
+
+/** An actor whose credit-grant burst has already alerted; it stays open while grants keep coming. */
+export type AdminAuditOpenBurst = { actorUserId: string; lastGrantAt: Date };
+
+/**
+ * The alert worker's progress through the audit log. Kept in its own collection because the log
+ * itself is append-only: nothing may mark an entry as alerted.
+ */
+export type AdminAuditAlertState = {
+  cursor: AuditLogCursor;
+  openBursts: AdminAuditOpenBurst[];
+  updatedAt?: Date;
+};
+
+export interface IAdminAuditAlertStateRepository {
+  get(): Promise<AdminAuditAlertState | null>;
+  save(state: Omit<AdminAuditAlertState, 'updatedAt'>): Promise<void>;
+}
+
+/** GET /api/admin/audit-log/alert-status: whether alerts are on, and the grant lines that make an entry critical. */
+export type AuditAlertStatus = {
+  alertsEnabled: boolean;
+  singleGrantCredits: number;
+  dailyGrantCredits: number;
+};

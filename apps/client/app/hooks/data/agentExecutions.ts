@@ -24,6 +24,8 @@ export interface AgentExecutionTrace {
   id: string;
   status: AgentExecutionStatus | null;
   answer: string | null;
+  /** Caller-safe failure text; null unless the run failed. */
+  error: string | null;
   steps: IAgentStep[];
   totalIterations: number | null;
   children: AgentExecutionChildSnapshot[];

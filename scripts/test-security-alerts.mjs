@@ -10,20 +10,17 @@
  *
  * Prerequisites:
  * - AWS CLI installed and configured
- * - Security alerts infrastructure must be deployed to the target stage
+ * - The target stage must be production or dev; other stages do not create the SecurityAlertsSchedule job
  * - MongoDB must have some failed login attempts in AuthFailLog collection
  * - EventBridge and email system must be configured
  *
  * Usage:
- *   # Deploy infrastructure to target stage first
- *   npx sst deploy --stage pr5613  # or dev
- *
- *   # Then test the Lambda function
- *   npx sst shell --stage pr5613 -- node scripts/test-security-alerts.mjs
+ *   # Test the Lambda function
+ *   npx sst shell --stage dev -- node scripts/test-security-alerts.mjs
  *
  *   # Or invoke directly via AWS CLI (after deployment)
  *   aws lambda invoke \
- *     --function-name bike4mind-pr5613-SecurityAlertsSchedule-job \
+ *     --function-name bike4mind-dev-SecurityAlertsSchedule-job \
  *     --region us-east-2 \
  *     --payload '{}' \
  *     response.json && cat response.json | jq .

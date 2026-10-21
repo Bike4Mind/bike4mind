@@ -281,6 +281,7 @@ export function App({
                     args={permissionPrompt.args}
                     preview={permissionPrompt.preview}
                     canBeTrusted={permissionPrompt.canBeTrusted}
+                    kind={permissionPrompt.kind}
                     // Capture the id at render time so the response carries the
                     // prompt it was rendered against - closes the tavern/Ink race
                     // where a buffered keypress for the active prompt could land

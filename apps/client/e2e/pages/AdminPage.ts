@@ -41,21 +41,40 @@ export class AdminPage extends BasePage {
     await this.navigateToAdmin();
   }
 
-  /** Wait for the admin page to be fully loaded and interactive */
+  /** Wait for admin navigation without assuming a particular active tab. */
   private async waitForAdminReady() {
     await this.closeFloatingChat();
-    await this.waitForLoaderToDisappear('admin-users-loading-indicator');
-    await expect(this.page.getByTestId('admin-search-users-input')).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
-    await expect(this.page.getByTestId('admin-sort-order-btn')).toBeEnabled({ timeout: TIMEOUTS.ACTION });
+    const navigation = this.page
+      .getByTestId('admin-dashboard-tab-btn')
+      .or(this.page.getByTestId('admin-mobile-menu-btn'))
+      .filter({ visible: true })
+      .first();
+    await expect(navigation).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
+    await expect(navigation).toBeEnabled({ timeout: TIMEOUTS.ACTION });
+  }
+
+  private async expandUserOps() {
+    const section = this.page.getByRole('button', { name: 'User Ops', exact: true }).filter({ visible: true }).first();
+    if (!(await section.isVisible())) {
+      await this.page.getByTestId('admin-mobile-menu-btn').click();
+    }
+    await expect(section).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    if ((await section.getAttribute('aria-expanded')) !== 'true') {
+      await section.click();
+    }
   }
 
   async navigateToUsersTab() {
-    await this.page.getByTestId('admin-users-tab-btn').first().click();
+    await this.expandUserOps();
+    await this.page.getByTestId('admin-users-tab-btn').filter({ visible: true }).first().click();
     await expect(this.page.getByTestId('admin-search-users-input')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await this.waitForLoaderToDisappear('admin-users-loading-indicator');
+    await expect(this.page.getByTestId('admin-sort-order-btn')).toBeEnabled({ timeout: TIMEOUTS.ACTION });
   }
 
   async navigateToInviteCenter() {
-    await this.page.getByTestId('admin-invite-center-tab-btn').first().click();
+    await this.expandUserOps();
+    await this.page.getByTestId('admin-invite-center-tab-btn').filter({ visible: true }).first().click();
     await expect(this.page.getByTestId('invite-center-codes-tab')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
   }
 
@@ -188,6 +207,11 @@ export class AdminPage extends BasePage {
     await this.fillMuiInput(this.page.getByTestId('login-as-mfa-input').locator('input'), code);
   }
 
+  /** Confirm stays disabled until the audited reason meets ADMIN_ACTION_REASON_MIN_LENGTH. */
+  async fillLoginAsReason(reason = 'E2E login-as regression guard') {
+    await this.page.getByTestId('login-as-reason-input').fill(reason);
+  }
+
   async confirmLoginAs() {
     const confirmBtn = this.page.getByTestId('login-as-mfa-confirm-btn');
     await expect(confirmBtn).toBeEnabled({ timeout: TIMEOUTS.ELEMENT_STATE });
@@ -224,6 +248,11 @@ export class AdminPage extends BasePage {
 
   async clickDeleteUserButton() {
     await this.page.getByTestId('delete-user-btn').click();
+  }
+
+  /** The confirm-delete button stays disabled until the audited reason meets ADMIN_ACTION_REASON_MIN_LENGTH. */
+  async fillDeleteReason(reason = 'E2E user CRUD cleanup') {
+    await this.page.getByTestId('user-delete-reason-input').fill(reason);
   }
 
   async confirmDeleteUser() {

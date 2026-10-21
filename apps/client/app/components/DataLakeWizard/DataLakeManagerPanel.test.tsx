@@ -53,6 +53,8 @@ vi.mock('@client/app/components/datalake/LakeSyncStatus', () => ({ default: () =
 // The not-ingested chip has its own suite (LakeSkippedFilesChip.test.tsx).
 vi.mock('@client/app/components/datalake/LakeSkippedFilesChip', () => ({ default: () => null }));
 vi.mock('./manager/FinishSourceConnectBanner', () => ({ default: () => null }));
+// The source card has its own suite (LakeSourceConnectActions.test.tsx) and reads react-query hooks.
+vi.mock('./steps/LakeSourceConnectActions', () => ({ default: () => null }));
 // The repository picker has its own suite (GitHubRepositoryPickerModal.test.tsx) and reaches
 // react-query hooks this suite does not mock; here it is only mounted-once wiring, not behavior.
 vi.mock('./manager/GitHubRepositoryPickerModal', () => ({ default: () => null }));
@@ -353,7 +355,7 @@ beforeEach(() => {
   retryMutate.mockClear();
   // managerTab is module state in the real store, so a test left in Discover would otherwise
   // decide what the next one renders.
-  useDataLakeWizardStore.setState({ managerTab: 'mine', gitHubConnectFailure: null });
+  useDataLakeWizardStore.setState({ managerTab: 'mine', managerLakeId: null, gitHubConnectFailure: null });
   toastError.mockClear();
 });
 
@@ -662,6 +664,41 @@ describe('DataLakeManagerPanel - lake navigation', () => {
     );
     expect(screen.queryByTestId('datalake-manager-lakeinfo')).not.toBeInTheDocument();
     expect(screen.getByTestId('datalake-manager-overview')).toBeInTheDocument();
+  });
+
+  it('opens a deep-linked lake on its categories, not on a folder named after its prefix', () => {
+    useDataLakeWizardStore.setState({ managerLakeId: 'mine' });
+    renderPanel();
+
+    expect(screen.getByTestId('datalake-manager-node-genre')).toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-manager-node-lk')).not.toBeInTheDocument();
+  });
+
+  it('seeds past the prefix once a deep-linked lake appears in the list (GitHub connect lands before the refetch)', () => {
+    useGetDataLakes.mockReturnValue({ data: [theirsLake], isLoading: false });
+    useDataLakeWizardStore.setState({ managerLakeId: 'mine' });
+    const { rerender } = renderPanel();
+    expect(screen.queryByTestId('datalake-manager-lakeinfo')).not.toBeInTheDocument();
+
+    useGetDataLakes.mockReturnValue({ data: [mineLake, theirsLake], isLoading: false });
+    rerenderPanel(rerender);
+
+    expect(screen.getByTestId('datalake-manager-node-genre')).toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-manager-node-lk')).not.toBeInTheDocument();
+  });
+
+  it('seeds a deep-linked lake once, so a refetch does not pull the user back out of a folder', () => {
+    useDataLakeWizardStore.setState({ managerLakeId: 'mine' });
+    const { rerender } = renderPanel();
+    fireEvent.click(screen.getByTestId('datalake-manager-node-genre'));
+    expect(screen.getByTestId('datalake-manager-node-war')).toBeInTheDocument();
+
+    // Fresh objects, as a refetch returns, so activeLake changes identity and the seed effect reruns.
+    useGetDataLakes.mockReturnValue({ data: [{ ...mineLake }, { ...theirsLake }], isLoading: false });
+    rerenderPanel(rerender);
+
+    expect(screen.getByTestId('datalake-manager-node-war')).toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-manager-node-genre')).not.toBeInTheDocument();
   });
 });
 

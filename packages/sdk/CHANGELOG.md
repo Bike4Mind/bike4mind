@@ -1,5 +1,27 @@
 # @bike4mind/sdk
 
+## 1.3.0
+
+### Minor Changes
+
+- [#5191](https://github.com/Bike4Mind/bike4mind/pull/5191) [`a68d013`](https://github.com/Bike4Mind/bike4mind/commit/a68d013d2a4c7a59268f3bfbb2ed9b343a0a36c0) Thanks [@jjmarfa](https://github.com/jjmarfa)! - add a decide tool for agent loops and the CLI
+
+### Patch Changes
+
+- [#5173](https://github.com/Bike4Mind/bike4mind/pull/5173) [`7bc69c7`](https://github.com/Bike4Mind/bike4mind/commit/7bc69c780cf2e3def64cd650fb82412c6fa91a53) Thanks [@onoya](https://github.com/onoya)! - bill an org-billed API key's organization on agent runs and /api/ai/llm
+
+## 1.2.0
+
+### Minor Changes
+
+- [#5134](https://github.com/Bike4Mind/bike4mind/pull/5134) [`d1d146c`](https://github.com/Bike4Mind/bike4mind/commit/d1d146c73a2adebe4bd3ecf54facccd7a8514e14) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - accept mid-conversation tool changes on Anthropic models
+
+### Patch Changes
+
+- [#5038](https://github.com/Bike4Mind/bike4mind/pull/5038) [`9f6f66b`](https://github.com/Bike4Mind/bike4mind/commit/9f6f66b28964425db2fa7b1fecee47fcc5fc2aaa) Thanks [@julsanchez](https://github.com/julsanchez)! - bind uploads to their measured size and moderate every animation frame
+
+- [#5139](https://github.com/Bike4Mind/bike4mind/pull/5139) [`f43c31e`](https://github.com/Bike4Mind/bike4mind/commit/f43c31e5001a396f02d17121b2d4654e50cc980c) Thanks [@poysama](https://github.com/poysama)! - note npm trusted publishing in client-auth and sdk READMEs
+
 ## 1.1.1
 
 ### Patch Changes

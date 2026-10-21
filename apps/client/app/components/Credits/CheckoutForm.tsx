@@ -14,6 +14,7 @@ export interface ConfirmResult {
 interface ICheckoutFormProps {
   clientSecret: string;
   onPayment: () => void;
+  onPaymentPending?: () => void;
   onConfirmResult?: (result: ConfirmResult) => void;
 }
 
@@ -25,7 +26,7 @@ function toOutcome(status: string | undefined): CreditPurchaseConfirmOutcome {
   return status === 'succeeded' || status === 'processing' || status === 'requires_action' ? status : 'unknown';
 }
 
-const CheckoutForm: FC<ICheckoutFormProps> = ({ clientSecret, onPayment, onConfirmResult }) => {
+const CheckoutForm: FC<ICheckoutFormProps> = ({ clientSecret, onPayment, onPaymentPending, onConfirmResult }) => {
   const stripe = useStripe();
   const elements = useElements();
   const [message, setMessage] = useState<string | null>(null);
@@ -42,6 +43,13 @@ const CheckoutForm: FC<ICheckoutFormProps> = ({ clientSecret, onPayment, onConfi
     onPayment();
   }, [onPayment]);
 
+  const pendingRef = useRef(false);
+  const notifyPending = useCallback(() => {
+    if (pendingRef.current) return;
+    pendingRef.current = true;
+    onPaymentPending?.();
+  }, [onPaymentPending]);
+
   // Retrieve purchase status from Stripe
   useEffect(() => {
     if (!stripe || !clientSecret) return;
@@ -54,10 +62,12 @@ const CheckoutForm: FC<ICheckoutFormProps> = ({ clientSecret, onPayment, onConfi
           notifyPaid();
           break;
         case 'processing':
+          notifyPending();
           setMessage('Your payment is processing.');
           setIsSettled(true);
           break;
         case 'requires_action':
+          notifyPending();
           setMessage(PENDING_ACTION_MESSAGE);
           break;
         case 'requires_payment_method':
@@ -68,7 +78,7 @@ const CheckoutForm: FC<ICheckoutFormProps> = ({ clientSecret, onPayment, onConfi
           break;
       }
     });
-  }, [clientSecret, notifyPaid, stripe]);
+  }, [clientSecret, notifyPaid, notifyPending, stripe]);
 
   const handleSubmit: (event: React.MouseEvent<HTMLButtonElement>) => void = useCallback(
     async e => {
@@ -110,9 +120,11 @@ const CheckoutForm: FC<ICheckoutFormProps> = ({ clientSecret, onPayment, onConfi
           // A card success no longer redirects, so StripePaymentReturnHandler never sees it.
           reportCreditPurchaseConversion(paymentIntent.id);
         } else if (paymentIntent?.status === 'processing') {
+          notifyPending();
           setMessage('Your payment is processing.');
           setIsSettled(true);
         } else if (paymentIntent?.status === 'requires_action') {
+          notifyPending();
           setMessage(PENDING_ACTION_MESSAGE);
           setIsSettled(true);
         } else {
@@ -122,7 +134,7 @@ const CheckoutForm: FC<ICheckoutFormProps> = ({ clientSecret, onPayment, onConfi
 
       setIsLoading(false);
     },
-    [elements, notifyPaid, onConfirmResult, stripe]
+    [elements, notifyPaid, notifyPending, onConfirmResult, stripe]
   );
 
   return (

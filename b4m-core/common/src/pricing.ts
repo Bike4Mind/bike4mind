@@ -178,6 +178,21 @@ export const usdToCreditsStochastic = (
 };
 
 /**
+ * The expectation of usdToCreditsStochastic for one call, without a draw:
+ * the exact fractional credit cost, rounded to two decimals. Use for
+ * reporting/analytics that need a deterministic figure comparable to what
+ * settlement charges on average; never to charge. Zero or non-finite cost
+ * yields 0.
+ *
+ * @param rate - Credits per $1, defaults to the platform-wide CREDITS_PER_USD_COST.
+ */
+export const usdToCreditsExpected = (usd: number, rate: number = CREDITS_PER_USD_COST): number => {
+  const raw = usd * rate;
+  if (!Number.isFinite(raw) || raw <= 0) return 0;
+  return Math.round(raw * 100) / 100;
+};
+
+/**
  * Output tokens the pre-flight credit hold prices when a request's max_tokens
  * ceiling exceeds it.
  *

@@ -79,7 +79,7 @@ describe('PUT /api/data-lakes/[id] - preferredSystemPromptId allowlist is enforc
     vi.clearAllMocks();
     h.toAccessContext.mockResolvedValue({ userId: 'owner', isAdmin: false, userTags: [] });
     h.assertLakeAccessById.mockResolvedValue({ id: 'lake1', createdByUserId: 'owner' });
-    h.updateDataLake.mockResolvedValue({ id: 'lake1', preferredSystemPromptId: 'triage_router' });
+    h.updateDataLake.mockResolvedValue({ id: 'lake1', preferredSystemPromptId: 'triage_router', _id: 'oid', __v: 1 });
   });
 
   it('rejects a non-activatable prompt id BEFORE touching the service', async () => {
@@ -110,6 +110,8 @@ describe('PUT /api/data-lakes/[id] - preferredSystemPromptId allowlist is enforc
       })
     );
     expect(json.mock.calls[0][0].preferredSystemPromptId).toBe('triage_router');
+    // The response boundary drops the service's own Mongo keys.
+    expect(json.mock.calls[0][0]).toEqual({ id: 'lake1', preferredSystemPromptId: 'triage_router' });
   });
 
   /**

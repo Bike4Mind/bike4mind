@@ -697,6 +697,7 @@
     "add_tag_other": "Updated tag for {{count}} files",
     "failed_to_add_tag_one": "Failed to update tag to file",
     "failed_to_add_tag_other": "Failed to update tag to files",
+    "toggle_tag_partial": "Updated the tag on {{applied}} of {{total}} files before an error. Toggling the same selection again will undo those {{applied}}.",
     "prefix_arm_join_notice_one": "That tag also made this file a member of a data lake by content prefix only - no lake tag was applied. Open the lake's manager to add the lake tag too.",
     "prefix_arm_join_notice_other": "That tag also made some of these files a member of a data lake by content prefix only - no lake tag was applied. Open the lake's manager to add the lake tag too.",
     "cancel": "Cancel",

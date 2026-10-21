@@ -3,6 +3,7 @@ import { act, renderHook } from '@testing-library/react';
 import { StrictMode, useState } from 'react';
 import { AdminTab } from './adminSidebarConfig';
 import { useAdminTabUrlSync, type IsAdminTabRenderable } from './useAdminTabUrlSync';
+import { useAdminModal } from './useAdminModal';
 
 const routerMock = vi.hoisted(() => ({
   search: {} as Record<string, unknown>,
@@ -45,6 +46,27 @@ describe('useAdminTabUrlSync', () => {
     expect(to).toBe('/admin');
     expect(replace).toBe(true);
     expect(search({})).toEqual({ tab: 'users' });
+  });
+
+  it('opens the dashboard by default and writes its shareable URL', () => {
+    const { activeTab } = useAdminModal.getInitialState();
+    expect(activeTab).toBe(AdminTab.Dashboard);
+    renderHook(() => useHarness(activeTab));
+    expect(lastNavigation().search({})).toEqual({ tab: 'dashboard' });
+  });
+
+  it('honours an existing deep link when the store defaults to the dashboard', () => {
+    routerMock.search = { tab: 'event-metrics' };
+    const { result } = renderHook(() => useHarness(AdminTab.Dashboard));
+    expect(result.current.activeTab).toBe(AdminTab.EventMetrics);
+    expect(routerMock.navigate).not.toHaveBeenCalled();
+  });
+
+  it('returns to the dashboard when its URL is selected', () => {
+    routerMock.search = { tab: 'dashboard' };
+    const { result } = renderHook(() => useHarness(AdminTab.Analytics));
+    expect(result.current.activeTab).toBe(AdminTab.Dashboard);
+    expect(routerMock.navigate).not.toHaveBeenCalled();
   });
 
   it('writes the slug of a tab selected after mount', () => {

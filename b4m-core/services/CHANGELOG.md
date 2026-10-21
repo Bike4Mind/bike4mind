@@ -1,5 +1,79 @@
 # @bike4mind/services
 
+## 20.0.0
+
+### Major Changes
+
+- [#4939](https://github.com/Bike4Mind/bike4mind/pull/4939) [`4eb04ce`](https://github.com/Bike4Mind/bike4mind/commit/4eb04ce7df80bc724b0ff957eab4d9bc18a62360) Thanks [@onoya](https://github.com/onoya)! - move a file's billed bytes when its lake membership changes
+
+- [#5045](https://github.com/Bike4Mind/bike4mind/pull/5045) [`c060285`](https://github.com/Bike4Mind/bike4mind/commit/c060285611b6d4abdafb701fa8c0010afb1be30c) Thanks [@onoya](https://github.com/onoya)! - retire the single org managerId in favor of the Managers list
+
+### Minor Changes
+
+- [#5083](https://github.com/Bike4Mind/bike4mind/pull/5083) [`20f9362`](https://github.com/Bike4Mind/bike4mind/commit/20f9362014343fde166c09acc72c3b759ddfd61d) Thanks [@onoya](https://github.com/onoya)! - close admin audit gaps for roles, deletion, impersonation, MFA and settings
+
+- [#5191](https://github.com/Bike4Mind/bike4mind/pull/5191) [`a68d013`](https://github.com/Bike4Mind/bike4mind/commit/a68d013d2a4c7a59268f3bfbb2ed9b343a0a36c0) Thanks [@jjmarfa](https://github.com/jjmarfa)! - add a decide tool for agent loops and the CLI
+
+### Patch Changes
+
+- [#5069](https://github.com/Bike4Mind/bike4mind/pull/5069) [`fe5147e`](https://github.com/Bike4Mind/bike4mind/commit/fe5147e64e18b78e9d28198f3d94bbae546ad963) Thanks [@jarlacut](https://github.com/jarlacut)! - apply Bedrock lifecycle to served inference-profile ids
+
+- [#5112](https://github.com/Bike4Mind/bike4mind/pull/5112) [`a3f3802`](https://github.com/Bike4Mind/bike4mind/commit/a3f3802a916aa37c354deeba9ad5cde19c20fff3) Thanks [@onoya](https://github.com/onoya)! - make session-reuse revocations triageable, alarm on bursts only
+
+- [#5175](https://github.com/Bike4Mind/bike4mind/pull/5175) [`6edd9d0`](https://github.com/Bike4Mind/bike4mind/commit/6edd9d0def28d3689f2d974cd968c911f8873536) Thanks [@jjmarfa](https://github.com/jjmarfa)! - completed history import shows 0/N items
+
+- [#5182](https://github.com/Bike4Mind/bike4mind/pull/5182) [`a0b5f42`](https://github.com/Bike4Mind/bike4mind/commit/a0b5f429fc8e0b4bcb7968d88513ffd4c71c2d2c) Thanks [@ktdejesus](https://github.com/ktdejesus)! - keep the Claude prompt cache stable across turns in long sessions
+
+- [#5185](https://github.com/Bike4Mind/bike4mind/pull/5185) [`c90d3c5`](https://github.com/Bike4Mind/bike4mind/commit/c90d3c59eeab038d8e84b6bba0a655c64b28ee5b) Thanks [@jjmarfa](https://github.com/jjmarfa)! - avoid 'Gathering data sources' status on source-free prompts
+
+- Updated dependencies [[`a68d013`](https://github.com/Bike4Mind/bike4mind/commit/a68d013d2a4c7a59268f3bfbb2ed9b343a0a36c0), [`4eb04ce`](https://github.com/Bike4Mind/bike4mind/commit/4eb04ce7df80bc724b0ff957eab4d9bc18a62360), [`fe5147e`](https://github.com/Bike4Mind/bike4mind/commit/fe5147e64e18b78e9d28198f3d94bbae546ad963), [`20f9362`](https://github.com/Bike4Mind/bike4mind/commit/20f9362014343fde166c09acc72c3b759ddfd61d), [`2d33506`](https://github.com/Bike4Mind/bike4mind/commit/2d33506efd4f95460139dedb554780ac544be23c), [`a6a458e`](https://github.com/Bike4Mind/bike4mind/commit/a6a458ee96a84759072f7388e77c66be8a8f9be8), [`7bc69c7`](https://github.com/Bike4Mind/bike4mind/commit/7bc69c780cf2e3def64cd650fb82412c6fa91a53), [`a0b5f42`](https://github.com/Bike4Mind/bike4mind/commit/a0b5f429fc8e0b4bcb7968d88513ffd4c71c2d2c), [`847b65f`](https://github.com/Bike4Mind/bike4mind/commit/847b65f4347c32e825b705244902a223bbbf4d3a)]:
+  - @bike4mind/common@19.0.0
+  - @bike4mind/llm-adapters@1.5.1
+  - @bike4mind/utils@8.1.4
+  - @bike4mind/agents@1.2.9
+  - @bike4mind/auth@1.1.9
+  - @bike4mind/db-core@0.8.9
+  - @bike4mind/fab-pipeline@2.1.9
+  - @bike4mind/mcp@2.1.9
+
+## 19.2.0
+
+### Minor Changes
+
+- [#5127](https://github.com/Bike4Mind/bike4mind/pull/5127) [`a43e39d`](https://github.com/Bike4Mind/bike4mind/commit/a43e39da24f846df42f1c8de8631736e89bfc753) Thanks [@onoya](https://github.com/onoya)! - edit an organization's storage limit
+
+- [#5134](https://github.com/Bike4Mind/bike4mind/pull/5134) [`d1d146c`](https://github.com/Bike4Mind/bike4mind/commit/d1d146c73a2adebe4bd3ecf54facccd7a8514e14) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - accept mid-conversation tool changes on Anthropic models
+
+### Patch Changes
+
+- [#5029](https://github.com/Bike4Mind/bike4mind/pull/5029) [`78b942f`](https://github.com/Bike4Mind/bike4mind/commit/78b942fdac1e4a65ebb59e9aa8467b87eee53c75) Thanks [@aflordelis](https://github.com/aflordelis)! - move the shared h0 leaves of server/utils, lib, shared, app/utils, services and config
+
+- [#5034](https://github.com/Bike4Mind/bike4mind/pull/5034) [`4e05df4`](https://github.com/Bike4Mind/bike4mind/commit/4e05df42da2be56f4b2633fad440f41d9d24e570) Thanks [@julsanchez](https://github.com/julsanchez)! - bound voice holds by server time and floor voice debits
+
+- [#5038](https://github.com/Bike4Mind/bike4mind/pull/5038) [`9f6f66b`](https://github.com/Bike4Mind/bike4mind/commit/9f6f66b28964425db2fa7b1fecee47fcc5fc2aaa) Thanks [@julsanchez](https://github.com/julsanchez)! - bind uploads to their measured size and moderate every animation frame
+
+- [#5062](https://github.com/Bike4Mind/bike4mind/pull/5062) [`3eeea1b`](https://github.com/Bike4Mind/bike4mind/commit/3eeea1b92b1cb3af52cdade73680c946389a9eee) Thanks [@aflordelis](https://github.com/aflordelis)! - keep a held file's stored objects through a lake purge
+
+- [#5088](https://github.com/Bike4Mind/bike4mind/pull/5088) [`0dcbad1`](https://github.com/Bike4Mind/bike4mind/commit/0dcbad11c888e1792484de1b5cc4235c75a9661f) Thanks [@erikbethke](https://github.com/erikbethke)! - let verified partner-domain emails register on invite-only instances
+
+- [#5118](https://github.com/Bike4Mind/bike4mind/pull/5118) [`ac0b050`](https://github.com/Bike4Mind/bike4mind/commit/ac0b050304bf47fd8e62833de7b52be004b0fc19) Thanks [@onoya](https://github.com/onoya)! - stop content-policy blocks from paging the error-alert channel
+
+- [#5147](https://github.com/Bike4Mind/bike4mind/pull/5147) [`e6cf558`](https://github.com/Bike4Mind/bike4mind/commit/e6cf558f5be37f0d2bef61ee278eaf2f82321133) Thanks [@ktdejesus](https://github.com/ktdejesus)! - enable Claude prompt caching on the CLI, Desktop and v1 completions path
+
+- [#5151](https://github.com/Bike4Mind/bike4mind/pull/5151) [`a60a44b`](https://github.com/Bike4Mind/bike4mind/commit/a60a44b8b1e8e62d2178a45451c5dfc760675349) Thanks [@ktdejesus](https://github.com/ktdejesus)! - default adaptive-thinking Claude models to medium effort on the CLI path
+
+- [#5174](https://github.com/Bike4Mind/bike4mind/pull/5174) [`9acd1df`](https://github.com/Bike4Mind/bike4mind/commit/9acd1df001f711b28be3667f742773f6186291e4) Thanks [@ktdejesus](https://github.com/ktdejesus)! - settle non-chat usage stochastically instead of rounding up
+
+- Updated dependencies [[`cf07686`](https://github.com/Bike4Mind/bike4mind/commit/cf0768653624d972a13256138132cb45ac183b8e), [`0ff8025`](https://github.com/Bike4Mind/bike4mind/commit/0ff80253dc13b74255b32727c873ed915764372f), [`78b942f`](https://github.com/Bike4Mind/bike4mind/commit/78b942fdac1e4a65ebb59e9aa8467b87eee53c75), [`9f6f66b`](https://github.com/Bike4Mind/bike4mind/commit/9f6f66b28964425db2fa7b1fecee47fcc5fc2aaa), [`3eeea1b`](https://github.com/Bike4Mind/bike4mind/commit/3eeea1b92b1cb3af52cdade73680c946389a9eee), [`0dcbad1`](https://github.com/Bike4Mind/bike4mind/commit/0dcbad11c888e1792484de1b5cc4235c75a9661f), [`ac0b050`](https://github.com/Bike4Mind/bike4mind/commit/ac0b050304bf47fd8e62833de7b52be004b0fc19), [`a43e39d`](https://github.com/Bike4Mind/bike4mind/commit/a43e39da24f846df42f1c8de8631736e89bfc753), [`88476d1`](https://github.com/Bike4Mind/bike4mind/commit/88476d1a5aa9fceec132d7abc452f9ba0b18ad54), [`d1d146c`](https://github.com/Bike4Mind/bike4mind/commit/d1d146c73a2adebe4bd3ecf54facccd7a8514e14), [`acf5d1e`](https://github.com/Bike4Mind/bike4mind/commit/acf5d1e06542b3b28748b8fcaae825eb9aa299dc), [`a60a44b`](https://github.com/Bike4Mind/bike4mind/commit/a60a44b8b1e8e62d2178a45451c5dfc760675349), [`4e05df4`](https://github.com/Bike4Mind/bike4mind/commit/4e05df42da2be56f4b2633fad440f41d9d24e570)]:
+  - @bike4mind/llm-adapters@1.5.0
+  - @bike4mind/utils@8.1.3
+  - @bike4mind/common@18.0.0
+  - @bike4mind/fab-pipeline@2.1.8
+  - @bike4mind/agents@1.2.8
+  - @bike4mind/auth@1.1.8
+  - @bike4mind/db-core@0.8.8
+  - @bike4mind/mcp@2.1.8
+
 ## 19.1.0
 
 ### Minor Changes

@@ -166,6 +166,8 @@ export interface DiscoverySourceOk {
    */
   authoritativeFor?: readonly ModelBackend[];
   httpStatus?: number;
+  /** Records the source read but could not take at face value; they join the run's droppedRecords. */
+  dropped?: readonly DroppedSourceRecord[];
   /** Recorded on the run report so "the aggregator changed under us" stays answerable. */
   etag?: string;
   contentHash?: string;

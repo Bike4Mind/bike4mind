@@ -29,6 +29,11 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { update: (...args: unknown[]) => mockUserRepositoryUpdate(...args) },
 }));
 
+const mockEmitVerifiedFunnel = vi.fn();
+vi.mock('@server/analytics/funnel', () => ({
+  emitEmailVerifiedFunnelEvents: (...args: unknown[]) => mockEmitVerifiedFunnel(...args),
+}));
+
 const mockReleasePending = vi.fn();
 const mockShouldBlockDisposableEmail = vi.fn();
 const mockAddCredits = vi.fn();
@@ -100,6 +105,7 @@ beforeEach(() => {
   mockRevokeAllUserSessions.mockClear();
   mockUserRepositoryUpdate.mockReset();
   mockUserRepositoryUpdate.mockResolvedValue(undefined);
+  mockEmitVerifiedFunnel.mockReset();
   mockReleasePending.mockReset();
   mockReleasePending.mockImplementation(async (user: { tags?: string[] | null }) =>
     user.tags?.includes(PENDING_FREE_CREDITS_TAG)
@@ -185,6 +191,11 @@ describe('verifyCallback - existing user auto-link safety gate', () => {
     expect(updateArg.$set.emailVerified).toBe(true);
     expect(updateArg.$set.emailVerifiedAt).toBeInstanceOf(Date);
     expect(updateArg.$inc).toEqual({ tokenVersion: 1 });
+    expect(mockEmitVerifiedFunnel).toHaveBeenCalledWith({
+      user: expect.objectContaining({ _id: 'u1' }),
+      method: AuthStrategy.Google,
+      creditsGranted: 0,
+    });
   });
 
   it('does NOT promote emailVerified when it was already true (no-op on the happy path)', async () => {
@@ -1152,16 +1163,18 @@ describe('verifyCallback - starter credits on OAuth signup', () => {
         expect.objectContaining({ reason: 'OAuth signup (provider-verified email)' })
       );
       expect(mockUserRepositoryUpdate).toHaveBeenCalledWith({ id: 'new-id', tags: [], pendingCreditGrant: null });
+      expect((user as { signupCreditsGranted?: number }).signupCreditsGranted).toBe(100);
     }
   );
 
   it('does not tag or grant for an enterprise SSO strategy', async () => {
-    const { err } = await runStandard(AuthStrategy.SAML, verifiedProfile);
+    const { err, user } = await runStandard(AuthStrategy.SAML, verifiedProfile);
 
     expect(err).toBeNull();
     expect(mockCreate).toHaveBeenCalledTimes(1);
     expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('tags');
     expect(mockReleasePending).not.toHaveBeenCalled();
+    expect((user as { signupCreditsGranted?: number }).signupCreditsGranted).toBe(0);
   });
 
   it('does not tag or grant when the account has no email', async () => {

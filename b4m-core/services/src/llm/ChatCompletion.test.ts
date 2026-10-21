@@ -596,6 +596,90 @@ describe('ChatCompletionProcess', () => {
     return { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
   };
 
+  describe('stale attachment scrub', () => {
+    const SOFT_DELETED = '507f1f77bcf86cd799439201';
+    const GONE_SYSTEM_FILE = '507f1f77bcf86cd799439202';
+    const GLOBAL_GONE = '507f1f77bcf86cd799439203';
+
+    const unresolved = (fabFileId: string): FabFileNotice => ({
+      fabFileId,
+      fileName: fabFileId,
+      band: 'unresolved',
+      message: 'not found',
+      delivered: false,
+    });
+
+    const wireDataSources = (over: Record<string, unknown>) =>
+      vi.spyOn(service as any, 'buildDataSources').mockResolvedValue({
+        urlMessages: [],
+        remainingUserPrompt: 'Hello',
+        fabMessages: [],
+        convertedFabFiles: [],
+        globalSystemFileIds: [],
+        enabledSystemFileIds: [],
+        allFileIdsBeforeDedup: [],
+        dedupedFileIds: [],
+        featureContextMessages: [],
+        actuallyInlinedKnowledgeIds: [],
+        fullyInlinedAttachmentIds: [],
+        attachmentNotices: [],
+        attachmentDelivery: undefined,
+        fileNotices: [],
+        ...over,
+      });
+
+    it('detaches a soft-deleted pinned knowledge id from this session and a gone system file from the user', async () => {
+      const fabfileProbes = {
+        findExistingIdsIncludingDeletedByIds: vi.fn(async (ids: string[]) => ids.filter(id => id === SOFT_DELETED)),
+        findExistingIdsByIds: vi.fn(async () => []),
+      };
+      mockSession.userId = 'user1';
+      mockSession.knowledgeIds = [SOFT_DELETED];
+      mockDb.fabfiles = fabfileProbes;
+      mockDb.sessions.pullKnowledgeIdsFromSession = vi.fn().mockResolvedValue(true);
+      mockDb.users.pullSystemFilesForUsers = vi.fn().mockResolvedValue(undefined);
+      (service as any).user = {
+        id: 'user1',
+        currentCredits: 10000,
+        systemFiles: [{ fileId: GONE_SYSTEM_FILE, enabled: true }],
+      };
+      (service as any).systemFilesCache = new Map([['system-files-user1', [['global'], [GONE_SYSTEM_FILE]]]]);
+      wireDataSources({
+        enabledSystemFileIds: [GONE_SYSTEM_FILE],
+        fileNotices: [unresolved(SOFT_DELETED), unresolved(GONE_SYSTEM_FILE)],
+      });
+
+      await service.process({ body: wireMinimalTurn(), logger: mockLogger });
+
+      // The session id is what scopes a soft-deleted id to this notebook alone.
+      expect(mockDb.sessions.pullKnowledgeIdsFromSession).toHaveBeenCalledWith('session1', [SOFT_DELETED]);
+      expect(mockDb.users.pullSystemFilesForUsers).toHaveBeenCalledWith(['user1'], [GONE_SYSTEM_FILE]);
+      expect((service as any).user.systemFiles).toEqual([]);
+      expect((service as any).systemFilesCache.has('system-files-user1')).toBe(false);
+    });
+
+    it('warns about unresolved ids in the admin-wide SystemFiles setting without writing to it', async () => {
+      mockSession.userId = 'user1';
+      mockDb.sessions.pullKnowledgeIdsFromSession = vi.fn().mockResolvedValue(true);
+      mockDb.users.pullSystemFilesForUsers = vi.fn().mockResolvedValue(undefined);
+      (service as any).user = { id: 'user1', currentCredits: 10000, systemFiles: [] };
+      wireDataSources({
+        globalSystemFileIds: [GLOBAL_GONE],
+        fileNotices: [unresolved(GLOBAL_GONE)],
+      });
+
+      await service.process({ body: wireMinimalTurn(), logger: mockLogger });
+
+      // The turn logs through the logger it was constructed with, not the per-call one.
+      expect((service as any).logger.warn).toHaveBeenCalledWith(
+        'The SystemFiles admin setting lists files that did not resolve',
+        { count: 1 }
+      );
+      expect(mockDb.users.pullSystemFilesForUsers).not.toHaveBeenCalled();
+      expect(mockDb.sessions.pullKnowledgeIdsFromSession).not.toHaveBeenCalled();
+    });
+  });
+
   describe('a deprecated-model redirect', () => {
     const successor = {
       id: ChatModels.GPT4_1,
@@ -2017,6 +2101,97 @@ describe('ChatCompletionProcess', () => {
           type: 'message',
         })
       );
+    });
+
+    describe('data-source status copy', () => {
+      // Literal copy, not the module constants: this pins what the user reads.
+      const processStatusTurn = async (
+        messageFileIds: string[] = [],
+        { message = 'Hello', fabFileIds = [] }: { message?: string; fabFileIds?: string[] } = {}
+      ) => {
+        mockedGetLlmByModel.mockReturnValue({
+          complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+            await cb(['Hi!']);
+          }),
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: ChatModels.GPT4,
+        });
+        mockedGetAvailableModels.mockResolvedValue([
+          {
+            id: ChatModels.GPT4,
+            type: 'text',
+            name: 'GPT-4',
+            backend: ModelBackend.OpenAI,
+            max_tokens: 100,
+            contextWindow: 1000,
+            can_stream: false,
+            pricing: {},
+            supportsImageVariation: false,
+          },
+        ]);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: message }],
+          messageTruncation: null,
+        });
+        mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+        mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: message });
+
+        await service.process({
+          body: {
+            ...startQuestParams,
+            message,
+            messageFileIds,
+            fabFileIds,
+            tools: [],
+            projectId: undefined,
+            organizationId: undefined,
+          },
+          logger: mockLogger,
+        });
+
+        return vi.mocked(service.sendStatusUpdate).mock.calls.map(([, status]) => status);
+      };
+
+      it('sends neutral copy, never the data-source copy, on a source-free turn', async () => {
+        const statuses = await processStatusTurn();
+
+        expect(statuses).toContain('Preparing context...');
+        expect(statuses).not.toContain('Gathering data sources...');
+      });
+
+      it('sends the data-source copy when the turn has an attached file', async () => {
+        const statuses = await processStatusTurn(['file-a']);
+
+        expect(statuses).toContain('Gathering data sources...');
+      });
+
+      it('sends the data-source copy when the session has knowledge attached', async () => {
+        // No file ids: session knowledge is the only source signal, so this pins the call site's
+        // knowledgeIds wiring - passing [] there would flip the status with every other test green.
+        mockSession.knowledgeIds = ['knowledge-a'];
+        const statuses = await processStatusTurn();
+
+        expect(statuses).toContain('Gathering data sources...');
+      });
+
+      it('sends the data-source copy when only session fab files are attached', async () => {
+        const statuses = await processStatusTurn([], { fabFileIds: ['file-a'] });
+
+        expect(statuses).toContain('Gathering data sources...');
+      });
+
+      it('sends the data-source copy when only forced retrieval is enabled', async () => {
+        mockSession.forceKnowledgeRetrieval = true;
+        const statuses = await processStatusTurn();
+
+        expect(statuses).toContain('Gathering data sources...');
+      });
+
+      it('sends the data-source copy when only the prompt contains a URL', async () => {
+        const statuses = await processStatusTurn([], { message: 'Summarize https://example.com' });
+
+        expect(statuses).toContain('Gathering data sources...');
+      });
     });
 
     it('skips a prefetched quest that invoke already saved as an error', async () => {
@@ -7991,7 +8166,13 @@ describe('ChatCompletionProcess', () => {
     const resolve = vi.fn();
     const table = {
       'settings-surface': {
-        ownedFields: ['systemPromptText', 'enabledTools', 'temperature', 'maxToolCalls'] as const,
+        ownedFields: [
+          'systemPromptText',
+          'enabledTools',
+          'temperature',
+          'maxToolCalls',
+          'disableUserIntegrations',
+        ] as const,
         resolve,
       },
     };
@@ -8000,6 +8181,10 @@ describe('ChatCompletionProcess', () => {
       mockDb.sessions.findById.mockResolvedValue({ ...mockSession, ...session });
       (service as any).workspaceSessionSettings = workspaceSessionSettings;
       const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue([]);
+      const buildMcpToolsSpy = vi
+        .spyOn(ToolBuilder.prototype, 'buildMcpTools')
+        .mockResolvedValue({ mcpToolsByServer: {}, serverAgentConfig: {} });
+      buildMcpToolsSpy.mockClear();
       const complete = vi.fn().mockImplementation(async (_m, _msgs, _opts, cb) => cb(['Hi!']));
       mockedGetLlmByModel.mockReturnValue({
         complete,
@@ -8025,11 +8210,23 @@ describe('ChatCompletionProcess', () => {
       } as any);
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
-      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      const body = {
+        ...startQuestParams,
+        tools: [],
+        projectId: undefined,
+        organizationId: undefined,
+        mcpServers: ['notion'],
+      };
       try {
-        await service.process({ body, logger: mockLogger });
+        const processError = await service.process({ body, logger: mockLogger }).then(
+          () => undefined,
+          (error: unknown) => error
+        );
         const completeOptions = complete.mock.calls[0]?.[2];
         return {
+          processError,
+          modelCalled: complete.mock.calls.length > 0,
+          requestedMcpServers: buildMcpToolsSpy.mock.calls[0]?.[0]?.requestedMcpServers,
           // buildOptimizedFeatures is stubbed in beforeEach; its eighth argument is the session prompt.
           sessionPrompt: (service as any).buildOptimizedFeatures.mock.calls[0]?.[7] as string | undefined,
           temperature: completeOptions?.temperature,
@@ -8038,6 +8235,7 @@ describe('ChatCompletionProcess', () => {
         };
       } finally {
         buildToolsSpy.mockRestore();
+        buildMcpToolsSpy.mockRestore();
         (service as any).workspaceSessionSettings = {};
       }
     };
@@ -8052,10 +8250,12 @@ describe('ChatCompletionProcess', () => {
         enabledTools: ['current_datetime'],
         temperature: 0.15,
         maxToolCalls: 3,
+        disableUserIntegrations: true,
       });
 
       const turn = await runTurn({ surface: 'settings-surface' }, table);
 
+      expect(turn.processError).toBeUndefined();
       expect(resolve).toHaveBeenCalledWith(
         expect.objectContaining({
           user: expect.objectContaining({ id: 'user1' }),
@@ -8066,6 +8266,24 @@ describe('ChatCompletionProcess', () => {
       expect(turn.temperature).toBe(0.15);
       expect(turn.maxToolCalls).toBe(3);
       expect(turn.enabledTools).toContain('current_datetime');
+      // The request asked for an MCP server; the resolved disableUserIntegrations withholds it.
+      expect(turn.requestedMcpServers).toEqual([]);
+    });
+
+    it('fails closed when the resolver throws: no model call on stored settings', async () => {
+      resolve.mockRejectedValue(new Error('workspace lookup failed'));
+
+      const turn = await runTurn(
+        { surface: 'settings-surface', systemPromptText: 'STALE BAKED PROMPT', temperature: 0.9 },
+        table
+      );
+
+      expect(resolve).toHaveBeenCalledOnce();
+      expect(turn.processError).toEqual(
+        expect.objectContaining({ cause: expect.objectContaining({ message: 'workspace lookup failed' }) })
+      );
+      expect(turn.modelCalled).toBe(false);
+      expect(turn.sessionPrompt).toBeUndefined();
     });
 
     it('clears a baked owned field the resolver no longer yields', async () => {
@@ -8076,6 +8294,8 @@ describe('ChatCompletionProcess', () => {
         table
       );
 
+      expect(turn.processError).toBeUndefined();
+      expect(turn.modelCalled).toBe(true);
       expect(turn.sessionPrompt).toBeUndefined();
       expect(turn.maxToolCalls).toBeUndefined();
     });
@@ -9099,6 +9319,157 @@ describe('ChatCompletionProcess', () => {
       expect(mockLogger.warn).toHaveBeenCalledWith(
         expect.stringContaining('Skipping the context-overflow guard: input tokens are an estimate')
       );
+    });
+  });
+
+  // The provider's prompt cache matches on a prefix (tools, system, messages), so anything that
+  // changes between turns in front of the history re-writes the whole conversation. These pin the
+  // two per-turn inputs the process controls here: the history count and the session-sticky tool set.
+  describe('prompt-cache stability', () => {
+    const wireTurn = () => {
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_m: any, _msgs: any, _opts: any, cb: any) => {
+          await cb(['Hi!'], { inputTokens: 100, outputTokens: 50 });
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as any);
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ] as any);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      } as any);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
+      return { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+    };
+
+    const lastComplete = () => {
+      const complete = vi.mocked(mockedGetLlmByModel.mock.results.at(-1)!.value.complete);
+      return complete.mock.calls.at(-1)!;
+    };
+
+    describe('history count', () => {
+      it.each([
+        [30, 30],
+        [80, 60],
+      ])('requested %i resolves to %i whatever the query complexity', async (requested, expected) => {
+        const resolved: number[] = [];
+        for (const queryComplexity of ['simple', 'contextual', 'complex']) {
+          const body = { ...wireTurn(), historyCount: requested, queryComplexity };
+          await service.process({ body, logger: mockLogger });
+          resolved.push(mockedFetchAndProcessPreviousMessages.mock.calls.at(-1)![1] as number);
+        }
+
+        expect(resolved).toEqual([expected, expected, expected]);
+      });
+    });
+
+    describe('auto-added tools', () => {
+      const toolNames = () =>
+        (lastComplete()[2].tools ?? []).map((t: { toolSchema: { name: string } }) => t.toolSchema.name);
+
+      afterEach(() => {
+        delete (service as any).user.isAdmin;
+        delete (service as any).user.blogIntegration;
+      });
+
+      it('persists a tool the turn triggered onto the session', async () => {
+        (service as any).user.isAdmin = true;
+        const addAutoAddedTools = vi.fn().mockResolvedValue(undefined);
+        mockDb.sessions.addAutoAddedTools = addAutoAddedTools;
+        const body = { ...wireTurn(), message: 'Turn this conversation into a blog post' };
+
+        await service.process({ body, logger: mockLogger });
+
+        expect(toolNames()).toContain('blog_draft');
+        expect(addAutoAddedTools).toHaveBeenCalledWith('session1', ['blog_draft']);
+      });
+
+      it('keeps a persisted tool on a later turn with no trigger, without rewriting it', async () => {
+        (service as any).user.isAdmin = true;
+        const addAutoAddedTools = vi.fn().mockResolvedValue(undefined);
+        mockDb.sessions.addAutoAddedTools = addAutoAddedTools;
+        mockSession.autoAddedTools = ['blog_draft'];
+        const body = { ...wireTurn(), message: 'thanks, that works' };
+
+        await service.process({ body, logger: mockLogger });
+
+        expect(toolNames()).toContain('blog_draft');
+        expect(addAutoAddedTools).not.toHaveBeenCalled();
+      });
+
+      // The tool and its prompt section travel together: a carried-over blog_draft whose
+      // content-transform guidance is withheld leaves the model holding a tool it does not know how
+      // to use, on exactly the follow-up turns the stickiness exists for.
+      it('gives a carried-over blog_draft its content-transform prompt section', async () => {
+        (service as any).user.isAdmin = true;
+        mockSession.autoAddedTools = ['blog_draft'];
+        const buildToolPromptSpy = vi.spyOn(ToolBuilder.prototype, 'buildToolPrompt').mockResolvedValue(null);
+        try {
+          await service.process({ body: { ...wireTurn(), message: 'thanks' }, logger: mockLogger });
+
+          expect(buildToolPromptSpy.mock.calls.at(-1)?.[0]).toEqual(
+            expect.objectContaining({ hasContentTransform: true })
+          );
+        } finally {
+          buildToolPromptSpy.mockRestore();
+        }
+      });
+
+      // A failed persist costs stickiness on the next turn, never this one.
+      it('completes the turn and still offers the tool when persisting it fails', async () => {
+        (service as any).user.isAdmin = true;
+        mockDb.sessions.addAutoAddedTools = vi.fn().mockRejectedValue(new Error('db down'));
+        const body = { ...wireTurn(), message: 'Turn this conversation into a blog post' };
+
+        await expect(service.process({ body, logger: mockLogger })).resolves.not.toThrow();
+
+        expect(toolNames()).toContain('blog_draft');
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          '[AutoAddedTools] Failed to persist auto-added tools on the session',
+          expect.objectContaining({ tools: ['blog_draft'] })
+        );
+      });
+
+      it('lists the same set in the same order whatever order the session stored it in', async () => {
+        (service as any).user.isAdmin = true;
+        (service as any).user.blogIntegration = true;
+        const lists: string[][] = [];
+        for (const stored of [
+          ['blog_publish', 'blog_draft', 'blog_edit'],
+          ['blog_edit', 'blog_publish', 'blog_draft'],
+        ]) {
+          mockSession.autoAddedTools = stored;
+          const body = { ...wireTurn(), message: 'thanks' };
+          await service.process({ body, logger: mockLogger });
+          lists.push(toolNames().filter((name: string) => name.startsWith('blog_')));
+        }
+
+        expect(lists[0]).toEqual(['blog_draft', 'blog_edit', 'blog_publish']);
+        expect(lists[1]).toEqual(lists[0]);
+      });
+
+      it('does not offer a persisted blog tool to a user who is not an admin', async () => {
+        mockSession.autoAddedTools = ['blog_draft', 'blog_publish', 'blog_edit'];
+        const body = { ...wireTurn(), message: 'thanks' };
+
+        await service.process({ body, logger: mockLogger });
+
+        expect(toolNames().filter((name: string) => name.startsWith('blog_'))).toEqual([]);
+      });
     });
   });
 

@@ -1,3 +1,4 @@
+import { canAdministerOrganization } from '@bike4mind/common';
 import { SkillListing, SkillListingVersion, User, type ISkillListingVersionDocument } from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { Logger } from '@bike4mind/observability';
@@ -84,7 +85,10 @@ async function remindOne(
   let reviewers: string[];
   if (listing.visibility === 'organization' && listing.organizationId) {
     const org = await organizationRepository.findById(listing.organizationId);
-    reviewers = [org?.userId, org?.managerId].filter((id): id is string => Boolean(id));
+    // The org's reviewers are whoever `findIdsAdministeredBy` admits: the owner and current managers.
+    reviewers = org
+      ? [org.userId, ...(org.adminUserIds ?? [])].filter(id => Boolean(id) && canAdministerOrganization({ id }, org))
+      : [];
   } else {
     reviewers = await superAdminIds();
   }
