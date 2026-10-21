@@ -97,6 +97,40 @@ describe('AdminApiKeysModal', () => {
     expect(screen.getByTestId('admin-api-key-usage-day-k1').textContent).toContain('42/1000 per day · resets in 1h 0m');
   });
 
+  it('gates each reset on its own window', () => {
+    // Both resets are future; k1 has only day usage and k2 only minute usage, so swapping
+    // the two `> 0` gates fails one line in each direction.
+    h.keys = [KEY, { ...KEY, id: 'k2', name: 'busy minute key' }];
+    h.liveUsage = {
+      k1: { minute: 0, day: 42, minuteResetAt: NOW_S + 600, dayResetAt: NOW_S + 3600 },
+      k2: { minute: 3, day: 0, minuteResetAt: NOW_S + 600, dayResetAt: NOW_S + 3600 },
+    };
+    renderModal();
+
+    expect(screen.getByTestId('admin-api-key-usage-minute-k1').textContent).not.toContain('resets in');
+    expect(screen.getByTestId('admin-api-key-usage-day-k1').textContent).toContain('resets in 1h 0m');
+    expect(screen.getByTestId('admin-api-key-usage-minute-k2').textContent).toContain('resets in 10m');
+    expect(screen.getByTestId('admin-api-key-usage-day-k2').textContent).not.toContain('resets in');
+  });
+
+  it('drops a reset whose window already closed, keeping the other line', () => {
+    // A snapshot taken while a window was open outlives it: the counter is still
+    // non-zero, but the formatter returns ''. Without the truthiness guard the line
+    // would end in a bare "resets in ".
+    h.keys = [KEY, { ...KEY, id: 'k2', name: 'stale day key' }];
+    h.liveUsage = {
+      k1: { minute: 3, day: 42, minuteResetAt: NOW_S - 1, dayResetAt: NOW_S + 3600 },
+      k2: { minute: 3, day: 42, minuteResetAt: NOW_S + 600, dayResetAt: NOW_S - 1 },
+    };
+    renderModal();
+
+    expect(screen.getByTestId('admin-api-key-usage-minute-k1').textContent).toContain('3/60 per min');
+    expect(screen.getByTestId('admin-api-key-usage-minute-k1').textContent).not.toContain('resets in');
+    expect(screen.getByTestId('admin-api-key-usage-day-k1').textContent).toContain('resets in 1h 0m');
+    expect(screen.getByTestId('admin-api-key-usage-day-k2').textContent).not.toContain('resets in');
+    expect(screen.getByTestId('admin-api-key-usage-minute-k2').textContent).toContain('resets in 10m');
+  });
+
   it('omits the reset time while a window is empty', () => {
     h.keys = [KEY];
     h.liveUsage = {

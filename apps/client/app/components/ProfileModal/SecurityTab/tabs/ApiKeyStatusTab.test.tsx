@@ -73,6 +73,46 @@ describe('ApiKeyStatusTab', () => {
     expect(day).toContain('resets in 6h 12m');
   });
 
+  it('gates each reset on its own window', () => {
+    // Both resets are future; only the day counter is non-zero, so swapping the two
+    // `> 0` gates would put the duration on the empty minute line and drop it from the day line.
+    h.keys = [{ ...KEY, liveUsage: { ...KEY.liveUsage, minute: 0 } }];
+    render(
+      <Wrapper>
+        <ApiKeyStatusTab />
+      </Wrapper>
+    );
+
+    const minute = screen.getByTestId('api-key-usage-minute-0').textContent ?? '';
+    expect(minute).toContain('0 / 60');
+    expect(minute).not.toContain('resets in');
+
+    const day = screen.getByTestId('api-key-usage-day-0').textContent ?? '';
+    expect(day).toContain('42 / 800');
+    expect(day).toContain('resets in 6h 12m');
+  });
+
+  it('drops a reset whose window already closed, keeping the other line', () => {
+    // A snapshot taken while a window was open outlives it: the counter is still
+    // non-zero, but the formatter returns ''. Without the truthiness guard the line
+    // would end in a bare "resets in ".
+    h.keys = [
+      { ...KEY, id: 'stale-minute', liveUsage: { ...KEY.liveUsage, minuteResetAt: NOW_S - 1 } },
+      { ...KEY, id: 'stale-day', liveUsage: { ...KEY.liveUsage, dayResetAt: NOW_S - 1 } },
+    ];
+    render(
+      <Wrapper>
+        <ApiKeyStatusTab />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('api-key-usage-minute-0').textContent).not.toContain('resets in');
+    expect(screen.getByTestId('api-key-usage-day-0').textContent).toContain('resets in 6h 12m');
+
+    expect(screen.getByTestId('api-key-usage-day-1').textContent).not.toContain('resets in');
+    expect(screen.getByTestId('api-key-usage-minute-1').textContent).toContain('resets in 10m');
+  });
+
   it('hides the reset text while a window is empty', () => {
     h.keys = [{ ...KEY, liveUsage: { ...KEY.liveUsage, minute: 0, day: 0 } }];
     render(
