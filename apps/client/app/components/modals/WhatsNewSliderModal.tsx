@@ -576,10 +576,12 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger,
   const metaLine = [displayDate, subtitleText].filter(Boolean).join(' \u00b7 ');
 
   // A video replaces the slide image. When it cannot play (URL withheld, or a playback error that
-  // re-signing cannot fix) the slide shows its image, else the video's poster in the video slot.
+  // re-signing cannot fix) the slide shows its image, else the video's poster in the video slot, and
+  // with neither the slot is dropped rather than left empty.
   const pickedVideo = pickSlideVideo(currentModal.video, isMobile);
+  const videoPoster = (pickedVideo?.poster && videoUrls[pickedVideo.poster]) || undefined;
   const videoUnplayable = !!pickedVideo && (videoUrls[pickedVideo.src] === null || failedVideos.has(pickedVideo.src));
-  const slideVideo = pickedVideo && !(videoUnplayable && currentModal.imageUrl) ? pickedVideo : null;
+  const slideVideo = pickedVideo && !(videoUnplayable && (currentModal.imageUrl || !videoPoster)) ? pickedVideo : null;
   const showImage = !slideVideo && !!currentModal.imageUrl;
   const isLandscapeVideo = slideVideo?.orientation === 'landscape';
   // Video above the text: always on mobile, and for 16:9 on desktop where a side slot is too small
@@ -587,12 +589,11 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger,
 
   const renderVideo = () => {
     if (!slideVideo) return null;
-    const poster = (slideVideo.poster && videoUrls[slideVideo.poster]) || undefined;
     if (videoUnplayable) {
-      return poster ? (
+      return videoPoster ? (
         <Box
           component="img"
-          src={poster}
+          src={videoPoster}
           alt={currentTitle}
           data-testid="whats-new-slide-video-poster"
           sx={{ width: '100%', height: '100%', objectFit: 'contain', borderRadius: '12px' }}
@@ -605,7 +606,7 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger,
       <WhatsNewSlideVideo
         key={`${currentModal._id}:${slideVideo.src}`}
         src={src}
-        poster={poster}
+        poster={videoPoster}
         title={currentTitle}
         active={isOpen}
         onSourceError={() => handleVideoError(slideVideo.src)}

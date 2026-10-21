@@ -76,8 +76,8 @@ export function useSignedMediaUrls(urls: string[]) {
       if (now - (lastRefresh.current.get(url) ?? 0) < MIN_REFRESH_INTERVAL_MS) return false;
       lastRefresh.current.set(url, now);
       void resolve([url]).then(next => {
-        // A failed re-sign keeps the old URL rather than tearing down a video that may still be buffered
-        if (next[url]) setResolved(prev => ({ ...prev, ...next }));
+        // A failed re-sign marks the URL unusable, so the slide falls back to its image or poster
+        setResolved(prev => ({ ...prev, ...next, [url]: next[url] ?? null }));
       });
       return true;
     },
