@@ -29,6 +29,8 @@ export interface FileCursor {
   offset: number;
   status: FileStatus;
   cwd?: string;
+  /** CODE_MAP_VERSION the copy was made with; absent on cursors from before it existed. */
+  mapVersion?: number;
   /** Size when the head was last read for `cwd`, so a file with none is not re-read every pass. */
   peekedSize?: number;
   state?: CodeMapState;

@@ -9,8 +9,12 @@ import {
   countsFor,
   importTranscript,
   listTranscripts,
+  claudeWorktreeOf,
+  CODE_MAP_VERSION,
+  matchesFilter,
   needsImport,
   peekTranscript,
+  projectFor,
   type IndexedTranscript,
 } from './ClaudeCodeSync';
 import { mapToolCall } from './claudeCodeMapper';
@@ -18,6 +22,7 @@ import type { FileCursor } from './ImportStateStore';
 
 const FIXTURES = join(__dirname, '__fixtures__');
 const SOURCE_ID = '11111111-2222-4333-8444-555555555555';
+const WORKTREE = '/work/example-project/.claude/worktrees/sample';
 
 async function setup() {
   const root = await mkdtemp(join(tmpdir(), 'cc-import-'));
@@ -82,7 +87,7 @@ describe('Claude Code import', () => {
     expect(session.importOrigin).toMatchObject({
       kind: 'claude-code',
       sourceId: SOURCE_ID,
-      cwd: '/work/example-project',
+      cwd: WORKTREE,
       gitBranch: 'feature/sample',
     });
     expect(session.createdAt).toBe('2026-01-02T10:00:00.000Z');
@@ -130,6 +135,25 @@ describe('Claude Code import', () => {
     // The torn last line is not consumed, so the reply it held is not here yet.
     expect(session.messages.at(-1)!.role).toBe('user');
     expect(cursor.offset).toBeLessThan((await stat(transcriptPath)).size);
+  });
+
+  it('rebuilds a copy an older mapping made, even when the transcript has not changed', async () => {
+    const { transcriptPath, store, deps } = await setup();
+    const exists = { ...deps, directoryExists: async () => true };
+    const first = await importTranscript(await indexed(transcriptPath), undefined, exists);
+    const old = { ...first, mapVersion: undefined };
+    await store.putImported({
+      ...(await store.get(codeSessionId(SOURCE_ID)))!,
+      project: { ...(await store.get(codeSessionId(SOURCE_ID)))!.project!, directory: WORKTREE, name: 'sample' },
+    });
+
+    expect(needsImport(await indexed(transcriptPath), old)).toBe(true);
+    const rebuilt = await importTranscript(await indexed(transcriptPath), old, exists);
+    expect(rebuilt.mapVersion).toBe(CODE_MAP_VERSION);
+    const session = (await store.get(codeSessionId(SOURCE_ID)))!;
+    expect(session.project?.directory).toBe('/work/example-project');
+    const ids = session.messages.map(message => message.id);
+    expect(new Set(ids).size).toBe(ids.length);
   });
 
   it('appends only what was added since the last read', async () => {
@@ -254,18 +278,39 @@ describe('Claude Code import', () => {
     expect(await store.get(codeSessionId(SOURCE_ID))).toBeNull();
   });
 
-  it('binds the project when the folder exists here', async () => {
+  it('files the session under its repository, running in its own worktree while that is still there', async () => {
     const { transcriptPath, store, deps } = await setup();
     await importTranscript(await indexed(transcriptPath), undefined, { ...deps, directoryExists: async () => true });
-    const session = (await store.get(codeSessionId(SOURCE_ID)))!;
-    expect(session.project).toEqual({
+    expect((await store.get(codeSessionId(SOURCE_ID)))!.project).toEqual({
       directory: '/work/example-project',
       name: 'example-project',
       branch: 'feature/sample',
-      workspace: false,
-      workingDirectory: '/work/example-project',
+      workspace: true,
+      workspaceBranch: 'feature/sample',
+      workingDirectory: WORKTREE,
       contextDirectories: [],
     });
+
+    const repositoryOnly = async (path: string) => path === '/work/example-project';
+    expect(await projectFor(WORKTREE, 'feature/sample', repositoryOnly)).toMatchObject({
+      directory: '/work/example-project',
+      workspace: false,
+      workingDirectory: '/work/example-project',
+    });
+  });
+
+  it('syncs only sessions that ran in a .claude/worktrees worktree', () => {
+    const all = { enabled: true, sourceFolder: null, projects: 'all' as const, includeSubagents: false };
+    expect(claudeWorktreeOf('/r/.claude/worktrees/a/apps/web')).toEqual({
+      repository: '/r',
+      worktree: '/r/.claude/worktrees/a',
+    });
+    expect(matchesFilter('/r/.claude/worktrees/a', all)).toBe(true);
+    expect(matchesFilter('/r/.manifold/worktrees/a', all)).toBe(false);
+    expect(matchesFilter('/r', all)).toBe(false);
+    expect(matchesFilter(undefined, all)).toBe(false);
+    expect(matchesFilter('/r/.claude/worktrees/a', { ...all, projects: ['/r'] })).toBe(true);
+    expect(matchesFilter('/s/.claude/worktrees/a', { ...all, projects: ['/r'] })).toBe(false);
   });
 
   it('indexes by stat and a head read, including subagent files only when asked', async () => {
@@ -293,11 +338,11 @@ describe('Claude Code import', () => {
     ]);
 
     const peeked = await peekTranscript(await indexed(transcriptPath));
-    expect(peeked.cwd).toBe('/work/example-project');
+    expect(peeked.cwd).toBe(WORKTREE);
   });
 
   it('counts by status within the project filter', () => {
-    const transcripts = ['a', 'b', 'c', 'd'].map(name => ({
+    const transcripts = ['a', 'b', 'c', 'd', 'e'].map(name => ({
       path: name,
       size: 1,
       mtimeMs: 1,
@@ -313,10 +358,11 @@ describe('Claude Code import', () => {
       cwd,
     });
     const files = {
-      a: cursor('imported', '/p'),
-      b: cursor('forked', '/p'),
-      c: cursor('failed', '/p'),
-      d: cursor('imported', '/q'),
+      a: cursor('imported', '/p/.claude/worktrees/one'),
+      b: cursor('forked', '/p/.claude/worktrees/two'),
+      c: cursor('failed', '/p/.claude/worktrees/one'),
+      d: cursor('imported', '/q/.claude/worktrees/one'),
+      e: cursor('imported', '/p/.manifold/worktrees/one'),
     };
     expect(
       countsFor(files, transcripts, { enabled: true, sourceFolder: null, projects: ['/p'], includeSubagents: false })

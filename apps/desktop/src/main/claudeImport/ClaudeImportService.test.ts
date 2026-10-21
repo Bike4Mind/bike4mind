@@ -1,4 +1,4 @@
-import { copyFile, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -103,6 +103,30 @@ describe('ClaudeImportService', () => {
     await service.setCodeSettings({ projects: 'all' });
     expect((await service.state()).code.running).toBe(false);
     expect(await store.list()).toEqual([]);
+  });
+
+  it('leaves out sessions run outside .claude/worktrees, and drops copies that leave the filter', async () => {
+    const { home, service, store } = await setup();
+    const elsewhere = '22222222-2222-4333-8444-555555555555';
+    const fixture = await readFile(join(FIXTURES, 'code-session.jsonl'), 'utf8');
+    await writeFile(
+      join(home, '.claude', 'projects', '-work-example-project', `${elsewhere}.jsonl`),
+      fixture.replaceAll(
+        '/work/example-project/.claude/worktrees/sample',
+        '/work/example-project/.manifold/worktrees/run'
+      )
+    );
+    await service.setCodeSettings({ enabled: true });
+    await service.syncCode();
+    expect((await service.state()).code.counts).toMatchObject({ found: 1, imported: 1 });
+    expect((await store.list()).map(session => session.id)).toEqual([SESSION_ID]);
+
+    await service.setCodeSettings({ projects: [] });
+    await service.syncCode();
+    expect(await store.list()).toEqual([]);
+    await service.setCodeSettings({ projects: 'all' });
+    await service.syncCode();
+    expect((await store.list()).map(session => session.id)).toEqual([SESSION_ID]);
   });
 
   it('filters by project', async () => {

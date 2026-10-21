@@ -1,10 +1,9 @@
 import { useCallback, useSyncExternalStore } from 'react';
 
 /**
- * Whether sessions imported from Claude sit among the others in the sidebar, or in their own
- * collapsed "Imported from Claude" section (the default, so a first sync of hundreds of
- * transcripts does not bury the user's own recent conversations). Per-machine UI state, read by
- * both Settings and the sidebar, hence a store with subscribers - see promptSuggestions.ts.
+ * Whether sessions imported from Claude sit in their project groups in the sidebar (the
+ * default), or in their own collapsed "Imported from Claude" section. Per-machine UI state, read
+ * by both Settings and the sidebar, hence a store with subscribers - see promptSuggestions.ts.
  */
 const STORAGE_KEY = 'b4m.sidebar.importedInline';
 
@@ -13,9 +12,9 @@ const listeners = new Set<() => void>();
 
 function readStored(): boolean {
   try {
-    return window.localStorage.getItem(STORAGE_KEY) === '1';
+    return window.localStorage.getItem(STORAGE_KEY) !== '0';
   } catch {
-    return false;
+    return true;
   }
 }
 
@@ -39,7 +38,7 @@ export function useImportedInline(): [boolean, (next: boolean) => void] {
   const value = useSyncExternalStore(
     subscribe,
     () => inline,
-    () => false
+    () => true
   );
   const set = useCallback((next: boolean) => setImportedInline(next), []);
   return [value, set];

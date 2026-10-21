@@ -6,6 +6,7 @@ import type { ChatSessionMode, ChatSessionSummary } from '@shared/chat';
 import { EMPTY_SIDEBAR_SECTIONS } from '@shared/sidebarSections';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
+import { setImportedInline } from './importedInline';
 import { SessionList } from './SessionList';
 import { useSessions } from './useChat';
 
@@ -365,6 +366,27 @@ describe('renaming a session from the sidebar', () => {
 
 describe('sessions imported from Claude', () => {
   const origin = { kind: 'claude-code' as const, sourceId: 's', importedAt: 'x', sourceUpdatedAt: 'x' };
+
+  it('join their project group by default', async () => {
+    const project = { directory: '/work/widgets', name: 'widgets' } as ChatSessionSummary['project'];
+    await mount(
+      [
+        summary('own', 'My own work', { mode: 'code', project }),
+        summary('cc-1', 'Imported work', { mode: 'code', project, importOrigin: origin }),
+      ],
+      'code'
+    );
+    expect(query('sidebar-imported')).toBeNull();
+    expect(all('project-group')).toHaveLength(1);
+    expect(titles()).toEqual(['My own work', 'Imported work']);
+    expect(all('session-imported-badge')).toHaveLength(1);
+  });
+});
+
+describe('sessions imported from Claude, in their own section', () => {
+  const origin = { kind: 'claude-code' as const, sourceId: 's', importedAt: 'x', sourceUpdatedAt: 'x' };
+  beforeEach(() => setImportedInline(false));
+  afterEach(() => setImportedInline(true));
   const typeSearch = (text: string) => {
     const search = el('chat-search-input') as HTMLInputElement;
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;

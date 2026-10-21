@@ -69,7 +69,7 @@ export interface ClaudeImportCounts {
 }
 
 export interface ClaudeCodeProject {
-  /** The working directory the sessions ran in; also the filter key. */
+  /** The repository whose .claude/worktrees the sessions ran in; also the filter key. */
   cwd: string;
   name: string;
   sessions: number;

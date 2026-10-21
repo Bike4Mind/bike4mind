@@ -12,7 +12,7 @@ import type {
 import { IPC_CHANNELS } from '@shared/ipc';
 import type { AttachmentStore } from '../chat/AttachmentStore';
 import { MAX_ATTACHMENTS_PER_TURN } from '../chat/attachments';
-import { ImportScopeChangedError, type SessionStore } from '../chat/SessionStore';
+import { ImportScopeChangedError, isForkedImport, type SessionStore } from '../chat/SessionStore';
 import { importChatExport, looksLikeClaudeExport } from './ClaudeChatImport';
 import {
   countsFor,
@@ -292,6 +292,7 @@ export class ClaudeImportService {
       changed = true;
     }
     if (changed) this.pushState();
+    if (await this.pruneOutOfScope(scope, scopeKey, settings.code)) changed = true;
 
     const queue = this.transcripts
       .filter(transcript => {
@@ -341,6 +342,42 @@ export class ClaudeImportService {
     scope.lastSyncMs = Date.now() - started;
     // A live Claude Code session wakes this every few seconds; most passes find nothing new.
     if (changed || queue.length > 0) await this.states.saveScope(scopeKey);
+  }
+
+  /**
+   * A copy whose transcript no longer syncs (a narrowed project filter, or one that ran outside
+   * Claude's worktrees) goes, so the sidebar mirrors exactly what syncs. One continued here is
+   * the user's own and stays. The cursor goes back to pending, so widening the filter again
+   * brings the copy back.
+   */
+  private async pruneOutOfScope(
+    scope: ScopeImportState,
+    scopeKey: string,
+    settings: ClaudeCodeImportSettings
+  ): Promise<boolean> {
+    let pruned = false;
+    for (const transcript of this.transcripts) {
+      const cursor = scope.files[transcript.path];
+      if (cursor?.status !== 'imported' || matchesFilter(cursor.cwd, settings)) continue;
+      if (this.disposed || this.removing || this.deps.scopeKey() !== scopeKey) break;
+      const existing = await this.deps.store.getImported(cursor.sessionId, scopeKey).catch(() => null);
+      if (existing && isForkedImport(existing)) {
+        scope.files[transcript.path] = { ...cursor, status: 'forked' };
+      } else {
+        if (existing) await this.deps.deleteSession(cursor.sessionId);
+        scope.files[transcript.path] = {
+          sessionId: cursor.sessionId,
+          size: 0,
+          mtimeMs: 0,
+          offset: 0,
+          status: 'pending',
+          ...(cursor.cwd ? { cwd: cursor.cwd } : {}),
+        };
+        this.sessionsChanged();
+      }
+      pruned = true;
+    }
+    return pruned;
   }
 
   async importChatExport(): Promise<ClaudeImportResult> {

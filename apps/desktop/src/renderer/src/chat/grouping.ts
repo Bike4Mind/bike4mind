@@ -38,8 +38,9 @@ export interface SidebarSections {
    */
   archived: ChatSessionSummary[];
   /**
-   * Imported from Claude and not yet continued here, in their own collapsed section unless the
-   * user asked for them inline. Pinned, filed or archived ones go where the user put them.
+   * Imported from Claude and not yet continued here, when the user asked for them in their own
+   * collapsed section rather than their project groups. Pinned, filed or archived ones go where
+   * the user put them.
    */
   imported: ChatSessionSummary[];
 }

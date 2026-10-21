@@ -181,7 +181,8 @@ export function ClaudeImportSettings({
           }}
         />
         <Typography level="body-xs" textColor="text.tertiary">
-          Sessions from the Claude Code CLI, IDE extensions and the Claude desktop app&apos;s Code tab. A session you
+          Sessions Claude Code ran in its own worktrees (a project&apos;s .claude/worktrees folder), filed under that
+          project. Sessions run anywhere else, including other tools&apos; worktrees, are left out. A session you
           continue here becomes your own copy and stops syncing, so nothing you add is ever overwritten.
         </Typography>
 
@@ -398,12 +399,12 @@ export function ClaudeImportSettings({
           size="sm"
           checked={inline}
           onChange={event => setInline(event.target.checked)}
-          endDecorator="Show imported sessions among my other conversations"
+          endDecorator="Show imported sessions in their project groups"
           sx={{ alignSelf: 'flex-start' }}
           slotProps={{ input: { 'data-testid': 'claude-import-inline-switch' } }}
         />
         <Typography level="body-xs" textColor="text.tertiary">
-          Off keeps them in their own &quot;Imported from Claude&quot; section of the sidebar.
+          Off collects them in their own &quot;Imported from Claude&quot; section of the sidebar instead.
         </Typography>
         <Stack direction="row" spacing={1}>
           <Button

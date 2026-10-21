@@ -24,6 +24,11 @@ const HEAD_TAIL_BYTES = 64 * 1024;
 /** Lines larger than this are skipped: a single event that size is a pasted binary, not a turn. */
 export const MAX_LINE_BYTES = 8 * 1024 * 1024;
 const LINES_PER_YIELD = 200;
+/**
+ * Bumped whenever a transcript maps to a different desktop session (version 2: worktree sessions
+ * filed under their repository), so copies made by an older mapping are rebuilt, not resumed.
+ */
+export const CODE_MAP_VERSION = 2;
 /** Decoded images are handed to the attachment store once this many bytes are waiting. */
 const PENDING_ATTACHMENT_BYTES = 32 * 1024 * 1024;
 /** SessionStore's id limit. */
@@ -163,9 +168,45 @@ export async function peekTranscript(transcript: IndexedTranscript): Promise<Cod
   return state;
 }
 
+/**
+ * `<repository>/.claude/worktrees/<name>`, the worktrees Claude Code makes for its own sessions.
+ * Only sessions that ran in one sync: other tools drive Claude Code from worktrees of their own
+ * (and the CLI runs anywhere), and those are not the user's sessions to mirror.
+ */
+export function claudeWorktreeOf(cwd: string | undefined): { repository: string; worktree: string } | null {
+  const match = cwd ? /^(.+?)[\\/]\.claude[\\/]worktrees[\\/]([^\\/]+)/.exec(cwd) : null;
+  return match ? { repository: match[1], worktree: match[0] } : null;
+}
+
+/** The project filter names repositories, so all of a repository's worktrees go together. */
 export function matchesFilter(cwd: string | undefined, settings: ClaudeCodeImportSettings): boolean {
-  if (settings.projects === 'all') return true;
-  return !!cwd && settings.projects.includes(cwd);
+  const place = claudeWorktreeOf(cwd);
+  if (!place) return false;
+  return settings.projects === 'all' || settings.projects.includes(place.repository);
+}
+
+/**
+ * Filed under the repository, as the app's own worktree sessions are, so imports join that
+ * project's sidebar group. The recorded branch is what lets a continued session reuse its
+ * worktree rather than cut a new one (see resolveWorkspace); once the worktree is gone the
+ * repository itself is where it runs.
+ */
+export async function projectFor(
+  cwd: string | undefined,
+  gitBranch: string | undefined,
+  directoryExists: (path: string) => Promise<boolean>
+): Promise<ChatProject | undefined> {
+  const place = claudeWorktreeOf(cwd);
+  if (!place || !(await directoryExists(place.repository))) return undefined;
+  const base = {
+    directory: place.repository,
+    name: basename(place.repository) || place.repository,
+    branch: gitBranch ?? '',
+    contextDirectories: [],
+  };
+  return gitBranch && (await directoryExists(place.worktree))
+    ? { ...base, workspace: true, workspaceBranch: gitBranch, workingDirectory: place.worktree }
+    : { ...base, workspace: false, workingDirectory: place.repository };
 }
 
 export function projectsOf(
@@ -174,8 +215,8 @@ export function projectsOf(
 ): ClaudeCodeProject[] {
   const counts = new Map<string, number>();
   for (const transcript of transcripts) {
-    const cwd = files[transcript.path]?.cwd;
-    if (cwd) counts.set(cwd, (counts.get(cwd) ?? 0) + 1);
+    const repository = claudeWorktreeOf(files[transcript.path]?.cwd)?.repository;
+    if (repository) counts.set(repository, (counts.get(repository) ?? 0) + 1);
   }
   return [...counts]
     .map(([cwd, sessions]) => ({ cwd, name: basename(cwd) || cwd, sessions }))
@@ -209,6 +250,7 @@ export function countsFor(
 export function needsImport(transcript: IndexedTranscript, cursor: FileCursor | undefined): boolean {
   if (!cursor) return true;
   if (cursor.status === 'forked' || cursor.status === 'removed') return false;
+  if (cursor.status === 'imported' && cursor.mapVersion !== CODE_MAP_VERSION) return true;
   return cursor.size !== transcript.size || cursor.mtimeMs !== transcript.mtimeMs;
 }
 
@@ -285,6 +327,7 @@ export async function importTranscript(
   // file, lost bookkeeping) is rebuilt from the top and replaces it.
   const resume =
     previous?.status === 'imported' &&
+    previous.mapVersion === CODE_MAP_VERSION &&
     !!existing &&
     previous.offset <= transcript.size &&
     (await startsLineAt(transcript.path, previous.offset));
@@ -330,6 +373,7 @@ export async function importTranscript(
     mtimeMs: transcript.mtimeMs,
     offset,
     status: 'skipped',
+    mapVersion: CODE_MAP_VERSION,
     ...(state.cwd ? { cwd: state.cwd } : {}),
     state,
   };
@@ -340,17 +384,7 @@ export async function importTranscript(
   const title =
     (subagent ? await readSubagentTitle(transcript.path) : undefined) ?? displayTitle(state) ?? 'Claude Code session';
   const cwd = state.cwd;
-  const project: ChatProject | undefined =
-    cwd && (await deps.directoryExists(cwd))
-      ? {
-          directory: cwd,
-          name: basename(cwd) || cwd,
-          branch: state.gitBranch ?? '',
-          workspace: false,
-          workingDirectory: cwd,
-          contextDirectories: [],
-        }
-      : undefined;
+  const project = await projectFor(cwd, state.gitBranch, deps.directoryExists);
   const importOrigin: ChatImportOrigin = {
     kind: 'claude-code',
     sourceId: transcript.sourceId,

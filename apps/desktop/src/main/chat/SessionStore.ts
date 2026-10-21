@@ -813,7 +813,10 @@ export class SessionStore {
       const kept: Partial<ChatSession> = existing
         ? {
             ...(existing.titleLocked ? { title: existing.title, titleLocked: true } : {}),
-            ...(existing.project ? { project: existing.project } : {}),
+            // Same repository only: a project the importer now derives differently is not the user's.
+            ...(existing.project && existing.project.directory === session.project?.directory
+              ? { project: existing.project }
+              : {}),
             model: existing.model,
             approvalMode: existing.approvalMode,
             reasoningEffort: existing.reasoningEffort,
