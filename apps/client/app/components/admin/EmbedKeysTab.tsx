@@ -56,7 +56,7 @@ import {
   MODELLESS_AGENT_WARNING,
 } from '@client/app/components/common/ModellessAgentWarning';
 import { useEntitlements } from '@client/app/hooks/data/entitlements';
-import { EMBED_WHITELABEL_ENTITLEMENT_KEY, normalizeTag } from '@client/lib/entitlements/registry';
+import { EMBED_WHITELABEL_ENTITLEMENT_KEY, normalizeTag } from '@bike4mind/server-utils/lib/entitlements/registry';
 import { useGetAgents } from '@client/app/hooks/data/agents';
 import { useGetOrganization, useSearchOrganizations } from '@client/app/hooks/data/organizations';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';

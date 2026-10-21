@@ -20,8 +20,8 @@ import {
   getTargetUrlForStage,
   getWorkflowIdForScanType,
 } from '@bike4mind/server-utils/integrations/github/githubWorkflowTrigger';
-import { handler as runCloudScan } from '@server/security/cloudScan';
-import { handler as runWafScan } from '@server/security/wafScan';
+import { handler as runCloudScan } from '@bike4mind/server-utils/security/cloudScan';
+import { handler as runWafScan } from '@bike4mind/server-utils/security/wafScan';
 import { calculateNextRunTime } from '@bike4mind/server-utils/utils/scheduleCalculator';
 import { logAuditEvent, AdminConfigAuditEvents } from '@server/utils/auditLog';
 

@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import path from 'path';
 import { ApiKeyScope, CONFINED_API_KEY_SCOPES } from '@bike4mind/common';
-import { decideScopeGate } from '@server/middlewares/apiKeyScopeGate';
+import { decideScopeGate } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 import { FILES_WRITE_OR_RELEASE_NOTES_SCOPES } from '@server/files/fileScopes';
 import { stripComments, tsFiles } from './scopeCoverageHelpers';
 

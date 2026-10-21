@@ -1,7 +1,7 @@
 import { CreditHolderType, type ApiKeyBillingOwnerType, type IEmbedBranding } from '@bike4mind/common';
 import { organizationRepository, userRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
-import { EMBED_WHITELABEL_ENTITLEMENT_KEY, normalizeTag } from '@client/lib/entitlements/registry';
+import { EMBED_WHITELABEL_ENTITLEMENT_KEY, normalizeTag } from '@bike4mind/server-utils/lib/entitlements/registry';
 import type { EntitlementKey } from '@bike4mind/server-utils/lib/entitlements/types';
 import { getUserEntitlements } from './index';
 

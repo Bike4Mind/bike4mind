@@ -26,7 +26,7 @@ import { useGetSubscriptionPlans } from '@client/app/hooks/data/stripe';
 import { useOpenUserStripePortal } from '@client/app/components/subscription/useOpenUserStripePortal';
 import dayjs from 'dayjs';
 import { useTheme } from '@mui/joy';
-import { isDelinquentSubscriptionStatus, pickDisplayedSubscription } from '@client/lib/subscriptions/types';
+import { isDelinquentSubscriptionStatus, pickDisplayedSubscription } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { useToggleShowCreditsUsed } from '@client/app/hooks/data/user';
 
 function centsToDollars(cents: number | undefined) {

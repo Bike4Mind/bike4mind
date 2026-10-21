@@ -1,7 +1,7 @@
 import { questMasterPlanRepository } from '@bike4mind/database';
 import { NotFoundError, QuestHandoff, questMasterPlanMutationResponseSchema } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { respond } from '@server/utils/respond';

@@ -147,7 +147,7 @@ import {
   makeDagDispatcher,
   onDagNodeTerminal,
 } from './agentExecutorDag';
-import { collectDagChildArtifactBlocks } from '@server/utils/agentDagArtifacts';
+import { collectDagChildArtifactBlocks } from '@bike4mind/server-utils/utils/agentDagArtifacts';
 import type { DagHandoffSignal } from '@bike4mind/services/llm';
 import { filterRunnableModels, type LLMModelConfig, type ModelInfo } from '@bike4mind/common';
 // `buildFirstIterationQuery` lives in its own module so it can be

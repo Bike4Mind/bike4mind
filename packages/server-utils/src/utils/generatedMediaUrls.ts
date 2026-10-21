@@ -1,4 +1,4 @@
-import { getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { getGeneratedImageStorage } from './storage/index';
 
 // Clients re-sign well before this (useGeneratedMediaUrls), so a URL is never handed to a media
 // element after it expires.

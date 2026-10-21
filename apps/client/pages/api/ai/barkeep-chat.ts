@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { ensureTavernAccess } from '@bike4mind/server-utils/utils/errors';
-import { OperationsModelService } from '@client/services/operationsModelService';
+import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 
 const BARKEEP_SYSTEM_PROMPT = `You are Grimbold, the jovial bartender of The Gilded Flagon tavern.
 You speak in a warm, slightly rough medieval voice — think gruff but kind.

@@ -57,7 +57,7 @@ import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
 import { McpServer } from '@bike4mind/database/ai';
-import { decryptToken } from '@server/security/tokenEncryption';
+import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { ImageModels, IUserDocument, McpServerName } from '@bike4mind/common';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 

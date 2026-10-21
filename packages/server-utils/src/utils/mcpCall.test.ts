@@ -28,7 +28,7 @@ vi.mock('@bike4mind/mcp', () => ({
 vi.mock('sst', () => ({ Resource: { RATE_LIMIT_INGEST_TOKEN: { value: 'ingest-token' } } }));
 
 import { handler } from './mcpCall';
-import { UNATTRIBUTED_MCP_TENANT } from '@bike4mind/server-utils/utils/mcpTenantKey';
+import { UNATTRIBUTED_MCP_TENANT } from './mcpTenantKey';
 
 function postedBody(): { events: unknown[]; tenantKey: string } {
   const [, init] = h.fetch.mock.calls[0] as [string, RequestInit];

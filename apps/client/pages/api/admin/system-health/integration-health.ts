@@ -3,7 +3,7 @@ import { Logger } from '@bike4mind/observability';
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import {
   integrationHealthCheckRepository,
   integrationCircuitOverrideRepository,

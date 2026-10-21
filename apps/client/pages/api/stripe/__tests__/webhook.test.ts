@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
+import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 
 /**
  * Route-level cover for the dunning branches of the Stripe webhook: who gets the payment-failed

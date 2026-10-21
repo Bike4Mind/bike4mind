@@ -23,7 +23,7 @@ import {
   UnauthorizedError,
   canUpdateShareable,
 } from '@bike4mind/common';
-import { isValidObjectId, toObjectIdString } from '@bike4mind/server-utils/utils/objectId';
+import { isValidObjectId, toObjectIdString } from './objectId';
 
 /** Read routes accept a read-or-write grant; write routes require an update-level grant. */
 export type SessionAccessLevel = 'read' | 'write';

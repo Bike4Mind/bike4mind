@@ -5,7 +5,7 @@ import {
   type ImageModerationIncident,
   type IncidentSurface,
 } from '@bike4mind/common';
-import { escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
+import { escapeHtml } from '../utils/mailer/emailHelpers';
 
 /** The fields of a stored incident the alert reads; anything else on the record is never rendered. */
 export interface RecordedIncident {

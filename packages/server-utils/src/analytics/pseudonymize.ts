@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { Config } from '@bike4mind/server-utils/utils/config';
+import { Config } from '../utils/config';
 
 // Pure helper: accepts explicit salt for testability.
 // Production callers use pseudonymizeUserId() which reads the configured salt.

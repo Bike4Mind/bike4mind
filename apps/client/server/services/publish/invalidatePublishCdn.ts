@@ -1,6 +1,6 @@
 import { CloudFrontClient, CreateInvalidationCommand } from '@aws-sdk/client-cloudfront';
 import type { PublishScopeTier, PublishSourceKind } from '@bike4mind/common';
-import { resolveRouterDistributionId } from '@server/security/wafSharedHelpers';
+import { resolveRouterDistributionId } from '@bike4mind/server-utils/security/wafSharedHelpers';
 import type { MinimalLogger } from './minimalLogger';
 import { buildPublishUrlPath } from './paths';
 

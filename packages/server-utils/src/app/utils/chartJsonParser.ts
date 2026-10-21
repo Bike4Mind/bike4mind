@@ -5,7 +5,7 @@ import {
   RechartsArtifactWrapperSchema,
   type RechartsConfig,
   type RechartsArtifactWrapper,
-} from '@bike4mind/server-utils/app/utils/chartSchemas';
+} from './chartSchemas';
 
 /**
  * Error types for chart JSON parsing

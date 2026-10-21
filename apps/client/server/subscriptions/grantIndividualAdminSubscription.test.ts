@@ -23,7 +23,7 @@ vi.mock('@server/models/Subscription', () => ({
   },
 }));
 
-import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
+import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
 import { grantIndividualAdminSubscription } from './grantIndividualAdminSubscription';
 

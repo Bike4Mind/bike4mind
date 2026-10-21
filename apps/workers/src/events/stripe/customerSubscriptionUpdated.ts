@@ -1,7 +1,7 @@
 import { organizationRepository, withTransaction } from '@bike4mind/database';
-import { entitlementsForPriceIds } from '@client/lib/entitlements/registry';
-import { StripeSubscriptionMetadataSchema } from '@client/lib/subscriptions/schema';
-import { SubscriptionMetadata, SubscriptionOwnerType } from '@client/lib/subscriptions/types';
+import { entitlementsForPriceIds } from '@bike4mind/server-utils/lib/entitlements/registry';
+import { StripeSubscriptionMetadataSchema } from '@bike4mind/server-utils/lib/subscriptions/schema';
+import { SubscriptionMetadata, SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { setSeats } from '@server/services/organizationService';
 import { Config } from '@bike4mind/server-utils/utils/config';

@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { encryptSecret, generateEncryptionKey } from '@bike4mind/server-utils/security/secretEncryption';
+import { encryptSecret, generateEncryptionKey } from './secretEncryption';
 
 // Mock config before importing tokenEncryption
 const mockConfig: Record<string, string | undefined> = {};
-vi.mock('@bike4mind/server-utils/utils/config', () => ({
+vi.mock('../utils/config', () => ({
   Config: new Proxy({}, { get: (_, key: string) => mockConfig[key] }),
 }));
 

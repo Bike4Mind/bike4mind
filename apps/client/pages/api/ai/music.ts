@@ -13,7 +13,7 @@ import { apiKeyService, estimateMusicCredits } from '@bike4mind/services';
 import { aiMusicService, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { reserveRequestCredits } from '@server/billing/reserveRequestCredits';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
+import { saveGeneratedAssetToFiles } from '@bike4mind/server-utils/utils/saveGeneratedAssetToFiles';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
 import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
 

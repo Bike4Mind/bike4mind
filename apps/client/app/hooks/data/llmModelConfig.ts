@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { useMemo } from 'react';
 import { LLMModelConfig, ModelInfo } from '@bike4mind/common';
-import { BASE_ENTITLEMENT_KEY } from '@client/lib/entitlements/registry';
+import { BASE_ENTITLEMENT_KEY } from '@bike4mind/server-utils/lib/entitlements/registry';
 
 /**
  * Hook to fetch LLM model configurations from admin settings

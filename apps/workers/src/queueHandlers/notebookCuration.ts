@@ -138,7 +138,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       logger.info('Initializing LLM service for executive summary generation...');
       try {
         // Get operations model with initialized LLM backend
-        const { OperationsModelService } = await import('@client/services/operationsModelService');
+        const { OperationsModelService } = await import('@bike4mind/server-utils/services/operationsModelService');
         const { llm, modelInfo } = await OperationsModelService.getOperationsModel();
 
         // Every summary call is reserved and settled against the user's billing owner (org seat when

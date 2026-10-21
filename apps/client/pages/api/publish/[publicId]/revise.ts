@@ -5,7 +5,7 @@ import { getPublishedArtifactsStorage } from '@bike4mind/server-utils/utils/stor
 import { PublishedArtifact, Annotation } from '@bike4mind/database';
 import type { IMessage, PublishScopeTier, PublishVisibility } from '@bike4mind/common';
 import { validateBundle, buildPublishUrlPath, invalidatePublishCdn, toCacheTarget } from '@server/services/publish';
-import { OperationsModelService } from '@client/services/operationsModelService';
+import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 
 /**
  * POST /api/publish/[publicId]/revise - Phase C of the artifact-collab layer:

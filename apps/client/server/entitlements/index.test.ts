@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { getRequestEntitlements, getUserEntitlements, requestHasEntitlement, userHasEntitlement } from './index';
 import type { Request } from 'express';
-import { __registryRows } from '@client/lib/entitlements/registry';
+import { __registryRows } from '@bike4mind/server-utils/lib/entitlements/registry';
 
 // Minimal req shim - only the fields the entitlement helpers touch.
 const makeReq = (user: {
@@ -27,9 +27,9 @@ vi.mock('@bike4mind/observability', () => ({ Logger: { globalInstance: { warn: v
 // Fixture registry: behavior of the real rows is covered by
 // lib/entitlements/registry.test.ts; here we test the resolver's wiring and
 // gate semantics against controlled mappings (and avoid product literals).
-vi.mock('@client/lib/entitlements/registry', async () => {
-  const actual = await vi.importActual<typeof import('@client/lib/entitlements/registry')>(
-    '@client/lib/entitlements/registry'
+vi.mock('@bike4mind/server-utils/lib/entitlements/registry', async () => {
+  const actual = await vi.importActual<typeof import('@bike4mind/server-utils/lib/entitlements/registry')>(
+    '@bike4mind/server-utils/lib/entitlements/registry'
   );
   return {
     ...actual,

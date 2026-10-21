@@ -88,7 +88,7 @@ vi.mock('@server/utils/creditPreflight', () => ({
 // Mock the persistence helper so this route test doesn't pull in the real
 // FabFile/services/database stack (which references @bike4mind/common exports
 // not provided by the partial mock above).
-vi.mock('@server/utils/saveGeneratedAssetToFiles', () => ({
+vi.mock('@bike4mind/server-utils/utils/saveGeneratedAssetToFiles', () => ({
   saveGeneratedAssetToFiles: (...a: unknown[]) => mocks.saveGeneratedAssetToFiles(...a),
 }));
 

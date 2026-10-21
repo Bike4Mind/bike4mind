@@ -9,7 +9,7 @@ vi.mock('./emitActiveEvent', () => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { OVERWATCH_PSEUDONYM_SALT: 'test-salt' } }));
 
-import { pseudonymize } from './pseudonymize';
+import { pseudonymize } from '@bike4mind/server-utils/analytics/pseudonymize';
 import {
   emitPurchaseForSourceProducts,
   emitSignupForSourceProducts,

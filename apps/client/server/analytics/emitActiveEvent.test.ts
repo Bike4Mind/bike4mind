@@ -19,7 +19,7 @@ import {
   emitVisitEvent,
   emitProductEvent,
 } from './emitActiveEvent';
-import { pseudonymize } from './pseudonymize';
+import { pseudonymize } from '@bike4mind/server-utils/analytics/pseudonymize';
 import { OVERWATCH_ANONYMOUS_USER_ID, OVERWATCH_UNKNOWN_SESSION_ID } from '@bike4mind/common';
 import { Config } from '@bike4mind/server-utils/utils/config';
 

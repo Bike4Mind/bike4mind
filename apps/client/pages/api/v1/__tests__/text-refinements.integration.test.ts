@@ -17,8 +17,8 @@ const { mockGetOperationsModel, mockRefineText, mockFindByKey, mockCreateOrUpdat
   cacheStore: new Map<string, unknown>(),
 }));
 
-vi.mock('@client/services/operationsModelService', async orig => ({
-  ...(await orig<typeof import('@client/services/operationsModelService')>()),
+vi.mock('@bike4mind/server-utils/services/operationsModelService', async orig => ({
+  ...(await orig<typeof import('@bike4mind/server-utils/services/operationsModelService')>()),
   OperationsModelService: { getOperationsModel: (...a: unknown[]) => mockGetOperationsModel(...a) },
 }));
 vi.mock('@bike4mind/services/llm/refineText', async orig => ({
@@ -28,13 +28,13 @@ vi.mock('@bike4mind/services/llm/refineText', async orig => ({
 vi.mock('@server/utils/apiKeyRateLimitCheck', async orig =>
   (await import('@server/generations/__test__/routeHarness')).apiKeyRateLimitCheckMock(orig)
 );
-vi.mock('@server/middlewares/rateLimit', async () =>
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', async () =>
   (await import('@server/generations/__test__/routeHarness')).rateLimitMiddlewareMock()
 );
 vi.mock('@server/utils/userRateTier', async () =>
   (await import('@server/generations/__test__/routeHarness')).userRateTierMock()
 );
-vi.mock('@server/utils/orgAccess', async orig =>
+vi.mock('@bike4mind/server-utils/utils/orgAccess', async orig =>
   (await import('@server/generations/__test__/routeHarness')).orgAccessMock(orig)
 );
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
@@ -52,7 +52,7 @@ vi.mock('@bike4mind/database', async orig => ({
 vi.mock('@server/auth/auth', async orig => (await import('@server/generations/__test__/routeHarness')).authMock(orig));
 
 import handler from '../text-refinements';
-import { OperationsModelUnavailableError } from '@client/services/operationsModelService';
+import { OperationsModelUnavailableError } from '@bike4mind/server-utils/services/operationsModelService';
 import { Logger } from '@bike4mind/observability';
 import { CacheKeys } from '@server/utils/cacheKeys';
 

@@ -4,7 +4,7 @@ import {
   TERMINAL_SUBSCRIPTION_STATUSES,
   isDelinquentSubscriptionStatus,
   resolveSubscriptionSource,
-} from '@client/lib/subscriptions/types';
+} from '@bike4mind/server-utils/lib/subscriptions/types';
 import { IUserSubscription } from '@client/lib/userSubscriptions/types';
 import { voidOpenSubscriptionInvoices } from '@server/integrations/stripe/dunning';
 import { rethrowStripeRejection } from '@server/integrations/stripe/errors';

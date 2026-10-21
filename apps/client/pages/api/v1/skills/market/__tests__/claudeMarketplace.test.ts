@@ -9,7 +9,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'crypto';
 import { createMocks } from 'node-mocks-http';
 import { ApiKeyScope, getClaudeMarketplaceContract, getClaudePluginZipContract } from '@bike4mind/common';
-import { decideScopeGate } from '@server/middlewares/apiKeyScopeGate';
+import { decideScopeGate } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 
 const {
   mockFind,
@@ -54,7 +54,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return { get: compose };
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 vi.mock('@bike4mind/database', () => ({

@@ -61,7 +61,7 @@ vi.mock('@server/skillMarket/submitVersion', async importOriginal => {
   return { ...actual, submitListingVersion: submitListingVersionMock };
 });
 
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModel: vi.fn() },
   getEffectiveApiKeyByBackend: vi.fn(),
 }));

@@ -15,7 +15,7 @@ import {
   grantTagForEntitlement,
   isBypassExemptEntitlement,
   normalizeTag,
-} from '@client/lib/entitlements/registry';
+} from '@bike4mind/server-utils/lib/entitlements/registry';
 import { partnerEntitlementsForEmail } from '@server/entitlements/partnerRules';
 import { ApiKeyScope, hasDeveloperUserTag } from '@bike4mind/common';
 import type { EntitlementKey } from '@bike4mind/server-utils/lib/entitlements/types';

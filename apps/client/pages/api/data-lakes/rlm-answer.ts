@@ -21,7 +21,7 @@ import {
 } from '@bike4mind/llm-adapters';
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_QUERY_SCOPES } from '@server/dataLakes/dataLakeScopes';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { buildDataLakeTools } from '@server/tavern/rlm/tools';
 import { REPL_TOOL_SYSTEM_PROMPT } from '@server/tavern/rlm/dataLakeReplPrompts';
 import { resolvePrincipalAuthHeaders } from '@server/tavern/rlm/principalAuthHeaders';

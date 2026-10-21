@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { FileEvents } from '@bike4mind/common';
-import { SCOPE_STAGING_ENV_VAR } from '@server/middlewares/apiKeyScopeGate';
+import { SCOPE_STAGING_ENV_VAR } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 import { logEventSafe } from '@server/utils/analyticsLog';
 
 const h = vi.hoisted(() => ({

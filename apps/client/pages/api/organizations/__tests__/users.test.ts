@@ -29,7 +29,7 @@ vi.mock('@server/middlewares/baseApi', () => {
 });
 
 const verifyOrgAccess = vi.hoisted(() => vi.fn());
-vi.mock('@server/utils/orgAccess', () => ({ verifyOrgAccess }));
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgAccess }));
 
 const findById = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/database', () => ({

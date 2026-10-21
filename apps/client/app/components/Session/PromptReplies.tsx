@@ -81,7 +81,7 @@ import DeepResearchProgress from '../GenAI/DeepResearchProgress';
 import PromptEnhancementBanner from './PromptEnhancementBanner';
 import { extractCodeBlockTitle } from '@client/app/utils/codeBlockTitleExtractor';
 import CitableSources from './CitableSources';
-import { parseChartJSON, ChartParseError, getChartErrorMessage } from '@client/app/utils/chartJsonParser';
+import { parseChartJSON, ChartParseError, getChartErrorMessage } from '@bike4mind/server-utils/app/utils/chartJsonParser';
 import NavigationButtons from './NavigationButtons';
 import ReplyChoiceButtons from './ReplyChoiceButtons';
 import ReplyAccessories from './ReplyAccessories';

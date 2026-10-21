@@ -6,7 +6,7 @@ import { Logger } from '@bike4mind/observability';
 let mockJwtSecret: string | undefined = 'test-jwt-secret-for-state-store';
 
 // Mock Config with getter to allow dynamic values
-vi.mock('@bike4mind/server-utils/utils/config', () => ({
+vi.mock('../utils/config', () => ({
   Config: {
     get JWT_SECRET() {
       return mockJwtSecret;

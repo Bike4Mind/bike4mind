@@ -23,12 +23,12 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
+vi.mock('./cloudwatch', () => ({
   recordRateLimitEvent: vi.fn().mockResolvedValue(undefined),
 }));
 
 import { rateLimitSnapshotRepository } from '@bike4mind/database';
-import { recordRateLimitEvent } from '@bike4mind/server-utils/utils/cloudwatch';
+import { recordRateLimitEvent } from './cloudwatch';
 import { persistRateLimitEvents, throttleIfNearRateLimit } from './mcpRateLimitSnapshots';
 
 const TENANT_A = 'tenant-a';

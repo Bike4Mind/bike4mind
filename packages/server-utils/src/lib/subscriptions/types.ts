@@ -1,9 +1,9 @@
 import { IMongoDocument } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/database';
-import { StripeSubscriptionMetadataSchema } from '@client/lib/subscriptions/schema';
+import { StripeSubscriptionMetadataSchema } from './schema';
 import Stripe from 'stripe';
 import { z } from 'zod';
-import type { AcquisitionTouch, AcquisitionTouches } from '@bike4mind/server-utils/lib/subscriptions/acquisition';
+import type { AcquisitionTouch, AcquisitionTouches } from './acquisition';
 
 export enum SubscriptionOwnerType {
   User = 'User',

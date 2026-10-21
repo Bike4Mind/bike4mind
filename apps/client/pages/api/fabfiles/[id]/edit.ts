@@ -34,7 +34,7 @@ import {
 import { v4 as uuidv4 } from 'uuid';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { apiKeyService, fabFilesService } from '@bike4mind/services';
-import { OperationsModelService } from '@client/services/operationsModelService';
+import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import {
   completionRequestCeilingUsd,
   completionUsd,

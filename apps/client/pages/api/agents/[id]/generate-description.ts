@@ -4,7 +4,7 @@ import { AGENTS_WRITE_SCOPES } from '@server/agents/agentScopes';
 import { assertAgentAccess } from '@server/agents/assertAgentAccess';
 import { agentRepository } from '@bike4mind/database';
 import { IAgent, IMessage } from '@bike4mind/common';
-import { OperationsModelService } from '@client/services/operationsModelService';
+import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 
 // System prompt for generating agent descriptions
 const AGENT_DESCRIPTION_SYSTEM_PROMPT = `You are an expert at creating rich, personality-driven descriptions for AI agents that have REAL AGENCY, PURPOSE, and MISSIONS. These are not simple chatbots - they are beings with their own burning goals, active projects, and authentic motivations.

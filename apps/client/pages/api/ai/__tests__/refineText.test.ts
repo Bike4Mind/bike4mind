@@ -30,16 +30,16 @@ vi.mock('@bike4mind/services/llm/refineText', () => ({
 vi.mock('@bike4mind/database', () => ({ cacheRepository: { findByKey: vi.fn(), createOrUpdate: vi.fn() } }));
 
 const mockGetOperationsModel = vi.fn();
-vi.mock('@client/services/operationsModelService', async orig => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', async orig => ({
   // Keep the real exports (the helper's typed unavailable error) and stub only the resolver.
-  ...(await orig<typeof import('@client/services/operationsModelService')>()),
+  ...(await orig<typeof import('@bike4mind/server-utils/services/operationsModelService')>()),
   OperationsModelService: { getOperationsModel: (...a: any[]) => mockGetOperationsModel(...a) },
 }));
 
 import handler from '@pages/api/ai/refineText';
 import errorHandler from '@server/middlewares/errorHandler';
 import { CacheKeys } from '@server/utils/cacheKeys';
-import { OperationsModelUnavailableError } from '@client/services/operationsModelService';
+import { OperationsModelUnavailableError } from '@bike4mind/server-utils/services/operationsModelService';
 
 describe('POST /api/ai/refineText', () => {
   beforeEach(() => {

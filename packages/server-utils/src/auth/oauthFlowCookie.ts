@@ -5,7 +5,7 @@ import {
   readCookie,
   secureAttribute,
   type CookieResponse,
-} from '@bike4mind/server-utils/auth/refreshCookie';
+} from './refreshCookie';
 
 /**
  * Browser-binding cookies for OAuth/SSO flows.

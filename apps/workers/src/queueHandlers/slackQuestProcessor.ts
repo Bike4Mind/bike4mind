@@ -76,7 +76,7 @@ import { getSharedTokenizer, publishTelemetryAlertCallback } from '@server/utils
 import { recallMementosV2 } from '@server/memory/recallMementosV2';
 import { recallLakeMemoryForSession } from '@server/memory/lakeMemoryRecall';
 import { loadSystemPromptById } from '@server/utils/sessionSystemPromptResolver';
-import { decryptToken } from '@server/security/tokenEncryption';
+import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import { buildVideoToolConfig } from '@bike4mind/server-utils/videoGenerations/buildVideoToolConfig';
 import {

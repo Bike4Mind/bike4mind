@@ -12,7 +12,7 @@ vi.mock('@server/middlewares/baseApi', () => {
 vi.mock('@server/middlewares/checkBlockedIP', () => ({
   checkBlockedIP: () => (_req: any, _res: any, next: any) => next?.(),
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => (_req: any, _res: any, next: any) => next?.() }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => (_req: any, _res: any, next: any) => next?.() }));
 
 // Database: only User + authFailLogRepository + authSessionRepository are touched by the handler.
 const mockFindOne = vi.fn();
@@ -63,7 +63,7 @@ vi.mock('@server/utils/auth/oauthSourceTag', () => ({
 
 // State token verification.
 const mockVerifyState = vi.fn();
-vi.mock('@server/auth/jwtStateStore', () => ({ verifyStateToken: (...a: any[]) => mockVerifyState(...a) }));
+vi.mock('@bike4mind/server-utils/auth/jwtStateStore', () => ({ verifyStateToken: (...a: any[]) => mockVerifyState(...a) }));
 
 // Remaining leaf collaborators. Mock the session helper directly (rather than @bike4mind/services)
 // so the test never pulls the real services barrel -- the callback mints via issueBrowserSession,

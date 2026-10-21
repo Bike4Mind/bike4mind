@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { randomUUID } from 'crypto';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { AdminSettings, ModalModel } from '@bike4mind/database';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
