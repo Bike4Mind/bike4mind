@@ -38,8 +38,8 @@ describe('POST /api/user/accept-policies/shown', () => {
   it('requires a first-party JWT, only permits POST, and bounds pre-consent writes', () => {
     expect(mocks.baseApi).toHaveBeenCalledWith({ auth: 'jwtOnly', allowedMethods: ['POST'] });
     expect(mocks.rateLimit).toHaveBeenCalledWith({
-      limit: 10,
-      windowMs: 60_000,
+      limit: 5,
+      windowMs: 60 * 60 * 1000,
       bucket: '/api/user/accept-policies/shown',
     });
   });
