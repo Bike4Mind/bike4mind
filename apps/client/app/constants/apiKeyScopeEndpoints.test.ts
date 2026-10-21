@@ -156,7 +156,7 @@ function loadHelpers(): Map<string, Gate> {
   const bodies = new Map<string, string>();
   for (const file of HELPER_SOURCES) {
     const code = stripComments(readFileSync(path.join(CLIENT_DIR, file), 'utf8'));
-    for (const [body, name] of code.matchAll(/export (?:async )?function (\w+)\b[\s\S]*?(?=\nexport |$)/g)) {
+    for (const [body, name] of code.matchAll(/^export (?:async )?function (\w+)\b[\s\S]*?^\}[ \t]*$/gm)) {
       bodies.set(name, body.slice(body.indexOf('{')));
     }
   }
@@ -434,7 +434,7 @@ describe('the gate rule itself', () => {
 
   it.each(Object.entries(HAND_HELPERS))('%s throws and checks exactly the scopes it is credited with', (name, h) => {
     const code = stripComments(readFileSync(path.join(CLIENT_DIR, h.file), 'utf8'));
-    const body = new RegExp(String.raw`export (?:async )?function ${name}\b[\s\S]*?(?=\nexport |$)`).exec(code)?.[0];
+    const body = new RegExp(String.raw`^export (?:async )?function ${name}\b[\s\S]*?^\}[ \t]*$`, 'm').exec(code)?.[0];
     expect(body, `${name} not found in ${h.file}`).toBeDefined();
     expect(body).toMatch(/\bthrow\b/);
     const named = [...body!.matchAll(/\bApiKeyScope\.([A-Z_]+)\b/g)].map(([, m]) => scopeOf(m));
