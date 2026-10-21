@@ -45,7 +45,7 @@ export async function assertPreflightCredits({
   billingOrganizationId,
 }: CreditPreflightArgs): Promise<void> {
   const [settings, user, organization] = await Promise.all([
-    getSettingsMap({ adminSettings: adminSettingsRepository }, { names: ['enforceCredits'] }),
+    getSettingsMap({ adminSettings: adminSettingsRepository }, { names: ['enforceCredits'], skipCache: true }),
     userRepository.findById(userId),
     billingOrganizationId ? organizationRepository.findById(billingOrganizationId) : null,
   ]);
