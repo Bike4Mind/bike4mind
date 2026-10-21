@@ -73,13 +73,14 @@ describe('stdio solver tools', () => {
     expect(result.structuredContent).toEqual({ winner: { solverId: 'tabu' } });
   });
 
-  it('serves the roster tool from the startup catalog', async () => {
-    vi.spyOn(B4mApiClient.prototype, 'getSolverCatalog').mockResolvedValue(catalog);
+  it('serves the roster tool from a fresh fetch, not the startup catalog', async () => {
+    const later = { ...catalog, defaultSolverIds: ['tabu'] };
+    vi.spyOn(B4mApiClient.prototype, 'getSolverCatalog').mockResolvedValueOnce(catalog).mockResolvedValueOnce(later);
 
     const client = await connect(await buildStdioMcpServer(options));
     const result = await client.callTool({ name: 'optihashi_solvers', arguments: {} });
 
-    expect(result.structuredContent).toEqual(catalog);
+    expect(result.structuredContent).toEqual(later);
   });
 
   it('surfaces a server refusal of the problem as a tool error', async () => {
