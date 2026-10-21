@@ -70,6 +70,7 @@ export default defineConfig({
     'src/index.tsx',
     'src/commands/mcpCommand.ts',
     'src/commands/pluginCommand.ts',
+    'src/commands/skillsCommand.ts',
     'src/commands/updateCommand.ts',
     'src/commands/doctorCommand.ts',
     'src/commands/headlessCommand.ts',
