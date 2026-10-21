@@ -490,17 +490,20 @@ describe('unexpected artifact on a chat prompt', () => {
 });
 
 describe('ChatPage artifact detector', () => {
-  it('keys on the raw artifact tag, so a promoted code fence stays a chat reply', () => {
+  it('keys on the html/react renderers, so a promoted python or mermaid fence stays a chat reply', () => {
     // ChatPage imports Playwright, so no vitest project can load it; the wiring is pinned as text.
-    // The client promotes plain ```python/```mermaid fences into artifact cards too, so a detector
-    // that trusted the renderer test id alone would drop ordinary chat replies from the gate.
-    expect(readSource(CHAT_PAGE)).toContain('data-artifact-tag');
-    expect(readSource(PROMPT_REPLIES)).toMatch(/data-artifact-tag=\{hasArtifactTag\(/);
+    // The server promotes python/mermaid/recharts code fences into artifact cards after the
+    // stream, so matching any artifact-renderer-* would drop ordinary chat replies from the gate.
+    const chatPage = readSource(CHAT_PAGE);
+    expect(chatPage).toContain('[data-testid="artifact-renderer-html"]');
+    expect(chatPage).toContain('[data-testid="artifact-renderer-react"]');
+    expect(chatPage).not.toContain('[data-testid^="artifact-renderer-"]');
+    expect(chatPage).not.toContain('data-artifact-tag');
   });
 
   it('pins the placeholder test ids against the components that mount them', () => {
     expect(readSource(ARTIFACT_RENDERER)).toContain('data-testid={`artifact-renderer-${artifact.type}`}');
-    expect(readSource(CHAT_PAGE)).toContain('getByTestId(\'generating-artifact-indicator\')');
+    expect(readSource(CHAT_PAGE)).toContain("getByTestId('generating-artifact-indicator')");
     expect(readSource(PROMPT_REPLIES)).toContain('data-testid="generating-artifact-indicator"');
     expect(readSource(ARTIFACT_RENDERER)).toContain('data-testid="artifact-loading"');
   });

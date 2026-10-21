@@ -264,20 +264,20 @@ export class ChatPage extends BasePage {
   }
 
   /**
-   * Whether the newest reply carries a model-emitted artifact. The rendered cards alone cannot
-   * answer this: the client also promotes plain fenced code (python, mermaid, react, html) into
-   * artifact cards, so an ordinary chat reply containing a snippet renders one too. The app tags
-   * the reply root from its raw text instead (`data-artifact-tag`, PromptReplies), which only an
-   * `<artifact` tag the model actually wrote sets - and an artifact must also have rendered, so a
-   * reply that merely names the tag in prose does not count.
+   * Whether the newest reply carries an artifact the model built instead of a chat answer: a
+   * mounted html or react renderer, or either pending placeholder. Deliberately not "any
+   * artifact-renderer-*": the server promotes plain python/mermaid/recharts code fences into
+   * artifact tags after the stream (ChatCompletionProcess convertCodeBlocksToArtifacts), so an
+   * ordinary chat answer with a snippet renders those cards too. An html fence is the one
+   * remaining false positive, and is rare for these prompts.
    *
    * One-shot: same caveat as waitForArtifactSettled - it only sees what the stream has delivered.
    */
   async hasArtifact(): Promise<boolean> {
     const root = this.aiResponseRoot.last();
-    if ((await root.getAttribute('data-artifact-tag')) !== 'true') return false;
     const artifact = root.locator(
-      '[data-testid^="artifact-renderer-"], [data-testid="generating-artifact-indicator"], [data-testid="artifact-loading"]'
+      '[data-testid="artifact-renderer-html"], [data-testid="artifact-renderer-react"], ' +
+        '[data-testid="generating-artifact-indicator"], [data-testid="artifact-loading"]'
     );
     return (await artifact.count()) > 0;
   }

@@ -36,17 +36,6 @@ export interface ReplyTruncationState {
   notice: ReplyTruncationNotice;
 }
 
-/**
- * Whether the reply text itself carries an `<artifact` opening tag, closed or not. The parser
- * promotes fenced code (python, mermaid, react, html) to artifacts after this point, so this is
- * the only text-level signal that distinguishes a model-emitted artifact from a chat reply that
- * merely contains a snippet. Prose that names the tag counts too - callers also require that an
- * artifact actually rendered.
- */
-export function hasArtifactTag(reply: string): boolean {
-  return /<artifact\b/i.test(reply);
-}
-
 export function getReplyTruncationState({
   reply,
   completed,
