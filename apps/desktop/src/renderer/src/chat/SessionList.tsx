@@ -1,4 +1,14 @@
-import { memo, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode, type SyntheticEvent } from 'react';
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent,
+  type ReactNode,
+  type SyntheticEvent,
+} from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -618,9 +628,9 @@ const SHOW_MORE_SX = {
 const isLive = (status: ChatSessionStatus | undefined) => status === 'processing' || status === 'needs-action';
 
 /**
- * A group's rows, capped at GROUP_ROW_CAP with "Show more" below them. The active,
- * pinned and live rows always draw, in place. `uncapped` is set while a search is narrowing the
- * list, which then shows every match.
+ * A group's rows, capped at GROUP_ROW_CAP with "Show more" below them. The active, live and
+ * just-moved rows draw in place whatever the cap. `uncapped` is set while a search is narrowing
+ * the list, which then shows every match.
  */
 function CappedSessionRows({
   groupKey,
@@ -629,6 +639,7 @@ function CappedSessionRows({
   uncapped,
   activeId,
   statuses,
+  revealId,
   row,
 }: {
   groupKey: string;
@@ -637,6 +648,8 @@ function CappedSessionRows({
   uncapped: boolean;
   activeId: string | null;
   statuses: ReadonlyMap<string, ChatSessionStatus>;
+  /** A session just moved into this group, whose updatedAt slot may sit behind the cap. */
+  revealId: string | null;
   row: (session: ChatSessionSummary) => ReactNode;
 }) {
   const limit = useGroupLimit(groupKey);
@@ -647,9 +660,13 @@ function CappedSessionRows({
         : capRows(
             sessions,
             limit,
-            session => session.id === activeId || session.pinned === true || isLive(statuses.get(session.id))
+            session =>
+              session.id === activeId ||
+              session.pinned === true ||
+              isLive(statuses.get(session.id)) ||
+              session.id === revealId
           ),
-    [sessions, uncapped, limit, activeId, statuses]
+    [sessions, uncapped, limit, activeId, statuses, revealId]
   );
 
   return (
@@ -771,6 +788,7 @@ export function SessionList({
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; section?: SidebarSection } | null>(null);
   const [draggedSession, setDraggedSession] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
+  const [revealId, setRevealId] = useState<string | null>(null);
   const dragFrame = useRef(0);
   const [nameRequest, setNameRequest] = useState<SectionNameRequest | null>(null);
 
@@ -814,6 +832,15 @@ export function SessionList({
     sectionActions,
   };
 
+  /**
+   * A moved row keeps its updatedAt slot in the group it lands in, which on a long group is past
+   * the cap - the row would leave one group and arrive hidden in the other.
+   */
+  const moveSession = useCallback((sessionId: string, sectionId: string | null) => {
+    setRevealId(sessionId);
+    target.current.sectionActions.move(sessionId, sectionId);
+  }, []);
+
   const actions = useMemo<RowActions>(
     () => ({
       select: sessionId => target.current.onSelect(sessionId),
@@ -821,7 +848,7 @@ export function SessionList({
       togglePin: session => target.current.onTogglePin(session),
       toggleArchived: session => target.current.onToggleArchived(session),
       rename: (session, title) => target.current.onRename(session, title),
-      moveToSection: (sessionId, sectionId) => target.current.sectionActions.move(sessionId, sectionId),
+      moveToSection: (sessionId, sectionId) => moveSession(sessionId, sectionId),
       requestNewSection: sessionId => setNameRequest({ kind: 'create', sessionId }),
       drag: sessionId => {
         cancelAnimationFrame(dragFrame.current);
@@ -835,7 +862,7 @@ export function SessionList({
         dragFrame.current = requestAnimationFrame(() => setDraggedSession(sessionId));
       },
     }),
-    []
+    [moveSession]
   );
 
   /**
@@ -903,7 +930,7 @@ export function SessionList({
     event.preventDefault();
     event.stopPropagation();
     actions.drag(null);
-    if (sectionOf(userSections, sessionId) !== sectionId) sectionActions.move(sessionId, sectionId);
+    if (sectionOf(userSections, sessionId) !== sectionId) moveSession(sessionId, sectionId);
   };
 
   // Anywhere in the list outside a section takes a session out of its section; a row in no
@@ -926,7 +953,7 @@ export function SessionList({
     if (!sessionId) return;
     event.preventDefault();
     actions.drag(null);
-    if (sectionOf(userSections, sessionId) !== undefined) sectionActions.move(sessionId, null);
+    if (sectionOf(userSections, sessionId) !== undefined) moveSession(sessionId, null);
   };
 
   const customGroup = (group: CustomGroup) => (
@@ -961,6 +988,7 @@ export function SessionList({
           uncapped={searching}
           activeId={activeId}
           statuses={statuses}
+          revealId={revealId}
           row={row}
         />
       ) : (
@@ -1177,6 +1205,7 @@ export function SessionList({
                   uncapped={searching}
                   activeId={activeId}
                   statuses={statuses}
+                  revealId={revealId}
                   row={row}
                 />
               </Box>
