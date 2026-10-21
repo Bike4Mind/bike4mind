@@ -257,4 +257,75 @@ describe('WhatsNewSliderModal video slides', () => {
     expect(await screen.findByRole('img', { name: 'Slide a' })).toBeTruthy();
     expect(screen.queryByTestId('whats-new-slide-video')).toBeNull();
   });
+
+  it('falls back to the image when the initial signing request fails', async () => {
+    mocks.mutateAsync = vi.fn(() => Promise.reject(new Error('sign failed')));
+    renderSlider([slide('a', '2026-03-05T00:00:00Z', { video: VIDEO, imageUrl: `${S3}/modals/shot.png` })]);
+
+    expect(await screen.findByRole('img', { name: 'Slide a' })).toBeTruthy();
+    expect(screen.queryByTestId('whats-new-slide-video')).toBeNull();
+  });
+
+  it('falls back to the image when re-signing fails', async () => {
+    let calls = 0;
+    mocks.mutateAsync = vi.fn(async ({ filePaths }: { filePaths: string[] }) => {
+      calls += 1;
+      if (calls > 1) throw new Error('sign failed');
+      return filePaths.map(p => sign(p, 1));
+    });
+    renderSlider([slide('a', '2026-03-05T00:00:00Z', { video: VIDEO, imageUrl: `${S3}/modals/shot.png` })]);
+    const video = await videoEl();
+
+    fireEvent.error(video);
+
+    expect(await screen.findByRole('img', { name: 'Slide a' })).toBeTruthy();
+    expect(screen.queryByTestId('whats-new-slide-video')).toBeNull();
+  });
+
+  it('falls back to the image when re-signing returns no URL', async () => {
+    renderSlider([slide('a', '2026-03-05T00:00:00Z', { video: VIDEO, imageUrl: `${S3}/modals/shot.png` })]);
+    const video = await videoEl();
+
+    mocks.withhold = true;
+    fireEvent.error(video);
+
+    expect(await screen.findByRole('img', { name: 'Slide a' })).toBeTruthy();
+    expect(screen.queryByTestId('whats-new-slide-video')).toBeNull();
+  });
+
+  it('leaves the video playable by hand when autoplay is blocked', async () => {
+    play.mockRejectedValue(new DOMException('autoplay blocked', 'NotAllowedError'));
+    renderSlider([slide('a', '2026-03-05T00:00:00Z', { video: VIDEO })]);
+
+    const video = await videoEl();
+    await waitFor(() => expect(play).toHaveBeenCalled());
+
+    expect(screen.getByTestId('whats-new-slide-video')).toBe(video);
+    expect(video.hasAttribute('controls')).toBe(true);
+  });
+
+  it('renders no empty slot when an unplayable video has neither poster nor image', async () => {
+    renderSlider([
+      slide('a', '2026-03-05T00:00:00Z', { video: { landscapeUrl: 'https://d111.cloudfront.net/wide.mp4' } }),
+    ]);
+
+    fireEvent.error(await videoEl());
+
+    await waitFor(() => expect(screen.queryByTestId('whats-new-slide-video-slot')).toBeNull());
+    expect(screen.queryByTestId('whats-new-slide-video')).toBeNull();
+  });
+
+  it('shows the date and release tag above the headline, above the video', async () => {
+    const releaseNote = slide('a', '2026-03-05T00:00:00Z', { video: VIDEO });
+    renderSlider([releaseNote]);
+
+    const meta = await screen.findByTestId('whats-new-slide-meta');
+    const title = document.getElementById('whats-new-modal-title');
+    const slot = await screen.findByTestId('whats-new-slide-video-slot');
+
+    expect(meta.textContent).toBe(releaseNote.subtitle);
+    expect(meta.textContent).toContain('v-a');
+    expect(meta.compareDocumentPosition(title!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(title!.compareDocumentPosition(slot) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
 });
