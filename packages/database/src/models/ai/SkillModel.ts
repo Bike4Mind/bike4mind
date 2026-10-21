@@ -43,14 +43,20 @@ export class SkillRepository extends BaseRepository<ISkillDocument> implements I
     }
     const { id, ...updateData } = data;
     const idFilter = { _id: convertId(id) };
+    // Bump `__v` (with no `__v` precondition, so ordinary edits never conflict): a guarded writer that
+    // read the skill while it was global must not land on top of content written here unscanned.
     const updated = await this._plainUpdate(
       { ...idFilter, isGlobalRead: { $ne: true }, isGlobalWrite: { $ne: true } },
       updateData as Record<string, unknown>,
-      options
+      options,
+      { $inc: { __v: 1 } }
     );
     if (updated) return updated;
     // A miss on a row that still exists means it went global after the caller read it.
-    if (await this.skillModel.exists(idFilter)) {
+    const existsQuery = this.skillModel.exists(idFilter);
+    if (options?.includeDeleted) existsQuery.setOptions({ includeDeleted: true });
+    if (this._txn) existsQuery.session(this._txn);
+    if (await existsQuery) {
       throw new ConcurrencyConflictError(this.skillModel.modelName, { filter: idFilter, reason: 'became_global' });
     }
     return null;

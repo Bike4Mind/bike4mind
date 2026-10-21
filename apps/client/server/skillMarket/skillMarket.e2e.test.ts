@@ -1559,4 +1559,40 @@ describe('global-skill write races (real mongod)', () => {
       description: 'concurrent',
     });
   });
+
+  it('market import: 409s an update into a non-global copy that went global after the read', async () => {
+    const source = await makeSkill(AUTHOR, 'Rewrite as bullets v1.');
+    const { listing } = await publish(source, 'public');
+    const copyId = (await call(importHandler, 'POST', OTHER, { id: listing.id }))._getJSONData().skill.id;
+    await skillRepository.update({ id: source.id, body: 'Rewrite as bullets v2.' });
+    await submitListingVersion(listing, (await skillRepository.findById(source.id))!, deps);
+
+    const stale = (await skillRepository.findById(copyId))!;
+    await skillRepository.update({ id: copyId, isGlobalRead: true });
+    vi.spyOn(skillRepository, 'findById').mockResolvedValueOnce(stale);
+
+    await expect(
+      call(importHandler, 'POST', OTHER, { id: listing.id }, { targetSkillId: copyId })
+    ).rejects.toMatchObject({ statusCode: 409 });
+    vi.restoreAllMocks();
+    expect(await skillRepository.findById(copyId)).toMatchObject({ body: 'Rewrite as bullets v1.' });
+  });
+
+  it('a guarded write from a global-era read conflicts with content written while the skill was non-global', async () => {
+    const skill = await makeSkill(AUTHOR, 'original');
+    await skillRepository.update({ id: skill.id, isGlobalRead: true });
+    const globalRead = (await skillRepository.findById(skill.id))!;
+
+    await skillRepository.update({ id: skill.id, isGlobalRead: false });
+    await skillRepository.updateIfNonGlobal({ id: skill.id, body: 'unscanned' });
+    await skillRepository.update({ id: skill.id, isGlobalRead: true });
+
+    await expect(
+      skillRepository.updateGuarded({
+        id: skill.id,
+        __v: (globalRead as { __v?: number }).__v,
+        description: 'scanned against the old body',
+      })
+    ).rejects.toMatchObject({ name: 'ConcurrencyConflictError', statusCode: 409 });
+  });
 });
