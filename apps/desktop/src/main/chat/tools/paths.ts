@@ -1,5 +1,5 @@
 import { readlink, realpath } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join, parse, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, parse, resolve, sep } from 'node:path';
 
 /** The kernel's own limit (MAXSYMLINKS); past it the open fails with ELOOP anyway. */
 const MAX_LINK_HOPS = 32;
@@ -136,15 +136,35 @@ export async function realpathNearest(target: string): Promise<string> {
  * ancestor, so a link in a granted folder aimed at a file that does not exist yet would look
  * like a new file inside the folder.
  */
-export async function physicalTarget(target: string, hops = 0): Promise<string> {
+export async function physicalTarget(target: string): Promise<string> {
   try {
     return await realpath(target);
   } catch {
-    const parent = dirname(target);
-    if (parent === target) return target;
-    const directory = await physicalTarget(parent, hops);
-    const link = hops < MAX_LINK_HOPS ? await readlink(target).catch(() => null) : null;
-    if (link === null) return join(directory, basename(target));
-    return physicalTarget(resolve(directory, link), hops + 1);
+    // A dangling link can contain `..` after another link. Resolve its components in order:
+    // path.resolve(directory, link) would collapse that `..` before following the earlier link.
+    const absolute = resolve(target);
+    let current = parse(absolute).root;
+    let pending = absolute.slice(current.length).split(sep);
+    let hops = 0;
+    while (pending.length > 0) {
+      const part = pending.shift();
+      if (!part || part === '.') continue;
+      if (part === '..') {
+        current = dirname(current);
+        continue;
+      }
+      const candidate = join(current, part);
+      const link = await readlink(candidate).catch(() => null);
+      if (link === null) {
+        // Existing components also supply their canonical casing on case-insensitive volumes.
+        current = await realpath(candidate).catch(() => candidate);
+        continue;
+      }
+      if (++hops > MAX_LINK_HOPS) throw new PathAccessDenied(target);
+      const root = parse(link).root;
+      if (isAbsolute(link)) current = root;
+      pending = [...link.slice(root.length).split(sep), ...pending];
+    }
+    return current;
   }
 }

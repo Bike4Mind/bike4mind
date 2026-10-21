@@ -137,6 +137,7 @@ describe('the Claude Code folder', () => {
         `mkdir -p ${project}/.claude && echo x > ${project}/.claude/settings.json`,
         `mkdir -p ${project}/n/o && ln -s o ${project}/n/.claude`,
         'mv .claude .claude-moved',
+        `mkdir -p ${project}/nested/.claude && mv ${project}/nested/.claude ${project}/nested/moved`,
       ]) {
         expect((await run(command, [home, project])).ok, command).toBe(false);
       }

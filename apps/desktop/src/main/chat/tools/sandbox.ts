@@ -203,9 +203,10 @@ export function buildProfile(writableRoots: readonly string[], alwaysDenied: rea
 
   lines.push(
     `(deny file-write* (regex ${CLAUDE_SETTINGS_PROFILE}))`,
-    // A `.claude` symlink, or ~/.claude renamed away and back, would carry settings past the
+    // A `.claude` symlink, or a project config folder renamed away and back, would carry settings past the
     // regex above, which only ever sees the resolved path.
     '(deny file-write-create (require-all (regex #"/\\.claude$") (vnode-type SYMLINK)))',
+    '(deny file-write-unlink (regex #"/\\.claude$"))',
     ...spellings(expandHome('~/.claude')).map(path => `(deny file-write-unlink (literal "${escapeProfilePath(path)}"))`)
   );
   for (const guard of guards()) {
