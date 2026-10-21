@@ -507,3 +507,35 @@ describe('proxy configured object-store origin', () => {
     expect(proxy(makeRequest(`https://app.example.invalid${path}`)).headers.get('Content-Security-Policy')).toBeNull();
   });
 });
+
+describe("proxy upstream What's New feed origin", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  const policy = () => proxy(makeRequest('https://app.example.invalid/home')).headers.get('Content-Security-Policy')!;
+  const sourcesOf = (csp: string, name: string) =>
+    csp
+      .split(';')
+      .map(part => part.trim().split(/\s+/))
+      .find(([directive]) => directive === name)!
+      .slice(1);
+
+  it('lets media, posters and the service worker load from the upstream origin', () => {
+    vi.stubEnv('WHATS_NEW_FEED_URL', 'https://upstream.example.invalid/api/v1/whats-new');
+    const csp = policy();
+    for (const name of ['connect-src', 'img-src', 'media-src']) {
+      expect(sourcesOf(csp, name)).toContain('https://upstream.example.invalid');
+    }
+    expect(sourcesOf(csp, 'script-src')).not.toContain('https://upstream.example.invalid');
+  });
+
+  it('adds nothing for an unset or non-https feed', () => {
+    vi.stubEnv('WHATS_NEW_FEED_URL', '');
+    const baseline = policy();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.stubEnv('WHATS_NEW_FEED_URL', 'http://upstream.example.invalid/api/v1/whats-new');
+    expect(policy()).toBe(baseline);
+  });
+});

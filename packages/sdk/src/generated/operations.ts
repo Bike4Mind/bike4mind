@@ -177,6 +177,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/video-generations/{id}',
   },
+  getWhatsNewMedia: {
+    method: 'GET',
+    path: '/api/v1/whats-new/media/{id}/{asset}',
+  },
   listAgents: {
     method: 'GET',
     path: '/api/v1/agents',

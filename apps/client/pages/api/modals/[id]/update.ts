@@ -3,7 +3,8 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
-import { WHATS_NEW_DEFAULT_REPOSITORY } from '@bike4mind/common';
+import { createModalVideoSchema, WHATS_NEW_DEFAULT_REPOSITORY } from '@bike4mind/common';
+import { deploymentMediaOrigins } from '@server/utils/deploymentMediaOrigins';
 import { cacheExternalImage, cacheExternalImages } from '@server/utils/cacheExternalImage';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { WhatsNewDistributionService } from '@server/services/whatsNewDistribution';
@@ -12,6 +13,8 @@ import { Logger } from '@bike4mind/observability';
 import { extractVariantForViewer, viewerClassifier, MODAL_SAFE_DEFAULT_KEY } from '@bike4mind/services';
 
 const logger = new Logger({ metadata: { service: 'modals/update' } });
+
+const ModalVideoSchema = createModalVideoSchema({ extraOrigins: deploymentMediaOrigins() });
 
 const ModalImageSchema = z.object({
   url: z.url(),
@@ -26,6 +29,7 @@ const UpdateModalRequestSchema = z.object({
   description: z.string().max(15000).nullable().optional(),
   imageUrl: z.string().nullable().optional(),
   images: z.array(ModalImageSchema).nullable().optional(),
+  video: ModalVideoSchema.nullable().optional(),
   textMessage: z.string().nullable().optional(),
   isBanner: z.coerce.boolean().optional(),
   tags: z.array(z.string()).nullable().optional(),

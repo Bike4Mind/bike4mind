@@ -1,6 +1,11 @@
 import { NextResponse } from 'next/server';
 import { resolvePyodideMirrorOrigin } from '@client/app/utils/pyodideDistribution';
 import { getTrustedHeaderClientIp } from '@bike4mind/server-utils/utils/trustedClientIpHeaders';
+import {
+  resolveFilesOrigin,
+  resolveObjectStoreOrigin,
+  resolveWhatsNewUpstreamOrigin,
+} from '@client/server/utils/deploymentMediaOrigins';
 import type { NextRequest } from 'next/server';
 import { allowsUsercontentRequest } from '@bike4mind/server-utils/utils/usercontentRequest';
 
@@ -29,26 +34,6 @@ function originVerified(request: NextRequest, secret: string): boolean {
   let diff = 0;
   for (let i = 0; i < secret.length; i++) diff |= value.charCodeAt(i) ^ secret.charCodeAt(i);
   return diff === 0;
-}
-
-function resolveObjectStoreOrigin(raw: string | undefined): string {
-  const configured = raw?.trim();
-  if (!configured) return '';
-  try {
-    if (
-      /[\s;]/.test(configured) ||
-      [...configured].some(character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)
-    ) {
-      throw new Error('Invalid endpoint');
-    }
-    const url = new URL(configured);
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('Unsupported protocol');
-    if (/[\s;,'"*\\]/.test(url.origin)) throw new Error('Invalid origin');
-    return url.origin;
-  } catch {
-    console.warn('[csp] ignoring invalid S3_PRESIGN_ENDPOINT');
-    return '';
-  }
 }
 
 export function proxy(request: NextRequest) {
@@ -164,7 +149,8 @@ export function proxy(request: NextRequest) {
 
   // Deployment's own files subdomain for CSP, derived from the account-tied SERVER_DOMAIN with
   // no brand fallback (#9310/#9306); empty when unconfigured.
-  const filesHost = process.env.SERVER_DOMAIN ? ` https://files.dev.${process.env.SERVER_DOMAIN}` : '';
+  const filesOrigin = resolveFilesOrigin(process.env.SERVER_DOMAIN);
+  const filesHost = filesOrigin ? ` ${filesOrigin}` : '';
 
   // Operator blog host for the optional blog-integration feature, driven by the same
   // NEXT_PUBLIC_BLOG_HOST config the client uses (open-core #9392); no brand fallback, empty
@@ -205,17 +191,21 @@ export function proxy(request: NextRequest) {
   const mapTileHost = ' https://tile.openstreetmap.org';
   const objectStoreOrigin = resolveObjectStoreOrigin(process.env.S3_PRESIGN_ENDPOINT);
   const objectStoreHost = objectStoreOrigin ? ` ${objectStoreOrigin}` : '';
+  // Upstream release notes play their uploaded videos from the upstream's own media route. connect-src
+  // too, for the service worker's re-fetch (see mapTileHost).
+  const whatsNewUpstreamOrigin = resolveWhatsNewUpstreamOrigin(process.env.WHATS_NEW_FEED_URL);
+  const whatsNewUpstreamHost = whatsNewUpstreamOrigin ? ` ${whatsNewUpstreamOrigin}` : '';
 
   const cspHeader = `
     default-src 'self';
     script-src ${scriptSrcPolicy}${pyodideHost};
     style-src ${styleSrcPolicy};
-    img-src 'self' blob: data: https://*.amazonaws.com https://www.google.com https://*.gstatic.com https://*.cloudfront.net${filesHost}${blogHost} https://avatars.githubusercontent.com https://*.google-analytics.com https://alb.reddit.com https://www.facebook.com${mapTileHost}${objectStoreHost};
+    img-src 'self' blob: data: https://*.amazonaws.com https://www.google.com https://*.gstatic.com https://*.cloudfront.net${filesHost}${blogHost} https://avatars.githubusercontent.com https://*.google-analytics.com https://alb.reddit.com https://www.facebook.com${mapTileHost}${objectStoreHost}${whatsNewUpstreamHost};
     font-src 'self' https://fonts.gstatic.com https://fonts.googleapis.com data:;
-    connect-src 'self' https://*.amazonaws.com wss://*.amazonaws.com https://*.googleapis.com https://*.google.com https://fonts.gstatic.com https://api.bigdatacloud.net https://*.anthropic.com https://*.mail.anthropic.com https://*.stripe.com ws://localhost:* wss://localhost:* http://127.0.0.1:48732 http://localhost:48732 https://*.openai.com https://unpkg.com https://*.cloudfront.net${filesHost}${blogHost} https://cdn.jsdelivr.net${pyodideHost} https://*.google-analytics.com https://pixel-config.reddit.com https://alb.reddit.com https://www.facebook.com https://api.elevenlabs.io wss://api.elevenlabs.io https://*.livekit.cloud wss://*.livekit.cloud${mapTileHost}${objectStoreHost};
+    connect-src 'self' https://*.amazonaws.com wss://*.amazonaws.com https://*.googleapis.com https://*.google.com https://fonts.gstatic.com https://api.bigdatacloud.net https://*.anthropic.com https://*.mail.anthropic.com https://*.stripe.com ws://localhost:* wss://localhost:* http://127.0.0.1:48732 http://localhost:48732 https://*.openai.com https://unpkg.com https://*.cloudfront.net${filesHost}${blogHost} https://cdn.jsdelivr.net${pyodideHost} https://*.google-analytics.com https://pixel-config.reddit.com https://alb.reddit.com https://www.facebook.com https://api.elevenlabs.io wss://api.elevenlabs.io https://*.livekit.cloud wss://*.livekit.cloud${mapTileHost}${objectStoreHost}${whatsNewUpstreamHost};
     frame-src 'self' blob: https://accounts.google.com https://js.stripe.com https://hooks.stripe.com https://docs.google.com https://drive.google.com https://sheets.google.com https://slides.google.com https://forms.google.com https://www.youtube-nocookie.com;
     object-src 'none';
-    media-src 'self' blob: https://*.amazonaws.com https://*.cloudfront.net${filesHost} https://*.googleapis.com${objectStoreHost};
+    media-src 'self' blob: https://*.amazonaws.com https://*.cloudfront.net${filesHost} https://*.googleapis.com${objectStoreHost}${whatsNewUpstreamHost};
     base-uri 'self';
     frame-ancestors 'self';
     form-action 'self';

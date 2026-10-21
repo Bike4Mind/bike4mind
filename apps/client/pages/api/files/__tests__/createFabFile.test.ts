@@ -422,3 +422,59 @@ describe('POST /api/files/createFabFile - signing boundaries', () => {
     expect(h.signUrl.mock.calls[0][2]).toMatchObject({ ContentLength: 10 });
   });
 });
+
+describe('POST /api/files/createFabFile - admin modal video', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.lakeFind.mockResolvedValue([]);
+    h.userFindById.mockResolvedValue({ id: 'u1', isAdmin: true, storageLimit: 1e12, currentStorageSize: 0 });
+    h.fabFileCreate.mockImplementation(async data => ({ id: 'f1', ...data }));
+    h.signUrl.mockResolvedValue('https://signed.test/put');
+  });
+
+  const mp4 = (overrides: Record<string, unknown> = {}) =>
+    body({ fileName: 'demo.mp4', mimeType: 'video/mp4', fileSize: 1000, purpose: 'modal-media', ...overrides });
+  const asAdmin = { user: { id: 'u1', isAdmin: true } };
+
+  it('admits an admin mp4 under the server-chosen modals prefix', async () => {
+    const { res } = makeRes();
+    await run(mp4(), res, asAdmin);
+
+    const persisted = h.fabFileCreate.mock.calls[0][0] as { mimeType: string; filePath: string };
+    expect(persisted.mimeType).toBe('video/mp4');
+    expect(persisted.filePath).toMatch(/^modals\/.+\.mp4$/);
+  });
+
+  it('stores an admin modal poster under the modals prefix with the usual type rules', async () => {
+    const { res } = makeRes();
+    await run(mp4({ fileName: 'poster.jpg', mimeType: 'image/jpeg' }), res, asAdmin);
+
+    const persisted = h.fabFileCreate.mock.calls[0][0] as { filePath: string };
+    expect(persisted.filePath).toMatch(/^modals\/.+\.jpg$/);
+  });
+
+  it('ignores the purpose for a non-admin poster', async () => {
+    const { res } = makeRes();
+    await run(mp4({ fileName: 'poster.jpg', mimeType: 'image/jpeg' }), res, { user: { id: 'u1', isAdmin: false } });
+
+    const persisted = h.fabFileCreate.mock.calls[0][0] as { filePath: string };
+    expect(persisted.filePath).not.toMatch(/^modals\//);
+  });
+
+  it.each([
+    ['a non-admin', mp4(), { user: { id: 'u1', isAdmin: false } }],
+    ['an admin naming the prefix instead of the purpose', mp4({ purpose: undefined, prefix: 'modals' }), asAdmin],
+    ['an admin claiming another video type', mp4({ mimeType: 'video/quicktime' }), asAdmin],
+    ['an admin with a non-mp4 name', mp4({ fileName: 'demo.mov' }), asAdmin],
+  ])('refuses %s with the usual 400', async (_case, payload, overrides) => {
+    const { res } = makeRes();
+    await expect(run(payload, res, overrides)).rejects.toThrow(/is not supported/);
+    expect(h.fabFileCreate).not.toHaveBeenCalled();
+  });
+
+  it('rejects a purpose it does not know', async () => {
+    const { res } = makeRes();
+    await expect(run(mp4({ purpose: 'other' }), res, asAdmin)).rejects.toThrow();
+    expect(h.fabFileCreate).not.toHaveBeenCalled();
+  });
+});

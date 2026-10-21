@@ -1,5 +1,12 @@
 import { signBrowserFileResponse } from '@server/files/signBrowserFileResponse';
-import { CreateFabFileRequestInputType, FabFileSourceType, FileEvents, Permission } from '@bike4mind/common';
+import { z } from 'zod';
+import {
+  CreateFabFileRequestInputType,
+  FabFileSourceType,
+  FileEvents,
+  MODAL_MEDIA_PREFIX,
+  Permission,
+} from '@bike4mind/common';
 import {
   adminSettingsRepository,
   dataLakeBatchRepository,
@@ -12,6 +19,7 @@ import {
   withTransaction,
 } from '@bike4mind/database';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
+import { getFileExtension } from '@bike4mind/utils';
 import { logEvent } from '@server/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -25,7 +33,15 @@ import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
 // No caller-chosen `prefix`: the key namespace decides how the S3 upload hook treats an object,
 // and a prefix such as `tmp` lands in one it skips (`isUntrackedFabFileKey`), so the object
 // would escape the storage charge, size check and moderation. Server-side callers still set it.
-const createFabFileSchema = fabFilesService.createFabFileSchema.omit({ prefix: true });
+const createFabFileSchema = fabFilesService.createFabFileSchema
+  .omit({ prefix: true })
+  .extend({ purpose: z.literal('modal-media').optional() });
+
+// The admin What's New media upload (AdminModalVideoFields) lands under the shared modal prefix, chosen
+// here, not by the caller. mp4 stays off the global allowlist (non-image uploads skip the content
+// scan), so only that admin upload admits it.
+const isModalVideo = (params: { mimeType?: string | null; fileName: string }) =>
+  params.mimeType === 'video/mp4' && getFileExtension(params.fileName) === 'mp4';
 
 const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
   .use((req, res, next) => {
@@ -38,7 +54,9 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
     asyncHandler<unknown, unknown, CreateFabFileRequestInputType>(async (req, res) => {
       const { user } = req;
 
-      const params = createFabFileSchema.parse(req.body);
+      const parsed = createFabFileSchema.parse(req.body);
+      const adminModalMedia = !!user.isAdmin && parsed.purpose === 'modal-media';
+      const params = adminModalMedia ? { ...parsed, prefix: MODAL_MEDIA_PREFIX } : parsed;
 
       // NOTE: unlike the presign siblings (generate-presigned-url.ts) we do NOT reject executable
       // upload types (html/xhtml/svg) here. Those siblings write to appFilesBucket, which IS routed
@@ -141,6 +159,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
           // org rungs need the actor's administered-org set, which the service cannot read off a
           // user document.
           administeredOrgIds: ctx.administeredOrgIds,
+          ...(adminModalMedia && isModalVideo(params) && { mimeTypePrecedence: 'claim-first' as const }),
         });
       });
 

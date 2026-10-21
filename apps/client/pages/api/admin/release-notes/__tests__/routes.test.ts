@@ -163,8 +163,33 @@ describe('PATCH /api/admin/release-notes/[id]', () => {
     expect(body.id).toBe(ID);
   });
 
+  it('sets a video and passes it to the edit', async () => {
+    m.edit.mockResolvedValue({ kind: 'ok', note: note() });
+    const video = { landscapeUrl: 'https://d111.cloudfront.net/wide.mp4', portraitUrl: null };
+    const { error } = await call(editHandler, { method: 'PATCH', query: { id: ID }, body: { video } });
+    expect(error).toBeUndefined();
+    expect(m.edit).toHaveBeenCalledWith(ID, { video });
+  });
+
+  it('clears the video with null', async () => {
+    m.edit.mockResolvedValue({ kind: 'ok', note: note() });
+    const { error } = await call(editHandler, { method: 'PATCH', query: { id: ID }, body: { video: null } });
+    expect(error).toBeUndefined();
+    expect(m.edit).toHaveBeenCalledWith(ID, { video: null });
+  });
+
+  it('serves the stored video on the admin note', async () => {
+    const video = { landscapeUrl: 'https://d111.cloudfront.net/wide.mp4' };
+    m.edit.mockResolvedValue({ kind: 'ok', note: note({ video }) });
+    const { body } = await call(editHandler, { method: 'PATCH', query: { id: ID }, body: { video } });
+    expect(body.video).toEqual(video);
+  });
+
   it.each([
     ['empty headline', { headline: '' }],
+    ['video on a disallowed host', { video: { landscapeUrl: 'https://evil.example.com/wide.mp4' } }],
+    ['video over plain http', { video: { portraitUrl: 'http://d111.cloudfront.net/tall.mp4' } }],
+    ['poster without its video', { video: { landscapePosterUrl: 'https://d111.cloudfront.net/p.png' } }],
     ['non-array items', { items: 'x' }],
     ['no fields', {}],
     ['unknown field', { status: 'hidden' }],

@@ -1,7 +1,14 @@
 import { z } from 'zod';
 import { releaseNoteRepository } from '@bike4mind/database';
-import { ApiKeyScope, findDenied, ReleaseNoteItemSchema, scrubCustomerText } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  createModalVideoSchema,
+  findDenied,
+  ReleaseNoteItemSchema,
+  scrubCustomerText,
+} from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
+import { deploymentMediaOrigins } from '@server/utils/deploymentMediaOrigins';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { loadDenylistOrThrow, noteOrThrow, toAdminReleaseNote } from '@server/releaseNotes/adminReleaseNotes';
@@ -11,6 +18,7 @@ const EditSchema = z
     headline: z.string().min(1).optional(),
     summary: z.string().optional(),
     items: z.array(ReleaseNoteItemSchema).optional(),
+    video: createModalVideoSchema({ extraOrigins: deploymentMediaOrigins() }).nullable().optional(),
   })
   .strict()
   .refine(edit => Object.values(edit).some(value => value !== undefined), { message: 'Nothing to update' });
@@ -39,10 +47,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).patch(async (re
     return text;
   };
 
-  const { headline, summary, items } = parsed.data;
+  const { headline, summary, items, video } = parsed.data;
   const result = await releaseNoteRepository.edit(id, {
     ...(headline !== undefined && { headline: clean('headline', headline) }),
     ...(summary !== undefined && { summary: clean('summary', summary, true) }),
+    ...(video !== undefined && { video }),
     ...(items !== undefined && {
       items: items.map((item, i) => ({ ...item, text: clean(`items.${i}.text`, item.text) })),
     }),
