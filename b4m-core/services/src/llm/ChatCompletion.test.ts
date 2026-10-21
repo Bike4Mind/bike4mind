@@ -3565,6 +3565,12 @@ describe('ChatCompletionProcess', () => {
             await service.process({ body: turnBody(), logger: mockLogger });
             expect(offered()).not.toContain('current_model_details');
             expect(lastCompleteOpts().identityViaTool).toBe(false);
+            // The per-attempt override masks the primary-turn trim above, so check the recorded list too.
+            const saved = vi.mocked(mockDb.quests.update).mock.calls.at(-1)?.[0] as {
+              promptMeta?: { offeredTools?: string[] };
+            };
+            expect(saved?.promptMeta?.offeredTools).toBeDefined();
+            expect(saved.promptMeta!.offeredTools).not.toContain('current_model_details');
           }
         );
 
