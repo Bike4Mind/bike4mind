@@ -176,6 +176,7 @@ describe('POST /api/oauth/federated-admin', () => {
     expect(status).toBe(403);
     expect(body.error).toBe('invalid_scope');
     expect(body.error_description).toContain('relying-party');
+    expect(mockTryIncrement).not.toHaveBeenCalled();
     expect(mockVerifyIdToken).not.toHaveBeenCalled();
     expect(mockCheckGrant).not.toHaveBeenCalled();
     expect(mockUserFindById).not.toHaveBeenCalled();
