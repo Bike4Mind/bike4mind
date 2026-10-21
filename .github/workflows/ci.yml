@@ -657,9 +657,9 @@ jobs:
       - name: Mark shard start
         run: echo "SHARD_START_SECONDS=$(date +%s)" >> "$GITHUB_ENV"
 
-      # `matrix.shard.script` is unset on every shard but the integration ones (client and
-      # workers), and an unset matrix value is the empty string here, so `||` falls back
-      # to the unit `test` script. `matrix.shard.args` is likewise set only on the
+      # `matrix.shard.script` is unset on every shard but the integration ones (client,
+      # workers and server-utils), and an unset matrix value is the empty string here, so
+      # `||` falls back to the unit `test` script. `matrix.shard.args` is likewise set only on the
       # shard legs (three client, three client-integration), where it carries
       # `--shard=i/3` - deliberately with no `--` separator before it, see the matrix
       # entries above for why that is load-bearing.
