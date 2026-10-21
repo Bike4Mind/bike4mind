@@ -89,6 +89,8 @@ export interface ClaudeChatImportSummary {
   fileName: string;
   counts: ClaudeImportCounts & { updated: number; unchanged: number };
   error?: string;
+  /** Some failure may clear on its own (a write or attachment error), unlike an unreadable conversation. */
+  retryable?: boolean;
 }
 
 export interface ClaudeImportState {

@@ -92,6 +92,7 @@ export async function importChatExport(path: string, deps: ChatImportDeps): Prom
       } catch (error) {
         if (error instanceof ImportScopeChangedError) throw error;
         counts.failed++;
+        summary.retryable = true;
       }
       if (counts.found % 25 === 0) {
         deps.onProgress?.();

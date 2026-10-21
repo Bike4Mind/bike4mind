@@ -578,7 +578,7 @@ export class ClaudeImportService {
           if (this.deps.scopeKey() !== scopeKey) break;
           const result = await this.importChatFile(zip.path);
           const summary = scope.lastChatImport;
-          if (!result.ok || !summary || summary.error || summary.counts.failed > 0) continue;
+          if (!result.ok || !summary || summary.error || summary.retryable) continue;
           scope.watchedSeen[zip.path] = zip.mtimeMs;
           await this.states.saveScope(scopeKey);
         } catch (error) {

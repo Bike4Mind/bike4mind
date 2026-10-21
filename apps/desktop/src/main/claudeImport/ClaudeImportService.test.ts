@@ -302,6 +302,31 @@ describe('ClaudeImportService', () => {
     expect((await stat(path)).mtimeMs).toBe(original.mtimeMs);
   });
 
+  it('does not retry a watched export whose only failure is an unreadable conversation', async () => {
+    vi.useFakeTimers();
+    const { root, service, pick } = await setup();
+    const folder = join(root, 'downloads');
+    await mkdir(folder);
+    pick(folder);
+    await service.setChatWatchFolder(false);
+    const fixture = JSON.parse(await readFile(join(FIXTURES, 'conversations.json'), 'utf8')) as unknown[];
+    const path = join(folder, 'export.zip');
+    await writeFile(
+      path,
+      buildZip([
+        { name: 'users.json', data: Buffer.from('[]') },
+        { name: 'conversations.json', data: Buffer.from(JSON.stringify([fixture[0], { not: 'a conversation' }])) },
+      ])
+    );
+    service.start();
+    await vi.advanceTimersByTimeAsync(5000);
+    await vi.waitFor(async () => {
+      const scope = JSON.parse(await readFile(join(root, 'userData', 'claude-import', 'test-scope.json'), 'utf8'));
+      expect(scope.watchedSeen[path]).toBe((await stat(path)).mtimeMs);
+    });
+    expect((await service.state()).chat.lastImport?.counts).toMatchObject({ imported: 1, failed: 1 });
+  });
+
   it('retries an archive that was unreadable on the initial scan at the same mtime', async () => {
     vi.useFakeTimers();
     const { root, service, store, pick } = await setup();
