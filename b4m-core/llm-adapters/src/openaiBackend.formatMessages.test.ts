@@ -88,6 +88,20 @@ describe('OpenAIBackend.formatMessages — caller system consolidation (#8844)',
     expect(lead).toBe(`${ORG_GUARD}\n\n${buildIdentityReminder(ChatModels.GPT5_4)}`);
   });
 
+  it('closes the lead with the named reminder when a display name is passed', () => {
+    const messages: IMessage[] = [
+      { role: 'system', content: ORG_GUARD },
+      { role: 'user', content: 'Hello.' },
+    ];
+
+    const lead = leadSystemText(
+      formatMessages(backend, messages, false, ChatModels.GPT5_4, { modelDisplayName: 'GPT-5.4' })
+    );
+
+    expect(lead).toBe(`${ORG_GUARD}\n\n${buildIdentityReminder(ChatModels.GPT5_4, 'GPT-5.4')}`);
+    expect(lead).toContain(`you are GPT-5.4 (model id ${ChatModels.GPT5_4}).`);
+  });
+
   it.each([ChatModels.GPT5_4, ChatModels.GPT4_1])(
     'synthesizes no persona or tool protocol for %s, with or without tools',
     model => {
