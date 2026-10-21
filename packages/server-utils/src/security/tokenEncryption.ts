@@ -1,9 +1,4 @@
-import {
-  encryptSecret,
-  decryptSecret,
-  isEncrypted,
-  isValidEncryptionKey,
-} from './secretEncryption';
+import { encryptSecret, decryptSecret, isEncrypted, isValidEncryptionKey } from './secretEncryption';
 import { mcpEnvSecretContext } from '@bike4mind/utils/security';
 import { Config } from '../utils/config';
 
@@ -52,8 +47,8 @@ export function decryptToken(value: string | null | undefined, context?: string)
 
   throw new Error(
     hasPrevious
-      ? 'Token decryption failed — value may be corrupted or encrypted with an unknown key'
-      : 'Token decryption failed — check SECRET_ENCRYPTION_KEY'
+      ? 'Token decryption failed \u2014 value may be corrupted or encrypted with an unknown key'
+      : 'Token decryption failed \u2014 check SECRET_ENCRYPTION_KEY'
   );
 }
 
