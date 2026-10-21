@@ -172,7 +172,7 @@ import type { MusicToolConfig } from './tools/implementation/musicGeneration';
 import { applyModerationHit, MODERATION_POLICY, moderationThrottleKey } from '../userService/moderationPolicy';
 import { ToolDefinition } from './tools/base/types';
 import { ServerAgentStore } from './agents/ServerAgentStore';
-import throttle from 'lodash/throttle.js';
+import { createStreamingStatusSender } from './streamingStatusSender';
 import {
   AutoNameSessionFeature,
   ChatCompletionFeature,
@@ -2023,6 +2023,14 @@ export class ChatCompletionProcess {
     let finalQuest: IChatHistoryItemDocument | null = null;
     let cancelWatcherInterval: NodeJS.Timeout | null = null;
     let streamingHeartbeatInterval: NodeJS.Timeout | null = null;
+    // Assigned once the streaming sender exists. A pending trailing send reads `quest` at fire
+    // time, so it must be dropped before any terminal write or it publishes `done`/`stopped`
+    // ahead of settlement and the terminal save.
+    let cancelPendingStreamingSend: (() => void) | null = null;
+    const setTerminalQuestStatus = (target: IChatHistoryItemDocument, status: 'done' | 'stopped') => {
+      cancelPendingStreamingSend?.();
+      target.status = status;
+    };
     // Replaced once the turn's deliverable baselines exist; until then nothing can have answered.
     let clearStaleFallbackInfoIfNoAnswer = () => {
       quest.fallbackInfo = null;
@@ -2090,7 +2098,7 @@ export class ChatCompletionProcess {
 
       if (!loadedSession) {
         // Try to clean up the quest if session doesn't exist
-        quest.status = 'stopped';
+        setTerminalQuestStatus(quest, 'stopped');
         quest.replies = ['Session not found. Please create a new session or refresh the page.'];
         await saveQuest(quest);
         return;
@@ -2107,7 +2115,7 @@ export class ChatCompletionProcess {
       const latestQuestStatus = await this.db.quests.findByIdWithStatus(questId);
       if (latestQuestStatus?.status === 'stopped') {
         logger.info(`Quest ${questId} was stopped before processing started`);
-        quest.status = 'stopped';
+        setTerminalQuestStatus(quest, 'stopped');
         return;
       }
       quest.status = 'running';
@@ -2245,15 +2253,12 @@ export class ChatCompletionProcess {
       // The invisible-failure warning ("caller has knowledge but no knowledge tool offered")
       // moved to after buildTools, where the authoritative post-build tool list is known.
 
-      const throttledSend = DISABLE_SERVER_THROTTLING
-        ? () => this.sendStatusUpdate(quest, null) // No throttling - direct send
-        : throttle(
-            () => {
-              return this.sendStatusUpdate(quest, null);
-            },
-            THROTTLE_INTERVAL,
-            { leading: true }
-          );
+      const throttledSend = createStreamingStatusSender(
+        () => this.sendStatusUpdate(quest, null),
+        THROTTLE_INTERVAL,
+        DISABLE_SERVER_THROTTLING
+      );
+      cancelPendingStreamingSend = () => throttledSend.cancel();
 
       // Streaming heartbeat: persist quest state to MongoDB every 10s during streaming.
       // Without this, quest.replies and quest.updatedAt stay stale until completion, so a mid-stream
@@ -4650,7 +4655,7 @@ export class ChatCompletionProcess {
         // abort the controller, so the terminal status has to reflect that rather than
         // unconditionally claiming the turn finished.
         quest.researchModeResults = researchResults;
-        quest.status = successStatus();
+        setTerminalQuestStatus(quest, successStatus());
 
         // This branch returns before the normal settlement, so each configuration's usage settles
         // the hold here; one that streamed nothing (failed or cancelled up front) costs nothing.
@@ -5360,7 +5365,7 @@ export class ChatCompletionProcess {
 
         // Mark quest as done when all the replies are received
         const finalStatus = successStatus();
-        quest.status = finalStatus;
+        setTerminalQuestStatus(quest, finalStatus);
         clearStaleFallbackInfoIfNoAnswer();
         const visibleCharsBeforeStrip = countVisibleChars(quest.replies);
         // A Stop that resolves ends the stream wherever it was, same as the rejecting Stop below.
@@ -5399,8 +5404,11 @@ export class ChatCompletionProcess {
           });
         }
 
+        // Widen explicitly: the terminal flip happens inside setTerminalQuestStatus, so control
+        // flow analysis still believes status is 'running' at this point.
+        const statusAtEnd = quest.status as IChatHistoryItemDocument['status'];
         const incompleteAnswerNotice = buildIncompleteAnswerNotice({
-          stopped: quest.status === 'stopped',
+          stopped: statusAtEnd === 'stopped',
           toolCallCount: toolCallsSeen,
           visibleCharsAfterLastToolCall: countVisibleChars(quest.replies) - visibleCharsAtLastToolCall,
           stopReason: actualTokenUsage.stopReason,
@@ -6208,7 +6216,7 @@ export class ChatCompletionProcess {
           quest.promptMeta.warnings = [...(quest.promptMeta.warnings ?? []), earlyStopStamp.warning];
         }
 
-        quest.status = successStatus();
+        setTerminalQuestStatus(quest, successStatus());
         clearStaleFallbackInfoIfNoAnswer();
 
         // Context Telemetry: Finalize and attach to promptMeta
@@ -6412,7 +6420,7 @@ export class ChatCompletionProcess {
           }
         }
 
-        quest.status = successStatus();
+        setTerminalQuestStatus(quest, successStatus());
         clearStaleFallbackInfoIfNoAnswer();
 
         timer.phase('save');
@@ -6518,7 +6526,7 @@ export class ChatCompletionProcess {
         // Post-streaming processing failed, but the reply is already streamed.
         // Do NOT overwrite quest.reply, quest.replies, or quest.status - keep status as 'done'.
         logger.error(`❌ [POST_PROCESS] Error in post-streaming processing for quest ${questId}:`, postProcessError);
-        quest.status = successStatus();
+        setTerminalQuestStatus(quest, successStatus());
         clearStaleFallbackInfoIfNoAnswer();
         // Ensure quest is persisted as 'done' even if the error occurred before the normal save
         await saveQuest(quest);
@@ -6575,7 +6583,7 @@ export class ChatCompletionProcess {
         isAbortError(err) && (await this.db.quests.findByIdWithStatus(questId).catch(() => null))?.status === 'stopped';
       if (stoppedByUser) {
         logger.log(`Chat completion was stopped by user for quest ${questId}`);
-        quest.status = 'stopped';
+        setTerminalQuestStatus(quest, 'stopped');
         // Same rules as the success path, so an abort that rejects and one that resolves persist alike.
         flagNarratedToolCalls(applyNarratedToolCallStrip(quest, turnOfferedToolNames, { truncated: true }).toolNames);
         clearStaleFallbackInfoIfNoAnswer();
@@ -6600,7 +6608,7 @@ export class ChatCompletionProcess {
       };
       setErrorReply((err as Error).message);
       quest.type = 'error';
-      quest.status = 'done';
+      setTerminalQuestStatus(quest, 'done');
       // A turn can switch models and still fail; no model answered it, so it must not claim one did.
       quest.fallbackInfo = null;
       // Classifier for the client's "Add Credits" CTA. Chat reservation throws
@@ -6626,7 +6634,7 @@ export class ChatCompletionProcess {
         logger.log(`Chat completion was stopped by user for quest ${questId}: ${err.message}`);
         setErrorReply('The request was interrupted. Please try sending your message again.');
         quest.type = 'error';
-        quest.status = 'done';
+        setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);
         return;
       } else if (err instanceof ResponsesStreamTruncatedError) {
@@ -6635,7 +6643,7 @@ export class ChatCompletionProcess {
         logger.warn(`[Truncated] Quest ${questId}: ${err.message}`);
         setErrorReply('The request was interrupted. Please try sending your message again.');
         quest.type = 'error';
-        quest.status = 'done';
+        setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);
         return;
       } else if (
@@ -6650,7 +6658,7 @@ export class ChatCompletionProcess {
         logger.warn(`[Timeout] Quest ${questId}: ${err.message}`);
         setErrorReply('The AI service is currently experiencing high demand. Please try again in a few minutes.');
         quest.type = 'error';
-        quest.status = 'done';
+        setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);
         return;
       } else if (err instanceof Error && isToolPairingError(err)) {
@@ -6658,14 +6666,14 @@ export class ChatCompletionProcess {
         logger.error(`[Tool Pairing Error] Quest ${questId}: ${err.message}`);
         setErrorReply('I encountered an issue with the conversation history. Please try again or start a new session.');
         quest.type = 'error';
-        quest.status = 'done';
+        setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);
         return;
       } else if (err instanceof Error && isOverloadedError(err)) {
         logger.error(`[Overloaded Error] Quest ${questId}: ${err.message}`);
         setErrorReply('The AI service is currently experiencing high demand. Please try again in a few minutes.');
         quest.type = 'error';
-        quest.status = 'done';
+        setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);
         return;
       } else if (err instanceof Error && err.message.startsWith('Your request is too large for')) {
@@ -6675,6 +6683,9 @@ export class ChatCompletionProcess {
       }
       throw err;
     } finally {
+      // A throw inside the catch can reach here before any terminal write, so the pending
+      // trailing send is dropped here too - the publish below is the only terminal frame.
+      cancelPendingStreamingSend?.();
       if (cancelWatcherInterval) {
         clearInterval(cancelWatcherInterval);
       }
