@@ -99,6 +99,7 @@ afterEach(() => {
   act(() => root.unmount());
   container.remove();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe('the image context menu', () => {
@@ -125,6 +126,7 @@ describe('the image context menu', () => {
     expect(menuItems()).toEqual(ITEM_IDS);
 
     await click('image-menu-save-btn');
+    expect(document.activeElement).toBe(byTestId('chat-media-view-btn'));
 
     expect(imageAction).toHaveBeenCalledWith({ source: 'media', url: SCREENSHOT.url, nameHint: 'screenshot' }, 'save');
     expect(byTestId('image-context-menu')).toBeNull();
@@ -216,6 +218,7 @@ describe('the image context menu', () => {
     await click('image-menu-attach-btn');
     await act(async () => undefined);
 
+    expect(document.activeElement).toBe(byTestId('chat-media-view-btn'));
     expect(byTestId('image-menu-error-notice')?.textContent).toContain('attach failed');
   });
 
@@ -236,6 +239,11 @@ describe('the image context menu', () => {
       document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     });
     expect(byTestId('image-context-menu')).toBeNull();
+    expect(document.activeElement).toBe(button);
+    await act(async () => {
+      document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ContextMenu', bubbles: true }));
+    });
+    expect(byTestId('image-context-menu')).not.toBeNull();
   });
 
   it('enters the Copy submenu with ArrowRight and leaves it with ArrowLeft', async () => {
@@ -261,6 +269,63 @@ describe('the image context menu', () => {
     expect(byTestId('image-menu-copy-submenu')).toBeNull();
     expect(byTestId('image-context-menu')).not.toBeNull();
     expect(document.activeElement).toBe(byTestId('image-menu-copy-submenu-btn'));
+
+    await press(copy, 'ArrowRight');
+    await press(document.activeElement!, 'Escape');
+    expect(byTestId('image-menu-copy-submenu')).toBeNull();
+    expect(byTestId('image-context-menu')).not.toBeNull();
+    expect(document.activeElement).toBe(copy);
+    await press(copy, 'Escape');
+    expect(byTestId('image-context-menu')).toBeNull();
+    expect(document.activeElement).toBe(byTestId('chat-media-view-btn'));
+  });
+
+  it('leaves focus on an outside control when the menu blurs', async () => {
+    await render(
+      <ImageMenuProvider>
+        <MediaAttachments media={[SCREENSHOT]} />
+        <button data-testid="outside">Outside</button>
+      </ImageMenuProvider>
+    );
+    await rightClick(byTestId('chat-media-view-btn')!);
+    const outside = byTestId('outside')!;
+    await act(async () => outside.focus());
+    expect(byTestId('image-context-menu')).toBeNull();
+    expect(document.activeElement).toBe(outside);
+  });
+
+  it('keeps the Copy submenu in the viewport after placement and resize', async () => {
+    let submenuTop = 550;
+    vi.stubGlobal('innerHeight', 600);
+    vi.stubGlobal('innerWidth', 800);
+    const originalRect = HTMLElement.prototype.getBoundingClientRect;
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this.dataset.testid === 'image-menu-copy-submenu-btn') return new DOMRect(600, 550, 198, 32);
+      if (this.dataset.testid === 'image-menu-copy-submenu') return new DOMRect(438, submenuTop, 162, 106);
+      return originalRect.call(this);
+    });
+    await render(
+      <ImageMenuProvider>
+        <MediaAttachments media={[SCREENSHOT]} />
+      </ImageMenuProvider>
+    );
+    await rightClick(byTestId('chat-media-view-btn')!);
+    await click('image-menu-copy-submenu-btn');
+    const submenu = byTestId('image-menu-copy-submenu')!;
+    expect(submenu.style.transform).toBe('translateY(-60px)');
+    expect(getComputedStyle(submenu).right).toBe('100%');
+
+    // Joy can update its outer transform after the submenu mounts.
+    submenuTop = 20;
+    await act(async () => {
+      byTestId('image-context-menu')!.style.transform = 'translate(0px, 20px)';
+    });
+    expect(submenu.style.transform).toBe('translateY(0px)');
+
+    submenuTop = 450;
+    vi.stubGlobal('innerHeight', 500);
+    await act(async () => window.dispatchEvent(new Event('resize')));
+    expect(submenu.style.transform).toBe('translateY(-60px)');
   });
 
   it('opens no menu outside a provider', async () => {
@@ -290,6 +355,7 @@ describe('the image context menu', () => {
     await rightClick(byTestId('chat-media-view-btn')!);
     await click('image-menu-attach-btn');
 
+    expect(document.activeElement).toBe(byTestId('chat-media-view-btn'));
     expect(attachImage).toHaveBeenCalledWith('s1', { source: 'media', url: SCREENSHOT.url, nameHint: 'screenshot' });
     expect(composer().querySelectorAll('[data-testid="attachment-tile"]')).toHaveLength(1);
     expect(composer().textContent).toContain('screenshot.png');

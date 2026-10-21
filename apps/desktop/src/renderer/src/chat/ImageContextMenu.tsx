@@ -4,6 +4,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -36,7 +37,7 @@ interface Point {
   y: number;
 }
 
-type OpenImageMenu = (image: ChatImageRef, at: Point) => void;
+type OpenImageMenu = (image: ChatImageRef, at: Point, trigger: HTMLElement) => void;
 
 const ImageMenuContext = createContext<OpenImageMenu | null>(null);
 
@@ -59,12 +60,16 @@ export function useImageMenu(image: ChatImageRef | null) {
         event.preventDefault();
         // A contextmenu raised from the keyboard reports no pointer position.
         const fromKeyboard = event.clientX === 0 && event.clientY === 0;
-        open(image, fromKeyboard ? belowElement(event.currentTarget) : { x: event.clientX, y: event.clientY });
+        open(
+          image,
+          fromKeyboard ? belowElement(event.currentTarget) : { x: event.clientX, y: event.clientY },
+          event.currentTarget
+        );
       },
       onKeyDown: (event: KeyboardEvent<HTMLElement>) => {
         if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return;
         event.preventDefault();
-        open(image, belowElement(event.currentTarget));
+        open(image, belowElement(event.currentTarget), event.currentTarget);
       },
     };
   }, [open, image]);
@@ -92,7 +97,33 @@ function CopySubmenu({
   onPick: (choice: CopyChoice) => void;
   onBack: () => void;
 }) {
+  const submenu = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLUListElement>(null);
+
+  useLayoutEffect(() => {
+    const element = submenu.current;
+    if (!element) return;
+    const keepInViewport = () => {
+      // Measure without the previous correction after Joy moves its outer menu.
+      element.style.transform = '';
+      const rect = element.getBoundingClientRect();
+      const shift = Math.max(4 - rect.top, Math.min(0, window.innerHeight - 4 - rect.bottom));
+      element.style.transform = `translateY(${shift}px)`;
+    };
+    keepInViewport();
+    // Joy updates the outer menu's transform after placing or flipping it.
+    const outerMenu = element.closest('[role="menu"]');
+    const placement = new MutationObserver(keepInViewport);
+    if (outerMenu) placement.observe(outerMenu, { attributes: true, attributeFilter: ['style'] });
+    const size = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(keepInViewport);
+    size?.observe(element);
+    window.addEventListener('resize', keepInViewport);
+    return () => {
+      placement.disconnect();
+      size?.disconnect();
+      window.removeEventListener('resize', keepInViewport);
+    };
+  }, [top, flip, onDisk]);
   const items = () => Array.from(list.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? []);
 
   useEffect(() => {
@@ -122,12 +153,15 @@ function CopySubmenu({
   return (
     <Box component="li" role="none" sx={{ listStyle: 'none' }}>
       <Sheet
+        ref={submenu}
         variant="outlined"
         sx={{
           position: 'absolute',
           top,
           ...(flip ? { right: '100%' } : { left: '100%' }),
           minWidth: 160,
+          maxHeight: 'calc(100vh - 8px)',
+          overflowY: 'auto',
           borderRadius: 'sm',
           boxShadow: 'md',
           bgcolor: 'background.popup',
@@ -258,6 +292,7 @@ export const ImageContextMenu = memo(function ImageContextMenu({
   at,
   canAttach,
   onClose,
+  onReturnFocus,
   onAction,
   onAttach,
 }: {
@@ -265,6 +300,7 @@ export const ImageContextMenu = memo(function ImageContextMenu({
   at: Point | null;
   canAttach: boolean;
   onClose: () => void;
+  onReturnFocus: () => void;
 } & MenuCallbacks) {
   return (
     <Dropdown open={image !== null} onOpenChange={(_event, open) => !open && onClose()}>
@@ -275,6 +311,8 @@ export const ImageContextMenu = memo(function ImageContextMenu({
           root: {
             'aria-hidden': true,
             tabIndex: -1,
+            // Joy restores focus to its anchor after Escape. Forward that to the real image.
+            onFocus: onReturnFocus,
             style: {
               position: 'fixed',
               left: at?.x ?? 0,
@@ -315,7 +353,14 @@ export function ImageMenuProvider({
 }) {
   const [menu, setMenu] = useState<{ image: ChatImageRef; at: Point } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const open = useCallback<OpenImageMenu>((image, at) => setMenu({ image, at }), []);
+  const trigger = useRef<HTMLElement | null>(null);
+  const open = useCallback<OpenImageMenu>((image, at, element) => {
+    trigger.current = element;
+    setMenu({ image, at });
+  }, []);
+  const returnFocus = useCallback(() => {
+    if (trigger.current?.isConnected) trigger.current.focus();
+  }, []);
   const close = useCallback(() => setMenu(null), []);
 
   const report = useCallback((error: unknown) => setNotice(error instanceof Error ? error.message : String(error)), []);
@@ -323,19 +368,21 @@ export function ImageMenuProvider({
   const onAction = useCallback(
     (image: ChatImageRef, action: ChatImageAction) => {
       setMenu(null);
+      returnFocus();
       void window.b4m.chat.imageAction(image, action).then(result => {
         if (!result.ok) setNotice(result.error);
       }, report);
     },
-    [report]
+    [report, returnFocus]
   );
 
   const attach = useCallback(
     (image: ChatImageRef) => {
       setMenu(null);
+      returnFocus();
       onAttach?.(image).catch(report);
     },
-    [onAttach, report]
+    [onAttach, report, returnFocus]
   );
 
   return (
@@ -346,6 +393,7 @@ export function ImageMenuProvider({
         at={menu?.at ?? null}
         canAttach={onAttach !== undefined}
         onClose={close}
+        onReturnFocus={returnFocus}
         onAction={onAction}
         onAttach={attach}
       />

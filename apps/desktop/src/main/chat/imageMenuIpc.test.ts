@@ -1,5 +1,6 @@
 import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { join, sep } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AddAttachmentsResult, ChatImageActionResult, ChatImageRef } from '@shared/chat';
@@ -12,8 +13,8 @@ const SESSION = 'session-1';
 // A real PNG header is not needed: nothing here decodes, and copyImage is a fake.
 const PNG = Buffer.from('not really a png');
 
-async function setup() {
-  const base = await mkdtemp(join(tmpdir(), 'b4m-image-menu-'));
+async function setup(directoryName = '') {
+  const base = join(await mkdtemp(join(tmpdir(), 'b4m-image-menu-')), directoryName);
   const media = new MediaStore(join(base, 'media'));
   const attachments = new AttachmentStore(join(base, 'attachments'), { debug: () => {}, warn: () => {} });
   const deps = {
@@ -198,15 +199,36 @@ describe('image menu IPC', () => {
       expect(await s.act(s.mediaRef, 'copy-markdown')).toEqual({ ok: true, done: true });
       expect(await s.act(s.attachmentRef, 'copy-markdown')).toEqual({ ok: true, done: true });
 
-      const [mediaLink] = s.deps.copyText.mock.calls[0];
-      expect(mediaLink.startsWith('![](')).toBe(true);
-      expect(mediaLink.endsWith(')')).toBe(true);
-      expect(mediaLink.slice(4, -1).startsWith(join(s.base, 'media', SESSION) + sep)).toBe(true);
-
-      const [attachmentLink] = s.deps.copyText.mock.calls[1];
-      expect(attachmentLink).toBe(`![](${join(s.base, 'attachments', SESSION, s.attachment.id)})`);
+      const mediaFile = await s.media.locate(SESSION, s.screenshot.name);
+      expect(s.deps.copyText.mock.calls[0][0]).toBe(markdownImage(pathToFileURL(mediaFile!.path).href));
+      expect(s.deps.copyText.mock.calls[1][0]).toBe(
+        markdownImage(pathToFileURL(join(s.base, 'attachments', SESSION, s.attachment.id)).href)
+      );
     });
   });
+
+  it.each(['A#B', 'A%B', 'A%20B', 'A B', 'A(1)', ...(process.platform === 'win32' ? [] : ['A?B', 'A\\B', 'A<B>'])])(
+    'copies Markdown with the exact stored path under %s',
+    async directoryName => {
+      const special = await setup(directoryName);
+      for (const ref of [special.mediaRef, special.attachmentRef]) {
+        expect(await special.act(ref, 'copy-path')).toEqual({ ok: true, done: true });
+        const [storedPath] = special.deps.copyText.mock.calls.at(-1)!;
+        expect(await special.act(ref, 'copy-markdown')).toEqual({ ok: true, done: true });
+        const [markdown] = special.deps.copyText.mock.calls.at(-1)!;
+        // Parentheses use CommonMark's angle-bracket destination syntax.
+        const markdownDestination = markdown.slice(4, -1);
+        const destination = markdownDestination.startsWith('<')
+          ? markdownDestination.slice(1, -1)
+          : markdownDestination;
+        const url = new URL(destination);
+        expect(url.protocol).toBe('file:');
+        expect(url.search).toBe('');
+        expect(url.hash).toBe('');
+        expect(fileURLToPath(url)).toBe(storedPath);
+      }
+    }
+  );
 
   describe('attach', () => {
     it('adds the stored image to the session through the attachment intake', async () => {
@@ -218,6 +240,19 @@ describe('image menu IPC', () => {
         mediaType: 'image/png',
         name: 'screenshot-2026-10-21-143005.png',
       });
+    });
+
+    it('copies an attachment into the target session independently of its original', async () => {
+      const targetSession = 'target-session';
+      const result = await s.attach(targetSession, s.attachmentRef);
+      expect(result.rejected).toEqual([]);
+      expect(result.attachments).toHaveLength(1);
+      const [copied] = result.attachments;
+      expect(copied).toMatchObject({ kind: 'image', mediaType: 'image/png', name: 'pasted.png' });
+      expect(await s.deps.attachments.read(targetSession, copied.id)).toEqual(PNG);
+      await s.deps.attachments.discard(SESSION, s.attachment.id);
+      expect(await s.deps.attachments.read(SESSION, s.attachment.id)).toBeNull();
+      expect(await s.deps.attachments.read(targetSession, copied.id)).toEqual(PNG);
     });
 
     it('rejects a bad session id or an unresolvable ref without writing', async () => {

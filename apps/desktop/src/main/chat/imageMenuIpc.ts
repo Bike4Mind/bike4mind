@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import type { IpcMain, SaveDialogOptions, WebContents } from 'electron';
 import type { AddAttachmentsResult, ChatImageAction, ChatImageActionResult, ChatImageRef } from '@shared/chat';
 import { IPC_CHANNELS } from '@shared/ipc';
@@ -175,7 +176,7 @@ export function registerImageMenuIpc(ipc: Pick<IpcMain, 'handle'>, deps: ImageMe
         await deps.copyText(image.path);
         return { ok: true, done: true };
       case 'copy-markdown':
-        await deps.copyText(markdownImage(image.path));
+        await deps.copyText(markdownImage(pathToFileURL(image.path).href));
         return { ok: true, done: true };
       case 'reveal':
         deps.reveal(image.path);
