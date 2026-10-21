@@ -30,7 +30,7 @@ describe('registry resolution with contributed rows', () => {
     expect(registry.grantTagForEntitlement('example:pro')).toBe('example-pro');
   });
 
-  it('pays contributed signup credits once per bundle', async () => {
+  it('pays a contributed staff credit once and nothing on an uncredited key', async () => {
     const registry = await loadRegistry(CONTRIBUTION);
 
     expect(registry.signupCreditsForKeys(['example:staff'])).toBe(1000);
@@ -39,11 +39,18 @@ describe('registry resolution with contributed rows', () => {
   });
 
   it('only implies between known keys over the merged rows', async () => {
-    const registry = await loadRegistry(CONTRIBUTION);
+    const registry = await loadRegistry({
+      ...CONTRIBUTION,
+      impliedEntitlements: [
+        ...(CONTRIBUTION.impliedEntitlements ?? []),
+        { ifHeld: 'example:orphan', alsoGrant: ['example:orphan-addon'] },
+      ],
+    });
     const known = new Set(registry.KNOWN_ENTITLEMENT_KEYS);
     const { impliedRows } = registry.__registryRows;
 
     expect(impliedRows.map(row => row.ifHeld)).toContain('example:pro');
+    expect(impliedRows.map(row => row.ifHeld)).not.toContain('example:orphan');
     for (const row of impliedRows) {
       expect(known.has(row.ifHeld), `'${row.ifHeld}' is not a known key`).toBe(true);
       for (const key of row.alsoGrant) expect(known.has(key), `'${key}' is not a known key`).toBe(true);
