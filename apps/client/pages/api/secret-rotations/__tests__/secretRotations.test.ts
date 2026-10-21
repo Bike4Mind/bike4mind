@@ -165,6 +165,23 @@ describe('POST /api/secret-rotations/renewed', () => {
     mockFindWithSecret.mockResolvedValue(null);
   });
 
+  it('refuses to renew against a pre-fingerprint row still holding the current secret', async () => {
+    // Rows captured before fingerprints existed have only the (encrypted) outgoing value, so
+    // equality with the running secret is the only evidence available that nothing changed.
+    const { configureSecretsAtRest, encryptAtRest, generateEncryptionKey } = await import('@bike4mind/utils/security');
+    configureSecretsAtRest(generateEncryptionKey());
+    try {
+      mockFindById.mockResolvedValue({ id: 's1', keyName: 'JWT_SECRET', rotationIntervalDays: 30 });
+      mockFindWithSecret.mockResolvedValue({ previousKey: encryptAtRest('server-held-jwt-secret') });
+      const { req, res } = request({ id: 's1' });
+
+      await expect(mockRefs.postHandler!(req, res)).rejects.toThrow('has not changed');
+      expect(mockUpdate).not.toHaveBeenCalled();
+    } finally {
+      configureSecretsAtRest(undefined);
+    }
+  });
+
   it('stores previousKey encrypted at rest, recoverable by the grace-window verifiers', async () => {
     const { configureSecretsAtRest, decryptAtRest, generateEncryptionKey } = await import('@bike4mind/utils/security');
     configureSecretsAtRest(generateEncryptionKey());
