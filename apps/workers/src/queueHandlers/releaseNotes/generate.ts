@@ -76,9 +76,11 @@ async function completeValidated<T>(
       reply = await complete(currentPrompt);
     } catch (error) {
       if (fallback === undefined) throw error;
-      logger?.warn(`[releaseNotes] ${label} repair call failed; keeping the first draft`);
+      const reason = error instanceof Error ? error.message : String(error);
+      logger?.warn(`[releaseNotes] ${label} repair call failed (${reason}); keeping the first draft`);
       return fallback;
     }
+    // Only completed calls are counted; one that throws may have reached the provider uncounted.
     usage.inputTokens += Math.ceil(currentPrompt.length / CHARS_PER_TOKEN);
     usage.outputTokens += Math.ceil(reply.length / CHARS_PER_TOKEN);
 
@@ -105,7 +107,7 @@ async function completeValidated<T>(
     ].join('\n');
   }
   if (fallback !== undefined) {
-    logger?.warn(`[releaseNotes] ${label} repair invalid; keeping the first draft`);
+    logger?.warn(`[releaseNotes] ${label} repair invalid (${lastErrors.join('; ')}); keeping the first draft`);
     return fallback;
   }
   throw new Error(`[releaseNotes] ${label} output invalid after one repair: ${lastErrors.join('; ')}`);
