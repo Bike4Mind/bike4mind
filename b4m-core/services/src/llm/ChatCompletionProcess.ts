@@ -5424,7 +5424,7 @@ export class ChatCompletionProcess {
         });
         // When the reply ended on a stripped call, say why in place of the generic notice. An answer
         // written after the call gets no notice: "try again" next to it would read as "you got nothing".
-        const narratedCallLeftNoAnswer = narratedStrip.endsOnCall && quest.status !== 'stopped';
+        const narratedCallLeftNoAnswer = narratedStrip.endsOnCall && statusAtEnd !== 'stopped';
         const turnNotice = narratedCallLeftNoAnswer ? NARRATED_TOOL_CALL_NOTICE : incompleteAnswerNotice;
         if (incompleteAnswerNotice && !narratedCallLeftNoAnswer) {
           logger.warn('[IncompleteAnswer] Turn ended without an answer after its last tool call', {
