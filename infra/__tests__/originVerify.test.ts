@@ -24,7 +24,9 @@ describe('origin verification wiring', () => {
     expect(injection).toContain(
       'event.request.headers["${ORIGIN_VERIFY_HEADER}"] = { value: "${originVerifySecret.result}" }'
     );
-    expect(router).toMatch(/viewerRequest: \{\s*injection: \$interpolate`\$\{originVerifyInjection\}/);
+    expect(router).toMatch(
+      /viewerRequest: \{\s*injection: \$interpolate`\$\{usercontentGateInjection\}\$\{originVerifyInjection\}\$\{userFileMarkerInjection\}`/
+    );
   });
 
   it('generates an alphanumeric secret so it is safe inside the injected JS string', () => {

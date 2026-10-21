@@ -761,7 +761,7 @@ export async function publishArtifact(
   };
 }
 
-function toResult(value: unknown): CallToolResult {
+export function toResult(value: unknown): CallToolResult {
   const structuredContent =
     value && typeof value === 'object' && !Array.isArray(value)
       ? (value as Record<string, unknown>)
@@ -772,7 +772,7 @@ function toResult(value: unknown): CallToolResult {
   };
 }
 
-function errorResult(message: string): CallToolResult {
+export function errorResult(message: string): CallToolResult {
   return { content: [{ type: 'text', text: message }], isError: true };
 }
 

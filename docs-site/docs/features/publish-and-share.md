@@ -79,6 +79,9 @@ Never rely on a URL being hard to guess. If content shouldn't be seen by everyon
 
 All publish endpoints require auth (`x-api-key` or a bearer token). See the [Publish & Share Cookbook](./publish-and-share-cookbook.md) for copy-paste recipes.
 
+For a user-scoped bundle, set `scopeId` to your authenticated user ID. Your editable
+display name or username does not select a publishing namespace.
+
 | Method & path | Purpose |
 |---|---|
 | `POST /api/publish/reply` | Publish a reply (`{ sessionId, messageId }`) |
@@ -89,3 +92,11 @@ All publish endpoints require auth (`x-api-key` or a bearer token). See the [Pub
 | `GET /api/publish/artifacts/{publicId}` | Fetch one |
 | `PATCH /api/publish/artifacts/{publicId}` | Update title/description/visibility, or `{"discoverable": true\|false}` to change the search listing |
 | `DELETE /api/publish/artifacts/{publicId}` | Unpublish (soft-delete) |
+
+## Troubleshooting
+
+- If a user-scoped upload returns 403, check that `scopeId` is your user ID.
+- After too many incorrect passphrase attempts, wait for the retry interval before
+  trying again. The limit applies to your IP address for that artifact.
+- A file in a published bundle downloads when opened directly as an asset URL.
+  Open the published page's main link to view the artifact.

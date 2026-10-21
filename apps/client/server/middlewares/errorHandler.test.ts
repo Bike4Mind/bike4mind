@@ -6,6 +6,7 @@ import {
   BadRequestError,
   StorageLimitError,
   TooManyRequestsError,
+  ServiceUnavailableError,
   parseStorageLimitErrorInfo,
 } from '@bike4mind/common';
 import { z } from 'zod';
@@ -294,6 +295,17 @@ describe('errorHandler - rate-limit info on a 429', () => {
     expect(status).toHaveBeenCalledWith(429);
     expect(set).toHaveBeenCalledWith({ 'Retry-After': '12', 'X-RateLimit-Limit-Minute': '10' });
     expect(json).toHaveBeenCalledWith(expect.objectContaining({ retryAfter: 12, error: 'slow down' }));
+  });
+});
+
+describe('errorHandler - a 503 with retryAfter', () => {
+  it('sets Retry-After so a machine client backs off instead of treating its key as bad', () => {
+    const { req, res, status, json, set } = makeReqRes();
+    errorHandler(new ServiceUnavailableError('Authentication temporarily unavailable', { retryAfter: 5 }), req, res);
+    expect(status).toHaveBeenCalledWith(503);
+    expect(set).toHaveBeenCalledWith({ 'Retry-After': '5' });
+    expect(json).toHaveBeenCalledWith(expect.objectContaining({ error: 'Authentication temporarily unavailable' }));
+    expect(req.logger.error).toHaveBeenCalledTimes(1);
   });
 });
 
