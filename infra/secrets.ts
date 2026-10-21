@@ -70,8 +70,9 @@ export const secrets = {
   // Secret encryption key for encrypting secrets stored in database (AES-256-GCM)
   // Generate with: openssl rand -hex 32
   SECRET_ENCRYPTION_KEY: new sst.Secret('SECRET_ENCRYPTION_KEY', 'my-secret-placeholder-value'),
-  // Previous encryption key for key rotation — set this to the old key when rotating
+  // Wraps memory principal keys; generate once (openssl rand -hex 32) and never rotate in place
   MEMORY_KEY_SECRET: new sst.Secret('MEMORY_KEY_SECRET', 'not-configured'),
+  // Previous encryption key for key rotation - set this to the old key when rotating
   SECRET_ENCRYPTION_KEY_PREVIOUS: new sst.Secret('SECRET_ENCRYPTION_KEY_PREVIOUS', 'not-configured'),
   // Shared-secret bearer authenticating the frontend's internal /process dispatch to the
   // always-on ChatCompletion service (see server/utils/dispatchQuest.ts +

@@ -101,11 +101,11 @@ export function extractBodyPreview(data: unknown, maxChars: number = EMAIL_PREVI
   return `${redacted.slice(0, maxChars)}…`;
 }
 
-/** Build the Slack message text for a mirrored email. Assumes `bodyPreview` is already redacted. */
 export function isSecurityEmail(emailType: string): boolean {
   return ['sign-in', 'invite', 'password-reset', 'email-change', 'email-verification'].includes(emailType);
 }
 
+/** Build the Slack message text for a mirrored email. Assumes `bodyPreview` is already redacted. */
 export function buildEmailMirrorMessage(payload: EmailMirrorPayload): string {
   const { to, emailType } = payload;
   const subject = isSecurityEmail(emailType) ? '[Security email]' : redactEmailContentForMirror(payload.subject);
