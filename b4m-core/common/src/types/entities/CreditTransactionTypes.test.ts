@@ -83,12 +83,9 @@ describe('generic deduct reason registry', () => {
     expect(GenericCreditDeductTransaction.safeParse(deduct(reason)).success).toBe(false);
   });
 
-  it('names the input and the valid reasons when a parse fails', () => {
+  it('keeps the input and the registered reasons out of the parse message', () => {
     const unregistered = GenericCreditDeductTransaction.safeParse(deduct('registry_test_never_added'));
-    expect(unregistered.error?.issues[0]?.message).toMatch(
-      /Unregistered generic deduct reason "registry_test_never_added"/
-    );
-    expect(unregistered.error?.issues[0]?.message).toContain(GenericDeductReasons[0]);
+    expect(unregistered.error?.issues[0]?.message).toBe('Unregistered generic deduct reason');
 
     const nonString = GenericCreditDeductTransaction.safeParse(deduct(null));
     expect(nonString.error?.issues[0]?.message).toBe('Expected a generic deduct reason string, received null');

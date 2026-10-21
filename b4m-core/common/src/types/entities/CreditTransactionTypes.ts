@@ -176,9 +176,11 @@ export const GenericCreditDeductTransaction = BaseCreditTransaction.extend({
    */
   reason: z
     .custom<GenericDeductReason>(isGenericDeductReason, {
+      // Parse messages reach HTTP clients through secureParameters, so neither the input nor the
+      // registered names (some come from private packages) go into them.
       error: issue =>
         typeof issue.input === 'string'
-          ? `Unregistered generic deduct reason ${JSON.stringify(issue.input)}; expected one of: ${listGenericDeductReasons().join(', ')}`
+          ? 'Unregistered generic deduct reason'
           : `Expected a generic deduct reason string, received ${issue.input === null ? 'null' : typeof issue.input}`,
     })
     .optional(),
