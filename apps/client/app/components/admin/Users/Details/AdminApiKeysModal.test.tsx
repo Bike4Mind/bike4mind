@@ -35,7 +35,7 @@ vi.mock('sonner', () => ({
 const appTheme = extendTheme({ ...getThemeConfig() });
 const USER = { id: 'u1', username: 'target-user' } as never;
 
-// Pinned clock: the minute window formats in minutes, the day window in hours.
+// Pinned clock: the minute window formats in seconds, the day window in hours.
 const NOW_MS = new Date('2026-10-21T12:00:00Z').getTime();
 const NOW_S = Math.floor(NOW_MS / 1000);
 
@@ -90,10 +90,10 @@ describe('AdminApiKeysModal', () => {
 
   it('shows the reset time for each open window', () => {
     h.keys = [KEY];
-    h.liveUsage = { k1: { minute: 3, day: 42, minuteResetAt: NOW_S + 600, dayResetAt: NOW_S + 3600 } };
+    h.liveUsage = { k1: { minute: 3, day: 42, minuteResetAt: NOW_S + 42, dayResetAt: NOW_S + 3600 } };
     renderModal();
 
-    expect(screen.getByTestId('admin-api-key-usage-minute-k1').textContent).toContain('3/60 per min · resets in 10m');
+    expect(screen.getByTestId('admin-api-key-usage-minute-k1').textContent).toContain('3/60 per min · resets in 42s');
     expect(screen.getByTestId('admin-api-key-usage-day-k1').textContent).toContain('42/1000 per day · resets in 1h 0m');
   });
 
@@ -102,14 +102,14 @@ describe('AdminApiKeysModal', () => {
     // the two `> 0` gates fails one line in each direction.
     h.keys = [KEY, { ...KEY, id: 'k2', name: 'busy minute key' }];
     h.liveUsage = {
-      k1: { minute: 0, day: 42, minuteResetAt: NOW_S + 600, dayResetAt: NOW_S + 3600 },
-      k2: { minute: 3, day: 0, minuteResetAt: NOW_S + 600, dayResetAt: NOW_S + 3600 },
+      k1: { minute: 0, day: 42, minuteResetAt: NOW_S + 42, dayResetAt: NOW_S + 3600 },
+      k2: { minute: 3, day: 0, minuteResetAt: NOW_S + 42, dayResetAt: NOW_S + 3600 },
     };
     renderModal();
 
     expect(screen.getByTestId('admin-api-key-usage-minute-k1').textContent).not.toContain('resets in');
     expect(screen.getByTestId('admin-api-key-usage-day-k1').textContent).toContain('resets in 1h 0m');
-    expect(screen.getByTestId('admin-api-key-usage-minute-k2').textContent).toContain('resets in 10m');
+    expect(screen.getByTestId('admin-api-key-usage-minute-k2').textContent).toContain('resets in 42s');
     expect(screen.getByTestId('admin-api-key-usage-day-k2').textContent).not.toContain('resets in');
   });
 
@@ -120,7 +120,7 @@ describe('AdminApiKeysModal', () => {
     h.keys = [KEY, { ...KEY, id: 'k2', name: 'stale day key' }];
     h.liveUsage = {
       k1: { minute: 3, day: 42, minuteResetAt: NOW_S - 1, dayResetAt: NOW_S + 3600 },
-      k2: { minute: 3, day: 42, minuteResetAt: NOW_S + 600, dayResetAt: NOW_S - 1 },
+      k2: { minute: 3, day: 42, minuteResetAt: NOW_S + 42, dayResetAt: NOW_S - 1 },
     };
     renderModal();
 
@@ -128,13 +128,13 @@ describe('AdminApiKeysModal', () => {
     expect(screen.getByTestId('admin-api-key-usage-minute-k1').textContent).not.toContain('resets in');
     expect(screen.getByTestId('admin-api-key-usage-day-k1').textContent).toContain('resets in 1h 0m');
     expect(screen.getByTestId('admin-api-key-usage-day-k2').textContent).not.toContain('resets in');
-    expect(screen.getByTestId('admin-api-key-usage-minute-k2').textContent).toContain('resets in 10m');
+    expect(screen.getByTestId('admin-api-key-usage-minute-k2').textContent).toContain('resets in 42s');
   });
 
   it('omits the reset time while a window is empty', () => {
     h.keys = [KEY];
     h.liveUsage = {
-      k1: { minute: 0, day: 0, minuteResetAt: NOW_S + 600, dayResetAt: NOW_S + 3600 },
+      k1: { minute: 0, day: 0, minuteResetAt: NOW_S + 42, dayResetAt: NOW_S + 3600 },
     };
     renderModal();
 

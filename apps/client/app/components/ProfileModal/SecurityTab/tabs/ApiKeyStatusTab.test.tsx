@@ -26,7 +26,7 @@ const Wrapper = ({ children }: { children: React.ReactNode }) => (
   <CssVarsProvider theme={testTheme}>{children}</CssVarsProvider>
 );
 
-// Pinned clock: the minute window formats in minutes, the day window in hours, so each
+// Pinned clock: the minute window formats in seconds, the day window in hours, so each
 // assertion names the window that produced it.
 const NOW_MS = new Date('2026-10-21T12:00:00Z').getTime();
 const NOW_S = Math.floor(NOW_MS / 1000);
@@ -39,7 +39,7 @@ const KEY = {
   liveUsage: {
     minute: 3,
     day: 42,
-    minuteResetAt: NOW_S + 600,
+    minuteResetAt: NOW_S + 42,
     dayResetAt: NOW_S + 6 * 3600 + 12 * 60,
   },
   rateLimit: { requestsPerMinute: 60, requestsPerDay: 800 },
@@ -66,7 +66,7 @@ describe('ApiKeyStatusTab', () => {
 
     const minute = screen.getByTestId('api-key-usage-minute-0').textContent ?? '';
     expect(minute).toContain('3 / 60');
-    expect(minute).toContain('resets in 10m');
+    expect(minute).toContain('resets in 42s');
 
     const day = screen.getByTestId('api-key-usage-day-0').textContent ?? '';
     expect(day).toContain('42 / 800');
@@ -110,7 +110,7 @@ describe('ApiKeyStatusTab', () => {
     expect(screen.getByTestId('api-key-usage-day-0').textContent).toContain('resets in 6h 12m');
 
     expect(screen.getByTestId('api-key-usage-day-1').textContent).not.toContain('resets in');
-    expect(screen.getByTestId('api-key-usage-minute-1').textContent).toContain('resets in 10m');
+    expect(screen.getByTestId('api-key-usage-minute-1').textContent).toContain('resets in 42s');
   });
 
   it('hides the reset text while a window is empty', () => {
