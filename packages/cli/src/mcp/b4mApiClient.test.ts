@@ -118,6 +118,12 @@ describe('B4mApiClient', () => {
     expect(mockGet).toHaveBeenCalledWith('/api/briefcase/prompts/p%201');
   });
 
+  it('bounds the startup solver catalog fetch well below the default request timeout', async () => {
+    mockGet.mockResolvedValue({});
+    await client.getSolverCatalog();
+    expect(mockGet).toHaveBeenCalledWith('/api/premium-optihashi/quantum/solve', { timeout: 5000 });
+  });
+
   it('creates a notebook with only the provided fields', async () => {
     mockFetch.mockResolvedValue(jsonResponse({ id: 'n1' }));
     await client.createNotebook({ name: 'My NB' });
