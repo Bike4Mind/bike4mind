@@ -6,6 +6,7 @@ import {
   ConflictError,
   NotFoundError,
   OAUTH_OPT_IN_SCOPES,
+  nonOptInScopes,
   createOAuthClientSchema,
   oauthRedirectUriSchema,
   resolveOAuthFederatedIdp,
@@ -175,26 +176,29 @@ export async function updateOAuthClient(
 }
 
 /**
- * Adds opt-in scopes to an existing federated client. Idempotent ($addToSet), so a rerun is a no-op.
- * Throws BadRequestError on an empty list, a scope outside OAUTH_OPT_IN_SCOPES, or a non-federated
- * client; NotFoundError when no client has that clientId.
+ * Adds opt-in scopes to an existing federated relying-party client. Idempotent ($addToSet), so a rerun
+ * is a no-op. Relying-party only: first-party clients skip the grant gate (federatedGrantGate.ts), so
+ * the scope would reach them with no user consent. Throws BadRequestError on an empty list, a scope
+ * outside OAUTH_OPT_IN_SCOPES, or a client that is not federated or not a relying party; NotFoundError
+ * when no client has that clientId. There is no remove counterpart: revoking is a manual $pull.
  */
 export async function addOAuthClientOptInScopes(clientId: string, scopes: readonly string[]): Promise<OAuthClientView> {
   if (scopes.length === 0) throw new BadRequestError('No opt-in scopes given');
-  const allowed: readonly string[] = OAUTH_OPT_IN_SCOPES;
-  const unknown = scopes.filter(s => !allowed.includes(s));
+  const unknown = nonOptInScopes(scopes);
   if (unknown.length) {
-    throw new BadRequestError(`Not an opt-in scope: ${unknown.join(', ')} (allowed: ${allowed.join(', ')})`);
+    throw new BadRequestError(
+      `Not an opt-in scope: ${unknown.join(', ')} (allowed: ${OAUTH_OPT_IN_SCOPES.join(', ')})`
+    );
   }
 
   const doc = await OAuthClientModel.findOneAndUpdate(
-    { clientId, federatedIdp: { $exists: true } },
+    { clientId, federatedIdp: { $exists: true }, clientType: 'relying-party' },
     { $addToSet: { allowedScopes: { $each: [...scopes] } } },
     { new: true }
   ).exec();
   if (!doc) {
     if (await OAuthClientModel.exists({ clientId })) {
-      throw new BadRequestError('Opt-in scopes can only be granted to a federated client');
+      throw new BadRequestError('Opt-in scopes can only be granted to a federated relying-party client');
     }
     throw new NotFoundError('OAuth client not found');
   }

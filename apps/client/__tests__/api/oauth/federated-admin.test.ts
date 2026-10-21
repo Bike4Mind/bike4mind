@@ -55,6 +55,7 @@ import { FEDERATED_ADMIN_STATUS_SCOPE } from '@bike4mind/common';
 
 const FEDERATED_CLIENT = {
   name: 'K2',
+  clientType: 'relying-party',
   allowedScopes: ['openid', FEDERATED_ADMIN_STATUS_SCOPE],
   federatedIdp: {
     issuer: 'https://cognito-idp.us-east-2.amazonaws.com/us-east-2_pool',
@@ -161,6 +162,20 @@ describe('POST /api/oauth/federated-admin', () => {
     expect(body.error).toBe('invalid_scope');
     expect(body.error_description).toContain(FEDERATED_ADMIN_STATUS_SCOPE);
     expect(mockTryIncrement).not.toHaveBeenCalled();
+    expect(mockVerifyIdToken).not.toHaveBeenCalled();
+    expect(mockCheckGrant).not.toHaveBeenCalled();
+    expect(mockUserFindById).not.toHaveBeenCalled();
+  });
+
+  it.each<[string, string | undefined]>([
+    ['first-party', 'first-party'],
+    ['legacy (no clientType)', undefined],
+  ])('rejects a %s client holding the scope with 403 invalid_scope', async (_name, clientType) => {
+    mockVerifyClientSecret.mockResolvedValue({ ...FEDERATED_CLIENT, clientType });
+    const { status, body } = await call();
+    expect(status).toBe(403);
+    expect(body.error).toBe('invalid_scope');
+    expect(body.error_description).toContain('relying-party');
     expect(mockVerifyIdToken).not.toHaveBeenCalled();
     expect(mockCheckGrant).not.toHaveBeenCalled();
     expect(mockUserFindById).not.toHaveBeenCalled();

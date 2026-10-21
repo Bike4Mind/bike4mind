@@ -7,12 +7,11 @@
  * /api/oauth/ai-token (see that file and server/auth/verifyFederatedIdToken.ts).
  * Nothing is minted and nothing is released beyond the boolean, but the answer is
  * still gated on the opt-in `federated:admin-status` scope: the client must be
- * registered for it (allowedScopes), and for a relying-party client the user's grant
+ * registered for it (allowedScopes) and be a relying party, and the user's grant
  * must cover it (federatedGrantGate.ts, enforced). Without the grant gate a
  * relying-party client's pool could name any B4M user in `identities[]` and learn
- * whether they are an admin. The grant gate does not cover first-party clients
- * (the default clientType): on the 'identities' path they can ask about any user
- * their pool names, as on /api/oauth/ai-token, until OAUTH_AI_TOKEN_REQUIRE_SUB=true.
+ * whether they are an admin. The grant gate exempts first-party clients, so the
+ * scope gate refuses them outright: only a relying party can use this endpoint.
  *
  * Response: 200 { is_admin: boolean }. A subject that resolves to no B4M user,
  * or to a blocked (banned, suspended, disputed) account, is simply not an admin.
@@ -74,12 +73,20 @@ const handler = baseApi({ auth: false })
       });
     }
 
-    // 2.5. Client scope gate - the scope is opt-in and never part of a registration's defaults.
-    if (!(client.allowedScopes ?? []).includes(FEDERATED_ADMIN_STATUS_SCOPE)) {
+    // 2.5. Client scope gate - the scope is opt-in and never part of a registration's defaults, and
+    //      only a relying party may hold it: the grant gate exempts first-party clients, so one holding
+    //      the scope could ask about any user with no consent. A legacy doc with no clientType is refused.
+    //      Rollout: a client that called this before the scope existed 403s here until an operator grants
+    //      it (seed-oauth-client.ts TARGET_CLIENT_ID) - do that before deploying. Audit query:
+    //        db.oauthclients.find({ federatedIdp: { $exists: true }, allowedScopes: { $nin: ['federated:admin-status'] } })
+    const isRelyingParty = client.clientType === 'relying-party';
+    if (!isRelyingParty || !(client.allowedScopes ?? []).includes(FEDERATED_ADMIN_STATUS_SCOPE)) {
       logError('invalid_scope', 403);
       return res.status(403).json({
         error: 'invalid_scope',
-        error_description: `Client is not registered for ${FEDERATED_ADMIN_STATUS_SCOPE}`,
+        error_description: isRelyingParty
+          ? `Client is not registered for ${FEDERATED_ADMIN_STATUS_SCOPE}`
+          : `${FEDERATED_ADMIN_STATUS_SCOPE} is available only to relying-party clients`,
       });
     }
 
@@ -118,8 +125,9 @@ const handler = baseApi({ auth: false })
       );
     }
 
-    // 4.5. Grant gate - relying-party clients only; see federatedGrantGate.ts. Enforced from the
-    //      start: this surface has no pre-grant callers to migrate. The grant must cover the scope.
+    // 4.5. Grant gate - see federatedGrantGate.ts; the grant must cover the scope. Enforced, no grace:
+    //      grants made before the scope existed lack it, so those users must re-consent (authorize
+    //      with the scope) before this answers for them.
     const grantRejection = await checkFederatedGrant({
       client,
       clientId: client_id,

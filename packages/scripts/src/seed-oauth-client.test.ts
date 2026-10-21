@@ -11,7 +11,7 @@ const { db } = vi.hoisted(() => ({
     createOAuthClient: vi.fn(),
     addOAuthClientOptInScopes: vi.fn(),
     mongoose: { connect: vi.fn(), disconnect: vi.fn() },
-    OAuthClientModel: { findOne: vi.fn(), exists: vi.fn() },
+    OAuthClientModel: { findOne: vi.fn() },
   },
 }));
 vi.mock('@bike4mind/database', () => db);
@@ -161,21 +161,35 @@ describe('runSeed', () => {
       });
     });
 
-    it('grants the scope to the existing client on a rerun, without FEDERATED_*', async () => {
-      db.OAuthClientModel.exists.mockResolvedValue({ _id: 'x' });
+    it('refuses to grant by name on a duplicate-name rerun, so an arbitrary duplicate is never targeted', async () => {
       db.createOAuthClient.mockRejectedValue(new ConflictError('exists'));
-      db.OAuthClientModel.findOne.mockReturnValue({ exec: () => Promise.resolve({ clientId: 'b4m_my_app_0011aabb' }) });
-      db.addOAuthClientOptInScopes.mockResolvedValue({ allowedScopes: ['openid', FEDERATED_ADMIN_STATUS_SCOPE] });
+      await expect(runSeed(federatedEnv)).rejects.toThrow(/TARGET_CLIENT_ID/);
+      expect(db.addOAuthClientOptInScopes).not.toHaveBeenCalled();
+      expect(db.OAuthClientModel.findOne).not.toHaveBeenCalled();
+      expect(db.mongoose.disconnect).toHaveBeenCalled();
+    });
 
-      const result = await runSeed({ ...env, OPT_IN_SCOPES: FEDERATED_ADMIN_STATUS_SCOPE });
+    it('grants to TARGET_CLIENT_ID without reading CLIENT_NAME, REDIRECT_URIS or FEDERATED_*', async () => {
+      const client = { clientId: 'b4m_my_app_0011aabb', allowedScopes: ['openid', FEDERATED_ADMIN_STATUS_SCOPE] };
+      db.addOAuthClientOptInScopes.mockResolvedValue(client);
+
+      const result = await runSeed({
+        MONGODB_URI: env.MONGODB_URI,
+        TARGET_CLIENT_ID: ' b4m_my_app_0011aabb ',
+        OPT_IN_SCOPES: FEDERATED_ADMIN_STATUS_SCOPE,
+      });
 
       expect(db.addOAuthClientOptInScopes).toHaveBeenCalledWith('b4m_my_app_0011aabb', [FEDERATED_ADMIN_STATUS_SCOPE]);
-      expect(result).toEqual({
-        status: 'exists',
-        name: 'My App',
-        clientId: 'b4m_my_app_0011aabb',
-        allowedScopes: ['openid', FEDERATED_ADMIN_STATUS_SCOPE],
-      });
+      expect(db.createOAuthClient).not.toHaveBeenCalled();
+      expect(result).toEqual({ status: 'scopes-granted', client });
+      expect(db.mongoose.disconnect).toHaveBeenCalled();
+    });
+
+    it('rejects TARGET_CLIENT_ID without OPT_IN_SCOPES before connecting', async () => {
+      await expect(runSeed({ MONGODB_URI: env.MONGODB_URI, TARGET_CLIENT_ID: 'b4m_x' })).rejects.toThrow(
+        /OPT_IN_SCOPES/
+      );
+      expect(db.mongoose.connect).not.toHaveBeenCalled();
     });
 
     it('does not call the helper when unset', async () => {
@@ -192,11 +206,13 @@ describe('runSeed', () => {
       expect(db.mongoose.connect).not.toHaveBeenCalled();
     });
 
-    it('refuses to create a non-federated client it could not grant the scope to', async () => {
-      db.OAuthClientModel.exists.mockResolvedValue(null);
-      await expect(runSeed({ ...env, OPT_IN_SCOPES: FEDERATED_ADMIN_STATUS_SCOPE })).rejects.toThrow(/FEDERATED_/);
+    it.each<[string, Record<string, string>]>([
+      ['a non-federated client', { ...env, OPT_IN_SCOPES: FEDERATED_ADMIN_STATUS_SCOPE }],
+      ['a first-party client', { ...federatedEnv, CLIENT_TYPE: 'first-party' }],
+    ])('refuses to create %s it could not grant the scope to, before connecting', async (_name, seedEnv) => {
+      await expect(runSeed(seedEnv)).rejects.toThrow(/FEDERATED_\* and a relying-party/);
+      expect(db.mongoose.connect).not.toHaveBeenCalled();
       expect(db.createOAuthClient).not.toHaveBeenCalled();
-      expect(db.mongoose.disconnect).toHaveBeenCalled();
     });
   });
 
@@ -254,6 +270,26 @@ describe('main', () => {
     expect(printed(log)).toContain('Client "My App" already exists');
     expect(printed(log)).toContain('b4m_my_app_0011aabb');
     expect(exit).toHaveBeenCalledTimes(1);
+    expect(exit).toHaveBeenCalledWith(0);
+  });
+
+  it('prints the granted scopes and exits 0 in TARGET_CLIENT_ID mode', async () => {
+    process.env.TARGET_CLIENT_ID = 'b4m_my_app_0011aabb';
+    process.env.OPT_IN_SCOPES = FEDERATED_ADMIN_STATUS_SCOPE;
+    db.addOAuthClientOptInScopes.mockResolvedValue({
+      name: 'My App',
+      clientId: 'b4m_my_app_0011aabb',
+      allowedScopes: ['openid', FEDERATED_ADMIN_STATUS_SCOPE],
+    });
+    try {
+      await main();
+    } finally {
+      delete process.env.TARGET_CLIENT_ID;
+      delete process.env.OPT_IN_SCOPES;
+    }
+
+    expect(printed(log)).toContain(`openid ${FEDERATED_ADMIN_STATUS_SCOPE}`);
+    expect(db.createOAuthClient).not.toHaveBeenCalled();
     expect(exit).toHaveBeenCalledWith(0);
   });
 
