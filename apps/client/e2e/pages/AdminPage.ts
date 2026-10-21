@@ -231,6 +231,11 @@ export class AdminPage extends BasePage {
     await this.page.getByTestId('delete-user-btn').click();
   }
 
+  /** The confirm-delete button stays disabled until the audited reason meets ADMIN_ACTION_REASON_MIN_LENGTH. */
+  async fillDeleteReason(reason = 'E2E user CRUD cleanup') {
+    await this.page.getByTestId('user-delete-reason-input').fill(reason);
+  }
+
   async confirmDeleteUser() {
     await this.page.getByTestId('confirm-delete-btn').click();
     // Wait for the confirm button itself to disappear (the delete modal closed)
