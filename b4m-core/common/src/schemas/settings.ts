@@ -2909,7 +2909,7 @@ export const settingsMap = {
     name: 'Skill Market URL Allowlist',
     defaultValue: '',
     description:
-      'Comma-separated host names a Skill Market skill may reference without a finding (subdomains included). Any other URL holds a Public listing for review.',
+      'Comma-separated host names a Skill Market skill may reference without a finding (subdomains included). Any other URL holds a listing for review at every visibility.',
     category: 'AI Moderation',
   }),
   SkillMarketClassifierMinConfidence: makeNumberSetting({
