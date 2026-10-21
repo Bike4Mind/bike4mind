@@ -73,14 +73,16 @@ const makeReq = (overrides: Record<string, unknown> = {}, query: Record<string, 
 });
 const makeRes = () => {
   const json = vi.fn();
-  const res: Record<string, unknown> = { json };
-  res.status = vi.fn(() => res);
-  return { json, res: res as never };
+  const status = vi.fn();
+  const res: Record<string, unknown> = { json, status };
+  status.mockReturnValue(res);
+  return { json, status, res: res as never };
 };
 
 const markedFile = (extra: Record<string, unknown> = {}) => ({
   id: FILE_ID,
   userId: 'u1',
+  deletedAt: null,
   fileName: 'secret-name.png',
   filePath: 'k.png',
   tags: [{ name: 't', strength: 1 }],
@@ -206,8 +208,9 @@ describe('DELETE /api/files/:id - ai:generate-only key', () => {
   });
 
   it('still 404s a malformed id before any file load', async () => {
-    const { res, json } = makeRes();
+    const { res, json, status } = makeRes();
     await route(makeReq({ method: 'DELETE' }, { id: 'nope' }), res);
+    expect(status).toHaveBeenCalledWith(404);
     expect(json).toHaveBeenCalledWith({ msg: 'File not found' });
     expect(h.findById).not.toHaveBeenCalled();
     expect(h.deleteFileForUser).not.toHaveBeenCalled();

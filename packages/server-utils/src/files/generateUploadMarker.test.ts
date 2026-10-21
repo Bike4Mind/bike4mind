@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { GENERATE_UPLOAD_MARKER, isOwnedGenerateUpload } from './generateUploadMarker';
 
+// `deletedAt: null` is what the soft-delete plugin returns for a live document, not an absent key.
 const marked = (extra: Record<string, unknown> = {}) => ({
   userId: 'u1',
+  deletedAt: null,
   sourceMetadata: { uploadedVia: GENERATE_UPLOAD_MARKER },
   ...extra,
 });
