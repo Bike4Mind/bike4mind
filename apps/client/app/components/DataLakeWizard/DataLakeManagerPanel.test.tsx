@@ -686,6 +686,20 @@ describe('DataLakeManagerPanel - lake navigation', () => {
     expect(screen.getByTestId('datalake-manager-node-genre')).toBeInTheDocument();
     expect(screen.queryByTestId('datalake-manager-node-lk')).not.toBeInTheDocument();
   });
+
+  it('seeds a deep-linked lake once, so a refetch does not pull the user back out of a folder', () => {
+    useDataLakeWizardStore.setState({ managerLakeId: 'mine' });
+    const { rerender } = renderPanel();
+    fireEvent.click(screen.getByTestId('datalake-manager-node-genre'));
+    expect(screen.getByTestId('datalake-manager-node-war')).toBeInTheDocument();
+
+    // Fresh objects, as a refetch returns, so activeLake changes identity and the seed effect reruns.
+    useGetDataLakes.mockReturnValue({ data: [{ ...mineLake }, { ...theirsLake }], isLoading: false });
+    rerenderPanel(rerender);
+
+    expect(screen.getByTestId('datalake-manager-node-war')).toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-manager-node-genre')).not.toBeInTheDocument();
+  });
 });
 
 describe('DataLakeManagerPanel - management affordances gate on canManage', () => {
