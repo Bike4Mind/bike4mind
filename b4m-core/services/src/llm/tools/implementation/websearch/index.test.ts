@@ -828,7 +828,7 @@ describe('webSearchTool - hedged backup and cache', () => {
     expect(result).toEqual({ formattedResults: 'No results found from web search.', citables: [] });
   });
 
-  it('does not cache an empty answer that came with a failed provider, so a retry searches again', async () => {
+  it('does not cache an empty answer, so a retry searches again', async () => {
     configure('auto');
     const fetchStub = stubProviders({
       serpOrganic: [
