@@ -103,7 +103,6 @@ export function createAiLatencySuite({
       timestamp: new Date().toISOString(),
       thresholdSec,
       averageResponseTimeSec,
-      unexpectedArtifactIds: unexpectedArtifactIds(results),
       results,
     };
 
@@ -154,8 +153,10 @@ export function createAiLatencySuite({
           } else if (await chatPage.hasArtifact()) {
             // A chat prompt that came back as an artifact: settle it so the scrape reads the final
             // reply, and flag it so the result is excluded from the gate (see completedResult).
+            // A settle timeout must not discard the stream window already measured: the keyword
+            // check below still fails the prompt, but the timing stays recorded.
             artifactRendered = true;
-            await chatPage.waitForArtifactSettled(TIMEOUTS.IMAGE_GENERATION);
+            await chatPage.waitForArtifactSettled(TIMEOUTS.IMAGE_GENERATION).catch(() => undefined);
           }
         }
       } catch (err: unknown) {
