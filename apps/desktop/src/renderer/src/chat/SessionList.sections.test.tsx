@@ -334,6 +334,23 @@ describe('moving a session from its menu', () => {
     expect(looseTitles()).toEqual([]);
   });
 
+  it('draws a row moved into a section that shows only its first twenty', async () => {
+    const rows = Array.from({ length: 25 }, (_, index) => summary(`s${index}`, `S${index}`));
+    // Last in the list, so last in the section once moved there.
+    const old = summary('old', 'Old one');
+    await mount([...rows, old], {
+      sections: [{ id: 'work', name: 'Work' }],
+      assignments: Object.fromEntries(rows.map(row => [row.id, 'work'])),
+    });
+    expect(titlesIn(sectionNamed('Work'))).toHaveLength(20);
+    expect(titlesIn(sectionNamed('Work'))).not.toContain('Old one');
+
+    await openMoveTo('Old one');
+    await click(all('chat-move-to-section-btn').find(node => node.textContent === 'Work') ?? el('missing'));
+
+    expect(titlesIn(sectionNamed('Work'))).toContain('Old one');
+  });
+
   it('returns the row to the default list on Remove from', async () => {
     await mount([summary('a', 'Alpha'), summary('b', 'Beta')], workAndHome);
 
