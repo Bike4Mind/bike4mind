@@ -221,4 +221,23 @@ describe('user sections', () => {
       expect(names('code')).toContain('Both');
     });
   });
+
+  it('keeps untouched Claude imports in their own section unless asked to show them inline', () => {
+    const origin = { kind: 'claude-code' as const, sourceId: 's', importedAt: 'x', sourceUpdatedAt: 'x' };
+    const sessions = [
+      session({ id: 'own' }),
+      session({ id: 'imported', importOrigin: origin }),
+      session({ id: 'continued', importOrigin: { ...origin, forkedAt: 'x' } }),
+      session({ id: 'pinned-import', pinned: true, importOrigin: origin }),
+    ];
+    const grouped = groupSessions(sessions, 'chat');
+    expect(grouped.imported.map(entry => entry.id)).toEqual(['imported']);
+    expect(grouped.loose.map(entry => entry.id)).toEqual(['own', 'continued']);
+    expect(grouped.pinned.map(entry => entry.id)).toEqual(['pinned-import']);
+    expect(orderedSessions(grouped).map(entry => entry.id)).not.toContain('imported');
+
+    const inline = groupSessions(sessions, 'chat', undefined, true);
+    expect(inline.imported).toEqual([]);
+    expect(inline.loose.map(entry => entry.id)).toEqual(['own', 'imported', 'continued']);
+  });
 });

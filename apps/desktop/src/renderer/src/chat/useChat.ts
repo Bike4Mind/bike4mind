@@ -78,6 +78,9 @@ export function useSessions(): SessionsController {
     void reload();
   }, [reload]);
 
+  // Main batches these, so a sync of hundreds of transcripts re-lists a handful of times.
+  useEffect(() => window.b4m.claudeImport?.onSessionsChanged(() => void reload()), [reload]);
+
   // Patched in place rather than moved to the front, the way pinning is: a generated title does
   // not touch `updatedAt`, so reordering here would disagree with the next reload. An id this
   // window does not hold is ignored - the push reaches every window, including ones that have

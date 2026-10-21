@@ -10,8 +10,10 @@ import type { AuthState } from '@shared/auth';
 import type { PermissionsState } from '@shared/permissions';
 import { updateAttention, updateSummary } from '@shared/update';
 import { EnvironmentPicker } from '../auth/EnvironmentPicker';
+import type { ClaudeImportState } from '@shared/claudeImport';
+import { ClaudeImportSettings, claudeImportSummary, useClaudeImport } from './ClaudeImportSettings';
 import { EntrySection, type ConfigEntry } from './ConfigEntry';
-import { CloseIcon, ContrastIcon, DownloadIcon, ServerIcon, ShieldIcon, SparkIcon } from './icons';
+import { CloseIcon, ContrastIcon, DownloadIcon, FolderIcon, ServerIcon, ShieldIcon, SparkIcon } from './icons';
 import { columnStackSx, contentColumnSx, scrollingColumnHostSx } from './layout';
 import { PermissionsSettings, permissionsSummary, usePermissions } from './PermissionsSettings';
 import { promptSuggestionsSummary, usePromptSuggestionModel, usePromptSuggestions } from './promptSuggestions';
@@ -92,6 +94,16 @@ function permissionsEntry(
   };
 }
 
+function claudeImportEntry(state: ClaudeImportState | null, setState: (state: ClaudeImportState) => void): ConfigEntry {
+  return {
+    id: 'claude-import',
+    icon: <FolderIcon />,
+    label: 'Import from Claude',
+    summary: claudeImportSummary(state),
+    control: <ClaudeImportSettings state={state} onState={setState} />,
+  };
+}
+
 /**
  * Which backend every conversation talks to.
  *
@@ -149,11 +161,13 @@ function useSettingsEntries(auth: AuthState | null): ConfigEntry[] {
   const [suggestions, toggleSuggestions] = usePromptSuggestions();
   const [suggestionModel] = usePromptSuggestionModel();
   const [permissions, setPermissions, permissionsError, retryPermissions] = usePermissions();
+  const [claudeImport, setClaudeImport] = useClaudeImport();
 
   const preferences = [
     appearanceEntry(mode, setMode, theme.palette.mode),
     suggestionsEntry(suggestions, toggleSuggestions, suggestionModel),
     permissionsEntry(permissions, setPermissions, permissionsError, retryPermissions),
+    claudeImportEntry(claudeImport, setClaudeImport),
   ];
   return auth ? [...preferences, serverEntry(auth), updatesEntry(update)] : [...preferences, updatesEntry(update)];
 }

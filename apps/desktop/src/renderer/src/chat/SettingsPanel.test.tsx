@@ -24,6 +24,7 @@ describe('the Settings screen', () => {
     expect(html).toContain('data-entry="server"');
     expect(html).toContain('data-entry="updates"');
     expect(html).toContain('data-entry="permissions"');
+    expect(html).toContain('data-entry="claude-import"');
   });
 
   it('offers appearance as a three-way choice', () => {

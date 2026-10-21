@@ -37,6 +37,16 @@ export interface SidebarSections {
    * the rows are still there.
    */
   archived: ChatSessionSummary[];
+  /**
+   * Imported from Claude and not yet continued here, in their own collapsed section unless the
+   * user asked for them inline. Pinned, filed or archived ones go where the user put them.
+   */
+  imported: ChatSessionSummary[];
+}
+
+/** A Claude import the user has not carried on with; a continued one is ordinary work. */
+export function isUntouchedImport(session: ChatSessionSummary): boolean {
+  return !!session.importOrigin && !session.importOrigin.forkedAt;
 }
 
 /**
@@ -49,7 +59,8 @@ export interface SidebarSections {
 export function groupSessions(
   sessions: readonly ChatSessionSummary[],
   mode: ChatSessionMode,
-  userSections: SidebarSectionsState = EMPTY_SIDEBAR_SECTIONS
+  userSections: SidebarSectionsState = EMPTY_SIDEBAR_SECTIONS,
+  importedInline = false
 ): SidebarSections {
   const inMode = sessions.filter(session => session.mode === mode);
   // Archiving outranks pinning: a pinned session that is then archived has been put away, and
@@ -76,12 +87,17 @@ export function groupSessions(
   const bySection = new Map(custom.map(group => [group.section.id, group]));
   const byDirectory = new Map<string, ProjectGroup>();
   const loose: ChatSessionSummary[] = [];
+  const imported: ChatSessionSummary[] = [];
 
   for (const session of rest) {
     const sectionId = sectionOf(userSections, session.id);
     const sectionGroup = sectionId === undefined ? undefined : bySection.get(sectionId);
     if (sectionGroup) {
       sectionGroup.sessions.push(session);
+      continue;
+    }
+    if (!importedInline && isUntouchedImport(session)) {
+      imported.push(session);
       continue;
     }
     const project = session.project;
@@ -94,7 +110,7 @@ export function groupSessions(
     else byDirectory.set(project.directory, { directory: project.directory, name: project.name, sessions: [session] });
   }
 
-  return { pinned, custom, projects: [...byDirectory.values()], loose, archived };
+  return { pinned, custom, projects: [...byDirectory.values()], loose, archived, imported };
 }
 
 /** How many rows the modifier-plus-digit shortcut reaches. */
@@ -107,8 +123,8 @@ export const QUICK_SWITCH_LIMIT = 9;
  * order the eye reads rather than from any one section.
  */
 export function orderedSessions(sections: SidebarSections): ChatSessionSummary[] {
-  // Archived rows are left out: the shortcut counts what the sidebar draws, and those sit
-  // behind a disclosure that is shut by default.
+  // Archived and imported rows are left out: the shortcut counts what the sidebar draws, and
+  // those sit behind disclosures that are shut by default.
   return [
     ...sections.pinned,
     ...sections.custom.flatMap(group => group.sessions),

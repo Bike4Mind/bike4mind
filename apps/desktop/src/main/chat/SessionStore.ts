@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type {
@@ -13,6 +13,7 @@ import type {
   ReasoningEffortSetting,
 } from '@shared/chat';
 import { SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
+import { isImportedMessageId, normalizeImportOrigin } from '@shared/claudeImport';
 import { storedReasoningEffortSetting } from './reasoningEffort';
 import { assertScopeKey, migrateLegacySessions, sessionScopeKey, type SessionScope } from './sessionScope';
 
@@ -83,6 +84,37 @@ export interface CreateOptions {
   approvalMode?: ChatApprovalMode;
   /** A spawned session's copy of its parent's session-scoped grants; see ChatSession.grantedDirectories. */
   grantedDirectories?: string[];
+}
+
+/**
+ * Sidebar summaries keyed by each file's size and mtime, kept beside the sessions so listing
+ * does not re-read and re-parse every transcript on every refresh. Not a `.json` name, so
+ * `list` never mistakes it for a session.
+ */
+const SUMMARY_INDEX = '.summary-index';
+const SUMMARY_INDEX_VERSION = 1;
+const LIST_READ_CONCURRENCY = 16;
+
+interface IndexedSummary {
+  size: number;
+  mtimeMs: number;
+  summary: ChatSessionSummary;
+}
+
+interface SummaryIndexFile {
+  version: number;
+  /** The launch defaults baked into every summary; a change invalidates them all. */
+  defaults: string;
+  entries: Record<string, IndexedSummary>;
+}
+
+/** What `putImported` did: wrote the session, or found it continued here and left it alone. */
+export type PutImportedOutcome = 'written' | 'forked';
+
+/** True once anything other than the importer has written a message into an imported session. */
+export function isForkedImport(session: ChatSession): boolean {
+  if (!session.importOrigin) return false;
+  return !!session.importOrigin.forkedAt || session.messages.some(message => !isImportedMessageId(message.id));
 }
 
 function summarize(session: ChatSession): ChatSessionSummary {
@@ -203,6 +235,9 @@ export class SessionStore {
    * the reply is still appending is exactly that overlap.
    */
   private readonly writes = new Map<string, Promise<unknown>>();
+
+  /** Per scope directory; see SUMMARY_INDEX. */
+  private readonly summaryIndexes = new Map<string, Promise<Map<string, IndexedSummary>>>();
 
   constructor(
     private readonly baseDirectory: string,
@@ -333,7 +368,11 @@ export class SessionStore {
     return directory ? this.read(directory, id) : null;
   }
 
-  /** Newest first. A file that no longer parses is skipped, not fatal - one bad file must not hide the rest. */
+  /**
+   * Newest first. A file that no longer parses is skipped, not fatal - one bad file must not hide the rest.
+   *
+   * Only files whose size or mtime changed since the last listing are read; see SUMMARY_INDEX.
+   */
   async list(): Promise<ChatSessionSummary[]> {
     const directory = await this.directoryFor(true);
     if (!directory) return [];
@@ -346,22 +385,93 @@ export class SessionStore {
       throw err;
     }
 
-    const sessions = await Promise.all(
-      entries
-        .filter(name => name.endsWith('.json'))
-        .map(async name => {
-          try {
-            return await this.read(directory, name.slice(0, -'.json'.length));
-          } catch {
-            return null;
+    const index = await this.summaryIndex(directory);
+    const ids = entries.filter(name => name.endsWith('.json')).map(name => name.slice(0, -'.json'.length));
+    let changed = false;
+    const sessions: (ChatSessionSummary | null)[] = new Array(ids.length).fill(null);
+    let next = 0;
+    const worker = async () => {
+      while (next < ids.length) {
+        const position = next++;
+        const id = ids[position];
+        try {
+          const info = await stat(this.filePath(directory, id));
+          const cached = index.get(id);
+          if (cached && cached.size === info.size && cached.mtimeMs === info.mtimeMs) {
+            sessions[position] = cached.summary;
+            continue;
           }
-        })
-    );
+          const session = await this.read(directory, id);
+          if (!session) continue;
+          const summary = summarize(session);
+          index.set(id, { size: info.size, mtimeMs: info.mtimeMs, summary });
+          changed = true;
+          sessions[position] = summary;
+        } catch {
+          sessions[position] = null;
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(LIST_READ_CONCURRENCY, ids.length) }, worker));
+
+    const present = new Set(ids);
+    for (const id of index.keys()) {
+      if (!present.has(id)) {
+        index.delete(id);
+        changed = true;
+      }
+    }
+    if (changed) await this.saveSummaryIndex(directory, index);
 
     return sessions
-      .filter((session): session is ChatSession => session !== null)
-      .map(summarize)
+      .filter((session): session is ChatSessionSummary => session !== null)
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  private summaryIndex(directory: string): Promise<Map<string, IndexedSummary>> {
+    let loading = this.summaryIndexes.get(directory);
+    if (!loading) {
+      loading = this.loadSummaryIndex(directory);
+      this.summaryIndexes.set(directory, loading);
+    }
+    return loading;
+  }
+
+  private summaryDefaults(): string {
+    return JSON.stringify([this.defaultModel, this.defaultReasoningEffort]);
+  }
+
+  private async loadSummaryIndex(directory: string): Promise<Map<string, IndexedSummary>> {
+    const index = new Map<string, IndexedSummary>();
+    try {
+      const parsed = JSON.parse(await readFile(join(directory, SUMMARY_INDEX), 'utf8')) as Partial<SummaryIndexFile>;
+      if (parsed.version !== SUMMARY_INDEX_VERSION || parsed.defaults !== this.summaryDefaults()) return index;
+      for (const [id, entry] of Object.entries(parsed.entries ?? {})) {
+        if (!isValidSessionId(id) || !entry?.summary || typeof entry.size !== 'number') continue;
+        // 'full' is scoped to the launch that chose it (see normalizeApprovalMode), so a summary
+        // carrying it from an earlier run is stale by definition.
+        if (entry.summary.approvalMode === 'full') continue;
+        index.set(id, entry);
+      }
+    } catch {
+      // Missing or unreadable: every file is read once and the index is rebuilt.
+    }
+    return index;
+  }
+
+  private async saveSummaryIndex(directory: string, index: Map<string, IndexedSummary>): Promise<void> {
+    const file: SummaryIndexFile = {
+      version: SUMMARY_INDEX_VERSION,
+      defaults: this.summaryDefaults(),
+      entries: Object.fromEntries(index),
+    };
+    const path = join(directory, SUMMARY_INDEX);
+    try {
+      await writeFile(`${path}.tmp`, JSON.stringify(file), 'utf8');
+      await rename(`${path}.tmp`, path);
+    } catch {
+      // A cache: failing to save it costs the next listing a re-read, nothing more.
+    }
   }
 
   /**
@@ -653,6 +763,39 @@ export class SessionStore {
   }
 
   /**
+   * Create or replace a session the Claude importer built, unless the user has continued it
+   * here - then it is left exactly as it is and marked forked, so a later sync can never
+   * overwrite a desktop turn. Under the same per-session lock as every other write.
+   */
+  async putImported(session: ChatSession): Promise<PutImportedOutcome> {
+    return this.serialize(session.id, async () => {
+      const directory = await this.directoryFor(false);
+      if (!directory) throw new Error('cannot import while no account is signed in');
+      const existing = await this.read(directory, session.id);
+      if (existing && (!existing.importOrigin || isForkedImport(existing))) {
+        if (existing.importOrigin && !existing.importOrigin.forkedAt) {
+          existing.importOrigin = { ...existing.importOrigin, forkedAt: new Date().toISOString() };
+          await this.write(directory, existing);
+        }
+        return 'forked';
+      }
+      // The user's own choices on the row outlive a re-sync of its content.
+      const kept: Partial<ChatSession> = existing
+        ? {
+            ...(existing.pinned ? { pinned: true } : {}),
+            ...(existing.archived ? { archived: true } : {}),
+            ...(existing.titleLocked ? { title: existing.title, titleLocked: true } : {}),
+            model: existing.model,
+            approvalMode: existing.approvalMode,
+            reasoningEffort: existing.reasoningEffort,
+          }
+        : {};
+      await this.write(directory, { ...session, ...kept });
+      return 'written';
+    });
+  }
+
+  /**
    * Forget the conversation. Deliberately does NOT touch the project directory or its worktree:
    * a worktree can hold uncommitted work, and deleting a chat must never be a way to lose code.
    * Removing one stays a git operation the user performs themselves (`rmworktree <branch>`).
@@ -696,6 +839,9 @@ export class SessionStore {
 
     session.messages.push(message);
     session.updatedAt = new Date().toISOString();
+    if (session.importOrigin && !session.importOrigin.forkedAt && !isImportedMessageId(message.id)) {
+      session.importOrigin = { ...session.importOrigin, forkedAt: session.updatedAt };
+    }
     await this.write(directory, session);
     return session;
   }
@@ -774,6 +920,7 @@ export class SessionStore {
     // in a later version must not make an existing conversation unreadable.
     const project = normalizeProject(parsed.project);
     const origin = normalizeOrigin(parsed.origin);
+    const importOrigin = normalizeImportOrigin(parsed.importOrigin);
     const suggestions = normalizeSuggestions(parsed.spawnSuggestions);
     // Absolute only: a relative entry would resolve against wherever the app was launched from.
     const grantedDirectories = Array.isArray(parsed.grantedDirectories)
@@ -805,6 +952,7 @@ export class SessionStore {
       ...(parsed.pinned ? { pinned: true } : {}),
       ...(parsed.archived ? { archived: true } : {}),
       ...(origin ? { origin } : {}),
+      ...(importOrigin ? { importOrigin } : {}),
       messages: Array.isArray(parsed.messages) ? parsed.messages : [],
       ...(typeof parsed.remoteSessionId === 'string' ? { remoteSessionId: parsed.remoteSessionId } : {}),
       ...(suggestions.length > 0 ? { spawnSuggestions: suggestions } : {}),

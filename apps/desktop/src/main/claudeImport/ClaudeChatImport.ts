@@ -1,0 +1,162 @@
+import { createReadStream } from 'node:fs';
+import { stat } from 'node:fs/promises';
+import { basename } from 'node:path';
+import { setImmediate as yieldToLoop } from 'node:timers/promises';
+import type { ChatMessage, ChatSession } from '@shared/chat';
+import type { ClaudeChatImportSummary } from '@shared/claudeImport';
+import { deriveTitle, isForkedImport, type SessionStore } from '../chat/SessionStore';
+import type { PendingAttachment } from './claudeCodeMapper';
+import { mapConversation } from './claudeChatMapper';
+import { streamJsonArray } from './jsonArrayStream';
+import { isUnsafeMemberName, listZipMembers, readZipMember, ZipError, type ZipMember } from './zipReader';
+
+/** Uncompressed ceiling for everything read out of one export. */
+export const MAX_EXPORT_BYTES = 2 * 1024 * 1024 * 1024;
+/** One conversation; past this it is counted as failed rather than parsed. */
+export const MAX_CONVERSATION_BYTES = 64 * 1024 * 1024;
+const CONVERSATIONS = 'conversations.json';
+
+export interface ChatImportDeps {
+  store: Pick<SessionStore, 'get' | 'putImported'>;
+  storeAttachments?: (
+    sessionId: string,
+    pending: PendingAttachment[]
+  ) => Promise<Map<string, ChatMessage['attachments']>>;
+  pickModel: () => Promise<string | undefined>;
+  /** Conversation uuid -> `updated_at` last imported; updated in place. */
+  seen: Record<string, string>;
+  /** Called every few sessions so the sidebar refreshes in batches rather than per row. */
+  onProgress?: () => void;
+  now?: () => Date;
+}
+
+export function chatSessionId(uuid: string): string {
+  return `cl-${uuid}`;
+}
+
+/**
+ * The one member worth reading: `conversations.json` at the root, or one folder down for an
+ * archive someone re-zipped. Anything else in the archive is never opened.
+ */
+export function findConversationsMember(members: readonly ZipMember[]): ZipMember | null {
+  const candidates = members.filter(member => {
+    const segments = member.name.split('/');
+    return segments.at(-1) === CONVERSATIONS && segments.length <= 2;
+  });
+  const chosen = candidates.find(member => member.name === CONVERSATIONS) ?? candidates[0] ?? null;
+  if (chosen && isUnsafeMemberName(chosen.name)) throw new ZipError('the archive has an unsafe file name');
+  return chosen;
+}
+
+/** True when a zip's directory looks like a claude.ai data export. */
+export async function looksLikeClaudeExport(path: string): Promise<boolean> {
+  try {
+    const members = await listZipMembers(path);
+    return (
+      !!findConversationsMember(members) && members.some(member => /(^|\/)(users|projects)\.json$/.test(member.name))
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function* conversationsBytes(path: string): AsyncGenerator<Buffer> {
+  if (path.toLowerCase().endsWith('.zip')) {
+    const members = await listZipMembers(path);
+    if (members.some(member => isUnsafeMemberName(member.name)))
+      throw new ZipError('the archive has an unsafe file name');
+    const member = findConversationsMember(members);
+    if (!member) throw new ZipError('this zip has no conversations.json; is it a claude.ai export?');
+    yield* readZipMember(path, member, MAX_EXPORT_BYTES);
+    return;
+  }
+  const info = await stat(path);
+  if (info.size > MAX_EXPORT_BYTES) throw new Error('conversations.json is larger than the import limit');
+  yield* createReadStream(path) as AsyncIterable<Buffer>;
+}
+
+export async function importChatExport(path: string, deps: ChatImportDeps): Promise<ClaudeChatImportSummary> {
+  const now = (deps.now ?? (() => new Date()))().toISOString();
+  const counts = { found: 0, imported: 0, updated: 0, unchanged: 0, skipped: 0, failed: 0 };
+  const summary: ClaudeChatImportSummary = { at: now, fileName: basename(path), counts };
+  const model = await deps.pickModel();
+
+  try {
+    for await (const element of streamJsonArray(conversationsBytes(path), MAX_CONVERSATION_BYTES)) {
+      counts.found++;
+      try {
+        await importOne(element, deps, counts, now, model);
+      } catch {
+        counts.failed++;
+      }
+      if (counts.found % 25 === 0) {
+        deps.onProgress?.();
+        await yieldToLoop();
+      }
+    }
+  } catch (error) {
+    summary.error = error instanceof Error ? error.message : String(error);
+  }
+  return summary;
+}
+
+async function importOne(
+  element: unknown,
+  deps: ChatImportDeps,
+  counts: ClaudeChatImportSummary['counts'],
+  now: string,
+  model: string | undefined
+): Promise<void> {
+  const mapped = element === null ? null : mapConversation(element);
+  if (!mapped) {
+    counts.failed++;
+    return;
+  }
+  if (mapped.messages.length === 0) {
+    counts.skipped++;
+    return;
+  }
+  const id = chatSessionId(mapped.uuid);
+  const existing = await deps.store.get(id);
+  if (existing && isForkedImport(existing)) {
+    counts.skipped++;
+    return;
+  }
+  if (existing && deps.seen[mapped.uuid] === mapped.updatedAt) {
+    counts.unchanged++;
+    return;
+  }
+
+  if (mapped.attachments.length > 0 && deps.storeAttachments) {
+    const stored = await deps.storeAttachments(id, mapped.attachments);
+    for (const message of mapped.messages) {
+      const attachments = stored.get(message.id);
+      if (attachments?.length) message.attachments = attachments;
+    }
+  }
+  const session: ChatSession = {
+    id,
+    title: deriveTitle(mapped.title),
+    model: existing?.model ?? model ?? '',
+    createdAt: mapped.createdAt,
+    updatedAt: mapped.updatedAt,
+    mode: 'chat',
+    approvalMode: 'ask',
+    reasoningEffort: 'default',
+    importOrigin: {
+      kind: 'claude-chat',
+      sourceId: mapped.uuid,
+      importedAt: existing?.importOrigin?.importedAt || now,
+      sourceUpdatedAt: mapped.updatedAt,
+    },
+    messages: mapped.messages,
+  };
+  const outcome = await deps.store.putImported(session);
+  if (outcome === 'forked') {
+    counts.skipped++;
+    return;
+  }
+  deps.seen[mapped.uuid] = mapped.updatedAt;
+  if (existing) counts.updated++;
+  else counts.imported++;
+}

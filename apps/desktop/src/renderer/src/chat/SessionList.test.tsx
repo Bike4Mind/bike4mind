@@ -84,13 +84,18 @@ function Harness({ activeId, mode }: { activeId: string | null; mode: ChatSessio
   );
 }
 
-async function mount(sessions: ChatSessionSummary[], mode: ChatSessionMode = 'chat') {
+async function mount(
+  sessions: ChatSessionSummary[],
+  mode: ChatSessionMode = 'chat',
+  extra: Record<string, unknown> = {}
+) {
   (window as unknown as { b4m: unknown }).b4m = {
     chat: {
       listSessions: async () => sessions,
       onSessionSummary: () => () => undefined,
       renameSession,
     },
+    ...extra,
   };
   host = document.createElement('div');
   document.body.appendChild(host);
@@ -355,5 +360,56 @@ describe('renaming a session from the sidebar', () => {
     await settle();
     // The edited row redraws for the optimistic title and again when it is applied; no other row does.
     expect(badgeRenders.count).toBeLessThanOrEqual(3);
+  });
+});
+
+describe('sessions imported from Claude', () => {
+  const origin = { kind: 'claude-code' as const, sourceId: 's', importedAt: 'x', sourceUpdatedAt: 'x' };
+  const typeSearch = (text: string) => {
+    const search = el('chat-search-input') as HTMLInputElement;
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    act(() => {
+      setter?.call(search, text);
+      search.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  };
+
+  it('sit in a collapsed section with a badge, and a search reaches them', async () => {
+    await mount([
+      summary('own', 'My own chat'),
+      summary('cc-1', 'Imported work', { importOrigin: origin }),
+      summary('cc-2', 'Continued import', { importOrigin: { ...origin, forkedAt: 'x' } }),
+    ]);
+    expect(titles()).toEqual(['My own chat', 'Continued import']);
+    expect(el('sidebar-imported-toggle-btn').textContent).toContain('Imported from Claude (1)');
+
+    act(() => el('sidebar-imported-toggle-btn').click());
+    expect(titles()).toEqual(['My own chat', 'Continued import', 'Imported work']);
+    const badges = all('session-imported-badge');
+    expect(badges.map(badge => badge.dataset.importForked)).toEqual(['true', 'false']);
+
+    act(() => el('sidebar-imported-toggle-btn').click());
+    typeSearch('imported work');
+    expect(titles()).toEqual(['Imported work']);
+  });
+
+  it('re-lists once when main says imported sessions changed', async () => {
+    let listener: (() => void) | null = null;
+    let sessions = [summary('own', 'Mine')];
+    await mount([], 'chat', {
+      claudeImport: {
+        onSessionsChanged: (next: () => void) => {
+          listener = next;
+          return () => undefined;
+        },
+      },
+    });
+    (
+      window as unknown as { b4m: { chat: { listSessions: () => Promise<ChatSessionSummary[]> } } }
+    ).b4m.chat.listSessions = async () => sessions;
+    sessions = [summary('own', 'Mine'), summary('cc-1', 'New import', { importOrigin: origin })];
+    await act(async () => listener?.());
+    await settle();
+    expect(el('sidebar-imported-toggle-btn').textContent).toContain('(1)');
   });
 });

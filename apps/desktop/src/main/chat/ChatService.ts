@@ -165,6 +165,12 @@ import {
   type ToolReporter,
   type WebContext,
 } from './tools/types';
+import {
+  IMPORTED_TAINT_SOURCE,
+  importedHistoryNeedsCompaction,
+  importedTurnAsText,
+  isImportedToolTurn,
+} from '../claudeImport/continuation';
 
 /** The fields this client reads from `GET /api/settings/serverConfig`. */
 interface ServerTransportConfig {
@@ -720,6 +726,12 @@ export class ChatService {
   async createSession(): Promise<ChatSessionSummary> {
     const catalog = await this.listModels();
     return this.deps.store.create((await this.pickModel(catalog.models)) ?? undefined);
+  }
+
+  /** The model a new conversation would start on, for a session the Claude importer writes. */
+  async modelForNewSession(): Promise<string | undefined> {
+    const catalog = await this.listModels();
+    return (await this.pickModel(catalog.models)) ?? undefined;
   }
 
   /**
@@ -1658,7 +1670,7 @@ export class ChatService {
    */
   private async autoCompact(session: ChatSession): Promise<void> {
     const window = this.deps.models?.cached()?.find(model => model.id === session.model)?.contextWindow;
-    if (!shouldAutoCompact(session.messages, window)) return;
+    if (!shouldAutoCompact(session.messages, window) && !importedHistoryNeedsCompaction(session)) return;
 
     const sessionId = session.id;
     this.compacting.add(sessionId);
@@ -2054,6 +2066,9 @@ export class ChatService {
         declined: [],
         granted: [],
         ...(resume ? resumedUntrusted(resume.toolCalls) : {}),
+        // Text brought in from Claude was written outside this app, so a continued import is
+        // treated as having read untrusted content for as long as it lives.
+        ...(session.importOrigin ? { untrusted: IMPORTED_TAINT_SOURCE } : {}),
         // A `/name` import's body IS this reply's prompt, so the reply starts as having read it.
         // Read off the stored message rather than passed in, so a resumed reply re-taints too.
         ...(session.messages.findLast(message => message.role === 'user')?.skill?.imported
@@ -5015,7 +5030,9 @@ function untrustedReason(tool: string): string {
         ? 'a skill'
         : tool === 'session_read'
           ? 'another conversation'
-          : 'the web';
+          : tool === IMPORTED_TAINT_SOURCE
+            ? 'a conversation imported from Claude'
+            : 'the web';
   return `Asked because this reply read content from ${source} (${tool}).`;
 }
 
@@ -5091,6 +5108,12 @@ async function toCompletionMessages(
     // Artifact markup is stripped out of the stored text, so it has to go back in here: a model
     // that cannot see the artifact it just wrote cannot revise it.
     const text = withNotes(message, frameBoundary(message, frameRelay(message, restoreArtifactMarkup(message))));
+
+    if (isImportedToolTurn(message)) {
+      const flattened = importedTurnAsText(message, text);
+      if (flattened) wire.push({ role: 'assistant', content: flattened });
+      continue;
+    }
 
     if (calls.length === 0) {
       const attachments = message.attachments ?? [];

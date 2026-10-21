@@ -26,6 +26,8 @@ import {
 import type { PrSummary } from '@shared/pullRequest';
 import { sectionOf, type SidebarSection, type SidebarSectionsState } from '@shared/sidebarSections';
 import { groupSessions, orderedSessions, type CustomGroup, type ProjectGroup } from './grouping';
+import { ImportedBadge } from './ImportedBadge';
+import { useImportedInline } from './importedInline';
 import {
   ArrowLeftIcon,
   ArtifactIcon,
@@ -472,6 +474,7 @@ const SessionRow = memo(function SessionRow({
               {session.title}
             </Typography>
           )}
+          {!editing && session.importOrigin && <ImportedBadge origin={session.importOrigin} />}
         </Stack>
       </ListItemButton>
     </ListItem>
@@ -693,6 +696,8 @@ export function SessionList({
   }, [sessions, query]);
 
   const [archivedOpen, setArchivedOpen] = useState(false);
+  const [importedOpen, setImportedOpen] = useState(false);
+  const [importedInline] = useImportedInline();
 
   // `section` is set when the right-click landed in a user section, which then offers a new session in it.
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; section?: SidebarSection } | null>(null);
@@ -702,16 +707,17 @@ export function SessionList({
   const [nameRequest, setNameRequest] = useState<SectionNameRequest | null>(null);
 
   const sections = useMemo(() => {
-    const grouped = groupSessions(matching, mode, userSections);
+    const grouped = groupSessions(matching, mode, userSections, importedInline);
     // An empty section under a search is only noise; with no query it stays so it can be found.
     return query.trim() ? { ...grouped, custom: grouped.custom.filter(group => group.sessions.length > 0) } : grouped;
-  }, [matching, mode, userSections, query]);
+  }, [matching, mode, userSections, query, importedInline]);
   const empty =
     sections.pinned.length === 0 &&
     sections.custom.length === 0 &&
     sections.projects.length === 0 &&
     sections.loose.length === 0 &&
-    sections.archived.length === 0;
+    sections.archived.length === 0 &&
+    sections.imported.length === 0;
 
   const ordered = useMemo(() => orderedSessions(sections), [sections]);
 
@@ -1106,6 +1112,30 @@ export function SessionList({
                 <List size="sm" sx={SESSION_LIST_SX}>
                   {sections.loose.map(row)}
                 </List>
+              </Box>
+            )}
+
+            {/* Shut by default so a first sync of hundreds of transcripts does not bury the
+                user's own work; a search opens it, since a match hidden behind it is no match. */}
+            {sections.imported.length > 0 && (
+              <Box data-testid="sidebar-imported">
+                <Button
+                  fullWidth
+                  size="sm"
+                  variant="plain"
+                  color="neutral"
+                  onClick={() => setImportedOpen(open => !open)}
+                  endDecorator={<ChevronIcon open={importedOpen || !!query.trim()} />}
+                  sx={{ justifyContent: 'flex-start', mt: 1, fontWeight: 'md' }}
+                  data-testid="sidebar-imported-toggle-btn"
+                >
+                  <Box sx={{ flex: 1, textAlign: 'left' }}>Imported from Claude ({sections.imported.length})</Box>
+                </Button>
+                {(importedOpen || !!query.trim()) && (
+                  <List size="sm" sx={SESSION_LIST_SX}>
+                    {sections.imported.map(row)}
+                  </List>
+                )}
               </Box>
             )}
 
