@@ -153,6 +153,16 @@ describe('buildHistoryTranscript', () => {
     expect(buildHistoryTranscript(recent)).toMatch(/"q" → reply$/);
   });
 
+  it('marks a turn stopped before any reply as stopped, not as an empty reply', () => {
+    const stopped = { ...makeRepliesMessage('s', 'q', []), status: 'stopped' } as IChatHistoryItemDocument;
+    expect(buildHistoryTranscript([stopped])).toMatch(/"q" \u2192 stopped before any reply$/);
+  });
+
+  it('keeps the reply text of a stopped turn that streamed output', () => {
+    const partial = { ...makeTextMessage('p', 'q', 'partial answer'), status: 'stopped' } as IChatHistoryItemDocument;
+    expect(buildHistoryTranscript([partial])).toContain('assistant: "partial answer"');
+  });
+
   it('collapses whitespace in prompts and replies', () => {
     const messy = makeTextMessage('m', 'line one\n\n  line  two', 'reply\n\n with   whitespace');
     const transcript = buildHistoryTranscript([messy]);
