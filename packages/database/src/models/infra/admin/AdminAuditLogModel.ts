@@ -1,5 +1,6 @@
 import mongoose, { Model, model, Schema, Types } from 'mongoose';
 import {
+  ADMIN_AUDIT_CREDIT_GRANT_ACTIONS,
   IMPERSONATION_ENDED_ACTION,
   IMPERSONATION_STARTED_ACTION,
   type AuditEntry,
@@ -204,6 +205,23 @@ const buildCursorClauses = (cursor: AuditLogCursor): FilterClause[] => [
   },
 ];
 
+// Ascending twin of buildCursorClauses: strictly after the cursor in (occurredAt, _id) order.
+const buildAfterCursorClauses = (cursor: AuditLogCursor): FilterClause[] => [
+  { occurredAt: { $gte: cursor.occurredAt } },
+  {
+    $or: [
+      { occurredAt: { $gt: cursor.occurredAt } },
+      { occurredAt: cursor.occurredAt, _id: { $gt: new Types.ObjectId(cursor.id) } },
+    ],
+  },
+];
+
+const creditGrantsBy = (actorUserId: string): FilterClause => ({
+  'actor.userId': actorUserId,
+  action: { $in: ADMIN_AUDIT_CREDIT_GRANT_ACTIONS },
+  'details.credits': { $gt: 0 },
+});
+
 type SummaryFacets = {
   grantCount: Array<{ count: number }>;
   creditTotals: Array<{ granted: number; deducted: number }>;
@@ -325,6 +343,34 @@ class AdminAuditLogRepository implements IAdminAuditLogRepository {
       deletions: readCount(facets?.deletions),
       deniedAttempts: readCount(facets?.deniedAttempts),
     };
+  }
+
+  async listAscending(page: { after: AuditLogCursor | null; until: Date; limit: number }): Promise<AuditEntry[]> {
+    const clauses: FilterClause[] = [{ occurredAt: { $lte: page.until } }];
+    if (page.after) clauses.push(...buildAfterCursorClauses(page.after));
+    const records = await this.auditLogModel
+      .find({ $and: clauses })
+      .sort({ occurredAt: 1, _id: 1 })
+      .limit(page.limit)
+      .maxTimeMS(LIST_QUERY_MAX_TIME_MS)
+      .lean<StoredRecord[]>();
+    return records.map(toAuditEntry);
+  }
+
+  async countCreditGrants(actorUserId: string, window: { from: Date; to: Date }): Promise<number> {
+    return this.auditLogModel
+      .countDocuments({ ...creditGrantsBy(actorUserId), occurredAt: { $gt: window.from, $lte: window.to } })
+      .maxTimeMS(LIST_QUERY_MAX_TIME_MS);
+  }
+
+  async sumCreditsGranted(actorUserId: string, since: Date): Promise<number> {
+    const [total] = await this.auditLogModel
+      .aggregate<{ credits: number }>([
+        { $match: { ...creditGrantsBy(actorUserId), occurredAt: { $gte: since } } },
+        { $group: { _id: null, credits: { $sum: '$details.credits' } } },
+      ])
+      .option({ maxTimeMS: LIST_QUERY_MAX_TIME_MS });
+    return total?.credits ?? 0;
   }
 
   async appendBackfill(

@@ -2,6 +2,7 @@ import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { api } from '@client/app/contexts/ApiContext';
 import type {
+  AuditAlertStatus,
   AuditEntry,
   AuditExportResult,
   AuditLogFilters,
@@ -65,6 +66,16 @@ export const useAuditSummary = (windowDays: AuditSummaryWindow) =>
       return response.data;
     },
     staleTime: 1000 * 60 * 5,
+  });
+
+export const useAuditAlertStatus = () =>
+  useQuery({
+    queryKey: ['admin', 'audit-log', 'alert-status'],
+    queryFn: async (): Promise<AuditAlertStatus> => {
+      const response = await api.get<AuditAlertStatus>('/api/admin/audit-log/alert-status');
+      return response.data;
+    },
+    staleTime: 1000 * 60,
   });
 
 /**
