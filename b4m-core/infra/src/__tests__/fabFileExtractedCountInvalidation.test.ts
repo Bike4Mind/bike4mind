@@ -132,6 +132,7 @@ describe('every FabFile content rewrite clears the cached extracted length', () 
       'apps/workers/src',
       'b4m-core/services/src/fabFileService',
       'b4m-core/services/src/researchTaskService',
+      'packages/server-utils/src',
     ];
     const found: string[] = [];
     searchRoots.forEach(root => walkTs(root, rel => UPLOAD_PATTERN.test(read(rel)) && found.push(rel)));
