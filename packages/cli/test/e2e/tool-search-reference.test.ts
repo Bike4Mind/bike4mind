@@ -101,7 +101,7 @@ function makeAgent(
   const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   return new ReActAgent({
     userId: 'e2e-test-user',
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test logger only needs the four log methods ReActAgent calls
     logger: logger as any,
     llm,
     model,
