@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -17,7 +17,6 @@ beforeEach(async () => {
   base = join(root, 'attachments');
   scratch = join(root, 'files');
   await mkdtemp(join(tmpdir(), 'unused-'));
-  const { mkdir } = await import('node:fs/promises');
   await mkdir(scratch, { recursive: true });
   store = new AttachmentStore(base, logger);
 });
@@ -138,6 +137,14 @@ describe('AttachmentStore lifecycle', () => {
   it('locates nothing for an id that would escape the session directory', async () => {
     expect(await store.locate(SESSION, '../../../etc/passwd')).toBeNull();
     expect(await store.locate('../elsewhere', 'abc')).toBeNull();
+  });
+
+  // Only ENOENT means gone; an I/O failure must not be swallowed as "no longer available".
+  it('rethrows a stat failure that is not ENOENT', async () => {
+    await mkdir(base, { recursive: true });
+    await writeFile(join(base, SESSION), '', 'utf8');
+
+    await expect(store.locate(SESSION, 'abc')).rejects.toMatchObject({ code: 'ENOTDIR' });
   });
 
   it('deletes everything a conversation owns', async () => {
