@@ -185,6 +185,7 @@ describe('DELETE /api/files/:id - ai:generate-only key', () => {
     h.findById.mockResolvedValue(markedFile());
     const { res, json } = makeRes();
     await route(makeReq({ method: 'DELETE' }), res);
+    expect(h.findById).toHaveBeenCalledWith(FILE_ID);
     expect(h.deleteFileForUser).toHaveBeenCalledTimes(1);
     expect(h.deleteFileForUser).toHaveBeenCalledWith(expect.objectContaining({ method: 'DELETE' }), FILE_ID);
     expect(json).toHaveBeenCalledWith({ msg: 'Fab file deleted', action: 'deleted' });
@@ -200,6 +201,7 @@ describe('DELETE /api/files/:id - ai:generate-only key', () => {
     const err = await route(makeReq({ method: 'DELETE' }), makeRes().res).catch(e => e);
     expect(err).toBeInstanceOf(ForbiddenError);
     expect(err.message).toMatch(/files:write is required/);
+    expect(h.findById).toHaveBeenCalledWith(FILE_ID);
     expect(h.deleteFileForUser).not.toHaveBeenCalled();
   });
 
@@ -218,6 +220,16 @@ describe('DELETE /api/files/:id - callers that keep today behaviour', () => {
     await route(makeReq({ method: 'DELETE', apiKeyInfo: { keyId: 'k', scopes: ['files:write'] } }), res);
     expect(h.findById).not.toHaveBeenCalled();
     expect(h.deleteFileForUser).toHaveBeenCalledTimes(1);
+    expect(h.deleteFileForUser).toHaveBeenCalledWith(expect.anything(), FILE_ID);
+    expect(json).toHaveBeenCalledWith({ msg: 'Fab file deleted', action: 'deleted' });
+  });
+
+  it('lets a key holding both files:write and ai:generate delete without consulting the marker', async () => {
+    const { res, json } = makeRes();
+    await route(makeReq({ method: 'DELETE', apiKeyInfo: { keyId: 'k', scopes: ['files:write', 'ai:generate'] } }), res);
+    expect(h.findById).not.toHaveBeenCalled();
+    expect(h.deleteFileForUser).toHaveBeenCalledTimes(1);
+    expect(h.deleteFileForUser).toHaveBeenCalledWith(expect.anything(), FILE_ID);
     expect(json).toHaveBeenCalledWith({ msg: 'Fab file deleted', action: 'deleted' });
   });
 
@@ -226,6 +238,7 @@ describe('DELETE /api/files/:id - callers that keep today behaviour', () => {
     await route(makeReq({ method: 'DELETE', apiKeyInfo: undefined }), res);
     expect(h.findById).not.toHaveBeenCalled();
     expect(h.deleteFileForUser).toHaveBeenCalledTimes(1);
+    expect(h.deleteFileForUser).toHaveBeenCalledWith(expect.anything(), FILE_ID);
     expect(json).toHaveBeenCalledWith({ msg: 'Fab file deleted', action: 'deleted' });
   });
 
