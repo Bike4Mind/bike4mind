@@ -161,7 +161,9 @@ export class TurnTimingRecorder {
 
   /** Ends the context-build span. Only the first call counts: retries and hops re-enter the loop. */
   markLlmRequestStarted(now = Date.now()): void {
-    this.timing.contextBuildMs ??= Math.max(0, now - this.processStartedAt);
+    if (this.timing.contextBuildMs !== undefined) return;
+    this.timing.contextBuildMs = Math.max(0, now - this.processStartedAt);
+    this.changed();
   }
 
   addSemaphoreWait(waitMs: number): void {

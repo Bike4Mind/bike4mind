@@ -164,13 +164,17 @@ describe('TurnTimingRecorder', () => {
     expect(recorder.snapshot().totalMs).toBe(415_000);
   });
 
-  it('reports every change so the quest mirrors backend-reported retries and slot waits', () => {
+  it('reports every change so the quest mirrors the context build, retries and slot waits', () => {
     const seen: ITurnTiming[] = [];
     const recorder = new TurnTimingRecorder(createdAt, processStartedAt, undefined, timing => seen.push(timing));
 
+    recorder.markLlmRequestStarted(processStartedAt + 3000);
+    recorder.markLlmRequestStarted(processStartedAt + 9000);
     recorder.sink.onSemaphoreWait(120);
     recorder.sink.onRetry({ error: withStatus('Overloaded', 529), delayMs: 500, model: 'model-a' });
 
+    expect(seen).toHaveLength(3);
+    expect(seen[0].contextBuildMs).toBe(3000);
     expect(seen[seen.length - 1].semaphoreWaitMs).toBe(120);
     expect(seen[seen.length - 1].retries).toHaveLength(1);
   });
