@@ -102,7 +102,7 @@ export function SkillMarketPanel({
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<SkillMarketListingRef | null>(initial ?? null);
   const [tab, setTab] = useState<'browse' | 'mine'>('browse');
-  // Bumped after an upload saves, so an open My listings reloads.
+  // Bumped after an upload saves, so every market list reflects the change.
   const [mineKey, setMineKey] = useState(0);
   const upload = useSkillUpload(() => setMineKey(key => key + 1));
 
@@ -122,11 +122,17 @@ export function SkillMarketPanel({
 
   useEffect(() => {
     void load(filters, 1);
-  }, [filters, load]);
+  }, [filters, load, mineKey]);
 
   useEffect(() => {
-    void window.b4m.skillMarket.recommended().then(result => setRecommended(result.listings));
-  }, []);
+    let live = true;
+    void window.b4m.skillMarket.recommended().then(result => {
+      if (live) setRecommended(result.listings);
+    });
+    return () => {
+      live = false;
+    };
+  }, [mineKey]);
 
   const set = <K extends keyof SkillMarketFilters>(key: K, value: SkillMarketFilters[K]) =>
     setFilters(previous => ({ ...previous, [key]: value }));

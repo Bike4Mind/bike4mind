@@ -13,6 +13,14 @@ import type {
 } from '@shared/skillMarket';
 import { SkillMarketPanel } from './SkillMarketPanel';
 
+const upload = vi.hoisted(() => ({ onSaved: undefined as (() => void) | undefined }));
+vi.mock('./SkillUploadDialog', () => ({
+  useSkillUpload: (onSaved?: () => void) => {
+    upload.onSaved = onSaved;
+    return { start: vi.fn(), error: null, dialog: null };
+  },
+}));
+
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 window.matchMedia ??= ((query: string) => ({
@@ -108,6 +116,39 @@ async function click(id: string): Promise<void> {
 }
 
 describe('SkillMarketPanel', () => {
+  it('refreshes browse and recommended listings when an upload changes the market', async () => {
+    await mount();
+    browse.mockResolvedValueOnce({ listings: [{ ...card, name: 'published-skill' }], hasMore: false });
+    recommended.mockResolvedValueOnce({
+      listings: [{ ...card, id: 'l2', name: 'new-recommendation' }],
+      hasMore: false,
+    });
+
+    await act(async () => upload.onSaved?.());
+
+    expect(browse).toHaveBeenCalledTimes(2);
+    expect(recommended).toHaveBeenCalledTimes(2);
+    expect(host?.textContent).toContain('/published-skill');
+    expect(byTestId('skill-market-recommended')?.textContent).toContain('/new-recommendation');
+  });
+
+  it('ignores an older recommendations response after an upload refresh', async () => {
+    let completePrevious: (page: SkillMarketPage) => void = () => {};
+    recommended.mockReturnValueOnce(
+      new Promise(resolve => {
+        completePrevious = resolve;
+      })
+    );
+    await mount();
+    recommended.mockResolvedValueOnce({ listings: [{ ...card, name: 'fresh-recommendation' }], hasMore: false });
+    await act(async () => upload.onSaved?.());
+
+    await act(async () => completePrevious({ listings: [{ ...card, name: 'old-recommendation' }], hasMore: false }));
+
+    expect(byTestId('skill-market-recommended')?.textContent).toContain('/fresh-recommendation');
+    expect(byTestId('skill-market-recommended')?.textContent).not.toContain('/old-recommendation');
+  });
+
   it('lists the market and opens a listing with its safety summary, requested tools and body', async () => {
     await mount();
     expect(browse).toHaveBeenCalledWith(expect.objectContaining({ sort: 'top' }), 1);
