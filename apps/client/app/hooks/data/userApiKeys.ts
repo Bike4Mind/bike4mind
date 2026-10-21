@@ -224,10 +224,11 @@ export function useAdminGenerateApiKey({ onSuccess }: { onSuccess?: (result: Cre
 
 /** Response of GET /api/admin/users/[userId]/user-api-keys: the user's keys plus
  * each key's live minute/day rate-limit counters (keyed by key id) - the
- * usage fields on the key doc itself are not maintained. */
+ * usage fields on the key doc itself are not maintained. Reset timestamps are
+ * epoch seconds and mirror the server's `RateLimitUsage`. */
 export interface AdminUserApiKeysResponse {
   apiKeys: IUserApiKeyDocument[];
-  liveUsage: Record<string, { minute: number; day: number }>;
+  liveUsage: Record<string, { minute: number; day: number; minuteResetAt?: number; dayResetAt?: number }>;
 }
 
 export function useAdminGetUserApiKeys(userId: string | undefined) {

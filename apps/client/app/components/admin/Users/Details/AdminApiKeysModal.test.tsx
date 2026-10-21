@@ -7,7 +7,7 @@ import { toast } from 'sonner';
 
 const h = vi.hoisted(() => ({
   keys: [] as Record<string, unknown>[],
-  liveUsage: {} as Record<string, { minute: number; day: number }>,
+  liveUsage: {} as Record<string, { minute: number; day: number; minuteResetAt?: number; dayResetAt?: number }>,
   resetMutate: vi.fn(),
   // Auto-invokes onOk so the confirm-then-mutate flow runs synchronously;
   // individual tests override the implementation to model a dismissal.
@@ -76,6 +76,25 @@ describe('AdminApiKeysModal', () => {
     expect(screen.getByTestId('admin-api-key-usage-k1').textContent).toContain('42/1000 per day');
     expect(screen.getByTestId('admin-api-key-status-k1').textContent).toBe('Active');
     expect(screen.getByTestId('admin-api-key-status-k2').textContent).toBe('Disabled');
+  });
+
+  it('shows the reset time for each open window', () => {
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    h.keys = [KEY];
+    h.liveUsage = { k1: { minute: 3, day: 42, minuteResetAt: nowSeconds + 600, dayResetAt: nowSeconds + 3600 } };
+    renderModal();
+
+    expect(screen.getByTestId('admin-api-key-usage-minute-k1').textContent).toContain('3/60 per min · resets in');
+    expect(screen.getByTestId('admin-api-key-usage-day-k1').textContent).toContain('42/1000 per day · resets in');
+  });
+
+  it('omits the reset time while a window is empty', () => {
+    h.keys = [KEY];
+    h.liveUsage = { k1: { minute: 0, day: 0, minuteResetAt: Math.floor(Date.now() / 1000) + 600 } };
+    renderModal();
+
+    expect(screen.getByTestId('admin-api-key-usage-minute-k1').textContent).not.toContain('resets in');
+    expect(screen.getByTestId('admin-api-key-usage-day-k1').textContent).not.toContain('resets in');
   });
 
   it('flags an active key whose live counter sits at its limit as rate limited', () => {
