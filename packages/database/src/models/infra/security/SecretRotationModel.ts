@@ -53,22 +53,32 @@ export class SecretRotationRepository
    * serializes the result.
    */
   async findByKeyNameWithSecret(keyName: string) {
-    const row = await this.secretRotationModel.findOne({ keyName }).select('+previousKey');
-    if (row?.previousKey && row.rotatedAt.getTime() <= Date.now() - 24 * 60 * 60 * 1000) {
-      const plaintext = decryptAtRest(row.previousKey);
-      const capturedKeyFingerprint =
-        row.capturedKeyFingerprint ?? (plaintext ? createHash('sha256').update(plaintext).digest('hex') : undefined);
-      await this.secretRotationModel.updateOne(
-        { _id: row._id, rotatedAt: row.rotatedAt },
-        {
-          $unset: { previousKey: '' },
-          ...(capturedKeyFingerprint ? { $set: { capturedKeyFingerprint } } : {}),
-        }
-      );
-      row.previousKey = undefined;
-      row.capturedKeyFingerprint = capturedKeyFingerprint;
-    }
-    return row;
+    return this.secretRotationModel.findOne({ keyName }).select('+previousKey');
+  }
+
+  /**
+   * Retire a rotated-out secret once its grace window has closed, recording the fingerprint of
+   * what it was so a later renew can prove the signing secret actually changed. Read paths stay
+   * read-only; this is the one writer, called from the rotation cron.
+   *
+   * The compare-and-swap on `rotatedAt` means a concurrent renew (which moves `rotatedAt`) is
+   * left alone rather than having its fresh `previousKey` cleared by this one.
+   */
+  async expirePreviousKey(keyName: string, graceMs: number) {
+    const row = await this.secretRotationModel.findOne({ keyName, previousKey: { $ne: null } }).select('+previousKey');
+    if (!row?.previousKey) return;
+    if (row.rotatedAt.getTime() > Date.now() - graceMs) return;
+
+    const plaintext = decryptAtRest(row.previousKey);
+    const capturedKeyFingerprint =
+      row.capturedKeyFingerprint ?? (plaintext ? createHash('sha256').update(plaintext).digest('hex') : undefined);
+    await this.secretRotationModel.updateOne(
+      { _id: row._id, rotatedAt: row.rotatedAt },
+      {
+        $unset: { previousKey: '' },
+        ...(capturedKeyFingerprint ? { $set: { capturedKeyFingerprint } } : {}),
+      }
+    );
   }
 
   async findActiveKeys() {
