@@ -3,14 +3,18 @@
  * remounted modal consumes it so the redirect is not logged as a second open and an abandonment.
  * Memory only: a reload must not suppress a genuine later open.
  */
-let returned = false;
+// Covers the return handler -> modal mount gap; past it, a modal that never mounted must not
+// swallow a later genuine open.
+export const BILLING_CHECKOUT_RETURN_TTL_MS = 60_000;
 
-export function markBillingCheckoutReturn(): void {
-  returned = true;
+let markedAt: number | null = null;
+
+export function markBillingCheckoutReturn(now = Date.now()): void {
+  markedAt = now;
 }
 
-export function consumeBillingCheckoutReturn(): boolean {
-  const value = returned;
-  returned = false;
-  return value;
+export function consumeBillingCheckoutReturn(now = Date.now()): boolean {
+  const fresh = markedAt !== null && now - markedAt < BILLING_CHECKOUT_RETURN_TTL_MS;
+  markedAt = null;
+  return fresh;
 }
