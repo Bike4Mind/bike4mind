@@ -73,11 +73,10 @@ const handler = baseApi({ auth: false })
       });
     }
 
-    // 2.5. Client scope gate - the scope is opt-in and never part of a registration's defaults, and
-    //      only a relying party may hold it: the grant gate exempts first-party clients, so one holding
-    //      the scope could ask about any user with no consent. A legacy doc with no clientType is refused.
-    //      Rollout: a client that called this before the scope existed 403s here until an operator grants
-    //      it (seed-oauth-client.ts TARGET_CLIENT_ID) - do that before deploying. Audit query:
+    // 2.5. Client scope gate (why first-party is refused: see the header). A legacy doc with no
+    //      clientType is refused. Rollout: a client that called this before the scope existed 403s here
+    //      until an operator grants it (seed-oauth-client.ts TARGET_CLIENT_ID) - do that before deploying.
+    //      Audit query:
     //        db.oauthclients.find({ federatedIdp: { $exists: true }, allowedScopes: { $nin: ['federated:admin-status'] } })
     const isRelyingParty = client.clientType === 'relying-party';
     if (!isRelyingParty || !(client.allowedScopes ?? []).includes(FEDERATED_ADMIN_STATUS_SCOPE)) {
