@@ -214,7 +214,7 @@ describe('executeCompletion - OpenAI bare model alias resolution', () => {
     await expect(rejection).rejects.not.toBeInstanceOf(BadRequestError);
     await expect(rejection).rejects.toMatchObject({
       statusCode: 503,
-      message: 'Failed to create LLM backend for model: llama3.2:latest',
+      message: 'Model listing for ollama is unavailable; retry shortly.',
       additionalInfo: { errorCode: 'provider_not_configured' },
     });
   });
@@ -244,6 +244,7 @@ describe('executeCompletion - OpenAI bare model alias resolution', () => {
     const rejection = executeCompletion({ ...baseParams, model: 'local-image/sd15', db, logger: logger as never });
     await expect(rejection).rejects.toMatchObject({
       statusCode: 503,
+      message: `Model listing for ${ModelBackend.LocalImage} is unavailable; retry shortly.`,
       additionalInfo: { errorCode: 'provider_not_configured' },
     });
     expect(logger.warn).toHaveBeenCalledWith(expect.any(String), {

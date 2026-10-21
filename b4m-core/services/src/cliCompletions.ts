@@ -485,15 +485,16 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       `Unknown model '${params.model}'. List the models you can call with GET /api/v1/models.`,
       { errorCode: UNKNOWN_MODEL_ERROR_CODE }
     );
-    const providerUnavailable = () =>
-      new HTTPError(503, `Failed to create LLM backend for model: ${params.model}`, {
+    const providerUnavailable = (message = `Failed to create LLM backend for model: ${params.model}`) =>
+      new HTTPError(503, message, {
         errorCode: 'provider_not_configured',
       });
     // Ollama pulls and local checkpoints exist only in their live listing, so a failed one proves no absence.
     if (!catalogued) {
-      if (!failedListings.some(b => RUNTIME_DISCOVERED_BACKENDS.includes(b))) throw unknownModel;
+      const failedRuntime = failedListings.filter(b => RUNTIME_DISCOVERED_BACKENDS.includes(b));
+      if (failedRuntime.length === 0) throw unknownModel;
       logger?.warn?.('[cliCompletions] live model listing failed; answering 503', { model, failedListings });
-      throw providerUnavailable();
+      throw providerUnavailable(`Model listing for ${failedRuntime.join(', ')} is unavailable; retry shortly.`);
     }
     const providerConfigured = await isModelProviderConfigured(model, apiKeys).catch((cause: unknown) => {
       logger?.error?.('[cliCompletions] provider check failed; answering 503', { model, cause });
