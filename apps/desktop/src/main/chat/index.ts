@@ -662,6 +662,7 @@ export function registerChat(
     },
     fit: () => local.contextFit(),
   });
+  ipcMain.handle(IPC_CHANNELS.chatListCreationTools, () => service.listCreationTools());
   ipcMain.handle(IPC_CHANNELS.chatSetSessionArchived, (_event, sessionId: string, archived: boolean) =>
     service.setSessionArchived(sessionId, archived)
   );

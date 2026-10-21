@@ -34,6 +34,7 @@ import type {
   ChatUsage,
   CreateCodeSessionRequest,
   CreateCodeSessionResult,
+  CreationTool,
   ContextBoundaryResult,
   ReasoningEffortSetting,
   SendMessageResult,
@@ -181,7 +182,7 @@ import { inspectDirectory, inspectDirectoryRequest } from './tools/requestDirect
 import type { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import { BackgroundWake } from './backgroundWake';
 import type { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
-import { findTool, isOfferedEditTool, toolsForRequest, usesApplyPatch } from './tools/registry';
+import { findTool, isOfferedEditTool, offeredMediaToolNames, toolsForRequest, usesApplyPatch } from './tools/registry';
 import { webContextFor } from './tools/webTools';
 import { DoomLoopTracker, THRESHOLD as LOOP_THRESHOLD } from './tools/doomLoop';
 import { WEB_SEARCH_TURN_BUDGET, WebSearchLimiter } from './tools/webSearchLimits';
@@ -919,6 +920,17 @@ export class ChatService {
   searchHistory(query: string): LocalHistoryResult[] {
     if (!this.deps.history) throw new Error('Local history is unavailable. Restart the app and try again.');
     return this.deps.history.search(query);
+  }
+
+  /**
+   * What a turn would be offered to generate with: the same `media` and `video` conditions the
+   * turn's toolsForRequest call reads. The video list is the ModelCatalog's short cache, so a
+   * blank chat asking for this costs no more than the next turn will.
+   */
+  async listCreationTools(): Promise<CreationTool[]> {
+    if (!this.deps.media || !this.deps.getApiClient()) return [];
+    const video = (await this.deps.models?.listVideoModels().catch(() => [])) ?? [];
+    return offeredMediaToolNames({ media: true, video }).map(name => ({ name, spendsCredits: spendsCredits(name) }));
   }
 
   /** What Settings offers for the next-prompt hint; see suggestionModelChoices. */

@@ -954,6 +954,17 @@ export interface ChatModelCatalog {
 }
 
 /**
+ * A generation tool the next Chat turn would declare, as `listCreationTools` answers. Derived from
+ * the same inputs as the request's tool list (see toolsForRequest), so the blank chat never offers
+ * to make something the model will not be given a tool for.
+ */
+export interface CreationTool {
+  name: string;
+  /** Asks before every call whatever the approval mode; see riskAssessment's spendsCredits. */
+  spendsCredits: boolean;
+}
+
+/**
  * Token counts the SERVER reported, never a client-side estimate.
  *
  * The completions endpoint reports usage per request, so an agent turn - which makes one
