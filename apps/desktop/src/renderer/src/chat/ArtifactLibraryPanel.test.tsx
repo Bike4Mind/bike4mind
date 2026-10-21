@@ -48,12 +48,12 @@ class ManualObserver {
   }
 }
 
-async function bringNear(elements: readonly Element[]): Promise<void> {
+async function bringNear(elements: readonly Element[], near = true): Promise<void> {
   await act(async () => {
     for (const { element, callback } of [...observed]) {
       if (!elements.includes(element)) continue;
       callback(
-        [{ isIntersecting: true, target: element } as unknown as IntersectionObserverEntry],
+        [{ isIntersecting: near, target: element } as unknown as IntersectionObserverEntry],
         {} as IntersectionObserver
       );
     }
@@ -148,6 +148,29 @@ describe('ArtifactLibraryPanel states', () => {
     expect(listArtifacts).toHaveBeenCalledTimes(2);
     expect(byTestId('artifact-library-error')).toBeNull();
     expect(titles()).toHaveLength(3);
+  });
+
+  it('keeps the previous list and cached body when a refresh fails', async () => {
+    listArtifacts.mockResolvedValueOnce({ artifacts: [summaries[0]], total: 1 });
+    readArtifact.mockResolvedValueOnce({
+      artifact: { id: 'a1', type: 'code', title: 'Beta chart', content: 'cached body' },
+    });
+    await mount();
+    await bringNear(allByTestId('artifact-library-card'));
+
+    const settleRefresh: Array<(result: ChatArtifactLibrary) => void> = [];
+    listArtifacts.mockReturnValueOnce(new Promise(resolve => settleRefresh.push(resolve)));
+    await click(byTestId('artifact-library-refresh-btn'));
+    await click(allByTestId('artifact-library-card')[0]);
+    await act(async () => {
+      settleRefresh[0]({ artifacts: [], total: 0, error: 'The server could not be reached.' });
+    });
+    expect(byTestId('artifact-library-error')?.textContent).toContain('The server could not be reached.');
+    expect(titles()).toEqual(['Beta chart']);
+    expect(byTestId('artifact-library-thumb-source')?.textContent).toBe('cached body');
+    expect(byTestId('artifact-library-detail')).not.toBeNull();
+    expect(byTestId('chat-artifact-card')?.textContent).toContain('cached body');
+    expect(readArtifact).toHaveBeenCalledTimes(1);
   });
 
   it('says when the server holds more than the page that was loaded', async () => {
@@ -248,6 +271,82 @@ describe('ArtifactLibraryPanel list', () => {
     expect(readArtifact).toHaveBeenCalledTimes(1);
   });
 
+  it('refreshes a prefetched body before its first explicit open', async () => {
+    listArtifacts.mockResolvedValue({ artifacts: [summaries[0]], total: 1 });
+    readArtifact.mockResolvedValueOnce({
+      artifact: { id: 'a1', type: 'code', title: 'Before edit', content: 'old body' },
+    });
+    await mount();
+    await bringNear(allByTestId('artifact-library-card'));
+    expect(byTestId('artifact-library-thumb-source')?.textContent).toBe('old body');
+
+    listArtifacts.mockResolvedValueOnce({ artifacts: [{ ...summaries[0], title: 'After edit' }], total: 1 });
+    readArtifact.mockResolvedValueOnce({
+      artifact: { id: 'a1', type: 'code', title: 'After edit', content: 'new body' },
+    });
+    await click(byTestId('artifact-library-refresh-btn'));
+    expect(readArtifact).toHaveBeenCalledTimes(2);
+    expect(titles()).toEqual(['After edit']);
+    expect(byTestId('artifact-library-thumb-source')?.textContent).toBe('new body');
+
+    await click(allByTestId('artifact-library-card')[0]);
+    expect(byTestId('chat-artifact-card')?.textContent).toContain('new body');
+    expect(byTestId('chat-artifact-card')?.textContent).not.toContain('old body');
+  });
+
+  it.each(['success', 'failure'] as const)(
+    'ignores a thumbnail %s from before the last successful refresh',
+    async outcome => {
+      listArtifacts.mockResolvedValue({ artifacts: [summaries[0]], total: 1 });
+      const pending: Array<{
+        resolve: (result: ChatArtifactContent) => void;
+        reject: (cause: Error) => void;
+      }> = [];
+      readArtifact.mockImplementation(() => new Promise((resolve, reject) => pending.push({ resolve, reject })));
+      await mount();
+      await bringNear(allByTestId('artifact-library-card'));
+      expect(readArtifact).toHaveBeenCalledTimes(1);
+
+      await click(byTestId('artifact-library-refresh-btn'));
+      expect(readArtifact).toHaveBeenCalledTimes(2);
+      await act(async () => {
+        if (outcome === 'success') {
+          pending[0].resolve({ artifact: { id: 'a1', type: 'code', title: 'Before edit', content: 'old body' } });
+        } else {
+          pending[0].reject(new Error('Old read failed.'));
+        }
+      });
+      expect(byTestId('artifact-library-thumb-source')).toBeNull();
+      expect(byTestId('artifact-library-card-thumb')?.getAttribute('data-state')).toBe('loading');
+
+      await act(async () => {
+        pending[1].resolve({ artifact: { id: 'a1', type: 'code', title: 'After edit', content: 'new body' } });
+      });
+      expect(byTestId('artifact-library-thumb-source')?.textContent).toBe('new body');
+    }
+  );
+
+  it('counts reads from before a refresh toward the thumbnail concurrency limit', async () => {
+    const many: ChatArtifactSummary[] = Array.from({ length: 6 }, (_, index) => ({
+      id: `m${index}`,
+      title: `Card ${index}`,
+      type: 'code',
+      createdAt: '2026-01-01T00:00:00.000Z',
+    }));
+    listArtifacts.mockResolvedValue({ artifacts: many, total: 6 });
+    const settle: Array<(result: ChatArtifactContent) => void> = [];
+    readArtifact.mockImplementation(() => new Promise(resolve => settle.push(resolve)));
+    await mount();
+    await bringNear(allByTestId('artifact-library-card'));
+    expect(readArtifact).toHaveBeenCalledTimes(4);
+
+    await click(byTestId('artifact-library-refresh-btn'));
+    expect(readArtifact).toHaveBeenCalledTimes(4);
+    await act(async () => settle[0]({ error: 'Old read failed.' }));
+    expect(readArtifact).toHaveBeenCalledTimes(5);
+    expect(readArtifact).toHaveBeenLastCalledWith('m0');
+  });
+
   it('reads at most four bodies at once and starts the next as one lands', async () => {
     const many: ChatArtifactSummary[] = Array.from({ length: 6 }, (_, i) => ({
       id: `m${i}`,
@@ -267,6 +366,43 @@ describe('ArtifactLibraryPanel list', () => {
 
     await act(async () => settle[0]());
     expect(readArtifact).toHaveBeenCalledTimes(5);
+  });
+
+  it('drops a queued thumbnail when its card leaves the viewport before a slot opens', async () => {
+    const many: ChatArtifactSummary[] = Array.from({ length: 5 }, (_, index) => ({
+      id: `m${index}`,
+      title: `Card ${index}`,
+      type: 'code',
+      createdAt: '2026-01-01T00:00:00.000Z',
+    }));
+    listArtifacts.mockResolvedValue({ artifacts: many, total: 5 });
+    const settle: Array<(result: ChatArtifactContent) => void> = [];
+    readArtifact.mockImplementation(() => new Promise(resolve => settle.push(resolve)));
+    await mount();
+    const cards = allByTestId('artifact-library-card');
+    await bringNear(cards);
+    expect(readArtifact).toHaveBeenCalledTimes(4);
+    await bringNear([cards[4]], false);
+    await act(async () => settle[0]({ error: 'Unavailable.' }));
+    expect(readArtifact).toHaveBeenCalledTimes(4);
+
+    await bringNear([cards[4]]);
+    expect(readArtifact).toHaveBeenLastCalledWith('m4');
+    expect(readArtifact).toHaveBeenCalledTimes(5);
+  });
+
+  it('retries a failed thumbnail read when its card is opened', async () => {
+    readArtifact.mockResolvedValueOnce({ error: 'Unavailable.' });
+    await mount();
+    const card = allByTestId('artifact-library-card')[0];
+    await bringNear([card]);
+    expect(byTestId('artifact-library-card-thumb')?.getAttribute('data-state')).toBe('error');
+    readArtifact.mockResolvedValueOnce({
+      artifact: { id: 'a3', type: 'code', title: 'Gamma page', content: 'retried body' },
+    });
+    await click(card);
+    expect(readArtifact).toHaveBeenCalledTimes(2);
+    expect(byTestId('chat-artifact-card')?.textContent).toContain('retried body');
   });
 
   it('opens a card over the grid, and goes back to the same, never-remounted cards', async () => {

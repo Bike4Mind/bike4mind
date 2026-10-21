@@ -76,7 +76,7 @@ function PagePreview({ artifact }: { artifact: ChatArtifactView }) {
 
 // A diagram scrolled out and back, or met again on reopening, is not recompiled. The source is
 // kept with the drawing because an artifact edited in the web app keeps its id.
-const diagramCache = new Map<string, { content: string; svg: string | null }>();
+const diagramCache = new Map<string, { content: string; svg: string }>();
 
 function cachedDiagram(key: string, content: string): string | null | undefined {
   const entry = diagramCache.get(key);
@@ -94,7 +94,9 @@ function DiagramPreview({ artifact, mode }: { artifact: ChatArtifactView; mode: 
     let live = true;
     void renderMermaidDiagram(artifact.content, mode).then(result => {
       const drawn = result.ok ? result.svg : null;
-      diagramCache.set(key, { content: artifact.content, svg: drawn });
+      // A failed chunk load is reported like an invalid source. Keep the source fallback for
+      // this mount, but let reopening the library retry instead of caching that outage forever.
+      if (result.ok) diagramCache.set(key, { content: artifact.content, svg: result.svg });
       if (live) setSvg(drawn);
     });
     return () => {

@@ -305,7 +305,8 @@ export function ArtifactCard({
         sx={{
           px: 1.5,
           py: 1,
-          ...(fill && !rendered ? { ...fillSx, overflowY: 'auto', ...thinScrollbarSx } : {}),
+          ...(fill ? { minHeight: 0, overflowY: 'auto', ...thinScrollbarSx } : {}),
+          ...(fill && !rendered ? fillSx : {}),
           ...(fill && rendered ? { borderTop: '1px solid', borderColor: 'divider' } : {}),
         }}
       >

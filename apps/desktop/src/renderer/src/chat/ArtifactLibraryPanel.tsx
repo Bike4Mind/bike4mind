@@ -313,19 +313,6 @@ export function ArtifactLibraryPanel({ onClose }: { onClose: () => void }) {
   const grid = useRef<HTMLDivElement>(null);
   const lastOpened = useRef<string | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    const result = await window.b4m.chat.listArtifacts();
-    setSummaries(result.artifacts);
-    setTotal(result.total);
-    setError(result.error ?? null);
-    setLoading(false);
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
   const setBody = useCallback((id: string, body: CardBody) => {
     bodiesRef.current = { ...bodiesRef.current, [id]: body };
     setBodies(bodiesRef.current);
@@ -335,21 +322,28 @@ export function ArtifactLibraryPanel({ onClose }: { onClose: () => void }) {
   // that scrolls out again before its turn is dropped instead of fetched for nobody.
   const loader = useMemo(() => {
     const queue: string[] = [];
+    const nearIds = new Set<string>();
+    let generation = 0;
     let inFlight = 0;
     const start = (id: string) => {
+      const requestedGeneration = generation;
       inFlight += 1;
       setBody(id, { state: 'loading' });
       void window.b4m.chat
         .readArtifact(id)
         .then(
-          result =>
+          result => {
+            if (requestedGeneration !== generation) return;
             setBody(
               id,
               result.artifact
                 ? { state: 'ready', artifact: result.artifact }
                 : { state: 'error', error: result.error ?? 'Could not load this artifact.' }
-            ),
-          (cause: unknown) => setBody(id, { state: 'error', error: describe(cause) })
+            );
+          },
+          (cause: unknown) => {
+            if (requestedGeneration === generation) setBody(id, { state: 'error', error: describe(cause) });
+          }
         )
         .finally(() => {
           inFlight -= 1;
@@ -369,9 +363,29 @@ export function ArtifactLibraryPanel({ onClose }: { onClose: () => void }) {
     return {
       // A failed thumbnail is not retried from scrolling; opening the card is the retry.
       near: (id: string, near: boolean) => {
-        if (!near) return drop(id);
+        if (!near) {
+          nearIds.delete(id);
+          return drop(id);
+        }
+        nearIds.add(id);
         if (bodiesRef.current[id] || queue.includes(id)) return;
         queue.push(id);
+        pump();
+      },
+      // A successful refresh invalidates bodies too: web edits retain the same artifact id.
+      // Keep old reads counted until they settle, but never let their results refill this cache.
+      refresh: (summaries: readonly ChatArtifactSummary[], openedId: string | null) => {
+        generation += 1;
+        queue.length = 0;
+        bodiesRef.current = {};
+        setBodies(bodiesRef.current);
+        for (const summary of summaries) {
+          if (nearIds.has(summary.id)) queue.push(summary.id);
+        }
+        if (openedId !== null && summaries.some(summary => summary.id === openedId)) {
+          drop(openedId);
+          start(openedId);
+        }
         pump();
       },
       // Opening skips the queue: the user is waiting on this one.
@@ -383,6 +397,22 @@ export function ArtifactLibraryPanel({ onClose }: { onClose: () => void }) {
       },
     };
   }, [setBody]);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const result = await window.b4m.chat.listArtifacts();
+    if (!result.error) {
+      loader.refresh(result.artifacts, lastOpened.current);
+      setSummaries(result.artifacts);
+      setTotal(result.total);
+    }
+    setError(result.error ?? null);
+    setLoading(false);
+  }, [loader]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   const openArtifact = useCallback(
     (id: string) => {
