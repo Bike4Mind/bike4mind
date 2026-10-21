@@ -118,6 +118,81 @@ describe('B4mApiClient', () => {
     expect(mockGet).toHaveBeenCalledWith('/api/briefcase/prompts/p%201');
   });
 
+  it('bounds the startup solver catalog fetch well below the default request timeout', async () => {
+    mockGet.mockResolvedValue({});
+    await client.getSolverCatalog();
+    expect(mockGet).toHaveBeenCalledWith('/api/premium-optihashi/quantum/solve', { timeout: 5000 });
+  });
+
+  it('reads the scopes of its own active key by stored prefix, and none when it cannot be found', async () => {
+    mockGet.mockResolvedValue([
+      { keyPrefix: 'b4m_live_aaaaaaaa', status: 'active', scopes: ['notebooks:read'] },
+      { keyPrefix: 'b4m_live_bbbbbbbb', status: 'revoked', scopes: ['optihashi:read'] },
+      { keyPrefix: 'b4m_live_cccccccc', status: 'active', scopes: ['optihashi:read', 'optihashi:compute'] },
+    ]);
+    const own = (key: string) => new B4mApiClient('http://localhost:3000', undefined, key).getOwnKeyScopes();
+
+    await expect(own('b4m_live_cccccccc0123')).resolves.toEqual(['optihashi:read', 'optihashi:compute']);
+    await expect(own('b4m_live_bbbbbbbb0123')).resolves.toEqual([]);
+    await expect(own('b4m_live_zzzzzzzz0123')).resolves.toEqual([]);
+    expect(mockGet).toHaveBeenCalledWith('/api/user-api-keys', { timeout: 5000 });
+  });
+
+  it('prefers the longest matching stored prefix over a shorter legacy one', async () => {
+    mockGet.mockResolvedValue([
+      { keyPrefix: 'b4m_live_abc', status: 'active', scopes: ['notebooks:read'] },
+      { keyPrefix: 'b4m_live_abcdef01', status: 'active', scopes: ['optihashi:read', 'optihashi:compute'] },
+    ]);
+    const own = new B4mApiClient('http://localhost:3000', undefined, 'b4m_live_abcdef012345');
+
+    await expect(own.getOwnKeyScopes()).resolves.toEqual(['optihashi:read', 'optihashi:compute']);
+  });
+
+  it('refuses to guess between two active keys with equally long matching prefixes', async () => {
+    mockGet.mockResolvedValue([
+      { keyPrefix: 'b4m_live_abc', status: 'active', scopes: ['optihashi:read', 'optihashi:compute'] },
+      { keyPrefix: 'b4m_live_abc', status: 'active', scopes: ['notebooks:read'] },
+    ]);
+    const own = new B4mApiClient('http://localhost:3000', undefined, 'b4m_live_abc999999999');
+
+    await expect(own.getOwnKeyScopes()).resolves.toEqual([]);
+  });
+
+  it('has no key scopes to read for a login caller and makes no request', async () => {
+    mockGet.mockClear();
+    await expect(new B4mApiClient('http://localhost:3000').getOwnKeyScopes()).resolves.toBeUndefined();
+    expect(mockGet).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a non-array response', {}],
+    ['a null row', [null]],
+    ['a non-string prefix', [{ status: 'active', keyPrefix: 42, scopes: [] }]],
+    [
+      'a scope string instead of a list',
+      [{ status: 'active', keyPrefix: 'b4m_live_', scopes: 'optihashi:read optihashi:compute' }],
+    ],
+    ['a non-string scope', [{ status: 'active', keyPrefix: 'b4m_live_', scopes: [42] }]],
+  ])('rejects malformed key metadata: %s', async (_label, response) => {
+    mockGet.mockResolvedValue(response);
+    await expect(client.getOwnKeyScopes()).rejects.toThrow();
+  });
+
+  it('ignores missing and empty prefixes even on active scoped keys', async () => {
+    mockGet.mockResolvedValue([
+      { status: 'active', scopes: ['optihashi:read', 'optihashi:compute'] },
+      { status: 'active', keyPrefix: '', scopes: ['optihashi:read', 'optihashi:compute'] },
+    ]);
+    await expect(client.getOwnKeyScopes()).resolves.toEqual([]);
+  });
+
+  it('forwards solver race arguments to the solver route', async () => {
+    const body = { problem: {}, solverIds: ['greedy'], timeoutMs: 100, includeTrace: true };
+    mockPost.mockResolvedValue({ winner: { solverId: 'greedy' } });
+    await expect(client.runSolverRace(body)).resolves.toEqual({ winner: { solverId: 'greedy' } });
+    expect(mockPost).toHaveBeenCalledWith('/api/premium-optihashi/quantum/solve', body);
+  });
+
   it('creates a notebook with only the provided fields', async () => {
     mockFetch.mockResolvedValue(jsonResponse({ id: 'n1' }));
     await client.createNotebook({ name: 'My NB' });

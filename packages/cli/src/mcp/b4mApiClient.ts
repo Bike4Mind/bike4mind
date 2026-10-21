@@ -1,5 +1,5 @@
 import { isAxiosError } from 'axios';
-import type { z } from 'zod';
+import { z } from 'zod';
 import { B4mApiError, createClient, parseRetryAfterSeconds, type B4mClient, type JsonBody } from '@bike4mind/sdk';
 import { ApiClient, NotAuthenticatedError } from '../auth/ApiClient.js';
 import { isProviderKeyFailure } from '../auth/providerKeyFailure.js';
@@ -33,6 +33,24 @@ import {
 export const NOTEBOOK_ID_PATTERN = /^[a-f0-9]{24}$/i;
 
 const STOP_REPLY_TIMEOUT_MS = 10 * 1000;
+
+/** Only the route is known here: the solver roster and limits are fetched at runtime. */
+const SOLVER_ROUTE = '/api/premium-optihashi/quantum/solve';
+
+/**
+ * The catalog and the key-scope lookup run before the stdio handshake completes, so they must not
+ * inherit the client's 10-minute default: a hung backend would otherwise stall `initialize` for every
+ * user, entitled or not.
+ */
+const SOLVER_CATALOG_TIMEOUT_MS = 5 * 1000;
+
+const keyScopeListSchema = z.array(
+  z.object({
+    keyPrefix: z.string().optional(),
+    scopes: z.array(z.string()).optional(),
+    status: z.string().optional(),
+  })
+);
 
 /**
  * An empty or dot-segment id collapses `/api/sessions/{id}` to `/api/sessions`, whose DELETE wipes every
@@ -245,9 +263,11 @@ export class B4mApiClient {
   private readonly client: ApiClient;
   private readonly sdk: B4mClient;
   readonly baseURL: string;
+  private readonly apiKey?: string;
 
   constructor(baseURL: string, configStore?: ConfigStore, apiKey?: string) {
     this.baseURL = baseURL;
+    this.apiKey = apiKey;
     this.client = new ApiClient(baseURL, configStore, apiKey);
     this.sdk = createClient({ baseUrl: baseURL, fetch: this.client.fetch });
   }
@@ -568,6 +588,35 @@ export class B4mApiClient {
       `/api/briefcase/prompts/${encodeURIComponent(promptId)}`
     );
     return result.prompt;
+  }
+
+  /**
+   * Scopes held by the API key this client authenticates with, read from the caller's own key list by
+   * matching the key's stored prefix. Undefined for a login (JWT) caller, who has no scopes to check;
+   * an empty list when the key is not found or cannot be told apart from another, so a caller that cannot be
+   * identified is never treated as scoped. Stored prefixes differ in length (older keys keep a shorter one),
+   * and the list can include other keys, so the longest matching prefix wins and a tie at that length is refused.
+   */
+  async getOwnKeyScopes(): Promise<string[] | undefined> {
+    const apiKey = this.apiKey;
+    if (!apiKey) return undefined;
+    const keys = keyScopeListSchema.parse(
+      await this.client.get<unknown>('/api/user-api-keys', { timeout: SOLVER_CATALOG_TIMEOUT_MS })
+    );
+    const matches = keys.filter(k => k.status === 'active' && !!k.keyPrefix && apiKey.startsWith(k.keyPrefix));
+    const longest = matches.reduce((length, key) => Math.max(length, key.keyPrefix?.length ?? 0), 0);
+    const best = matches.filter(k => k.keyPrefix?.length === longest);
+    return best.length === 1 ? (best[0].scopes ?? []) : [];
+  }
+
+  /** GET on the entitlement-gated solver route: the runnable rosters and limits for this caller. */
+  async getSolverCatalog(): Promise<unknown> {
+    return this.client.get<unknown>(SOLVER_ROUTE, { timeout: SOLVER_CATALOG_TIMEOUT_MS });
+  }
+
+  /** POST on the same route: run a bounded solver race. The body is validated server-side. */
+  async runSolverRace(body: Record<string, unknown>): Promise<unknown> {
+    return this.client.post<unknown>(SOLVER_ROUTE, body);
   }
 }
 

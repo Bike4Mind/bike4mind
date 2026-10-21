@@ -34,6 +34,10 @@ import type {
   SkillMarketImportRequest,
   SkillMarketListingRef,
   SkillMarketWebTarget,
+  SkillLocalRef,
+  SkillPublishRequest,
+  SkillSaveRequest,
+  SkillSubmitVersionRequest,
 } from '@shared/skillMarket';
 import type { ShareDirectoryResult } from '@shared/directoryRequest';
 import {
@@ -359,6 +363,13 @@ export function registerChat(
     getEnvironmentUrl: () => auth.getState().environment.url,
     catalog: skills,
     openExternal: url => shell.openExternal(url),
+    getUserId: () => auth.getState().user?.id ?? null,
+    // The same root listSkills resolves, so only a skill Customize could show is readable.
+    localSkill: async (sessionId, name) => {
+      const session = sessionId ? await store.get(sessionId) : null;
+      return skills.get(session?.project?.workingDirectory ?? null, name);
+    },
+    writeClipboard: text => clipboard.writeText(text),
     logger,
   });
   const models = new ModelCatalog({
@@ -519,6 +530,29 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.skillMarketOpenOnWeb, (_event, target: SkillMarketWebTarget) =>
     skillMarket.openOnWeb(target)
   );
+  ipcMain.handle(IPC_CHANNELS.skillMarketReadLocal, (_event, ref: SkillLocalRef) => skillMarket.readLocalSkill(ref));
+  ipcMain.handle(IPC_CHANNELS.skillMarketPickUpload, event => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    return skillMarket.pickUploadSource(options =>
+      window
+        ? dialog.showOpenDialog(window, { ...options, defaultPath: pickerStart() })
+        : dialog.showOpenDialog(options)
+    );
+  });
+  ipcMain.handle(IPC_CHANNELS.skillMarketSave, (_event, request: SkillSaveRequest) => skillMarket.saveSkill(request));
+  ipcMain.handle(IPC_CHANNELS.skillMarketOrgs, () => skillMarket.organizations());
+  ipcMain.handle(IPC_CHANNELS.skillMarketPublish, (_event, request: SkillPublishRequest) =>
+    skillMarket.publish(request)
+  );
+  ipcMain.handle(IPC_CHANNELS.skillMarketSubmitVersion, (_event, request: SkillSubmitVersionRequest) =>
+    skillMarket.submitVersion(request)
+  );
+  ipcMain.handle(IPC_CHANNELS.skillMarketMine, () => skillMarket.mine());
+  ipcMain.handle(IPC_CHANNELS.skillMarketWithdraw, (_event, listingId: string) => skillMarket.withdraw(listingId));
+  ipcMain.handle(IPC_CHANNELS.skillMarketCopyShareLink, (_event, listingId: string) =>
+    skillMarket.copyShareLink(listingId)
+  );
+  ipcMain.handle(IPC_CHANNELS.skillMarketOpenSource, (_event, url: string) => skillMarket.openSourceUrl(url));
   ipcMain.handle(IPC_CHANNELS.chatSetSessionModel, (_event, sessionId: string, model: string) =>
     service.setSessionModel(sessionId, model)
   );

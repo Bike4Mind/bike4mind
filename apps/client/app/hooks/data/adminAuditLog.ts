@@ -2,6 +2,7 @@ import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { api } from '@client/app/contexts/ApiContext';
 import type {
+  AuditAlertStatus,
   AuditEntry,
   AuditExportResult,
   AuditLogFilters,
@@ -17,9 +18,12 @@ const MAX_ENTRY_RETRIES = 3;
 const isNotFound = (error: unknown): boolean => isAxiosError(error) && error.response?.status === 404;
 
 /** JSON carries `occurredAt` as an ISO string; consumers expect the real `AuditEntry` Date. */
-type WireAuditEntry = Omit<AuditEntry, 'occurredAt'> & { occurredAt: string | Date };
+export type WireAuditEntry = Omit<AuditEntry, 'occurredAt'> & { occurredAt: string | Date };
 
-const reviveAuditEntry = (entry: WireAuditEntry): AuditEntry => ({ ...entry, occurredAt: new Date(entry.occurredAt) });
+export const reviveAuditEntry = (entry: WireAuditEntry): AuditEntry => ({
+  ...entry,
+  occurredAt: new Date(entry.occurredAt),
+});
 
 const definedFilterParams = (filters: AuditLogFilters): Record<string, string> =>
   Object.fromEntries(Object.entries(filters).filter(([, value]) => value !== undefined)) as Record<string, string>;
@@ -65,6 +69,16 @@ export const useAuditSummary = (windowDays: AuditSummaryWindow) =>
       return response.data;
     },
     staleTime: 1000 * 60 * 5,
+  });
+
+export const useAuditAlertStatus = () =>
+  useQuery({
+    queryKey: ['admin', 'audit-log', 'alert-status'],
+    queryFn: async (): Promise<AuditAlertStatus> => {
+      const response = await api.get<AuditAlertStatus>('/api/admin/audit-log/alert-status');
+      return response.data;
+    },
+    staleTime: 1000 * 60,
   });
 
 /**

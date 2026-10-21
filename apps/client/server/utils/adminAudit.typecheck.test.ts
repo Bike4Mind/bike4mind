@@ -37,12 +37,12 @@ declare module '@bike4mind/common' {
     impersonatedUserId?: string;
     apiKeyId?: string;
   };
-  export type AuditContext = {
+  export type StoredAuditContext = {
     ip: string;
     userAgent?: string;
     requestId: string;
     route: string;
-    source: 'api_key' | 'admin_ui';
+    source: 'admin_ui' | 'api_key' | 'script' | 'worker';
   };
   export type AuditEntry = { id: string };
   export type AdminAuditAction = 'user.role.admin_granted' | 'user.role.denied';
@@ -52,11 +52,17 @@ declare module '@bike4mind/common' {
       value: unknown
     ): { success: true; data: string } | { success: false; error: { issues: { message: string }[] } };
   };
+  export const ADMIN_AUDIT_CREDIT_GRANT_ACTIONS: AdminAuditAction[];
+  export const ADMIN_AUDIT_DEFAULT_CRITICAL_GRANT_CREDITS: number;
+  export const ADMIN_AUDIT_DEFAULT_DAILY_GRANT_CREDITS: number;
   export class BadRequestError extends Error {}
   export class ForbiddenError extends Error {}
 }
 declare module '@bike4mind/database' {
-  export const adminAuditLogRepository: unknown;
+  export const adminAuditLogRepository: {
+    sumCreditsGranted(actorUserId: string, since: Date): Promise<number>;
+  };
+  export const adminSettingsRepository: unknown;
 }
 declare module '@bike4mind/database/auth' {
   export const userRepository: {
@@ -68,16 +74,30 @@ declare module '@bike4mind/services' {
     export type RecordAdminActionInput = {
       action: import('@bike4mind/common').AdminAuditAction;
       actor: import('@bike4mind/common').AuditActor;
-      context: import('@bike4mind/common').AuditContext;
+      context: import('@bike4mind/common').StoredAuditContext;
       target: import('@bike4mind/common').AuditTarget;
       summary: string;
       details?: Record<string, unknown>;
+    };
+    export type CreditGrantPolicy = {
+      singleGrantCredits: number;
+      dailyTotalCredits: number;
+      sumCreditsGranted(actorUserId: string, since: Date): Promise<number>;
+    };
+    export type RecordAdminActionAdapters = {
+      db: { adminAuditLog: unknown };
+      creditGrantPolicy?: CreditGrantPolicy;
+      logger?: unknown;
     };
     export function recordAdminAction(
       input: RecordAdminActionInput,
       adapters: unknown
     ): Promise<import('@bike4mind/common').AuditEntry | null>;
   }
+}
+declare module '@bike4mind/utils' {
+  export function getSettingsMap(db: unknown, options?: unknown): Promise<Record<string, string>>;
+  export function getSettingsValue(key: string, settings: Record<string, string>, defaultValue: number): number;
 }
 declare module '@bike4mind/server-utils/utils/ip' {
   export function getClientIp(req: import('express').Request): string;

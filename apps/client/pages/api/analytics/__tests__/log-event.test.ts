@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { CreditPurchaseEvents } from '@bike4mind/common';
+import { CreditPurchaseEvents, FirstRunEvents } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -41,10 +41,23 @@ describe('POST /api/analytics/log-event', () => {
     expect(res.statusCode).toBe(204);
   });
 
+  it('writes a first-run event with its metadata', async () => {
+    const { run } = call({ type: FirstRunEvents.SEND_BLOCKED, metadata: { reason: 'uploading' } });
+
+    await run();
+
+    expect(mockLogEvent).toHaveBeenCalledWith(
+      { type: FirstRunEvents.SEND_BLOCKED, metadata: { reason: 'uploading' }, userId: 'user_1' },
+      expect.anything()
+    );
+  });
+
   it.each([
     CreditPurchaseEvents.CHECKOUT_STARTED,
     CreditPurchaseEvents.CREDITS_GRANTED,
     CreditPurchaseEvents.CREDITS_ALREADY_GRANTED,
+    FirstRunEvents.FIRST_ANSWER_CREDITS,
+    FirstRunEvents.POLICIES_SHOWN,
   ])('refuses the server-only %s event', async type => {
     const { run } = call({ type, metadata: { paymentIntentId: 'pi_forged', amount: 999, credits: 500 } });
 

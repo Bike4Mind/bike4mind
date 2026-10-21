@@ -1,4 +1,10 @@
-import { AuditLogFiltersSchema, type AuditLogCursor, type AuditLogFilters } from '@bike4mind/common';
+import {
+  AuditLogFiltersSchema,
+  UserActivityDirectionSchema,
+  type AuditLogCursor,
+  type AuditLogFilters,
+  type UserActivityDirection,
+} from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 const DEFAULT_LIMIT = 50;
@@ -62,3 +68,24 @@ export const parseAuditListQuery = (
 
 /** Export takes the same filters but ignores limit and cursor. */
 export const parseAuditExportQuery = (query: unknown): AuditLogFilters => parseFilters(readSingleValues(query));
+
+const parseBooleanFlag = (raw: string | undefined, name: string): boolean => {
+  if (raw === undefined || raw === 'false') return false;
+  if (raw === 'true') return true;
+  throw new BadRequestError(`${name} must be true or false`);
+};
+
+/** The per-user Activity query: direction defaults to `target`, security events are opt-in. */
+export const parseUserActivityQuery = (
+  query: unknown
+): { direction: UserActivityDirection; includeSecurity: boolean; limit: number; cursor?: AuditLogCursor } => {
+  const values = readSingleValues(query);
+  const direction = UserActivityDirectionSchema.safeParse(values.direction ?? 'target');
+  if (!direction.success) throw new BadRequestError('direction must be target or actor');
+  return {
+    direction: direction.data,
+    includeSecurity: parseBooleanFlag(values.includeSecurity, 'includeSecurity'),
+    limit: parseLimit(values.limit),
+    cursor: parseCursor(values.cursor),
+  };
+};

@@ -52,3 +52,16 @@ describe('checkScopePermission - project scope membership path (#610)', () => {
     });
   });
 });
+
+describe('user namespace authorization', () => {
+  it('allows the authenticated user id', async () => {
+    expect(
+      await checkScopePermission({ user: user({ username: 'other-user' }), tier: 'user', scopeId: 'user_1' })
+    ).toEqual({ ok: true });
+  });
+  it('rejects a self-set alias, including another user id', async () => {
+    expect(
+      await checkScopePermission({ user: user({ username: 'victim' }), tier: 'user', scopeId: 'victim' })
+    ).toMatchObject({ ok: false, status: 403 });
+  });
+});

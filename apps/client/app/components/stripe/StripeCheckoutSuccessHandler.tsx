@@ -3,6 +3,8 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { api } from '@client/app/contexts/ApiContext';
 import { trackPurchaseConversion } from '@client/app/utils/purchaseConversion';
+import { BILLING_SEARCH_PARAM } from '@client/app/utils/billingDeepLink';
+import { markBillingCheckoutReturn } from '@client/app/utils/billingCheckoutReturn';
 
 /**
  * Handles Stripe Checkout success redirects globally (subscription checkout success).
@@ -85,6 +87,7 @@ const StripeCheckoutSuccessHandler = () => {
       // caller's own query and hash, which now matters because the individual
       // checkout path reaches this code for the first time (its callbackUrl can
       // carry a redirectTo and the router preserves hashes).
+      if (searchParams.has(BILLING_SEARCH_PARAM)) markBillingCheckoutReturn();
       searchParams.delete('subscription_success');
       searchParams.delete('checkout_session_id');
       const remaining = searchParams.toString();

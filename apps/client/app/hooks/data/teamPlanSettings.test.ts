@@ -45,11 +45,25 @@ describe('team plan setting hooks', () => {
 describe('useTeamPlanAvailable', () => {
   it.each([
     [true, true],
+    [false, false],
     ['true', true],
     ['TRUE', true],
     ['false', false],
+    ['FALSE', false],
+    ['1', true],
+    ['0', false],
+    [1, true],
+    [0, false],
     [undefined, false],
-    [1, false],
+    [null, false],
+    ['', false],
+    ['yes', false],
+    ['01', false],
+    [' 1 ', false],
+    [2, false],
+    [-1, false],
+    [{}, false],
+    [[], false],
   ])('maps the raw setting %j to %s, as the setting schema does', (raw, expected) => {
     stored = { enableTeamPlan: raw };
     expect(renderHook(() => useTeamPlanAvailable()).result.current).toBe(expected);

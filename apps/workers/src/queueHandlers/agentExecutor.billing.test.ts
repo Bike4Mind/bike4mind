@@ -18,8 +18,14 @@ import {
   type BillingCounters,
   type IterationBillingEffects,
   type PendingToolUsage,
+  lastRequestInputTokens,
+  nextIterationCredits,
+  uncoveredIterationCredits,
+  buildInProcessBalanceCheck,
+  readPayerBalance,
 } from './agentExecutor.billing';
-import type { ModelInfo } from '@bike4mind/common';
+import { ChatModels, type ModelInfo } from '@bike4mind/common';
+import { GeminiBackend } from '@bike4mind/llm-adapters';
 import { estimateGeneratedMediaUsd } from '@bike4mind/services';
 
 // input rate = 1, everything else 0, so `getTextModelCost` reduces to
@@ -853,6 +859,54 @@ describe('billIteration (long-context tiers)', () => {
     );
     expect(charged).toBeCloseTo(100_000 * perM(2) + 1_000 * perM(12), 10);
   });
+
+  // Pins the real Gemini catalog, not the tier algorithm (the two-tier stubs below cover that).
+  it('bills two gemini-3.1-pro-preview iterations each under 200K at the <=200K rate when their sum crosses it', async () => {
+    const gemini = new GeminiBackend('test-key');
+    const modelInfo = (await gemini.getModelInfo()).find(m => m.id === ChatModels.GEMINI_3_1_PRO_PREVIEW);
+    if (!modelInfo) throw new Error('gemini-3.1-pro-preview missing from the Gemini catalog');
+
+    const { effects, spies } = makeEffects();
+    const counters = makeCounters();
+
+    await billIteration({
+      iterationIndex: 1,
+      checkpoint: {
+        ...checkpoint(150_000, { output: 1_000 }),
+        turnUsage: [{ inputTokens: 150_000, outputTokens: 1_000 }],
+      },
+      counters,
+      modelInfo,
+      model: ChatModels.GEMINI_3_1_PRO_PREVIEW,
+      startTime: 0,
+      effects,
+    });
+    await billIteration({
+      iterationIndex: 2,
+      checkpoint: {
+        ...checkpoint(300_000, { output: 2_000 }),
+        turnUsage: [
+          { inputTokens: 150_000, outputTokens: 1_000 },
+          { inputTokens: 150_000, outputTokens: 1_000 },
+        ],
+      },
+      counters,
+      modelInfo,
+      model: ChatModels.GEMINI_3_1_PRO_PREVIEW,
+      startTime: 0,
+      effects,
+    });
+
+    // The delta fallback would charge the same 150K, so only this proves the per-request path ran.
+    expect(spies.logTurnsFallback).not.toHaveBeenCalled();
+    const charged = spies.recordUsageEvent.mock.calls.map(([e]) => e.costUsd as number);
+    const shortTier = (150_000 * 2 + 1_000 * 12) / 1_000_000;
+    expect(charged).toHaveLength(2);
+    expect(charged[0]).toBeCloseTo(shortTier, 10);
+    // The run's 300K cumulative total would bill iteration 2 at $4/$18 per 1M; its own 150K prompt does not.
+    expect(charged[1]).toBeCloseTo(shortTier, 10);
+    expect(counters.cumulativeCost).toBeCloseTo((300_000 * 2 + 2_000 * 12) / 1_000_000, 10);
+  });
 });
 
 describe('billIteration (two-tier model, per-iteration pricing)', () => {
@@ -969,5 +1023,133 @@ describe('settleSubagentMediaUsage', () => {
     await expect(settleSubagentMediaUsage(pendingWith(0.04), effects)).rejects.toThrow('db down');
     expect(effects.recordAuditCredits).not.toHaveBeenCalled();
     expect(effects.recordUsageEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe('nextIterationCredits', () => {
+  const model = {
+    id: 'm',
+    max_tokens: 64_000,
+    contextWindow: 200_000,
+    pricing: { 200000: { input: 3 / 1_000_000, output: 15 / 1_000_000 } },
+  } as unknown as ModelInfo;
+
+  it('prices a full reservation-sized reply even before the first request', () => {
+    expect(nextIterationCredits(model, 0)).toBeGreaterThan(0);
+  });
+
+  it('grows with the size of the last request the run sent', () => {
+    expect(nextIterationCredits(model, 150_000)).toBeGreaterThan(nextIterationCredits(model, 0));
+  });
+
+  it('reads the last request, cached tokens included, and 0 before any', () => {
+    expect(lastRequestInputTokens(undefined)).toBe(0);
+    expect(
+      lastRequestInputTokens([
+        { inputTokens: 10, outputTokens: 1 },
+        { inputTokens: 100, outputTokens: 1, cacheReadInputTokens: 20, cacheCreationInputTokens: 5 },
+      ])
+    ).toBe(125);
+  });
+});
+
+// The per-iteration gate in `processExecution` and in-process subagent admission both stop on this.
+describe('uncoveredIterationCredits', () => {
+  const model = {
+    id: 'm',
+    max_tokens: 64_000,
+    contextWindow: 200_000,
+    pricing: { 200000: { input: 3 / 1_000_000, output: 15 / 1_000_000 } },
+  } as unknown as ModelInfo;
+
+  it('returns the credits the next iteration needs when the balance is short of them', () => {
+    const required = nextIterationCredits(model, 150_000);
+    expect(uncoveredIterationCredits(required - 0.01, model, 150_000)).toBe(required);
+  });
+
+  it('lets an iteration the balance exactly covers run', () => {
+    const required = nextIterationCredits(model, 150_000);
+    expect(uncoveredIterationCredits(required, model, 150_000)).toBeUndefined();
+  });
+
+  it('stops a balance that covers a small request once the run has grown past it', () => {
+    const balance = nextIterationCredits(model, 0);
+    expect(uncoveredIterationCredits(balance, model, 0)).toBeUndefined();
+    expect(uncoveredIterationCredits(balance, model, 150_000)).toBe(nextIterationCredits(model, 150_000));
+  });
+});
+
+describe('buildInProcessBalanceCheck', () => {
+  const model = {
+    id: 'm',
+    max_tokens: 64_000,
+    contextWindow: 200_000,
+    pricing: { 200000: { input: 3 / 1_000_000, output: 15 / 1_000_000 } },
+  } as unknown as ModelInfo;
+
+  it('is absent when credits are not enforced', () => {
+    expect(buildInProcessBalanceCheck(false, [model], vi.fn())).toBeUndefined();
+  });
+
+  it("refuses a subagent whose first iteration the payer's live balance cannot cover", async () => {
+    const loadBalance = vi.fn().mockResolvedValue(nextIterationCredits(model, 0) - 0.01);
+    const check = buildInProcessBalanceCheck(true, [model], loadBalance)!;
+
+    await expect(check('m')).resolves.toBe(true);
+    expect(loadBalance).toHaveBeenCalledTimes(1);
+  });
+
+  it('admits a subagent the balance covers', async () => {
+    const check = buildInProcessBalanceCheck(true, [model], vi.fn().mockResolvedValue(100_000))!;
+
+    await expect(check('m')).resolves.toBe(false);
+  });
+
+  it('admits a model it cannot price without reading the balance', async () => {
+    const loadBalance = vi.fn();
+    const check = buildInProcessBalanceCheck(true, [model], loadBalance)!;
+
+    await expect(check('unknown')).resolves.toBe(false);
+    expect(loadBalance).not.toHaveBeenCalled();
+  });
+});
+
+describe('readPayerBalance', () => {
+  it('uses the live org wallet for org-billed admission even when the personal wallet is funded', async () => {
+    const organizations = {
+      findById: vi.fn().mockResolvedValueOnce({ currentCredits: 1 }).mockResolvedValueOnce({ currentCredits: 100_000 }),
+    };
+    const users = { findById: vi.fn().mockResolvedValue({ currentCredits: 100_000 }) };
+    const payer = { organizationId: 'org-1', userId: 'user-1' };
+    const model = { ...makeModelInfo(200_000), pricing: { 200000: { input: 0.000003, output: 0.000015 } } };
+    const check = buildInProcessBalanceCheck(true, [model], () => readPayerBalance(payer, { organizations, users }))!;
+
+    await expect(check('test-model')).resolves.toBe(true);
+    // Pin routing separately from pricing: the next call must observe the newly funded org.
+    users.findById.mockResolvedValue({ currentCredits: 0 });
+    await expect(check('test-model')).resolves.toBe(false);
+    expect(organizations.findById).toHaveBeenCalledWith('org-1');
+    expect(users.findById).not.toHaveBeenCalled();
+  });
+
+  it('uses the personal wallet only when no organization pays', async () => {
+    const organizations = { findById: vi.fn().mockResolvedValue({ currentCredits: 100_000 }) };
+    const users = { findById: vi.fn().mockResolvedValue({ currentCredits: 2 }) };
+
+    await expect(readPayerBalance({ userId: 'user-1' }, { organizations, users })).resolves.toBe(2);
+    expect(users.findById).toHaveBeenCalledWith('user-1');
+    expect(organizations.findById).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the payer disappeared and propagates an unreadable wallet', async () => {
+    const organizations = {
+      findById: vi.fn().mockResolvedValueOnce(null).mockRejectedValueOnce(new Error('wallet unavailable')),
+    };
+    const users = { findById: vi.fn() };
+    const payer = { organizationId: 'org-1', userId: 'user-1' };
+
+    await expect(readPayerBalance(payer, { organizations, users })).resolves.toBe(0);
+    await expect(readPayerBalance(payer, { organizations, users })).rejects.toThrow('wallet unavailable');
+    expect(users.findById).not.toHaveBeenCalled();
   });
 });

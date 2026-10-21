@@ -17,6 +17,10 @@ export type SkillReviewStatus = 'not_required' | 'pending' | 'auto_approved' | '
 /** Risk tier assigned by a passed scan; drives whether a human must approve. */
 export type SkillRiskTier = 'clean' | 'review' | 'high';
 
+/** A listing tag. Shared by the web PublishDialog, the server's validateListingTags and desktop. */
+export const SKILL_LISTING_TAG_PATTERN = /^[a-z0-9][a-z0-9-]{0,23}$/;
+export const SKILL_LISTING_MAX_TAGS = 5;
+
 /** `critical` fails the scan; `high` / `medium` raise the tier; `low` is informational. */
 export type SkillScanSeverity = 'critical' | 'high' | 'medium' | 'low';
 

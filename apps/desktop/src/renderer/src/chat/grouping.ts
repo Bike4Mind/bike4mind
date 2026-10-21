@@ -132,7 +132,10 @@ export function projectForGroup(sessions: readonly ChatSessionSummary[], directo
 export const QUICK_SWITCH_LIMIT = 9;
 
 /**
- * Every row the sidebar draws, in the order it draws them.
+ * Every row in the sidebar, in the order it draws them - including the ones a long group keeps
+ * behind "Show more". Positions match the drawn order for each group's first GROUP_ROW_CAP rows
+ * (groupCap.ts); a kept row past the cap draws out of order, which is why the shortcut reaches
+ * no further than it.
  *
  * The quick-switch shortcut counts positions in THIS list, so it has to come from the same
  * order the eye reads rather than from any one section.
