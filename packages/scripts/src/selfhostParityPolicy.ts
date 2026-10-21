@@ -480,8 +480,13 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'queue:infra/queues.ts:optihashiRunCompletionQueue',
-    '86b8c5ccad30b979bcfda8cf2586e8602b10e8f9c1f66dddc5fe9a55dfbb7f3b',
-    ['cloudwatch:PutMetricData', 'execute-api:ManageConnections']
+    '9f43268abec33c309b1020cff8c27e3d35e17f990b715e9aec1cbf32feb8af4a',
+    [
+      'bedrock:InvokeModel',
+      'bedrock:InvokeModelWithResponseStream',
+      'cloudwatch:PutMetricData',
+      'execute-api:ManageConnections',
+    ]
   ),
   broker(
     'queue:infra/queues.ts:optihashiRunCompletionQueueDLQ',

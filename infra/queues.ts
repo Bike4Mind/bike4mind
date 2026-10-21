@@ -1460,7 +1460,7 @@ const agentContinuationQueue = new sst.aws.Queue('agentContinuationQueue', {
 // where the Agent Executor Lambda is defined, since it needs a reference to that Lambda.
 
 // OptiHashi Run Completion Queue
-// Handles async credit settlement when OptiHashi reports run completion/failure
+// Handles async follow-up work, including credit settlement, when OptiHashi reports run completion/failure
 const optihashiRunCompletionQueueDLQ = new sst.aws.Queue('optihashiRunCompletionQueueDLQ', {
   transform: {
     queue: {
@@ -1493,7 +1493,7 @@ const optihashiRunCompletionQueueSubscription = optihashiRunCompletionQueue.subs
   permissions: [
     { actions: ['cloudwatch:PutMetricData'], resources: ['*'] },
     { actions: ['execute-api:ManageConnections'], resources: ['*'] },
-    // Model calls follow the user's model choice, which can be a non-Anthropic Bedrock provider.
+    // Model calls follow the user's model choice, so any Bedrock provider, not just anthropic/amazon.
     { actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'], resources: ['*'] },
   ],
 });
