@@ -12,15 +12,16 @@ const describeModel = (model: ModelInfo) => ({
   name: model.name,
   id: model.id,
   backend: model.backend,
-  served_via: BACKEND_LABELS[model.backend] ?? model.backend,
+  servedVia: BACKEND_LABELS[model.backend] ?? model.backend,
   contextWindow: model.contextWindow,
-  max_tokens: model.max_tokens,
+  // A derived max_tokens is a placeholder default, not the model's real ceiling: say nothing.
+  maxTokens: model.maxOutputTokensDerived ? undefined : model.max_tokens,
   capabilities: {
     supportsTools: model.supportsTools ?? false,
     supportsVision: model.supportsVision ?? false,
     canStream: model.can_stream ?? false,
-    can_think: model.can_think ?? false,
-    thinkingStyle: model.can_think ? (model.thinkingStyle ?? 'legacy') : undefined,
+    canThink: model.can_think ?? false,
+    thinkingStyle: model.thinkingStyle,
   },
 });
 

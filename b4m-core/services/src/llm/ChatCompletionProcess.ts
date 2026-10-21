@@ -209,7 +209,7 @@ import {
   resolveForcedRetrieval,
   SYSTEM_PROMPT_PRIORITY,
   relocatePerTurnContext,
-  resolveOmitIdentityReminder,
+  resolveIdentityReminder,
   resolveSkipAutoOffers,
   lakeContentTokens,
   toPromptDetails,
@@ -790,10 +790,10 @@ export function attachmentHasIndexedContent(
 
 /**
  * Tools this process auto-adds server-side regardless of user selection. Three auto-add sites
- * feed this: the request-parse method (navigate_view), the conditional blog/skill/data-lake gate in
- * `process()` (blog_publish/blog_edit/blog_draft, skill, and the DATA_LAKE_TOOL_NAMES trio - each on
- * its own intent/catalog signal, see `shouldOfferBlogTools`/`shouldOfferSkillTool`/
- * `shouldOfferDataLakeTools`), and `resolveEnabledTools` (the
+ * feed this: the request-parse method (navigate_view and current_model_details), the conditional
+ * blog/skill/data-lake gate in `process()` (blog_publish/blog_edit/blog_draft, skill, and the
+ * DATA_LAKE_TOOL_NAMES trio - each on its own intent/catalog signal, see `shouldOfferBlogTools`/
+ * `shouldOfferSkillTool`/`shouldOfferDataLakeTools`), and `resolveEnabledTools` (the
  * attached-knowledge offer). Small local (Ollama) models get confused by tools they didn't ask
  * for, so the names in this list are trimmed for that backend unless the user explicitly enabled
  * them. Keep this list in sync with those auto-add sites.
@@ -4610,8 +4610,8 @@ export class ChatCompletionProcess {
               }
             : undefined,
         tools: allTools,
-        // The adapters append a model-identity line on their own; see resolveOmitIdentityReminder.
-        omitIdentityReminder: resolveOmitIdentityReminder({ promptMode, offeredToolNames }),
+        // The adapters append a model-identity line on their own; see resolveIdentityReminder.
+        ...resolveIdentityReminder({ promptMode, offeredToolNames }),
       };
 
       // Create an AbortController to allow cancelling the request. Set up before the Research
@@ -4711,7 +4711,13 @@ export class ChatCompletionProcess {
         const researchResults = await researchModeService.processResearchMode(
           researchMode,
           outboundMessages,
-          options as ICompletionOptions,
+          // Each configuration runs on its own model: the tool is bound to the primary's serving
+          // model, so withhold it and let every adapter keep naming its own model.
+          {
+            ...options,
+            tools: allTools?.filter(t => t.toolSchema.name !== 'current_model_details'),
+            identityViaTool: false,
+          } as ICompletionOptions,
           async (configId: string, streamedTexts: (string | null | undefined)[], completionInfo?: unknown) => {
             // Handle streaming for each configuration
             this.sendResearchModeStreamUpdate(quest, configId, streamedTexts, completionInfo);

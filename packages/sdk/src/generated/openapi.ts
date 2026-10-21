@@ -2552,6 +2552,7 @@ export interface components {
             | 'math_evaluate'
             | 'mermaid_chart'
             | 'current_datetime'
+            | 'current_model_details'
             | 'deep_research'
             | 'prompt_enhancement'
             | 'recharts'

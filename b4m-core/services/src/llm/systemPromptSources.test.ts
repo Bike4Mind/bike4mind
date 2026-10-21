@@ -18,7 +18,7 @@ import {
   PROMPT_SOURCE_ORDER,
   relocatePerTurnContext,
   resolveForcedRetrieval,
-  resolveOmitIdentityReminder,
+  resolveIdentityReminder,
   markShareablePrefixBoundary,
   SHAREABLE_PREFIX_SOURCES,
   SIDE_EFFECT_ONLY_FEATURES,
@@ -662,15 +662,18 @@ describe('per-turn context placement', () => {
   });
 });
 
-describe('resolveOmitIdentityReminder', () => {
+describe('resolveIdentityReminder', () => {
   it.each([
-    ['the tool is offered', undefined, ['web_search', 'current_model_details'], true],
-    ['raw, tool-less', 'raw', [], true],
-    ['raw, tool offered', 'raw', ['current_model_details'], true],
-    ['tool-less default turn', undefined, [], false],
-    ['tool stripped (Ollama trim, deny-list, non-tool model)', undefined, ['web_search'], false],
-    ['grounded without the tool', 'grounded', [], false],
-  ] as const)('%s', (_label, promptMode, offeredToolNames, expected) => {
-    expect(resolveOmitIdentityReminder({ promptMode, offeredToolNames })).toBe(expected);
+    ['the tool is offered', undefined, ['web_search', 'current_model_details'], false, true],
+    ['raw, tool-less', 'raw', [], true, false],
+    ['raw, tool offered', 'raw', ['current_model_details'], true, true],
+    ['tool-less default turn', undefined, [], false, false],
+    ['tool stripped (Ollama trim, deny-list, non-tool model)', undefined, ['web_search'], false, false],
+    ['grounded without the tool', 'grounded', [], false, false],
+  ] as const)('%s', (_label, promptMode, offeredToolNames, omit, viaTool) => {
+    expect(resolveIdentityReminder({ promptMode, offeredToolNames })).toEqual({
+      omitIdentityReminder: omit,
+      identityViaTool: viaTool,
+    });
   });
 });

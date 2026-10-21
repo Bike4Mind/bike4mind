@@ -36,7 +36,7 @@ describe('current_model_details', () => {
 
   it('returns registry fields and never pricing', async () => {
     const out = (await call({
-      servingModel: { current: model('m', ModelBackend.Anthropic, { can_think: true }) },
+      servingModel: { current: model('m', ModelBackend.Anthropic, { can_think: true, thinkingStyle: 'adaptive' }) },
     })) as string;
     const parsed = JSON.parse(out);
 
@@ -45,16 +45,29 @@ describe('current_model_details', () => {
       id: 'm',
       backend: 'anthropic',
       contextWindow: 200_000,
-      max_tokens: 8_000,
+      maxTokens: 8_000,
       capabilities: {
         supportsTools: true,
         supportsVision: true,
         canStream: true,
-        can_think: true,
-        thinkingStyle: 'legacy',
+        canThink: true,
+        thinkingStyle: 'adaptive',
       },
     });
     expect(out).not.toMatch(/pricing|cost|input"|output"/i);
+  });
+
+  it('omits a derived output cap and a thinking style the registry never set', async () => {
+    const out = (await call({
+      servingModel: {
+        current: model('g', ModelBackend.Gemini, { can_think: true, maxOutputTokensDerived: true }),
+      },
+    })) as string;
+    const parsed = JSON.parse(out);
+
+    expect(parsed).not.toHaveProperty('maxTokens');
+    expect(parsed.capabilities).toMatchObject({ canThink: true });
+    expect(parsed.capabilities).not.toHaveProperty('thinkingStyle');
   });
 
   it.each([
@@ -64,7 +77,7 @@ describe('current_model_details', () => {
     [ModelBackend.OpenAI, 'openai'],
   ])('labels the %s backend', async (backend, label) => {
     const out = (await call({ servingModel: { current: model('m', backend) } })) as string;
-    expect(JSON.parse(out).served_via).toBe(label);
+    expect(JSON.parse(out).servedVia).toBe(label);
   });
 
   it('falls back to availableModels/model without a reference, and says so when nothing resolves', async () => {

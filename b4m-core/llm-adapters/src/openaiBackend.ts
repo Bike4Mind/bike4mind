@@ -61,7 +61,7 @@ import {
   ARTIFACT_REMOVED_PLACEHOLDER,
 } from '@bike4mind/common';
 import { normalizeOpenAIFinishReason, normalizeOpenAIResponsesStopReason } from './stopReason';
-import { appendIdentityReminder, buildIdentityReminder } from './identityReminder';
+import { appendIdentityReminder, buildIdentityReminder, shouldOmitIdentityReminder } from './identityReminder';
 
 // Type for the reasoning_effort parameter that can be added to ChatCompletionCreateParams
 // OpenAI API expects reasoning_effort as a top-level string, not a nested object
@@ -2046,7 +2046,7 @@ export class OpenAIBackend implements ICompletionBackend {
     // Anthropic adapters. Bare-completion contract (API promptMode raw): synthesize
     // nothing, so the lead message is exactly the caller's own system text, or absent
     // entirely. Must stay in sync with the same flag in anthropicBackend / bedrockBackend.
-    const mergedContent = options.omitIdentityReminder
+    const mergedContent = shouldOmitIdentityReminder(options)
       ? callerSystem
       : appendIdentityReminder(callerSystem, buildIdentityReminder(model));
 

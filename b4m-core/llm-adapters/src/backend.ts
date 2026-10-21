@@ -174,6 +174,12 @@ export interface ICompletionOptions {
    */
   omitIdentityReminder?: boolean;
   /**
+   * The current_model_details tool carries the model identity for this call, so the identity line
+   * is left out while `tools` is non-empty. Separate from `omitIdentityReminder` because adapter
+   * recursions that drop `tools` must bring the line back, whereas a raw turn never gets it.
+   */
+  identityViaTool?: boolean;
+  /**
    * Controls which tool the model should use.
    * - 'auto': Model decides whether to call a tool (default)
    * - 'required': Model must call at least one tool
