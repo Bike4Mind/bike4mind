@@ -38,8 +38,9 @@ const STOP_REPLY_TIMEOUT_MS = 10 * 1000;
 const SOLVER_ROUTE = '/api/premium-optihashi/quantum/solve';
 
 /**
- * The catalog is fetched before the stdio handshake completes, so it must not inherit the client's
- * 10-minute default: a hung backend would otherwise stall `initialize` for every user, entitled or not.
+ * The catalog and the key-scope lookup run before the stdio handshake completes, so they must not
+ * inherit the client's 10-minute default: a hung backend would otherwise stall `initialize` for every
+ * user, entitled or not.
  */
 const SOLVER_CATALOG_TIMEOUT_MS = 5 * 1000;
 
@@ -254,9 +255,11 @@ export class B4mApiClient {
   private readonly client: ApiClient;
   private readonly sdk: B4mClient;
   readonly baseURL: string;
+  private readonly apiKey?: string;
 
   constructor(baseURL: string, configStore?: ConfigStore, apiKey?: string) {
     this.baseURL = baseURL;
+    this.apiKey = apiKey;
     this.client = new ApiClient(baseURL, configStore, apiKey);
     this.sdk = createClient({ baseUrl: baseURL, fetch: this.client.fetch });
   }
@@ -577,6 +580,22 @@ export class B4mApiClient {
       `/api/briefcase/prompts/${encodeURIComponent(promptId)}`
     );
     return result.prompt;
+  }
+
+  /**
+   * Scopes held by the API key this client authenticates with, read from the caller's own key list by
+   * matching the key's stored prefix. Undefined for a login (JWT) caller, who has no scopes to check;
+   * an empty list when the key is not found, so a caller that cannot be identified is never treated as scoped.
+   */
+  async getOwnKeyScopes(): Promise<string[] | undefined> {
+    const apiKey = this.apiKey;
+    if (!apiKey) return undefined;
+    const keys = await this.client.get<{ keyPrefix?: string; scopes?: string[]; status?: string }[]>(
+      '/api/user-api-keys',
+      { timeout: SOLVER_CATALOG_TIMEOUT_MS }
+    );
+    const own = keys.find(k => k.status === 'active' && !!k.keyPrefix && apiKey.startsWith(k.keyPrefix));
+    return own?.scopes ?? [];
   }
 
   /** GET on the entitlement-gated solver route: the runnable rosters and limits for this caller. */
