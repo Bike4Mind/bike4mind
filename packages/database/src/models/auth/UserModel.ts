@@ -5,7 +5,6 @@ import {
   ISecurityQuestion,
   IUserDocument,
   IUserRepository,
-  ReferralQuotaRepository,
   IUserNote,
   IModerationHit,
   UserModerationStatus,
@@ -248,7 +247,7 @@ const UserModerationSchema = new Schema(
   { _id: false }
 );
 
-export class UserRepository extends BaseRepository<IUserDocument> implements IUserRepository, ReferralQuotaRepository {
+export class UserRepository extends BaseRepository<IUserDocument> implements IUserRepository {
   constructor(model: IUserModel) {
     super(model);
   }
