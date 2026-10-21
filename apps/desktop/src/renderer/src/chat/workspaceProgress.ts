@@ -1,13 +1,7 @@
-import { awaitsWorktree, type ChatProject, type ChatStreamEvent } from '@shared/chat';
+import { awaitsWorktree, type ChatProject, type ChatStreamEvent, type WorkspacePreparation } from '@shared/chat';
 
 /** A first turn waiting on its worktree, for the status line under the transcript. */
-export interface WorkspaceProgress {
-  /** Epoch ms the wait began, for the elapsed clock. */
-  since: number;
-  base: string;
-  /** The session's own branch, once main has chosen it. */
-  branch?: string;
-}
+export type WorkspaceProgress = WorkspacePreparation;
 
 type WorkspaceEvent = Extract<ChatStreamEvent, { type: 'workspace' }>;
 

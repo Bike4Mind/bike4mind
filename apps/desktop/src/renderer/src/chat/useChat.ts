@@ -473,6 +473,9 @@ export function useConversation(
         if (live && settledReplies.current.has(live.messageId)) return load();
         setSession(loaded);
         setMessages(loaded?.messages ?? []);
+        // A started session opened while its worktree is still being cut: no event is coming
+        // to say so, the 'workspace' one went out before this window was looking.
+        setPreparing(current => current ?? loaded?.preparingWorkspace ?? null);
         setStreaming(!!live);
         setTurn(live ? { startedAt: live.startedAt, tokens: null } : null);
       });
@@ -533,7 +536,9 @@ export function useConversation(
   useEffect(() => {
     return window.b4m.chat.onSessionSummary(summary => {
       if (summary.id !== activeSessionId.current) return;
-      setSession(current => (current ? { ...current, title: summary.title } : current));
+      // The project too: a worktree landing under an open session is pushed this way, and the
+      // chips have to stop saying it is on its way.
+      setSession(current => (current ? { ...current, title: summary.title, project: summary.project } : current));
     });
   }, []);
 

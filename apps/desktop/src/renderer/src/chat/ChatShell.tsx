@@ -64,6 +64,7 @@ import { usePromptSuggestion } from './usePromptSuggestion';
 import { useFileDrop } from './useFileDrop';
 import { useSkills } from './useSkills';
 import { useSessionStartTiming } from './useSessionStartTiming';
+import { SpawnFailureToast } from './SpawnFailureToast';
 
 function SessionHeader({ title, onRename }: { title: string; onRename: (title: string) => void }) {
   const [editing, setEditing] = useState(false);
@@ -542,6 +543,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
 
   return (
     <Box sx={{ position: 'relative', display: 'flex', height: '100vh', bgcolor: 'background.body' }} {...drop.handlers}>
+      <SpawnFailureToast />
       {drop.over && (
         <Box
           sx={{
@@ -840,6 +842,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
               binding={conversation.project}
               settledTurns={conversation.settledTurns}
               inUse={conversation.messages.length > 0}
+              preparing={conversation.preparing !== null}
             />
           )}
           {conversation.session && conversation.session.mode !== 'code' && (

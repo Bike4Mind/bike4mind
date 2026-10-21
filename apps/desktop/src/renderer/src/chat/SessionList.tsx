@@ -28,6 +28,7 @@ import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { Theme } from '@mui/joy/styles';
 import {
+  awaitsWorktree,
   normalizeSessionTitle,
   SESSION_TITLE_MAX_LENGTH,
   type ChatSessionMode,
@@ -55,6 +56,7 @@ import { ResizeHandle } from './ResizeHandle';
 import { SectionNameDialog, type SectionNameRequest } from './SectionNameDialog';
 import { thinScrollbarSx } from './layout';
 import { SessionBadge } from './SessionBadge';
+import { PREPARING_WORKTREE } from './chipState';
 import {
   clampSidebarWidth,
   readSidebarWidth,
@@ -318,6 +320,8 @@ const SessionRow = memo(function SessionRow({
   const [menuView, setMenuView] = useState<'main' | 'move'>('main');
   const [editing, setEditing] = useState(false);
   const needsAction = status === 'needs-action';
+  // Main pushes the project once the worktree exists, which is what ends this.
+  const preparing = status === 'processing' && awaitsWorktree(session.project);
   const { ref: titleRef, clipped } = useTitleClipped(session.title, editing);
 
   const onRenameDone = (next: string | null) => {
@@ -487,6 +491,17 @@ const SessionRow = memo(function SessionRow({
             </Typography>
           )}
           {!editing && session.importOrigin && <ImportedBadge origin={session.importOrigin} />}
+          {preparing && !editing && (
+            <Typography
+              level="body-xs"
+              noWrap
+              textColor="text.tertiary"
+              sx={{ flexShrink: 0, fontSize: '0.75rem' }}
+              data-testid="chat-session-preparing"
+            >
+              {PREPARING_WORKTREE}
+            </Typography>
+          )}
         </Stack>
       </ListItemButton>
     </ListItem>
