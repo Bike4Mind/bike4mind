@@ -228,10 +228,10 @@ describe('log redaction', () => {
     { logInJson: true, prettyPrint: false },
     { logInJson: false, prettyPrint: true },
     { logInJson: false, prettyPrint: false },
-  ])('redacts provider errors and payloads in every output format: %j', options => {
+  ])('redacts provider payloads in every output format: %j', options => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const logger = new Logger({ ...options, metadata: { body: { password: 'password-canary' } } });
-    const error = Object.assign(new Error('provider-text-canary'), {
+    const error = Object.assign(new Error('context length exceeded'), {
       isAxiosError: true,
       config: { headers: { Authorization: 'Bearer key-canary', 'xi-api-key': 'xi-canary' }, data: 'request-canary' },
       response: { data: 'response-canary' },
@@ -248,30 +248,41 @@ describe('log redaction', () => {
       'response-canary',
       'conversation-canary',
       'user-message-canary',
-      'provider-text-canary',
     ]) {
       expect(output).not.toContain(secret);
     }
+    // The provider's own reason survives: without it an incident log cannot tell a context-length
+    // failure from a throttled one.
+    expect(output).toContain('context length exceeded');
     expect(output).toContain('Provider failed');
   });
 });
 
-it('withholds SDK provider error messages and response payloads', () => {
-  const error = Object.assign(new Error('provider-body-canary'), {
+it('keeps the provider error reason and status but withholds the response payload', () => {
+  const error = Object.assign(new Error('context length exceeded'), {
     status: 400,
-    headers: {},
-    error: { message: 'provider-body-canary' },
+    headers: { 'x-request-id': 'request-1' },
+    error: { message: 'nested-payload-canary' },
   });
   const entry = captureJson('error', logger => logger.error('Provider request failed', { error }));
-  expect(JSON.stringify(entry)).not.toContain('provider-body-canary');
-  expect(entry.error).toMatchObject({ status: 400, name: 'ProviderError' });
+  expect(JSON.stringify(entry)).not.toContain('nested-payload-canary');
+  expect(entry.error).toMatchObject({
+    name: 'Error',
+    message: 'context length exceeded',
+    status: 400,
+    requestId: 'request-1',
+  });
 });
 
-it('redacts numeric-status provider errors and preview aliases', () => {
-  const error = Object.assign(new Error('google-provider-canary'), { status: 400 });
+it('reads a status out of an AWS SDK metadata block', () => {
+  const error = Object.assign(new Error('Rate exceeded'), { $metadata: { httpStatusCode: 429, requestId: 'aws-1' } });
+  const entry = captureJson('error', logger => logger.error('AWS call failed', { error }));
+  expect(entry.error).toMatchObject({ message: 'Rate exceeded', status: 429, requestId: 'aws-1' });
+});
+
+it('redacts preview aliases and tool results', () => {
   const entry = captureJson('error', logger =>
     logger.error('Request failed', {
-      error,
       resultPreview: 'result-canary',
       rawResponsePreview: 'response-canary',
       resultSnippet: 'snippet-canary',
@@ -279,6 +290,6 @@ it('redacts numeric-status provider errors and preview aliases', () => {
     })
   );
   const output = JSON.stringify(entry);
-  for (const value of ['google-provider-canary', 'result-canary', 'response-canary', 'snippet-canary', 'tool-canary'])
+  for (const value of ['result-canary', 'response-canary', 'snippet-canary', 'tool-canary'])
     expect(output).not.toContain(value);
 });
