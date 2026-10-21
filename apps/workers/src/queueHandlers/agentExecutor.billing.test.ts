@@ -19,7 +19,8 @@ import {
   type IterationBillingEffects,
   type PendingToolUsage,
 } from './agentExecutor.billing';
-import type { ModelInfo } from '@bike4mind/common';
+import { ChatModels, type ModelInfo } from '@bike4mind/common';
+import { GeminiBackend } from '@bike4mind/llm-adapters';
 import { estimateGeneratedMediaUsd } from '@bike4mind/services';
 
 // input rate = 1, everything else 0, so `getTextModelCost` reduces to
@@ -852,6 +853,54 @@ describe('billIteration (long-context tiers)', () => {
       makeCounters({ inputTokens: 200_000, outputTokens: 1_000 })
     );
     expect(charged).toBeCloseTo(100_000 * perM(2) + 1_000 * perM(12), 10);
+  });
+
+  // Pins the real Gemini catalog, not the tier algorithm (the two-tier stubs below cover that).
+  it('bills two gemini-3.1-pro-preview iterations each under 200K at the <=200K rate when their sum crosses it', async () => {
+    const gemini = new GeminiBackend('test-key');
+    const modelInfo = (await gemini.getModelInfo()).find(m => m.id === ChatModels.GEMINI_3_1_PRO_PREVIEW);
+    if (!modelInfo) throw new Error('gemini-3.1-pro-preview missing from the Gemini catalog');
+
+    const { effects, spies } = makeEffects();
+    const counters = makeCounters();
+
+    await billIteration({
+      iterationIndex: 1,
+      checkpoint: {
+        ...checkpoint(150_000, { output: 1_000 }),
+        turnUsage: [{ inputTokens: 150_000, outputTokens: 1_000 }],
+      },
+      counters,
+      modelInfo,
+      model: ChatModels.GEMINI_3_1_PRO_PREVIEW,
+      startTime: 0,
+      effects,
+    });
+    await billIteration({
+      iterationIndex: 2,
+      checkpoint: {
+        ...checkpoint(300_000, { output: 2_000 }),
+        turnUsage: [
+          { inputTokens: 150_000, outputTokens: 1_000 },
+          { inputTokens: 150_000, outputTokens: 1_000 },
+        ],
+      },
+      counters,
+      modelInfo,
+      model: ChatModels.GEMINI_3_1_PRO_PREVIEW,
+      startTime: 0,
+      effects,
+    });
+
+    // The delta fallback would charge the same 150K, so only this proves the per-request path ran.
+    expect(spies.logTurnsFallback).not.toHaveBeenCalled();
+    const charged = spies.recordUsageEvent.mock.calls.map(([e]) => e.costUsd as number);
+    const shortTier = (150_000 * 2 + 1_000 * 12) / 1_000_000;
+    expect(charged).toHaveLength(2);
+    expect(charged[0]).toBeCloseTo(shortTier, 10);
+    // The run's 300K cumulative total would bill iteration 2 at $4/$18 per 1M; its own 150K prompt does not.
+    expect(charged[1]).toBeCloseTo(shortTier, 10);
+    expect(counters.cumulativeCost).toBeCloseTo((300_000 * 2 + 2_000 * 12) / 1_000_000, 10);
   });
 });
 
