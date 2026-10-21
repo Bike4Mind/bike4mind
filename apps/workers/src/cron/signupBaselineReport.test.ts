@@ -54,6 +54,17 @@ describe('scheduled signup baseline', () => {
     });
   });
 
+  it('ends the window at the start of the current UTC day', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-26T06:00:00Z'));
+    try {
+      await handler();
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(mocks.report).toHaveBeenCalledWith(expect.objectContaining({ until: new Date('2026-10-26T00:00:00Z') }));
+  });
+
   it('requires a configured post-fix cutoff before connecting', async () => {
     vi.stubEnv('SIGNUP_BASELINE_SINCE', '');
     await expect(handler()).rejects.toThrow();
