@@ -4,15 +4,17 @@ const h = vi.hoisted(() => ({
   findById: vi.fn(),
   filesSign: vi.fn(),
   generatedSign: vi.fn(),
+  filesDownload: vi.fn(),
+  generatedDownload: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({ fabFileRepository: { findById: h.findById } }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
-  getFilesStorage: () => ({ getSignedUrl: h.filesSign }),
-  getGeneratedImageStorage: () => ({ getSignedUrl: h.generatedSign }),
+  getFilesStorage: () => ({ getSignedUrl: h.filesSign, download: h.filesDownload }),
+  getGeneratedImageStorage: () => ({ getSignedUrl: h.generatedSign, download: h.generatedDownload }),
 }));
 
-import { signOutputUrl } from './signOutputUrl';
+import { downloadServeableOutput, signOutputUrl } from './signOutputUrl';
 
 const FILE_ID = '664f1c2b9a1e4d0012ab34cd';
 const filesOutput = { location: 'files' as const, s3Key: 'generated-video/j.mp4', fileId: FILE_ID };
@@ -77,5 +79,44 @@ describe('signOutputUrl', () => {
     expect(h.generatedSign).toHaveBeenCalledWith('generated-video/u1/j.mp4', 'get', { expiresIn: 900 });
     expect(h.findById).not.toHaveBeenCalled();
     expect(h.filesSign).not.toHaveBeenCalled();
+  });
+});
+
+describe('downloadServeableOutput', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.filesDownload.mockResolvedValue(Buffer.from('files-bytes'));
+    h.generatedDownload.mockResolvedValue(Buffer.from('generated-bytes'));
+  });
+
+  it('reads a Files output once its FabFile is clean', async () => {
+    h.findById.mockResolvedValue({ id: FILE_ID, moderationStatus: 'clean', mimeType: 'video/mp4' });
+    await expect(downloadServeableOutput(filesOutput)).resolves.toEqual(Buffer.from('files-bytes'));
+    expect(h.filesDownload).toHaveBeenCalledWith('generated-video/j.mp4');
+  });
+
+  it.each(['pending', 'scanning', 'blocked', null, undefined])(
+    'refuses a Files output while moderationStatus is %s, without reading the bucket',
+    async moderationStatus => {
+      h.findById.mockResolvedValue({ id: FILE_ID, moderationStatus, mimeType: 'video/mp4' });
+      await expect(downloadServeableOutput(filesOutput)).rejects.toThrow('not serveable');
+      expect(h.filesDownload).not.toHaveBeenCalled();
+    }
+  );
+
+  it('refuses a missing or deleted FabFile and an output with no usable file id', async () => {
+    h.findById.mockResolvedValueOnce(null);
+    await expect(downloadServeableOutput(filesOutput)).rejects.toThrow('not serveable');
+    h.findById.mockResolvedValueOnce({ id: FILE_ID, moderationStatus: 'clean', deletedAt: new Date() });
+    await expect(downloadServeableOutput(filesOutput)).rejects.toThrow('not serveable');
+    await expect(downloadServeableOutput({ ...filesOutput, fileId: undefined })).rejects.toThrow('no usable file id');
+    expect(h.filesDownload).not.toHaveBeenCalled();
+  });
+
+  it('reads a generated-bucket output without a FabFile lookup', async () => {
+    await expect(downloadServeableOutput({ location: 'generated', s3Key: 'generated/j.mp4' })).resolves.toEqual(
+      Buffer.from('generated-bytes')
+    );
+    expect(h.findById).not.toHaveBeenCalled();
   });
 });
