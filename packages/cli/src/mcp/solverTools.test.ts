@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { B4mApiClient } from './b4mApiClient';
@@ -25,7 +25,13 @@ async function connect(server: Awaited<ReturnType<typeof buildStdioMcpServer>>) 
 
 const toolNames = async (client: Client) => (await client.listTools()).tools.map(t => t.name);
 
+const BOTH_SCOPES = ['notebooks:read', 'optihashi:read', 'optihashi:compute'];
+
 describe('stdio solver tools', () => {
+  beforeEach(() => {
+    vi.spyOn(B4mApiClient.prototype, 'getOwnKeyScopes').mockResolvedValue(BOTH_SCOPES);
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -105,6 +111,40 @@ describe('stdio solver tools', () => {
 
     expect(names).toContain('list_notebooks');
     expect(names.filter(n => n.startsWith('optihashi_'))).toEqual([]);
+  });
+
+  it.each([
+    ['read only', ['optihashi:read']],
+    ['compute only', ['optihashi:compute']],
+    ['neither', ['notebooks:read']],
+    ['a key that could not be identified', []],
+  ])('offers no solver tools to a key holding %s, even though the route answers', async (_label, scopes) => {
+    vi.spyOn(B4mApiClient.prototype, 'getOwnKeyScopes').mockResolvedValue(scopes);
+    vi.spyOn(B4mApiClient.prototype, 'getSolverCatalog').mockResolvedValue(catalog);
+
+    const client = await connect(await buildStdioMcpServer(options));
+    const names = await toolNames(client);
+
+    expect(names).toContain('list_notebooks');
+    expect(names.filter(n => n.startsWith('optihashi_'))).toEqual([]);
+  });
+
+  it('offers the tools to a login (non API key) caller, which has no scopes to check', async () => {
+    vi.spyOn(B4mApiClient.prototype, 'getOwnKeyScopes').mockResolvedValue(undefined);
+    vi.spyOn(B4mApiClient.prototype, 'getSolverCatalog').mockResolvedValue(catalog);
+
+    const client = await connect(await buildStdioMcpServer(options));
+
+    expect(await toolNames(client)).toContain('optihashi_solve');
+  });
+
+  it('offers no solver tools when the key scope lookup fails', async () => {
+    vi.spyOn(B4mApiClient.prototype, 'getOwnKeyScopes').mockRejectedValue(new Error('boom'));
+    vi.spyOn(B4mApiClient.prototype, 'getSolverCatalog').mockResolvedValue(catalog);
+
+    const client = await connect(await buildStdioMcpServer(options));
+
+    expect((await toolNames(client)).filter(n => n.startsWith('optihashi_'))).toEqual([]);
   });
 
   it('offers no solver tools when the catalog is malformed', async () => {
