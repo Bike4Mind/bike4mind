@@ -108,7 +108,7 @@ export const BlankChat = memo(function BlankChat({
                 component="button"
                 type="button"
                 onClick={() => onPick(suggestion.prompt)}
-                aria-label={`${suggestion.label}: ${suggestion.prompt}${suggestion.spendsCredits ? ' (uses credits)' : ''}`}
+                aria-label={`${suggestion.label}: ${suggestion.prompt}`}
                 data-testid="chat-empty-suggestion-btn"
                 data-category={suggestion.category}
                 sx={theme => ({
@@ -153,16 +153,6 @@ export const BlankChat = memo(function BlankChat({
                 >
                   {suggestion.prompt}
                 </Typography>
-                {suggestion.spendsCredits && (
-                  <Typography
-                    level="body-xs"
-                    textColor="text.tertiary"
-                    sx={{ mt: 'auto', fontSize: '0.6875rem' }}
-                    data-testid="chat-empty-credits-hint"
-                  >
-                    Uses credits
-                  </Typography>
-                )}
               </Box>
             </Box>
           );

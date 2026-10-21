@@ -91,7 +91,6 @@ export interface BlankChatSuggestion {
   category: SuggestionCategory;
   label: string;
   prompt: string;
-  spendsCredits: boolean;
 }
 
 /** FNV-1a: stable across runs and renders, which Math.random and a counter are not. */
@@ -114,14 +113,13 @@ export function pickPrompt(prompts: readonly string[], sessionId: string, catego
  * more often than not.
  */
 export function blankChatSuggestions(tools: readonly CreationTool[], sessionId: string): BlankChatSuggestion[] {
-  const offered = new Map(tools.map(tool => [tool.name, tool]));
+  const offered = new Set(tools.map(tool => tool.name));
   const media = CATEGORIES.filter(spec => spec.tool && offered.has(spec.tool));
   const text = CATEGORIES.filter(spec => !spec.tool).slice(0, media.length % 2 === 1 ? 1 : 2);
   return [...media, ...text].map(spec => ({
     category: spec.category,
     label: spec.label,
     prompt: pickPrompt(spec.prompts, sessionId, spec.category),
-    spendsCredits: !!spec.tool && !!offered.get(spec.tool)?.spendsCredits,
   }));
 }
 

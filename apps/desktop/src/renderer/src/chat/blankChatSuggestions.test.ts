@@ -32,19 +32,6 @@ describe('blankChatSuggestions', () => {
     expect(blankChatSuggestions([], 's1').map(s => s.category)).toEqual(['write', 'ask']);
   });
 
-  it('flags only the cards whose tool spends credits', () => {
-    const cards = blankChatSuggestions(
-      [{ name: 'generate_image', spendsCredits: false }, tool('generate_music')],
-      's1'
-    );
-    expect(Object.fromEntries(cards.map(c => [c.category, c.spendsCredits]))).toEqual({
-      image: false,
-      music: true,
-      write: false,
-      ask: false,
-    });
-  });
-
   it('picks the same prompt for the same session id every time', () => {
     const first = blankChatSuggestions(ALL, 'session-42').map(s => s.prompt);
     expect(blankChatSuggestions(ALL, 'session-42').map(s => s.prompt)).toEqual(first);
