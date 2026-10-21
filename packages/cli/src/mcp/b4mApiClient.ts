@@ -585,7 +585,9 @@ export class B4mApiClient {
   /**
    * Scopes held by the API key this client authenticates with, read from the caller's own key list by
    * matching the key's stored prefix. Undefined for a login (JWT) caller, who has no scopes to check;
-   * an empty list when the key is not found, so a caller that cannot be identified is never treated as scoped.
+   * an empty list when the key is not found or cannot be told apart from another, so a caller that cannot be
+   * identified is never treated as scoped. Stored prefixes differ in length (older keys keep a shorter one),
+   * and the list can include other keys, so the longest matching prefix wins and a tie at that length is refused.
    */
   async getOwnKeyScopes(): Promise<string[] | undefined> {
     const apiKey = this.apiKey;
@@ -594,8 +596,10 @@ export class B4mApiClient {
       '/api/user-api-keys',
       { timeout: SOLVER_CATALOG_TIMEOUT_MS }
     );
-    const own = keys.find(k => k.status === 'active' && !!k.keyPrefix && apiKey.startsWith(k.keyPrefix));
-    return own?.scopes ?? [];
+    const matches = keys.filter(k => k.status === 'active' && !!k.keyPrefix && apiKey.startsWith(k.keyPrefix));
+    const longest = Math.max(0, ...matches.map(k => k.keyPrefix!.length));
+    const best = matches.filter(k => k.keyPrefix!.length === longest);
+    return best.length === 1 ? (best[0].scopes ?? []) : [];
   }
 
   /** GET on the entitlement-gated solver route: the runnable rosters and limits for this caller. */
