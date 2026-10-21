@@ -20,6 +20,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import { toast } from 'sonner';
 import { useSubmitUserInvitation, useSubmitReferral } from '@client/app/hooks/data/regInvites';
 import type { IReferralResult } from '@client/app/utils/regInviteAPICalls';
+import { getErrorMessage } from '@client/app/utils/error';
 import { create } from 'zustand';
 import { useTranslation } from 'react-i18next';
 import { useServerSettings } from '@client/app/contexts/UserSettingsContext';
@@ -144,7 +145,12 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
           // per-email summary, but the (future) user-invitation endpoint does not. The
           // Array.isArray guards below treat every field as optional, so the type matches
           // the real runtime contract across both modes.
-          onError: () => setLoading(false),
+          // Losing the quota race is a designed outcome (the server answers 400 with the
+          // reason), so the sender has to see it rather than watch the spinner stop.
+          onError: (error: unknown) => {
+            setLoading(false);
+            toast.error(getErrorMessage(error));
+          },
           onSuccess: (result: Partial<IReferralResult> | undefined) => {
             setLoading(false);
 
@@ -165,6 +171,7 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
 
             onClose();
             setFriendEmail('');
+            setEmailBody(t('referral.email_body_default').replace('USER_NAME', currentUser?.name || ''));
             if (inviteType === ReferralInviteType.userInvitation) {
               setNumReferralsAvailable(Math.max(0, numReferralsAvailable - sent.length));
             }
@@ -175,8 +182,6 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
       console.error('Failed to submit referral:', error);
       setLoading(false);
     }
-    setFriendEmail('');
-    setEmailBody(t('referral.email_body_default').replace('USER_NAME', currentUser?.name || ''));
   };
 
   return (
@@ -332,7 +337,9 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
                 },
               }}
             >
-              {loading && <CircularProgress variant="plain" size="sm" sx={{ mr: 1 }} />}
+              {loading && (
+                <CircularProgress data-testid="referral-submit-spinner" variant="plain" size="sm" sx={{ mr: 1 }} />
+              )}
               Invite a User
             </Button>
           </Stack>
