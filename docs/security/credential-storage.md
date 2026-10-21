@@ -30,6 +30,11 @@ Back it up securely and keep it stable across redeployments: replacing it makes 
 unreadable. Deployed memory providers refuse to operate without it. Provisioning the secret alone does
 not protect existing raw data keys; run the backfill too.
 
+The cloud deploy check applies to every stage, including PR previews and personal stages. Before this
+change reaches `main`, set an account-wide default in each AWS account those stages deploy to
+(`sst secret set MEMORY_KEY_SECRET <hex> --fallback`), or every preview and personal-stage deploy is
+refused. The same stability rule applies: the fallback must not be replaced once stages have used it.
+
 The token/API-key maintenance commands understand both ciphertext versions. Their rotation operations
 must receive the owning context; copying a bound blob to another record or variable is rejected.
 Keep the previous encryption key available until the backfill/rotation completes. Do not use plaintext
