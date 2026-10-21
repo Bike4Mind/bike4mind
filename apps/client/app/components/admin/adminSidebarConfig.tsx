@@ -107,6 +107,7 @@ export enum AdminTab {
   GrowthPricing = 64,
   IntegrationDemand = 65,
   AuditLog = 66,
+  Dashboard = 67,
 }
 
 /**

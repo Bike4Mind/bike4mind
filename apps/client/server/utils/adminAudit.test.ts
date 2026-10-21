@@ -6,7 +6,10 @@ const h = vi.hoisted(() => ({
   findById: vi.fn(),
 }));
 
-vi.mock('@bike4mind/database', () => ({ adminAuditLogRepository: { append: h.append } }));
+vi.mock('@bike4mind/database', () => ({
+  adminAuditLogRepository: { append: h.append },
+  adminSettingsRepository: { findAll: async () => [], findBySettingNames: async () => [] },
+}));
 vi.mock('@bike4mind/database/auth', () => ({ userRepository: { findById: h.findById } }));
 
 import {

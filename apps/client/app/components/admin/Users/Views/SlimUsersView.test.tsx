@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockIsMobile = vi.fn(() => false);
 
-vi.mock('@tanstack/react-router', async () => (await import('../__tests__/fakeAdminRouter')).fakeRouterModule);
+vi.mock('@tanstack/react-router', async () => (await import('../../__tests__/fakeAdminRouter')).fakeRouterModule);
 
 vi.mock('@client/app/hooks/useIsMobile', () => ({
   useIsMobile: () => mockIsMobile(),

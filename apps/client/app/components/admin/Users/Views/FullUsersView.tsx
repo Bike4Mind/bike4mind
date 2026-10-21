@@ -34,6 +34,7 @@ import Bike4MindUserDetails from '../Details/Bike4MindUserDetails';
 import LoginDetails from '../Details/LoginDetails';
 import UserDetails from '../Details/UserDetails';
 import UserSubscriptionStatus from '../Details/UserSubscriptionStatus';
+import { UserActivityTabPanel, UserViewTabs, type UserViewTab } from '../Activity/UserViewTabs';
 import SpicyUserActions from '../SpicyUserActions';
 import { useComplianceModal } from '../ComplianceModal';
 import UserPermissions from '../UserPermissions';
@@ -101,6 +102,7 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal, 
   const [loginAsMfaToken, setLoginAsMfaToken] = useState('');
   const [loginAsMfaRequiredOpen, setLoginAsMfaRequiredOpen] = useState(false);
   const [mobileExpanded, setMobileExpanded] = useState(false);
+  const [activeTab, setActiveTab] = useState<UserViewTab>('overview');
 
   useEffect(() => {
     setFormState({ ...user });
@@ -347,8 +349,10 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal, 
           </Stack>
         </Box>
 
+        <UserViewTabs value={activeTab} onChange={setActiveTab} />
+
         {/* Main content */}
-        <Box sx={{ p: { xs: 1, sm: 2 } }}>
+        <Box sx={{ p: { xs: 1, sm: 2 }, display: activeTab === 'overview' ? 'block' : 'none' }}>
           <Grid container spacing={3}>
             {/* User Details Section */}
             <Grid xs={12} sm={6} md={2}>
@@ -488,6 +492,7 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal, 
             </Grid>
           </Grid>
         </Box>
+        {activeTab === 'activity' && <UserActivityTabPanel userId={user.id} />}
       </Box>
 
       {/* System Message Modal */}

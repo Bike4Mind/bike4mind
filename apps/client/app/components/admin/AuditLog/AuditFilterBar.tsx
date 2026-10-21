@@ -5,9 +5,9 @@ import {
   ADMIN_AUDIT_CATALOGUE,
   AdminAuditCategorySchema,
   AdminAuditSeveritySchema,
-  AuditContextSchema,
   AuditTargetSchema,
   AUDIT_EXPORT_MAX_ROWS,
+  StoredAuditContextSourceSchema,
   type AuditLogFilters,
 } from '@bike4mind/common';
 import { downloadAuditLogCsv } from '@client/app/hooks/data/adminAuditLog';
@@ -20,7 +20,7 @@ const ANY = 'any';
 const ACTION_OPTIONS = Object.keys(ADMIN_AUDIT_CATALOGUE);
 const CATEGORY_OPTIONS = AdminAuditCategorySchema.options;
 const SEVERITY_OPTIONS = AdminAuditSeveritySchema.options;
-const SOURCE_OPTIONS = AuditContextSchema.shape.source.options;
+const SOURCE_OPTIONS = StoredAuditContextSourceSchema.options;
 const TARGET_KIND_OPTIONS = AuditTargetSchema.shape.kind.options;
 
 /** The date inputs are local calendar days; `to` is inclusive, so it means end of day. */

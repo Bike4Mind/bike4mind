@@ -1047,6 +1047,18 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
   pullKnowledgeIds: (fabFileIds: string[]) => Promise<number>;
 
   /**
+   * As `pullKnowledgeIds`, but for ONE session only. Resolves to whether that session was modified.
+   */
+  pullKnowledgeIdsFromSession: (sessionId: string, fabFileIds: string[]) => Promise<boolean>;
+
+  /**
+   * As `pullKnowledgeIds`, but only from live sessions OWNED by one of `userIds` - bounded by the
+   * (deletedAt, userId) indexes, where the unscoped form has to scan for the unindexed knowledgeIds.
+   * Resolves to the sessions modified.
+   */
+  pullKnowledgeIdsForUsers: (userIds: string[], fabFileIds: string[]) => Promise<number>;
+
+  /**
    * Search for sessions by user ID
    *
    * @param search - The search query

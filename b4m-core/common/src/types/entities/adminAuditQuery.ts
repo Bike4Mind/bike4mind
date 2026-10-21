@@ -4,8 +4,8 @@ import {
   AdminAuditCategorySchema,
   AdminAuditSeveritySchema,
   AuditActorSchema,
-  AuditContextSchema,
   AuditTargetSchema,
+  StoredAuditContextSourceSchema,
   type AuditEntry,
 } from './AdminAuditLogTypes';
 
@@ -36,7 +36,7 @@ export const AuditLogFiltersSchema = z.object({
   actorUserId: z.string().min(1).optional(),
   targetKind: AuditTargetSchema.shape.kind.optional(),
   targetId: z.string().min(1).optional(),
-  source: AuditContextSchema.shape.source.optional(),
+  source: StoredAuditContextSourceSchema.optional(),
   actorScope: AuditActorSchema.shape.scope.optional(),
   from: z.iso.datetime().optional(),
   to: z.iso.datetime().optional(),

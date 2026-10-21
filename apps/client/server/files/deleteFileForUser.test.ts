@@ -9,7 +9,12 @@ const {
   mockLogEvent,
   mockRecompute,
   mockIncrementCurrentStorage,
+  mockCleanUp,
+  txn,
 } = vi.hoisted(() => ({
+  mockCleanUp: vi.fn(),
+  // Whether the fake transaction's callback is running, so a test can tell in-txn from after-commit.
+  txn: { open: false, cleanupRanInside: [] as boolean[] },
   mockFindById: vi.fn(),
   mockDeleteFabFile: vi.fn(),
   mockFindUser: vi.fn(),
@@ -28,11 +33,27 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: { findById: mockFindById },
   fileTagRepository: { touchLastActivityBy: vi.fn() },
   sessionRepository: {},
+  projectRepository: {},
   userRepository: {},
-  withTransaction: (fn: (session: unknown) => unknown) => fn('session'),
+  withTransaction: async (fn: (session: unknown) => unknown) => {
+    txn.open = true;
+    try {
+      return await fn('session');
+    } finally {
+      txn.open = false;
+    }
+  },
   User: { findById: (id: string) => ({ session: () => mockFindUser(id) }) },
 }));
-vi.mock('@bike4mind/services', () => ({ fabFilesService: { deleteFabFile: mockDeleteFabFile } }));
+vi.mock('@bike4mind/services', () => ({
+  fabFilesService: {
+    deleteFabFile: mockDeleteFabFile,
+    cleanUpDeletedFileReferences: (...args: unknown[]) => {
+      txn.cleanupRanInside.push(txn.open);
+      return mockCleanUp(...args);
+    },
+  },
+}));
 vi.mock('@bike4mind/fab-pipeline', () => ({ FabFileChunkSearchIndex: {} }));
 vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: () => false }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: mockLogEvent }));
@@ -52,20 +73,42 @@ const logger = { error: vi.fn() };
 const req = { user: { id: 'u1' }, logger, ability: 'ability' } as any;
 
 /** Resolves deleteFabFile with `action`, reporting `size` freed bytes through onDeleteComplete. */
-function deleteResolves(action: string, size = 0, fabFile: unknown = { userId: 'u1' }) {
+function deleteResolves(action: string, size = 0, fabFile: unknown = { userId: 'u1' }, references?: unknown) {
   mockDeleteFabFile.mockImplementation(async (_userId, _params, adapters) => {
     if (size) await adapters.onDeleteComplete(fabFile, size);
-    return { action, fabFile };
+    return { action, fabFile, references };
   });
 }
 
+const REFERENCES = { fileIds: [FILE_ID], systemFileUserIds: ['u1'], projectUserIds: ['u1'] };
+
 beforeEach(() => {
   vi.clearAllMocks();
+  txn.cleanupRanInside.length = 0;
   mockFindById.mockResolvedValue({ userId: 'u1', tags: [] });
   mockFindUser.mockResolvedValue({ save: vi.fn() });
 });
 
 describe('deleteFileForUser', () => {
+  it('unlinks the returned references after the transaction commits, not inside it', async () => {
+    deleteResolves('deleted', 0, { userId: 'u1' }, REFERENCES);
+
+    expect(await deleteFileForUser(req, FILE_ID)).toBe('deleted');
+
+    expect(mockCleanUp).toHaveBeenCalledTimes(1);
+    expect(mockCleanUp.mock.calls[0][0]).toEqual(REFERENCES);
+    expect(txn.cleanupRanInside).toEqual([false]);
+  });
+
+  it('unlinks nothing when the transaction rolls back', async () => {
+    deleteResolves('deleted', 0, { userId: 'u1' }, REFERENCES);
+    mockLogEvent.mockRejectedValueOnce(new Error('log failed'));
+
+    await expect(deleteFileForUser(req, FILE_ID)).rejects.toThrow('log failed');
+
+    expect(mockCleanUp).not.toHaveBeenCalled();
+  });
+
   it('deducts the freed bytes from the owner and logs DELETE_FILE', async () => {
     const user = { save: vi.fn() };
     mockFindUser.mockResolvedValue(user);

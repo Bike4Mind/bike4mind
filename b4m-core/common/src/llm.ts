@@ -281,6 +281,12 @@ export const ChatCompletionInvokeParamsSchema = z.object({
         role: z.enum(['user', 'assistant', 'system', 'function', 'tool']),
         content: z.union([z.string(), z.array(z.any())]),
         fabFileIds: z.array(z.string()).optional(),
+        /**
+         * Send this message in the current user turn instead of the system prompt, keeping the
+         * system prefix byte-stable for prompt caching. Only for content that changes every turn
+         * (a view description, a per-send brief); a caller's actual system prompt must not set it.
+         */
+        perTurn: z.boolean().optional(),
       })
     )
     .optional(),

@@ -1,5 +1,29 @@
 # @bike4mind/common
 
+## 19.0.0
+
+### Major Changes
+
+- [#4939](https://github.com/Bike4Mind/bike4mind/pull/4939) [`4eb04ce`](https://github.com/Bike4Mind/bike4mind/commit/4eb04ce7df80bc724b0ff957eab4d9bc18a62360) Thanks [@onoya](https://github.com/onoya)! - move a file's billed bytes when its lake membership changes
+
+### Minor Changes
+
+- [#5191](https://github.com/Bike4Mind/bike4mind/pull/5191) [`a68d013`](https://github.com/Bike4Mind/bike4mind/commit/a68d013d2a4c7a59268f3bfbb2ed9b343a0a36c0) Thanks [@jjmarfa](https://github.com/jjmarfa)! - Add the `decide` server tool to the CLI and shared tool schemas, with deployment-aware availability and permission handling.
+
+- [#5083](https://github.com/Bike4Mind/bike4mind/pull/5083) [`20f9362`](https://github.com/Bike4Mind/bike4mind/commit/20f9362014343fde166c09acc72c3b759ddfd61d) Thanks [@onoya](https://github.com/onoya)! - close admin audit gaps for roles, deletion, impersonation, MFA and settings
+
+- [#5154](https://github.com/Bike4Mind/bike4mind/pull/5154) [`2d33506`](https://github.com/Bike4Mind/bike4mind/commit/2d33506efd4f95460139dedb554780ac544be23c) Thanks [@julsanchez](https://github.com/julsanchez)! - export skills to Claude Code as SKILL.md and import SKILL.md into new skills
+
+- [#5155](https://github.com/Bike4Mind/bike4mind/pull/5155) [`a6a458e`](https://github.com/Bike4Mind/bike4mind/commit/a6a458ee96a84759072f7388e77c66be8a8f9be8) Thanks [@onoya](https://github.com/onoya)! - typed response schemas for core data lake routes
+
+- [#5189](https://github.com/Bike4Mind/bike4mind/pull/5189) [`847b65f`](https://github.com/Bike4Mind/bike4mind/commit/847b65f4347c32e825b705244902a223bbbf4d3a) Thanks [@jjmarfa](https://github.com/jjmarfa)! - show confidence-gate pauses with Proceed/Stop
+
+### Patch Changes
+
+- [#5173](https://github.com/Bike4Mind/bike4mind/pull/5173) [`7bc69c7`](https://github.com/Bike4Mind/bike4mind/commit/7bc69c780cf2e3def64cd650fb82412c6fa91a53) Thanks [@onoya](https://github.com/onoya)! - bill an org-billed API key's organization on agent runs and /api/ai/llm
+
+- [#5182](https://github.com/Bike4Mind/bike4mind/pull/5182) [`a0b5f42`](https://github.com/Bike4Mind/bike4mind/commit/a0b5f429fc8e0b4bcb7968d88513ffd4c71c2d2c) Thanks [@ktdejesus](https://github.com/ktdejesus)! - keep the Claude prompt cache stable across turns in long sessions
+
 ## 18.0.0
 
 ### Major Changes

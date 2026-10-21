@@ -1,11 +1,12 @@
 import type { Request } from 'express';
-import type { IUserAcquisition } from '@bike4mind/common';
+import { FirstRunEvents, type IUserAcquisition } from '@bike4mind/common';
 import { adminSettingsRepository, User, userRepository } from '@bike4mind/database';
 import type { AcquisitionTouches } from '@bike4mind/server-utils/lib/subscriptions/acquisition';
 import { readConsentedAcquisitionTouches } from './acquisition';
 import { emitProductEvent, HOST_PRODUCT_ID } from './emitActiveEvent';
 import { pseudonymizeUserId } from './pseudonymize';
 import { stableEventId } from './signupEvents';
+import { logEventSafe } from '@server/utils/analyticsLog';
 
 // Server half of the funnel instrumentation. The client half (begin_checkout, upsell_*) is
 // app/utils/funnelEvents.ts; both skip users flagged isSynthetic so test personas never reach
@@ -201,12 +202,14 @@ export async function recordFirstValue(opts: {
   user: FunnelUser & { createdAt?: Date | string | null };
   feature: string;
   now?: Date;
+  onRecorded?: () => Promise<void>;
 }): Promise<boolean> {
   if (!signedUpAfterLaunch(opts.user.createdAt)) return false;
   try {
     const now = opts.now ?? new Date();
     const res = await User.updateOne({ _id: opts.user.id, firstValueAt: null }, { $set: { firstValueAt: now } });
     if (res.modifiedCount !== 1) return false;
+    await opts.onRecorded?.();
     const createdAt = opts.user.createdAt ? new Date(opts.user.createdAt).getTime() : NaN;
     return await emitFunnelEvent({
       user: opts.user,
@@ -233,10 +236,19 @@ export async function recordFirstValue(opts: {
  */
 export async function recordFirstChatValue(opts: {
   user: FunnelUser & { createdAt?: Date | string | null; firstValueAt?: Date | null };
-  loadQuest: () => Promise<{ status?: string; type?: string } | null | undefined>;
+  loadQuest: () => Promise<{ status?: string; type?: string; creditsUsed?: number } | null | undefined>;
 }): Promise<boolean> {
   if (opts.user.firstValueAt || !signedUpAfterLaunch(opts.user.createdAt)) return false;
   const quest = await opts.loadQuest().catch(() => undefined);
   if (quest?.status !== 'done' || quest.type === 'error') return false;
-  return recordFirstValue({ user: opts.user, feature: 'chat' });
+  return recordFirstValue({
+    user: opts.user,
+    feature: 'chat',
+    onRecorded: () =>
+      logEventSafe({
+        userId: opts.user.id,
+        type: FirstRunEvents.FIRST_ANSWER_CREDITS,
+        metadata: { credits: quest.creditsUsed ?? 0 },
+      }),
+  });
 }
