@@ -26,7 +26,7 @@ import {
 } from '@shared/chat';
 import type { PrSummary } from '@shared/pullRequest';
 import { sectionOf, type SidebarSection, type SidebarSectionsState } from '@shared/sidebarSections';
-import { capRows, GROUP_ROW_CAP, GROUP_ROW_STEP, setGroupLimit, useGroupLimit } from './groupCap';
+import { capRows, setGroupLimit, useGroupLimit } from './groupCap';
 import { groupSessions, orderedSessions, type CustomGroup, type ProjectGroup } from './grouping';
 import {
   ArrowLeftIcon,
@@ -618,7 +618,7 @@ const SHOW_MORE_SX = {
 const isLive = (status: ChatSessionStatus | undefined) => status === 'processing' || status === 'needs-action';
 
 /**
- * A group's rows, capped at GROUP_ROW_CAP with "Show more" / "Show less" below them. The active,
+ * A group's rows, capped at GROUP_ROW_CAP with "Show more" below them. The active,
  * pinned and live rows always draw, in place. `uncapped` is set while a search is narrowing the
  * list, which then shows every match.
  */
@@ -652,66 +652,23 @@ function CappedSessionRows({
     [sessions, uncapped, limit, activeId, statuses]
   );
 
-  // Each button unmounts on the click that empties it; focus moves to the other one rather than
-  // falling back to the document.
-  const moreRef = useRef<HTMLButtonElement>(null);
-  const lessRef = useRef<HTMLButtonElement>(null);
-  const pendingFocus = useRef<'more' | 'less' | null>(null);
-  useEffect(() => {
-    const next =
-      pendingFocus.current === 'more' ? moreRef.current : pendingFocus.current === 'less' ? lessRef.current : null;
-    pendingFocus.current = null;
-    next?.focus();
-  });
-
-  const hidden = capped?.hidden ?? 0;
-  const expanded = !uncapped && limit > GROUP_ROW_CAP && sessions.length > GROUP_ROW_CAP;
-
   return (
     <>
       <List size="sm" sx={SESSION_LIST_SX}>
         {(capped?.visible ?? sessions).map(row)}
       </List>
-      {(hidden > 0 || expanded) && (
-        <Stack direction="row" sx={{ alignItems: 'center', gap: 0.25 }}>
-          {capped && hidden > 0 && (
-            <Button
-              ref={moreRef}
-              size="sm"
-              variant="plain"
-              color="neutral"
-              onClick={event => {
-                if (hidden <= GROUP_ROW_STEP && event.currentTarget === document.activeElement) {
-                  pendingFocus.current = 'less';
-                }
-                setGroupLimit(groupKey, capped.nextLimit);
-              }}
-              sx={{ ...SHOW_MORE_SX, flex: 1 }}
-              data-testid={`${testIdPrefix}-show-more-btn`}
-            >
-              Show more
-              <Typography component="span" level="body-xs" textColor="inherit" sx={{ ml: 0.75 }}>
-                ({hidden} hidden)
-              </Typography>
-            </Button>
-          )}
-          {expanded && (
-            <Button
-              ref={lessRef}
-              size="sm"
-              variant="plain"
-              color="neutral"
-              onClick={event => {
-                if (event.currentTarget === document.activeElement) pendingFocus.current = 'more';
-                setGroupLimit(groupKey, null);
-              }}
-              sx={{ ...SHOW_MORE_SX, ...(hidden === 0 && { flex: 1 }) }}
-              data-testid={`${testIdPrefix}-show-less-btn`}
-            >
-              Show less
-            </Button>
-          )}
-        </Stack>
+      {capped && capped.hidden > 0 && (
+        <Button
+          fullWidth
+          size="sm"
+          variant="plain"
+          color="neutral"
+          onClick={() => setGroupLimit(groupKey, capped.nextLimit)}
+          sx={SHOW_MORE_SX}
+          data-testid={`${testIdPrefix}-show-more-btn`}
+        >
+          Show more
+        </Button>
       )}
     </>
   );

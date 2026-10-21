@@ -57,9 +57,8 @@ export function groupLimit(key: string): number {
   return limits.get(key) ?? GROUP_ROW_CAP;
 }
 
-/** Null goes back to the cap. */
-export function setGroupLimit(key: string, limit: number | null): void {
-  if (limit === null || limit <= GROUP_ROW_CAP) limits.delete(key);
+export function setGroupLimit(key: string, limit: number): void {
+  if (limit <= GROUP_ROW_CAP) limits.delete(key);
   else limits.set(key, limit);
   for (const listener of listeners) listener();
 }

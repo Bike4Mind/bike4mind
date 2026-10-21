@@ -109,7 +109,6 @@ const group = () => {
 };
 const groupTitles = () => all('chat-session-title-text', group()).map(node => node.textContent);
 const showMore = () => query('sidebar-project-show-more-btn');
-const showLess = () => query('sidebar-project-show-less-btn');
 const click = (node: HTMLElement | null) => {
   if (!node) throw new Error('nothing to click');
   act(() => node.click());
@@ -143,43 +142,30 @@ describe('SessionList project cap', () => {
     render({ sessions: projectSessions(20) });
     expect(groupTitles()).toHaveLength(20);
     expect(showMore()).toBeNull();
-    expect(showLess()).toBeNull();
   });
 
-  it('caps 21 at the first 20 and counts the one hidden', () => {
+  it('caps 21 at the first 20 under a plain Show more', () => {
     render({ sessions: projectSessions(21) });
     expect(groupTitles()).toEqual(projectSessions(20).map(session => session.title));
-    expect(showMore()?.textContent).toBe('Show more(1 hidden)');
+    expect(showMore()?.textContent).toBe('Show more');
   });
 
   it('renders only 20 rows for a 500-session project', () => {
     render({ sessions: projectSessions(500) });
     expect(all('chat-session-item')).toHaveLength(20);
-    expect(showMore()?.textContent).toBe('Show more(480 hidden)');
+    expect(showMore()).not.toBeNull();
   });
 
-  it('reveals 10 per click, the last click reveals the remainder, then only Show less is left', () => {
+  it('reveals 10 per click, and the last click reveals the remainder and removes the button', () => {
     render({ sessions: projectSessions(35) });
     click(showMore());
     expect(groupTitles()).toHaveLength(30);
-    expect(showMore()?.textContent).toBe('Show more(5 hidden)');
-    expect(showLess()).not.toBeNull();
+    expect(showMore()).not.toBeNull();
 
     click(showMore());
     expect(groupTitles()).toHaveLength(35);
     expect(showMore()).toBeNull();
-    expect(showLess()).not.toBeNull();
-  });
-
-  it('Show less collapses back to 20', () => {
-    render({ sessions: projectSessions(60) });
-    click(showMore());
-    click(showMore());
-    expect(groupTitles()).toHaveLength(40);
-    click(showLess());
-    expect(groupTitles()).toHaveLength(20);
-    expect(showLess()).toBeNull();
-    expect(showMore()?.textContent).toBe('Show more(40 hidden)');
+    expect(query('sidebar-project-show-less-btn')).toBeNull();
   });
 
   it('keeps an active session past the cap in its own place, once', () => {
@@ -188,7 +174,6 @@ describe('SessionList project cap', () => {
     expect(titles).toHaveLength(21);
     expect(titles[20]).toBe('Task 300');
     expect(titles.filter(title => title === 'Task 300')).toHaveLength(1);
-    expect(showMore()?.textContent).toBe('Show more(479 hidden)');
   });
 
   it('keeps pinned, running and waiting sessions past the cap visible', () => {
@@ -208,7 +193,6 @@ describe('SessionList project cap', () => {
     const titles = groupTitles();
     expect(titles.slice(20)).toEqual(['Task 40', 'Task 50']);
     expect(titles).not.toContain('Task 60');
-    expect(showMore()?.textContent).toBe('Show more(77 hidden)');
   });
 
   it('shows every match uncapped while searching', () => {
@@ -249,19 +233,15 @@ describe('SessionList project cap', () => {
     const titles = groupTitles();
     expect(titles).toHaveLength(20);
     expect(titles[0]).toBe('Newest');
-    expect(showMore()?.textContent).toBe('Show more(6 hidden)');
+    expect(titles).not.toContain('Task 24');
   });
 
-  it('is a focusable button that hands focus to Show less when it reveals the last rows', () => {
+  it('is a focusable button', () => {
     render({ sessions: projectSessions(25) });
     const more = showMore() as HTMLButtonElement;
     expect(more.tagName).toBe('BUTTON');
     act(() => more.focus());
-    click(more);
-    expect(showMore()).toBeNull();
-    expect(document.activeElement).toBe(showLess());
-    click(showLess());
-    expect(document.activeElement).toBe(showMore());
+    expect(document.activeElement).toBe(more);
   });
 });
 
@@ -277,6 +257,6 @@ describe('SessionList user section cap', () => {
     expect(all('chat-session-item', section)).toHaveLength(20);
     click(query('sidebar-section-show-more-btn'));
     expect(all('chat-session-item', section)).toHaveLength(30);
-    expect(query('sidebar-section-show-less-btn')).not.toBeNull();
+    expect(query('sidebar-section-show-more-btn')).toBeNull();
   });
 });

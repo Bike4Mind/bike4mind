@@ -46,7 +46,7 @@ describe('group limits', () => {
     setGroupLimit('project:/a', 40);
     expect(groupLimit('project:/a')).toBe(40);
     expect(groupLimit('project:/b')).toBe(GROUP_ROW_CAP);
-    setGroupLimit('project:/a', null);
+    setGroupLimit('project:/a', GROUP_ROW_CAP);
     expect(groupLimit('project:/a')).toBe(GROUP_ROW_CAP);
   });
 
