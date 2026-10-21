@@ -4,6 +4,7 @@ import {
   isEncrypted,
   isValidEncryptionKey,
 } from '@bike4mind/server-utils/security/secretEncryption';
+import { mcpEnvSecretContext } from '@bike4mind/utils/security';
 import { Config } from '@bike4mind/server-utils/utils/config';
 
 function requireKey(): string {
@@ -59,7 +60,7 @@ export function decryptToken(value: string | null | undefined, context?: string)
 export type McpSecretOwner = { userId: string; name?: string; id: string };
 
 function envContext(owner: McpSecretOwner, field: string): string {
-  return JSON.stringify(['mcp', owner.userId, owner.id, field]);
+  return mcpEnvSecretContext(owner.userId, owner.id, field);
 }
 
 export type EnvVariable = { key: string; value: string };

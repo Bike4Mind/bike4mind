@@ -1,7 +1,12 @@
 import mongoose from 'mongoose';
 import { softDeletePlugin } from '../../utils/mongo';
 import { ApiKeyType, IApiKeyDocument, IApiKeyRepository } from '@bike4mind/common';
-import { decryptAtRest, encryptAtRest, isSecretsAtRestConfigured } from '@bike4mind/utils/security';
+import {
+  apiKeySecretContext,
+  decryptAtRest,
+  encryptAtRest,
+  isSecretsAtRestConfigured,
+} from '@bike4mind/utils/security';
 import BaseRepository from '@bike4mind/db-core';
 
 interface IApiKeyModel extends mongoose.Model<IApiKeyDocument> {}
@@ -17,7 +22,7 @@ function decryptApiKeyInPlace<T extends { apiKey?: string; userId: string; id?: 
 ): T | null;
 function decryptApiKeyInPlace(doc: { apiKey?: string; userId: string; id?: string; _id?: unknown } | null) {
   if (doc && typeof doc.apiKey === 'string') {
-    doc.apiKey = decryptAtRest(doc.apiKey, JSON.stringify(['ApiKey', doc.userId, String(doc._id ?? doc.id), 'apiKey']));
+    doc.apiKey = decryptAtRest(doc.apiKey, apiKeySecretContext(doc.userId, String(doc._id ?? doc.id)));
   }
   return doc;
 }
@@ -42,7 +47,7 @@ class ApiKeyRepository extends BaseRepository<IApiKeyDocument> implements IApiKe
       );
     }
     const id = new mongoose.Types.ObjectId();
-    const context = JSON.stringify(['ApiKey', data.userId, String(id), 'apiKey']);
+    const context = apiKeySecretContext(data.userId, String(id));
     const encrypted = { ...data, _id: id, apiKey: encryptAtRest(data.apiKey, context) };
     const stored = await super.create(encrypted);
     return { ...stored, apiKey: data.apiKey };

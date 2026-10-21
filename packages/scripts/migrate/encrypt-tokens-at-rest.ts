@@ -28,7 +28,7 @@ import { pathToFileURL } from 'node:url';
 import { connectDB } from '@bike4mind/database';
 import { Resource } from 'sst';
 import mongoose from 'mongoose';
-import { encryptSecret, decryptSecret, isEncrypted } from '@bike4mind/utils/security';
+import { encryptSecret, decryptSecret, isEncrypted, mcpEnvSecretContext } from '@bike4mind/utils/security';
 
 const KEY_LENGTH = 32;
 
@@ -235,7 +235,7 @@ async function migrateMcpServers(db: mongoose.mongo.Db, key: string, oldKey?: st
           ev.value,
           key,
           oldKey,
-          JSON.stringify(['mcp', doc.userId, String(doc._id), ev.key])
+          mcpEnvSecretContext(doc.userId, String(doc._id), ev.key)
         );
         if (encrypted === 'error') {
           console.error(`  ERROR McpServer ${doc._id}: failed to decrypt envVariable "${ev.key}"`);

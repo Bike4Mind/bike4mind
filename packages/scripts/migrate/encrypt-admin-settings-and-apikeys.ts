@@ -46,7 +46,13 @@
 import { pathToFileURL } from 'node:url';
 import { connectDB } from '@bike4mind/database';
 import { settingsMap, SENSITIVE_SETTING_MASK } from '@bike4mind/common';
-import { decryptSecret, encryptSecret, isEncrypted, isValidEncryptionKey } from '@bike4mind/utils/security';
+import {
+  apiKeySecretContext,
+  decryptSecret,
+  encryptSecret,
+  isEncrypted,
+  isValidEncryptionKey,
+} from '@bike4mind/utils/security';
 import { Resource } from 'sst';
 import mongoose from 'mongoose';
 
@@ -189,12 +195,7 @@ async function migrateApiKeys(db: mongoose.mongo.Db, key: string, oldKey?: strin
   const cursor = collection.find({ apiKey: { $exists: true, $ne: '' } });
   for await (const doc of cursor) {
     stats.scanned++;
-    const next = transformIfNeeded(
-      doc.apiKey,
-      key,
-      oldKey,
-      JSON.stringify(['ApiKey', doc.userId, String(doc._id), 'apiKey'])
-    );
+    const next = transformIfNeeded(doc.apiKey, key, oldKey, apiKeySecretContext(doc.userId, String(doc._id)));
     if (next === 'error') {
       console.error(`  ERROR ApiKey ${doc._id}: failed to decrypt`);
       stats.errors++;
