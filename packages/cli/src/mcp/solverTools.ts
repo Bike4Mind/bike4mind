@@ -98,7 +98,7 @@ export async function registerSolverTools(server: McpServer, client: B4mApiClien
       description:
         'List the problem families, solvers, default race and limits available to the caller. Call before optihashi_solve.',
     },
-    () => run(async () => catalog)
+    () => run(async () => catalogSchema.parse(await client.getSolverCatalog()))
   );
 
   server.registerTool(
