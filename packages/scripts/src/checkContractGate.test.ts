@@ -197,6 +197,25 @@ describe('check-contract-gate.sh', () => {
       }
     });
 
+    // A single unreadable file makes grep (not find) fail, which must fail closed too.
+    it.skipIf(process.getuid?.() === 0).each([
+      ['under v1', true],
+      ['outside v1', false],
+    ])('exits 1 instead of reporting OK when a handler file is unreadable (%s)', (_label, inV1) => {
+      const { dir, v1Dir } = makeTree();
+      const rel = inV1 ? writeHandler(v1Dir, 'locked.ts', VIOLATING) : writeApiHandler(dir, 'locked.ts', API_KEY);
+      const full = path.join(dir, rel);
+      fs.chmodSync(full, 0o000);
+      try {
+        const r = runGuard(dir);
+        expect(r.status).toBe(1);
+        expect(r.stderr).toContain('grep failed');
+        expect(r.stdout).not.toContain('OK');
+      } finally {
+        fs.chmodSync(full, 0o644);
+      }
+    });
+
     it('does not flag files under __tests__/', () => {
       const { dir, v1Dir } = makeTree();
       writeHandler(v1Dir, '__tests__/bad.test.ts', VIOLATING);
@@ -211,6 +230,14 @@ describe('check-contract-gate.sh', () => {
       const r = runGuard(dir);
       expect(r.status).toBe(0);
       expect(r.stdout).toContain('OK');
+    });
+
+    it('still flags a top-level premium-* file (only directories are stubs)', () => {
+      const { dir } = makeTree();
+      const rel = writeApiHandler(dir, 'premium-foo.ts', API_KEY);
+      const r = runGuard(dir);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain(rel);
     });
 
     it('still flags a premium-* directory nested below pages/api/v1', () => {
@@ -278,6 +305,23 @@ describe('check-contract-gate.sh', () => {
       expect(runGuard(dir).status).toBe(0);
     });
 
+    it.each(['v1.ts', 'v1x/a.ts'])('scans %s next to the v1 directory', name => {
+      const { dir } = makeTree();
+      const rel = writeApiHandler(dir, name, API_KEY);
+      const r = runGuard(dir);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain(rel);
+    });
+
+    it('does not report a duplicated allowlist entry as stale while the file still violates', () => {
+      const { dir, apiKeyAllowlist } = makeTree();
+      const rel = writeApiHandler(dir, 'legacy.ts', API_KEY);
+      fs.writeFileSync(apiKeyAllowlist, `# header\n${rel}\n${rel}  # again\n`, 'utf8');
+      const r = runGuard(dir);
+      expect(r.status).toBe(0);
+      expect(r.stdout).not.toContain('INFO');
+    });
+
     it('does not apply the jwtOnly rule to v1 files (no double-gating)', () => {
       const { dir, v1Dir } = makeTree();
       writeHandler(v1Dir, 'clean.ts', EXEMPT);
@@ -300,6 +344,7 @@ describe('check-contract-gate.sh', () => {
       const r = runGuard(dir);
       expect(r.status).toBe(0);
       expect(r.stdout).toContain('INFO');
+      expect(r.stdout).toContain('contract-gate-api-key-allowlist.txt');
       expect(r.stdout).toContain(rel);
     });
 
@@ -332,6 +377,8 @@ describe('check-contract-gate.sh', () => {
       const r = runGuard(dir);
       expect(r.status).toBe(0);
       expect(r.stdout).toContain('INFO');
+      expect(r.stdout).toContain('scripts/contract-gate-allowlist.txt');
+      expect(r.stdout).not.toContain('contract-gate-api-key-allowlist.txt');
       expect(r.stdout).toContain(rel);
     });
 

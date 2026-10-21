@@ -6,7 +6,9 @@ is consistent across endpoints rather than per-endpoint improvisation.
 
 **Public** means API-key-callable: it appears in `CONTRACTS`, is registered into the
 OpenAPI spec, and someone outside the SPA can call it. Internal SPA-backend routes under
-`pages/api/*` are out of scope and stay plain handlers.
+`pages/api/*` are out of scope and stay plain handlers, but a new one must declare
+`auth: 'jwtOnly'` (the api-key chain is not installed in that mode); otherwise it is treated
+as API-key-callable and must be a contract under `/api/v1`.
 
 Anything marked **[gated]** is asserted structurally by
 `assertContractConventions.ts`, which runs at spec-generation time - a violation fails
@@ -323,7 +325,9 @@ for the whole window. Removing an alias is a major-version change.
 - Forward-only: a live URL is never renamed or removed. A new shape gets a new path; the
   old path stays and keeps working.
 - The other roots in the tree (`/api/ai/v1`, `/api/voice/v2`, `/api/overwatch/v1`) are
-  frozen, as is unversioned `/api/*`. They keep serving; nothing new is added to them.
+  frozen, as is unversioned `/api/*`. They keep serving; nothing new is added to them
+(unversioned `/api/*` is enforced by `scripts/check-contract-gate.sh` against
+`scripts/contract-gate-api-key-allowlist.txt`).
 - `LEGACY_PUBLIC_PATHS` in `assertContractConventions.ts` is the baseline: the seven paths
   already shipped in `apps/client/public/openapi.json` when this rule landed. **The list is
   frozen - entries are only ever removed.** Adding to it is the thing this convention

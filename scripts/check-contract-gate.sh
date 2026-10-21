@@ -38,12 +38,13 @@ trap 'rm -f "$tmp"' EXIT
 
 # Routable handler files under the given roots, NUL-delimited into $tmp.
 # Extensions must stay in sync with pageExtensions in apps/client/next.config.*.
-# premium-* codegen stubs are pruned only at $API_ROOT/premium-* (anchored): grep's
-# --exclude-dir would match that name at any depth and silently skip a real v1 directory.
+# premium-* codegen stubs are pruned only as directories at $API_ROOT/premium-* (anchored):
+# grep's --exclude-dir would match that name at any depth and skip a real v1 directory, and
+# a top-level premium-foo.ts file is a committed, routable handler that must stay scanned.
 # A find failure (e.g. an unreadable directory) must fail the gate, not read as "no files".
 list_files() {
   local status=0
-  find "$@" \( -name __tests__ -o -path "$API_ROOT/premium-*" \) -prune -o -type f \
+  find "$@" \( -name __tests__ -o \( -type d -path "$API_ROOT/premium-*" \) \) -prune -o -type f \
     \( -name '*.ts' -o -name '*.tsx' -o -name '*.js' -o -name '*.jsx' \) -print0 > "$tmp" || status=$?
   if [ "$status" -ne 0 ]; then
     echo "::error::find failed (exit ${status}) while scanning ${API_ROOT}"
@@ -71,7 +72,7 @@ files_missing() {
 # Entries of an allowlist file, comments stripped, sorted.
 # || true: grep -v '^$' exits 1 on a header-only (empty) allowlist.
 read_allowlist() {
-  { grep -v '^#' "$1" | grep -v '^$' | sed 's/[[:space:]]*#.*//' | sed 's/[[:space:]]*$//' | sort; } || true
+  { grep -v '^#' "$1" | grep -v '^$' | sed 's/[[:space:]]*#.*//' | sed 's/[[:space:]]*$//' | sort -u; } || true
 }
 
 # Diff violators ($2) against an allowlist ($1); print INFO for stale entries and, if any

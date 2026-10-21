@@ -3,7 +3,7 @@
 # Frozen baseline for scripts/check-contract-gate.sh scan 2: handlers under
 # apps/client/pages/api (outside v1) that do not declare `auth: 'jwtOnly'`, so
 # they still accept API keys. Generated mechanically with the script's own
-# predicate; do not audit it by hand.
+# predicate. Additions are reviewed; prefer regenerating over hand-editing.
 #
 # Rules:
 #   - This list only shrinks. Never add a new handler: make it `auth: 'jwtOnly'`
