@@ -184,7 +184,9 @@ The **Scope** column in both tables is the *recommended* key configuration for t
 
 ### Auth and endpoint
 
-Listing tools needs no credentials; tool *calls* hit the API and authenticate. Precedence:
+Over stdio only, when your account is entitled to OptiHashi and the key carries `optihashi:read` and `optihashi:compute`, the server also offers `optihashi_solvers` (the runnable families, solvers and limits) and `optihashi_solve` (a free, bounded classical solver race). Their schemas are fetched from your instance once at startup (a 5 second budget; any failure just leaves them unlisted), so they always match its roster. No paid compute is exposed, and HTTP mode never offers them.
+
+Listing the tools above needs no credentials; tool *calls* hit the API and authenticate. Precedence:
 
 - **Auth**: `--api-key` > `B4M_API_KEY` env var > the CLI's stored login (`b4m login`).
 - **Endpoint**: `B4M_API_URL` env var > `--api-url` > the CLI's configured backend.
