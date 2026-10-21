@@ -40,6 +40,25 @@ describe('security question profile updates', () => {
     expect(updated.securityQuestions?.map(question => question.answer)).toEqual(['hash-one', 'hash-two']);
   });
 
+  it('keeps the second stored answer when the first of two duplicate questions is replaced', () => {
+    const duplicated = {
+      id: 'user-1',
+      securityQuestions: [
+        { question: 'First pet?', answer: 'hash-one' },
+        { question: 'First pet?', answer: 'hash-two' },
+      ],
+    } as IUserDocument;
+
+    const updated = applyBaseUserUpdates(duplicated, {
+      securityQuestions: [
+        { question: 'First pet?', answer: 'replacement' },
+        { question: 'First pet?', answer: '' },
+      ],
+    });
+
+    expect(updated.securityQuestions?.map(question => question.answer)).toEqual(['replacement', 'hash-two']);
+  });
+
   it('bounds the amount of answer hashing requested by a profile update', () => {
     expect(
       updateUserSchema.safeParse({

@@ -125,18 +125,28 @@ export function applyBaseUserUpdates(user: IUserDocument, params: UpdateUserPara
   }
 
   if (params.securityQuestions) {
+    const stored = user.securityQuestions ?? [];
     // Each stored answer is claimed at most once. Matching on text alone collapses two stored
     // answers to the same question onto the first one, silently dropping the second.
     const claimed = new Set<number>();
-    params.securityQuestions = params.securityQuestions.map(question => {
+
+    // An answered entry keeps the slot it occupies, so a blank submitted at the same position
+    // cannot fall back onto an answer the user just replaced.
+    params.securityQuestions.forEach((question, i) => {
+      if (question.answer && stored[i]?.question === question.question) claimed.add(i);
+    });
+
+    params.securityQuestions = params.securityQuestions.map((question, i) => {
       if (question.answer) return question;
+      const sameIndex = stored[i]?.question === question.question && !claimed.has(i) ? i : -1;
       const index =
-        user.securityQuestions?.findIndex((stored, i) => !claimed.has(i) && stored.question === question.question) ??
-        -1;
+        sameIndex >= 0
+          ? sameIndex
+          : stored.findIndex((entry, j) => !claimed.has(j) && entry.question === question.question);
       if (index < 0) {
         throw new BadRequestError('An answer is required for a new or renamed security question');
       }
-      const existing = user.securityQuestions![index];
+      const existing = stored[index];
       if (!existing.answer) {
         throw new BadRequestError('An answer is required for a new or renamed security question');
       }
