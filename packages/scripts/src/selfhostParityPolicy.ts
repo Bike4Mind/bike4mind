@@ -802,7 +802,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'schedule:infra/cron.ts:signupBaselineReport',
-    '1deaa9dba608b3c27205e4152324a97a02f6ee5526d873aa6011ded23b458a9b'
+    '232c2e6f1e558e577611439ea8cb654421a0dd4a084d64e907ecfc9fe4340b38'
   ),
   gap(
     'schedule:infra/cron.ts:SreStaleDispatchCron',
