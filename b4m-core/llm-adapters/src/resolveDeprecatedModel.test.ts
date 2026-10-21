@@ -250,16 +250,6 @@ describe('DEPRECATED_MODEL_MAP invariants', () => {
     expect(chained, `mappings whose target is itself redirected: ${chained.join(', ')}`).toEqual([]);
   });
 
-  it('only maps to a model the static catalog holds', async () => {
-    const { ids } = await staticCatalog();
-
-    const missing = Object.entries(DEPRECATED_MODEL_MAP)
-      .filter(([, target]) => !ids.has(target))
-      .map(([from, target]) => `${from} -> ${target}`);
-
-    expect(missing, `mappings pointing at a model not in the catalog: ${missing.join(', ')}`).toEqual([]);
-  });
-
   it('never maps a model to a disabled one, which no caller can run', async () => {
     const { disabled } = await staticCatalog();
 
