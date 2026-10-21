@@ -1083,11 +1083,11 @@ jobs:
             echo "docs/sensitive-scan: ${STATE}"
             case "$STATE" in
               success) exit 0 ;;
-              failure|error) echo "::error::The docs sensitive-term scan failed for this commit. Remove the flagged content."; exit 1 ;;
+              failure|error) echo "::error::The docs sensitive-term scan failed for this commit. Remove the flagged content and push, or once a maintainer re-runs the scan to success, re-run this job."; exit 1 ;;
             esac
             sleep 20
           done
-          echo "::error::No docs/sensitive-scan result after 16 minutes. Ask a maintainer to re-run the scan."
+          echo "::error::No docs/sensitive-scan result after 16 minutes. Ask a maintainer to re-run the scan, then re-run this job once it reports success."
           exit 1
 
   # ============================================================
