@@ -774,6 +774,10 @@ describe('write tools', () => {
           /can only be changed by you/
         );
       }
+      await mkdir(join(project, '.claude'), { recursive: true });
+      await expect(
+        fileWrite.run({ path: join(project, '.CLAUDE', 'Settings.local.json'), content: '{}' }, context)
+      ).rejects.toThrow(/can only be changed by you/);
       const skill = join(project, '.claude', 'skills', 'y', 'SKILL.md');
       await fileWrite.run({ path: skill, content: 'ok\n' }, context);
       await expect(readFile(skill, 'utf8')).resolves.toBe('ok\n');

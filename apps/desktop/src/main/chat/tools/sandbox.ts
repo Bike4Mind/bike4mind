@@ -112,18 +112,24 @@ export function secretPaths(): string[] {
  * symlink on either side cannot slip past.
  */
 export function protectionFor(candidates: readonly string[], access: 'read' | 'write'): string | undefined {
+  // macOS and Windows volumes are case-insensitive by default, and realpath keeps the caller's
+  // casing for a name that does not exist yet: `.claude/Settings.local.json` would create the
+  // very file Claude Code loads. Folding everywhere only ever refuses more.
+  const folded = candidates.map(fold);
   for (const guard of guards()) {
     if (access === 'read' && guard.readable) continue;
-    for (const spelling of spellings(guard.path)) {
-      if (
-        candidates.some(candidate => (guard.prefix ? candidate.startsWith(spelling) : isWithin(spelling, candidate)))
-      ) {
+    for (const spelling of spellings(guard.path).map(fold)) {
+      if (folded.some(candidate => (guard.prefix ? candidate.startsWith(spelling) : isWithin(spelling, candidate)))) {
         return guard.reason;
       }
     }
   }
-  if (access === 'write' && candidates.some(candidate => CLAUDE_SETTINGS.test(candidate))) return SETTINGS;
+  if (access === 'write' && folded.some(candidate => CLAUDE_SETTINGS.test(candidate))) return SETTINGS;
   return undefined;
+}
+
+function fold(path: string): string {
+  return path.toLowerCase();
 }
 
 export function sandboxAvailable(): boolean {
