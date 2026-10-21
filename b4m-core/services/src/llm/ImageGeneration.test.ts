@@ -1019,6 +1019,18 @@ describe('ImageGenerationService.process (size normalization)', () => {
     };
   };
 
+  it('reads both gates off the process cache so an admin toggle applies on the next image', async () => {
+    vi.mocked(getSettingsMap).mockClear();
+
+    await generateWith(ImageModels.GPT_IMAGE_2, ModelBackend.OpenAI);
+
+    // One read for the credit gate, one for moderation - both fresh.
+    expect(vi.mocked(getSettingsMap).mock.calls.map(([, options]) => options)).toEqual([
+      { skipCache: true },
+      { skipCache: true },
+    ]);
+  });
+
   it.each([
     [ImageModels.GPT_IMAGE_1_5, '1440x810', '1024x1024'],
     [ImageModels.GPT_IMAGE_1_5, '2048x2048', '1024x1024'],

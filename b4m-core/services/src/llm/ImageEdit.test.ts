@@ -10,7 +10,7 @@ import {
 } from '@bike4mind/common';
 import { silentLogger } from '../__tests__/utils/testUtils';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
-import { aiImageService, getSettingsValue } from '@bike4mind/utils';
+import { aiImageService, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { estimateImageCredits } from '../imageCost';
 import { deductCreditsWithOrgSupport } from '../creditService';
 import { ImageEditService, type ImageEditBody } from './ImageEdit';
@@ -195,6 +195,20 @@ describe('ImageEditService.process model dispatch', () => {
     vi.mocked(aiImageService).mockClear();
     vi.mocked(aiImageService).mockReturnValue({ edit: editSpy } as never);
     vi.mocked(getAvailableModels).mockResolvedValue([]);
+  });
+
+  it('reads every settings map off the process cache so an admin toggle applies on the next edit', async () => {
+    vi.mocked(getSettingsMap).mockClear();
+
+    try {
+      await run(ImageModels.GPT_IMAGE_2);
+    } catch {
+      // The beforeEach edit spy rejects to stop after dispatch; the reads happened before that.
+    }
+
+    const calls = vi.mocked(getSettingsMap).mock.calls;
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.every(([, options]) => options?.skipCache === true)).toBe(true);
   });
 
   it('sends the selected BFL model to BFL instead of a hardcoded one', async () => {

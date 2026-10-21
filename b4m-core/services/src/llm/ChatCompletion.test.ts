@@ -25,6 +25,7 @@ import {
   usdToCredits,
   usdToCreditsStochastic,
   getSettingsValue,
+  getSettingsMap,
   processFabFilesServer,
   fetchAndConvertFabFiles,
   ClientMessageSender,
@@ -173,6 +174,7 @@ const mockedGetLlmWithFallback = vi.mocked(getLlmWithFallback);
 const mockedUsdToCredits = vi.mocked(usdToCredits);
 const mockedUsdToCreditsStochastic = vi.mocked(usdToCreditsStochastic);
 const mockedGetSettingsValue = vi.mocked(getSettingsValue);
+const mockedGetSettingsMap = vi.mocked(getSettingsMap);
 const mockedCalculateTotalTokenLength = vi.mocked(calculateTotalTokenLength);
 const mockedProcessFabFilesServer = vi.mocked(processFabFilesServer);
 const mockedFetchAndConvertFabFiles = vi.mocked(fetchAndConvertFabFiles);
@@ -327,6 +329,19 @@ describe('ChatCompletionProcess', () => {
     queryComplexity: 'simple',
     promptMeta: {},
   };
+
+  describe('loadAdminSettingsAsync (cross-process freshness)', () => {
+    // The Fargate service is always-on, so a cached settings map never learns about an admin
+    // write from another process. This read gates credit reservation and settlement, so it must
+    // come from the store on every turn.
+    it('bypasses the process cache so an admin flip is honoured on the next turn', async () => {
+      vi.mocked((service as any).loadAdminSettingsAsync).mockRestore();
+
+      await (service as any).loadAdminSettingsAsync(mockLogger, 0);
+
+      expect(mockedGetSettingsMap).toHaveBeenCalledWith(mockDb, { logger: mockLogger, skipCache: true });
+    });
+  });
 
   describe('resolveEntitlementKeys (fail-safe entitlement resolution)', () => {
     it('returns the injected keys and memoizes (resolves once per process)', async () => {

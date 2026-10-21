@@ -20,10 +20,10 @@ export type OperationalBillingSettingsAdapter = {
  * the pre-flight exists to close.
  *
  * Owns the fetch rather than taking a settings map, so no caller can narrow it to the
- * wrong keys: `getSettingsMap`'s `names` option is honoured only under `skipCache`
- * (`b4m-core/utils/src/settings.ts:130-143`), so a named fetch is inert on the cached
- * path and, on a `skipCache` path, one that omits a key reads `undefined` for it and
- * silently gates billing OFF - turning a pre-flight into a no-op with no error anywhere.
+ * wrong keys: under `skipCache` a `names` list that omits a key reads `undefined` for
+ * it and silently gates billing OFF - turning a pre-flight into a no-op with no error
+ * anywhere. `skipCache` is required for the same reason: a long-lived host's process
+ * cache never sees another process's admin write.
  *
  * Throws if the settings store does: a caller that must not fail on a billing-store
  * blip has to catch this and decide its own fallback.
@@ -32,7 +32,13 @@ export async function isOperationalBillingEnabled(
   db: OperationalBillingSettingsAdapter,
   logger?: Logger
 ): Promise<boolean> {
-  const settings = await getSettingsMap(db, { logger });
+  const settings = await getSettingsMap(db, {
+    logger,
+    // Both keys the caller could narrow away are listed here; the read bypasses the process
+    // cache so an admin flip is honoured on the next call, not on the next process.
+    names: ['billOperationalUsage', 'enforceCredits'],
+    skipCache: true,
+  });
   return (
     (getSettingsValue('billOperationalUsage', settings) ?? false) &&
     (getSettingsValue('enforceCredits', settings) ?? false)

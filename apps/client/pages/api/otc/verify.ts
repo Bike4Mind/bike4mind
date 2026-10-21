@@ -162,7 +162,10 @@ const handler = baseApi({ auth: false })
       }
 
       // --- MFA LOGIC (same as password login) ---
-      const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
+      const settings = await getSettingsMap(
+        { adminSettings: adminSettingsRepository },
+        { names: ['enforceMFA'], skipCache: true }
+      );
       const enforceMFA = getSettingsValue('enforceMFA', settings) || false;
       const userHasMFA = mfaService.userHasMFAConfigured(existingUser);
 

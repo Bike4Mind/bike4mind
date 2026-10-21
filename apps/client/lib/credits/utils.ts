@@ -9,7 +9,10 @@ import { PaymentDetails } from './types';
 export async function handlePerCreditTransaction({
   credits,
 }: z.infer<typeof perCreditSchema>): Promise<PaymentDetails> {
-  const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
+  const settings = await getSettingsMap(
+    { adminSettings: adminSettingsRepository },
+    { names: ['pricePerCredit'], skipCache: true }
+  );
   const pricePerCredit = getSettingsValue('pricePerCredit', settings);
 
   if (pricePerCredit === undefined) {

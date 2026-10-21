@@ -445,7 +445,8 @@ export class ImageEditService {
     ]);
     if (!user) throw new NotFoundError('User not found');
 
-    const settings = await getSettingsMap(this.db);
+    // skipCache: enforceCredits gates money, and this host may outlive the admin's write to it.
+    const settings = await getSettingsMap(this.db, { skipCache: true });
     const adminSettingsEnforceCredits = getSettingsValue('enforceCredits', settings);
 
     const parseQuestToStreamPayload = (quest: IChatHistoryItemDocument) => {
@@ -575,7 +576,8 @@ export class ImageEditService {
         statusMessage: 'Preparing to paint...',
       });
 
-      const settings = await getSettingsMap(this.db);
+      // skipCache: content safety must follow an admin toggle on the next request, not a TTL.
+      const settings = await getSettingsMap(this.db, { skipCache: true });
 
       if (getSettingsValue('ModerationEnabled', settings)) {
         await clientMessageSender.sendToClient(userId, wsEndpoint, {

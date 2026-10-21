@@ -356,7 +356,8 @@ export class VideoGenerationService {
     ]);
     if (!user) throw new NotFoundError('User not found');
 
-    const settings = await getSettingsMap(this.db);
+    // skipCache: enforceCredits gates money, and this host may outlive the admin's write to it.
+    const settings = await getSettingsMap(this.db, { skipCache: true });
     const adminSettingsEnforceCredits = getSettingsValue('enforceCredits', settings);
 
     const parseQuestToStreamPayload = (quest: IChatHistoryItemDocument) => {

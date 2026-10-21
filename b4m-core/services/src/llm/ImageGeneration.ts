@@ -832,7 +832,8 @@ export class ImageGenerationService {
     // owner/share/global-read only - never widens, never fails the run.
     const lakeAccess = this.resolveLakeAccess ? await this.resolveLakeAccess(user, logger) : undefined;
 
-    const settings = await getSettingsMap(this.db);
+    // skipCache: enforceCredits gates money, and this host may outlive the admin's write to it.
+    const settings = await getSettingsMap(this.db, { skipCache: true });
     const adminSettingsEnforceCredits = getSettingsValue('enforceCredits', settings);
 
     const parseQuestToStreamPayload = (quest: IChatHistoryItemDocument) => {
@@ -910,7 +911,8 @@ export class ImageGenerationService {
         statusMessage: 'Preparing to paint...',
       });
 
-      const settings = await getSettingsMap(this.db);
+      // skipCache: content safety must follow an admin toggle on the next request, not a TTL.
+      const settings = await getSettingsMap(this.db, { skipCache: true });
 
       if (getSettingsValue('ModerationEnabled', settings)) {
         this.addStatusToQuest(quest, 'Checking prompt...', userId);

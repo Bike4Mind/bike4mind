@@ -227,6 +227,27 @@ describe('/api/otc/verify — enumeration resistance', () => {
     expect(body.password).toBeUndefined();
   });
 
+  it('reads enforceMFA off the process cache so a security flip applies on the next login', async () => {
+    mockJwtVerify.mockReturnValue(validToken());
+    mockVerifyPendingOTC.mockResolvedValue(true);
+    mockFindByEmail.mockResolvedValue({
+      id: 'u1',
+      isSystem: false,
+      isBanned: false,
+      emailVerified: true,
+      tokenVersion: 0,
+      toJSON: () => ({ id: 'u1' }),
+    });
+
+    await handler(makeReq({ email: 'user@example.com', code: '123456', pendingToken: 'tok' }), mockRes);
+
+    const { getSettingsMap } = await import('@bike4mind/utils');
+    expect(vi.mocked(getSettingsMap)).toHaveBeenCalledWith(expect.anything(), {
+      names: ['enforceMFA'],
+      skipCache: true,
+    });
+  });
+
   it('registers a new user on a correct code with a username', async () => {
     mockJwtVerify.mockReturnValue(validToken());
     mockVerifyPendingOTC.mockResolvedValue(true);

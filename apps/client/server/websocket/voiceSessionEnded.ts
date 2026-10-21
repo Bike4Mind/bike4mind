@@ -175,7 +175,10 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   const credits = actualCredits;
 
   // Check if credits are now exhausted and enforcement is enabled
-  const settings = await getSettingsMap({ adminSettings: adminSettingsRepository }, { names: ['enforceCredits'] });
+  const settings = await getSettingsMap(
+    { adminSettings: adminSettingsRepository },
+    { names: ['enforceCredits'], skipCache: true }
+  );
   const enforceCredits = getSettingsValue('enforceCredits', settings);
 
   if (enforceCredits) {

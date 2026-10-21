@@ -6542,7 +6542,9 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     try {
       logger.info(`⏱️ [${Date.now() - processStartTime}ms] Background admin settings fetch started`);
 
-      const adminSettings = await getSettingsMap(this.db, { logger });
+      // skipCache: the billing/access flags in this map gate money, and this process outlives an
+      // admin write made by another one. One read here, once per turn - not per chunk.
+      const adminSettings = await getSettingsMap(this.db, { logger, skipCache: true });
 
       const fetchTime = Date.now() - adminSettingsStartTime;
       logger.info(`⏱️ [${Date.now() - processStartTime}ms] Background admin settings completed in ${fetchTime}ms`);

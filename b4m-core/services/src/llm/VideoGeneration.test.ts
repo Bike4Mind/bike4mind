@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ModelBackend, VideoModels, type ModelInfo } from '@bike4mind/common';
 import { silentLogger, statusLog } from '../__tests__/utils/testUtils';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
-import { aiVideoService, getSettingsValue } from '@bike4mind/utils';
+import { aiVideoService, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { deductCreditsWithOrgSupport } from '../creditService';
 import { VideoGenerationService } from './VideoGeneration';
 
@@ -156,6 +156,16 @@ describe('VideoGenerationService.process (partial quest writes)', () => {
     generateSpy.mockReset();
     vi.mocked(aiVideoService).mockReturnValue({ generate: generateSpy } as never);
     vi.mocked(getAvailableModels).mockResolvedValue([{ id: VideoModels.SORA_2 } as unknown as ModelInfo]);
+  });
+
+  it('reads the credit gate off the process cache so an admin toggle applies on the next run', async () => {
+    generateSpy.mockResolvedValue(['https://example.invalid/video.mp4']);
+    vi.mocked(getSettingsMap).mockClear();
+
+    await run();
+
+    expect(vi.mocked(getSettingsMap).mock.calls.length).toBeGreaterThan(0);
+    expect(vi.mocked(getSettingsMap).mock.calls.every(([, options]) => options?.skipCache === true)).toBe(true);
   });
 
   it('writes only the result fields on success', async () => {

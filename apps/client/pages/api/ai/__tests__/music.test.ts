@@ -8,6 +8,7 @@ const {
   estimateMusicCredits,
   generate,
   getSettingsValue,
+  getSettingsMap,
   findById,
   orgFindById,
   userIncrement,
@@ -20,6 +21,7 @@ const {
   estimateMusicCredits: vi.fn(),
   generate: vi.fn(),
   getSettingsValue: vi.fn(),
+  getSettingsMap: vi.fn(),
   findById: vi.fn(),
   orgFindById: vi.fn(),
   userIncrement: vi.fn(),
@@ -101,8 +103,8 @@ vi.mock('@bike4mind/services', async () => {
 });
 vi.mock('@bike4mind/utils', () => ({
   aiMusicService: () => ({ generate: (...a: unknown[]) => generate(...a) }),
-  getSettingsMap: vi.fn(async () => ({})),
   getSettingsValue: (...a: unknown[]) => getSettingsValue(...a),
+  getSettingsMap: (...a: unknown[]) => getSettingsMap(...a),
 }));
 vi.mock('@server/utils/persistGeneratedAudio', () => ({
   persistGeneratedAudio: (...a: unknown[]) => persistGeneratedAudio(...a),
@@ -129,6 +131,7 @@ beforeEach(() => {
     estimateMusicCredits,
     generate,
     getSettingsValue,
+    getSettingsMap,
     findById,
     orgFindById,
     userIncrement,
@@ -141,6 +144,7 @@ beforeEach(() => {
   // exercising the save path see no persisted-file headers.
   persistGeneratedAudio.mockResolvedValue({ saved: false, reason: 'error' });
   getEffectiveApiKey.mockResolvedValue('eleven-key');
+  getSettingsMap.mockResolvedValue({});
   generate.mockResolvedValue({ audio: Buffer.from('song'), contentType: 'audio/mpeg' });
   findById.mockResolvedValue({ id: 'u1', currentCredits: 1000 });
   // Default reservation results (post-decrement balance, non-negative == funded).
@@ -149,6 +153,16 @@ beforeEach(() => {
 });
 
 describe('POST /api/ai/music', () => {
+  it('reads enforceCredits off the process cache so an admin flip applies on the next request', async () => {
+    getSettingsValue.mockReturnValue(true);
+    estimateMusicCredits.mockReturnValue({ requiredCredits: 150, usdCost: 0.075, billedSeconds: 30 });
+
+    const { promise } = run({ prompt: 'lofi beat', lengthMs: 30000 });
+    await promise;
+
+    expect(getSettingsMap).toHaveBeenCalledWith(expect.anything(), { names: ['enforceCredits'], skipCache: true });
+  });
+
   it('reserves then settles the user charge on a successful generation (enforceCredits on)', async () => {
     getSettingsValue.mockReturnValue(true);
     estimateMusicCredits.mockReturnValue({ requiredCredits: 150, usdCost: 0.075, billedSeconds: 30 });
