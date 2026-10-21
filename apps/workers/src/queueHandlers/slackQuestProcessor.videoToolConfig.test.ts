@@ -66,7 +66,7 @@ vi.mock('@casl/mongoose', () => ({ accessibleBy: () => ({ ofType: () => ({}) }) 
 const mockCreateJob = vi.fn().mockResolvedValue({ ok: true });
 const mockBuildVideoToolConfig = vi.fn();
 
-vi.mock('@server/videoGenerations/buildVideoToolConfig', () => ({
+vi.mock('@bike4mind/server-utils/videoGenerations/buildVideoToolConfig', () => ({
   buildVideoToolConfig: (...args: unknown[]) => mockBuildVideoToolConfig(...args),
 }));
 

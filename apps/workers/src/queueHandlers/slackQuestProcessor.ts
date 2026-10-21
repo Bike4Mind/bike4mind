@@ -77,7 +77,7 @@ import { recallMementosV2 } from '@server/memory/recallMementosV2';
 import { recallLakeMemoryForSession } from '@server/memory/lakeMemoryRecall';
 import { loadSystemPromptById } from '@server/utils/sessionSystemPromptResolver';
 import { decryptToken } from '@server/security/tokenEncryption';
-import { buildVideoToolConfig } from '@server/videoGenerations/buildVideoToolConfig';
+import { buildVideoToolConfig } from '@bike4mind/server-utils/videoGenerations/buildVideoToolConfig';
 import {
   buildSlackVideoToolConfig,
   type PendingSlackNotification,
