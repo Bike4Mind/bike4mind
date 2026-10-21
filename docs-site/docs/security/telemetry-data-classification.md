@@ -163,6 +163,17 @@ Every request to a `baseApi` route that authenticates with an API key writes one
 | Client IP      | `ipAddress`, resolved server-side | 90 days (TTL index) | Abuse and security investigation, anomaly alerts |
 | Key and owner  | `keyId` and `userId`              | 90 days (TTL index) | Attribute usage to a key and its owner           |
 
+## Chat turn timing
+
+Each chat reply records where its wall-clock time went, so a slow or retried reply can be diagnosed from the reply itself. The record holds durations, counts and provider metadata only: no prompt or reply text. It is shown in the reply's Answer diagnosis panel, and a short summary with a copyable turn ID appears under replies that retried, switched model or took a minute or more.
+
+| Data           | Storage                                                                                         | Lifetime             | Purpose                                                                      |
+| -------------- | ----------------------------------------------------------------------------------------------- | -------------------- | ---------------------------------------------------------------------------- |
+| Durations      | `turnTiming` on the reply: queue, context build, concurrency wait and total, in ms              | Lives with the reply | Find which phase made a reply slow                                           |
+| Retries        | `turnTiming.retries`: reason, HTTP status, Retry-After, provider request id, delay, model, time | Lives with the reply | Tell provider load from stalls; cite a provider request id in a support case |
+| Model switches | `turnTiming.fallbackHops`: a count                                                              | Lives with the reply | Show that a reply moved to a fallback model                                  |
+| Retry metric   | CloudWatch metric `ChatRetry`, dimensioned by stage, reason and model; no user or reply id      | CloudWatch retention | Retry rate by cause and model                                                |
+
 ## Integrations gallery usage
 
 The `/integrations` page records first-party `IntegrationsEvents` through the existing `/api/analytics/log-event` route. They are stored like every other counter event (`CounterLog` and the per-user `UserActivityCounter`), tied to the signed-in user, and sent to no third party. Like the rest of first-party usage analytics, they are not behind the attribution consent banner.
