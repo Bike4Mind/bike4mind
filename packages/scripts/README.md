@@ -294,14 +294,16 @@ and never emitted. Missing telemetry, deleted
 records and activity-source classification gaps are disclosed; FlowProgress history will need
 wiring when that model exists.
 
-The production-only `signupBaselineReport` cron runs Mondays at 06:00 UTC after deployment.
-It writes the summary and per-account census to its Lambda logs, never to Slack or a public
-artifact. Operators can find the function through the SST console and filter its logs on
-`signup-baseline`, `signup-baseline-census` or `signup-baseline-event`. Reports include user ids, so keep logs and CLI
-outputs private. Set `SIGNUP_BASELINE_SINCE` at deploy
-time to the agreed post-fix signup start. Missing or invalid cutoffs fail before database access;
-there is no historical-window fallback. Set `ANALYTICS_TEST_PATTERN` at deploy time
-(or `--test-pattern` for a CLI run) to override the default test-email regex. Both cron and CLI
-require `NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS`. No schedule or production query is executed by
-running tests. The trailing-90-day external signup count flags the 300- and 1,000-signup
-measurement thresholds, independently of the chosen baseline window.
+- **Cron.** The production-only `signupBaselineReport` cron runs Mondays at 06:00 UTC after
+  deployment, with the window ending at 00:00 UTC that day. It writes the summary and
+  per-account census to its Lambda logs (kept for one week), never to Slack or a public artifact. Operators can find
+  the function through the SST console and filter its logs on `signup-baseline`,
+  `signup-baseline-census` or `signup-baseline-event`. Reports include user ids, so keep logs and
+  CLI outputs private.
+- **Configuration.** Set `SIGNUP_BASELINE_SINCE` at deploy time to the agreed post-fix signup
+  start. Missing or invalid cutoffs fail before database access; there is no historical-window
+  fallback. Set `ANALYTICS_TEST_PATTERN` at deploy time (or `--test-pattern` for a CLI run) to
+  override the default test-email regex. Both cron and CLI require
+  `NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS`. No schedule or production query is executed by running
+  tests. The trailing-90-day external signup count flags the 300- and 1,000-signup measurement
+  thresholds, independently of the chosen baseline window.
