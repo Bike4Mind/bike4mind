@@ -34,6 +34,14 @@ describe('classifyTurnRetryReason', () => {
     expect(classifyTurnRetryReason(IDLE_TIMEOUT_ERROR)).toBe('stream_idle_timeout');
   });
 
+  it('reads a stream that ended without message_stop as truncated, not stalled', () => {
+    const truncated = new Error(
+      'Anthropic API stream timeout - the stream ended after 42 events without message_stop, so the response is truncated.'
+    );
+
+    expect(classifyTurnRetryReason(truncated)).toBe('stream_truncated');
+  });
+
   it.each([
     [new Error('Anthropic API request timeout after 60s'), 'request_timeout'],
     [new Error('unexpected tool_use_id found in tool_result blocks'), 'tool_pairing'],
@@ -69,6 +77,14 @@ describe('describeTurnRetry', () => {
     expect(describeTurnRetry(error, 0, 'model-a').requestId).toBe('req_plain');
   });
 
+  it('prefers retry-after-ms and keeps a Retry-After of zero', () => {
+    const precise = withStatus('rate limited', 429, { headers: { 'retry-after-ms': '1500', 'retry-after': '2' } });
+    const immediate = withStatus('rate limited', 429, { headers: { 'retry-after': '0' } });
+
+    expect(describeTurnRetry(precise, 0, 'model-a').retryAfterMs).toBe(1500);
+    expect(describeTurnRetry(immediate, 0, 'model-a').retryAfterMs).toBe(0);
+  });
+
   it('leaves optional fields off when the error carries none', () => {
     const retry = describeTurnRetry(IDLE_TIMEOUT_ERROR, 3500, 'model-a');
 
@@ -90,7 +106,7 @@ describe('TurnTimingRecorder', () => {
     delete process.env.SEED_STAGE_NAME;
   });
 
-  it('measures queue time from quest creation to processing start', () => {
+  it('measures queue time from the turn start to processing start', () => {
     expect(new TurnTimingRecorder(createdAt, processStartedAt).snapshot()).toEqual({
       queueMs: 150,
       semaphoreWaitMs: 0,
@@ -138,7 +154,7 @@ describe('TurnTimingRecorder', () => {
     expect(recorder.snapshot().retries).toHaveLength(MAX_RECORDED_RETRIES);
   });
 
-  it('sets totalMs from quest creation on finish', () => {
+  it('sets totalMs from the turn start on finish', () => {
     const recorder = new TurnTimingRecorder(createdAt, processStartedAt);
 
     recorder.finish(createdAt.getTime() + 415_000);

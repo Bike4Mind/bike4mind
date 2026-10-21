@@ -21,6 +21,8 @@ export const MAX_RECORDED_RETRIES = 50;
  * telemetry exists to expose. Must stay in sync with TURN_RETRY_REASONS in @bike4mind/common.
  */
 export function classifyTurnRetryReason(error: Error): TurnRetryReason {
+  // The truncation error shares the idle timeout's "stream timeout" prefix but is not a stall.
+  if (error.message.includes('without message_stop')) return 'stream_truncated';
   if (isStreamIdleTimeoutError(error)) return 'stream_idle_timeout';
   if (isRequestTimeoutError(error)) return 'request_timeout';
   if (isToolPairingError(error)) return 'tool_pairing';
@@ -57,11 +59,19 @@ function readRequestId(error: Error): string | undefined {
 }
 
 function readRetryAfterMs(error: Error): number | undefined {
-  const raw = readHeader(errorHeaders(error), 'retry-after');
-  if (!raw) return undefined;
-  const seconds = Number(raw);
-  const ms = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(raw) - Date.now();
-  return Number.isFinite(ms) && ms > 0 ? Math.round(ms) : undefined;
+  const headers = errorHeaders(error);
+  const rawMs = readHeader(headers, 'retry-after-ms');
+  const raw = readHeader(headers, 'retry-after');
+  let ms: number;
+  if (rawMs) {
+    ms = Number(rawMs);
+  } else if (raw) {
+    const seconds = Number(raw);
+    ms = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(raw) - Date.now();
+  } else {
+    return undefined;
+  }
+  return Number.isFinite(ms) && ms >= 0 ? Math.round(ms) : undefined;
 }
 
 /** Builds the retry record for one failed attempt. Pure, apart from reading the clock. */
@@ -126,12 +136,12 @@ export class TurnTimingRecorder {
   private retryCount = 0;
 
   constructor(
-    private readonly questCreatedAt: Date,
+    private readonly turnStartedAt: Date,
     private readonly processStartedAt: number,
     private readonly logger?: Logger
   ) {
     this.timing = {
-      queueMs: Math.max(0, processStartedAt - questCreatedAt.getTime()),
+      queueMs: Math.max(0, processStartedAt - turnStartedAt.getTime()),
       semaphoreWaitMs: 0,
       retries: [],
       fallbackHops: 0,
@@ -171,7 +181,7 @@ export class TurnTimingRecorder {
   }
 
   finish(now = Date.now()): void {
-    this.timing.totalMs = Math.max(0, now - this.questCreatedAt.getTime());
+    this.timing.totalMs = Math.max(0, now - this.turnStartedAt.getTime());
   }
 
   /** A copy, so a later record does not mutate what was already handed to the quest. */

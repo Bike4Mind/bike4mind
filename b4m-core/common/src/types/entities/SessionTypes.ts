@@ -146,6 +146,7 @@ export interface IAttachmentDelivery {
  */
 export const TURN_RETRY_REASONS = [
   'stream_idle_timeout',
+  'stream_truncated',
   'request_timeout',
   'rate_limit',
   'overloaded',
@@ -178,13 +179,13 @@ export interface ITurnRetry {
  * so neither is repeated here.
  */
 export interface ITurnTiming {
-  /** Quest created to processing started: request handling plus queue delay. */
+  /** Turn started (the quest's timestamp) to processing started: request handling plus queue delay. */
   queueMs: number;
   /** Processing started to the first LLM request: context, history, data sources, tools. */
   contextBuildMs?: number;
   /** Summed wait for a provider concurrency slot, across every tool round. */
   semaphoreWaitMs: number;
-  /** Quest created to the end of processing. Unset while the turn is still running. */
+  /** Turn started to the reply completing (or the turn failing). Unset while it is running. */
   totalMs?: number;
   retries: ITurnRetry[];
   /** Models switched to after the requested one failed. */

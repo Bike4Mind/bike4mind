@@ -757,7 +757,8 @@ const MessageContent: React.FC<ContentProps> = memo(
           </ListItemDecorator>
           {ANSWER_DIAGNOSIS_TITLE}
         </MenuItem>
-        {messageData.id && (
+        {/* An optimistic id names no quest, so there is nothing for support to look up. */}
+        {messageData.id && isPersistedMessage && (
           <MenuItem
             data-testid="message-copy-turn-id-btn"
             onClick={() => messageData.id && copyTextWithToast(messageData.id, 'Turn ID copied')}

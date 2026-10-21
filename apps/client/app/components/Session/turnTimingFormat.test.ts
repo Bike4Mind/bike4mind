@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ITurnRetry, ITurnTiming } from '@bike4mind/common';
-import { isNotableTurn, summarizeTurnTiming, turnTimingMarkdown } from './turnTimingFormat';
+import { formatDurationMs, isNotableTurn, summarizeTurnTiming, turnTimingMarkdown } from './turnTimingFormat';
 
 const retry = (overrides: Partial<ITurnRetry> = {}): ITurnRetry => ({
   reason: 'stream_idle_timeout',
@@ -28,6 +28,18 @@ describe('isNotableTurn', () => {
     expect(isNotableTurn(timing({ retries: [retry()] }))).toBe(true);
     expect(isNotableTurn(timing({ fallbackHops: 1 }))).toBe(true);
     expect(isNotableTurn(timing({ totalMs: 60_000 }))).toBe(true);
+  });
+});
+
+describe('formatDurationMs', () => {
+  it.each([
+    [999.6, '1.0s'],
+    [999, '999ms'],
+    [1240, '1.2s'],
+    [9999, '10s'],
+    [415_000, '415s'],
+  ])('formats %s as %s', (ms, expected) => {
+    expect(formatDurationMs(ms)).toBe(expected);
   });
 });
 

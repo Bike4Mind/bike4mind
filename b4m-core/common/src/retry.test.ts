@@ -358,6 +358,16 @@ describe('retry', () => {
       expect(onRetry).not.toHaveBeenCalled();
     });
 
+    it('keeps retrying when onRetry throws', async () => {
+      const fn = vi.fn().mockRejectedValueOnce(createAxiosError(429)).mockResolvedValue('success');
+      const onRetry = vi.fn(() => {
+        throw new Error('telemetry broke');
+      });
+
+      await expect(withRetry(fn, { ...shortDelay, onRetry })).resolves.toMatchObject({ result: 'success' });
+      expect(onRetry).toHaveBeenCalledTimes(1);
+    });
+
     it('should call logger on retry', async () => {
       const logger = {
         info: vi.fn(),

@@ -33,7 +33,7 @@ export interface RetryOptions {
   };
   /** Optional abort signal to cancel retries */
   abortSignal?: AbortSignal;
-  /** Called once per scheduled retry, before the backoff sleep. Must not throw. */
+  /** Called once per scheduled retry, before the backoff sleep. A throw is logged, never propagated. */
   onRetry?: (info: RetryEvent) => void;
 }
 
@@ -323,7 +323,11 @@ export async function withRetry<T>(fn: () => Promise<T>, options: RetryOptions =
         attempt: attempts,
         delayMs,
       });
-      onRetry?.({ attempt: attempts, delayMs, error: err });
+      try {
+        onRetry?.({ attempt: attempts, delayMs, error: err });
+      } catch (callbackError) {
+        logger?.warn('onRetry callback threw; continuing the retry', { error: String(callbackError) });
+      }
 
       // Wait before retrying
       try {

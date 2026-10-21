@@ -2,6 +2,7 @@ import type { ITurnTiming, TurnRetryReason } from '@bike4mind/common';
 
 export const TURN_RETRY_REASON_LABELS: Record<TurnRetryReason, string> = {
   stream_idle_timeout: 'response stalled',
+  stream_truncated: 'response cut off',
   request_timeout: 'request timed out',
   rate_limit: 'rate limited',
   overloaded: 'provider busy',
@@ -21,7 +22,11 @@ export function isNotableTurn(timing: ITurnTiming | undefined): timing is ITurnT
 }
 
 export function formatDurationMs(ms: number): string {
-  return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s`;
+  const rounded = Math.round(ms);
+  if (rounded < 1000) return `${rounded}ms`;
+  // Round to the shown precision before choosing it, so 9999ms reads "10s", not "10.0s".
+  const tenths = Math.round(rounded / 100) / 10;
+  return tenths < 10 ? `${tenths.toFixed(1)}s` : `${Math.round(rounded / 1000)}s`;
 }
 
 /** Distinct reasons in first-seen order, so "stalled, stalled, busy" reads as "stalled, busy". */
@@ -46,7 +51,7 @@ export function summarizeTurnTiming(timing: ITurnTiming): string {
 
 /** The inspector's "copy as markdown" section. */
 export function turnTimingMarkdown(timing: ITurnTiming | undefined): string {
-  if (!timing) return '## Turn Timing\n- not recorded (turn predates turn timing)';
+  if (!timing) return '## Turn Timing\n- not recorded for this reply';
 
   const lines = [
     '## Turn Timing',

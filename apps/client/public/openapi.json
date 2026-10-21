@@ -6207,7 +6207,79 @@
           },
           "turnTiming": {
             "type": "object",
-            "additionalProperties": {}
+            "properties": {
+              "queueMs": {
+                "type": "number"
+              },
+              "contextBuildMs": {
+                "type": "number"
+              },
+              "semaphoreWaitMs": {
+                "type": "number"
+              },
+              "totalMs": {
+                "type": "number"
+              },
+              "retries": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "stream_idle_timeout",
+                        "stream_truncated",
+                        "request_timeout",
+                        "rate_limit",
+                        "overloaded",
+                        "server_error",
+                        "transport",
+                        "tool_pairing",
+                        "other"
+                      ]
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "retryAfterMs": {
+                      "type": "number"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "delayMs": {
+                      "type": "number"
+                    },
+                    "model": {
+                      "type": "string"
+                    },
+                    "at": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "format": "date-time"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "delayMs",
+                    "model",
+                    "at"
+                  ]
+                }
+              },
+              "fallbackHops": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "queueMs",
+              "semaphoreWaitMs",
+              "retries",
+              "fallbackHops"
+            ]
           },
           "executionTracking": {}
         },

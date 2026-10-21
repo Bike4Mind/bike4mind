@@ -261,6 +261,7 @@ describe('ChatCompletionProcess', () => {
       promptMeta: { context: {}, performance: {} },
       replies: [],
       type: 'message',
+      timestamp: new Date(),
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -10402,6 +10403,83 @@ describe('ChatCompletionProcess', () => {
       ]);
     });
 
+    it('resets a stale turnTiming from a prior attempt and measures queueMs from the attempt timestamp', async () => {
+      setupStreamIdleTimeoutMocks();
+      const tenMinutesMs = 10 * 60 * 1000;
+      mockQuest.timestamp = new Date();
+      mockQuest.createdAt = new Date(mockQuest.timestamp.getTime() - tenMinutesMs);
+      mockQuest.turnTiming = {
+        queueMs: 5,
+        semaphoreWaitMs: 0,
+        retries: [{ reason: 'stream_idle_timeout', model: ChatModels.GPT4, delayMs: 3000, at: new Date() }],
+        fallbackHops: 1,
+        totalMs: 999999,
+      };
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi
+          .fn()
+          .mockImplementation(
+            async (_model: unknown, _messages: unknown, _opts: unknown, cb: (chunks: string[]) => Promise<void>) => {
+              await cb(['Clean turn']);
+            }
+          ),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await runWithFakeTimers(service.process({ body, logger: mockLogger }));
+
+      const saved = mockDb.quests.update.mock.calls.map(call => call[0]?.turnTiming).filter(Boolean);
+      const turnTiming = saved[saved.length - 1];
+      expect(turnTiming.retries).toEqual([]);
+      expect(turnTiming.fallbackHops).toBe(0);
+      expect(turnTiming.queueMs).toBeLessThan(tenMinutesMs);
+      expect(turnTiming.totalMs).toBeLessThan(tenMinutesMs);
+    });
+
+    it('records a model fallback as a hop plus a zero-delay retry on the failed model', async () => {
+      setupStreamIdleTimeoutMocks();
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockRejectedValue(new Error('ServiceUnavailableException: primary down')),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      const fallbackModel = {
+        id: 'claude-opus-4-8',
+        type: 'text' as const,
+        name: 'Claude Opus 4.8',
+        backend: ModelBackend.Anthropic,
+        max_tokens: 100,
+        contextWindow: 200_000,
+        can_stream: true,
+        pricing: {},
+        supportsImageVariation: false,
+      };
+      const fallbackBackend = {
+        complete: vi
+          .fn()
+          .mockImplementation(
+            async (_model: unknown, _messages: unknown, _opts: unknown, cb: (chunks: string[]) => Promise<void>) => {
+              await cb(['Hello from fallback']);
+            }
+          ),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: 'claude-opus-4-8',
+      };
+      mockedGetLlmWithFallback.mockResolvedValue({ model: fallbackModel, backend: fallbackBackend, attempt: 1 } as any);
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await runWithFakeTimers(service.process({ body, logger: mockLogger }));
+
+      expect(fallbackBackend.complete).toHaveBeenCalledTimes(1);
+      const saved = mockDb.quests.update.mock.calls.map(call => call[0]?.turnTiming).filter(Boolean);
+      const turnTiming = saved[saved.length - 1];
+      expect(turnTiming.fallbackHops).toBe(1);
+      expect(turnTiming.retries).toEqual([expect.objectContaining({ model: ChatModels.GPT4, delayMs: 0 })]);
+    });
+
     it('should send status update during stream idle timeout retry', async () => {
       setupStreamIdleTimeoutMocks();
 
@@ -11053,6 +11131,7 @@ describe('prompt moderation', () => {
       status: 'running',
       sessionId: 'sess1',
       callback: undefined,
+      timestamp: new Date(),
       createdAt: new Date(),
       updatedAt: new Date(),
       promptMeta: { context: {}, performance: {} },

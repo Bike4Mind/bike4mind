@@ -540,7 +540,6 @@ export function isAbortError(error: unknown): boolean {
   return error.message.toLowerCase().includes('aborted');
 }
 
-
 /**
  * True when a completion failure is a service fault worth counting on the operator
  * `ProcessingFailed` metric. Approximates the terminal branches of the quest-level error handler
@@ -1869,7 +1868,10 @@ export class ChatCompletionProcess {
     const enableMementos = initialEnableMementos;
     let enableAgents = initialEnableAgents;
     const { questId, sessionId, promptMode } = parsedBody;
-    const turnTiming = new TurnTimingRecorder(quest.createdAt, processStartTime, logger);
+    // From the attempt's timestamp, not createdAt: a user retry reuses the quest doc. The snapshot
+    // replaces any record a previous attempt left, before the first frame streams it.
+    const turnTiming = new TurnTimingRecorder(quest.timestamp, processStartTime, logger);
+    quest.turnTiming = turnTiming.snapshot();
 
     // Variables to store actual timing durations
     let actualArtifactProcessingDuration = 0;
@@ -5355,6 +5357,8 @@ export class ChatCompletionProcess {
               primaryFailureReason ??= sanitizeTelemetryError(lastError);
               fallbackAttempt++;
               triedModelIds.add(currentModel.id);
+              // The failure that caused the hop is a retry too, on another model.
+              turnTiming.recordRetry(lastError, 0, failedModel.id);
               turnTiming.recordFallbackHop();
               quest.turnTiming = turnTiming.snapshot();
 
@@ -6482,6 +6486,10 @@ export class ChatCompletionProcess {
         clearStaleFallbackInfoIfNoAnswer();
 
         timer.phase('save');
+        // Before the terminal frame, so totalMs rides it and the awaited save below rather than
+        // only the fire-and-forget final save.
+        turnTiming.finish();
+        quest.turnTiming = turnTiming.snapshot();
 
         // P4-b: Fire-and-forget status update, don't block on WebSocket delivery
         this.sendStatusUpdate(quest, `Completed Quest`, { statusAt: new Date(), silent: true });
@@ -6565,8 +6573,6 @@ export class ChatCompletionProcess {
         const phases = timer.toRecord();
         quest.promptMeta!.performance!.phases = phases;
         this.pipelinePhases = phases;
-        turnTiming.finish();
-        quest.turnTiming = turnTiming.snapshot();
         logger.info(`📊 Pipeline phases:\n${timer.summary()}`);
 
         // P4-c: Fire-and-forget final save - only adds performance metadata to quest.
@@ -6588,12 +6594,14 @@ export class ChatCompletionProcess {
         logger.error(`❌ [POST_PROCESS] Error in post-streaming processing for quest ${questId}:`, postProcessError);
         quest.status = successStatus();
         clearStaleFallbackInfoIfNoAnswer();
+        turnTiming.finish();
+        quest.turnTiming = turnTiming.snapshot();
         // Ensure quest is persisted as 'done' even if the error occurred before the normal save
         await saveQuest(quest);
       }
     } catch (err) {
       const totalResponseTime = Date.now() - processStartTime;
-      // Every branch below saves the quest, so a failed turn keeps its timing too.
+      // Every branch below that saves the quest keeps the failed turn's timing too.
       turnTiming.finish();
       quest.turnTiming = turnTiming.snapshot();
 

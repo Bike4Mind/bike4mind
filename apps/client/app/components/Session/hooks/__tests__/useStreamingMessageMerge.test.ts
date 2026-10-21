@@ -127,6 +127,35 @@ describe('useStreamingMessageMerge', () => {
     });
   });
 
+  describe('turnTiming', () => {
+    const liveTiming = {
+      queueMs: 100,
+      semaphoreWaitMs: 0,
+      retries: [{ reason: 'stream_idle_timeout', delayMs: 3500, model: 'm', at: new Date() }],
+      fallbackHops: 0,
+    };
+
+    it('overlays a retry that arrived after the first frame onto the cached quest', () => {
+      // The cache holds the first frame, which predates any retry.
+      const cached = makeQuest({ id: 'q1', status: 'running', replies: [] });
+      const chatCompletion = makeChatCompletion({ quest: makeStreamQuest({ id: 'q1', turnTiming: liveTiming }) });
+
+      const { result } = renderHook(() =>
+        useStreamingMessageMerge(baseParams({ flattenQuests: [cached], chatCompletion }))
+      );
+
+      expect(result.current.streamingMessageData?.turnTiming?.retries).toHaveLength(1);
+    });
+
+    it('carries it on the fallback path, before the quest is cached', () => {
+      const chatCompletion = makeChatCompletion({ quest: makeStreamQuest({ id: 'q1', turnTiming: liveTiming }) });
+
+      const { result } = renderHook(() => useStreamingMessageMerge(baseParams({ flattenQuests: [], chatCompletion })));
+
+      expect(result.current.streamingMessageData?.turnTiming?.retries).toHaveLength(1);
+    });
+  });
+
   describe('videoJobIds', () => {
     const mergedJobIds = (quest: IChatCompletion['quest'], cached: IChatHistoryItem[]) => {
       const { result } = renderHook(() =>

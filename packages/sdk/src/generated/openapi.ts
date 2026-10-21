@@ -3377,7 +3377,31 @@ export interface components {
         [key: string]: unknown;
       };
       turnTiming?: {
-        [key: string]: unknown;
+        queueMs: number;
+        contextBuildMs?: number;
+        semaphoreWaitMs: number;
+        totalMs?: number;
+        retries: {
+          /** @enum {string} */
+          reason:
+            | 'stream_idle_timeout'
+            | 'stream_truncated'
+            | 'request_timeout'
+            | 'rate_limit'
+            | 'overloaded'
+            | 'server_error'
+            | 'transport'
+            | 'tool_pairing'
+            | 'other';
+          status?: number;
+          retryAfterMs?: number;
+          requestId?: string;
+          delayMs: number;
+          model: string;
+          /** Format: date-time */
+          at: string | null;
+        }[];
+        fallbackHops: number;
       };
       executionTracking?: unknown;
     };
