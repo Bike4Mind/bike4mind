@@ -37,4 +37,21 @@ describe('Slack app credential encryption', () => {
       'config-token-canary'
     );
   });
+
+  it('refuses to store an app credential when encryption is not configured', async () => {
+    // Fail closed: without a key the secret would be written in plaintext, which is exactly the
+    // state this model exists to avoid. Serialised here because the key is process-global.
+    configureSecretsAtRest(undefined);
+    try {
+      await expect(
+        slackDevWorkspaceRepository.createOrUpdateWithCredentials({
+          slackAppId: 'app-unkeyed',
+          slackClientId: 'client-test',
+          slackClientSecret: 'client-secret-canary',
+        })
+      ).rejects.toThrow('Slack credential encryption is not configured');
+    } finally {
+      configureSecretsAtRest(generateEncryptionKey());
+    }
+  });
 });
