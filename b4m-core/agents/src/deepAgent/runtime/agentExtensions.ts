@@ -83,9 +83,10 @@ export interface SurfaceProfileEntry {
 }
 
 /**
- * `runState` is ONE mutable object shared by every guard in a run (and persisted by the host
- * between invocations), so guards cooperate through it: a guard may read what an inner guard
- * recorded. A guard must never replace it, only mutate the fields it owns.
+ * `runState` is ONE mutable object shared by every guard in one invocation. The host decides which
+ * of its fields survive a continuation (the executor persists only its own ledger fields), so
+ * guards cooperate through it: a guard may read what an inner guard recorded.
+ * A guard must never replace it, only mutate the fields it owns.
  */
 export interface ToolMapGuardContext<TState> {
   executionId: string;
@@ -158,7 +159,11 @@ function isProfileShaped(value: unknown): value is ResolvedOrchestrationProfile 
     ceilings !== null &&
     typeof ceilings === 'object' &&
     THOROUGHNESS_LEVELS.every(level => Number.isInteger(ceilings[level]) && (ceilings[level] as number) > 0) &&
-    THOROUGHNESS_LEVELS.includes(p.defaultThoroughness as (typeof THOROUGHNESS_LEVELS)[number])
+    THOROUGHNESS_LEVELS.includes(p.defaultThoroughness as (typeof THOROUGHNESS_LEVELS)[number]) &&
+    (p.confidenceGateThreshold === undefined ||
+      (Number.isFinite(p.confidenceGateThreshold) &&
+        (p.confidenceGateThreshold as number) >= 0 &&
+        (p.confidenceGateThreshold as number) <= 1))
   );
 }
 
@@ -269,7 +274,7 @@ export function createAgentExtensionRegistry<TTools, TState>(
         if (source === 'builtin') return entry.apply(acc, ctx);
         let next: TTools;
         try {
-          next = entry.apply(acc, ctx);
+          next = entry.apply({ ...acc }, ctx);
         } catch (err) {
           ctx.logger.warn(`[agent-extensions] skipped tool-map guard "${entry.id}": apply threw`, {
             id: entry.id,
